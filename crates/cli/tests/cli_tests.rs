@@ -3267,6 +3267,128 @@ fn cli_doctor_json_reports_a_missing_explicit_config() {
 }
 
 #[test]
+fn cli_doctor_reports_a_missing_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/logging.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .arg("doctor")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Configuration"));
+    assert!(stdout.contains("Resolution"));
+    assert!(stdout.contains("could not resolve logging configuration"));
+    assert!(stdout.contains(config.to_str().unwrap()));
+    assert!(stdout.contains("Agents detected"));
+    assert!(stdout.contains("Some checks FAILED"));
+}
+
+#[test]
+fn cli_doctor_json_reports_a_missing_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/logging.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let resolution = &report["configuration"]["resolution"];
+    assert_eq!(resolution["status"], "fail");
+    assert!(
+        resolution["details"]
+            .as_str()
+            .unwrap()
+            .contains(config.to_str().unwrap())
+    );
+}
+
+#[test]
+fn cli_doctor_reports_invalid_explicit_logging_config_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    for (path, expected) in [
+        (PathBuf::from("logging.toml"), "must be absolute"),
+        (
+            temp.path().join("logging.json"),
+            "must identify a .toml file",
+        ),
+    ] {
+        let output = Command::new(gateway_bin())
+            .current_dir(&cwd)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("HOME", temp.path())
+            .args(["--log-config-path"])
+            .arg(&path)
+            .args(["doctor", "--json"])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "path: {}", path.display());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let resolution = &report["configuration"]["resolution"];
+        assert_eq!(resolution["status"], "fail");
+        assert!(
+            resolution["details"].as_str().unwrap().contains(expected),
+            "path: {}, details: {}",
+            path.display(),
+            resolution["details"]
+        );
+    }
+}
+
+#[test]
+fn cli_doctor_accepts_a_valid_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let (config, _log_path) = write_jsonl_logging_config(temp.path());
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "pass");
+}
+
+#[test]
 fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("workspace");
@@ -3302,6 +3424,80 @@ fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
     );
     assert_eq!(workspace["status"], "pass");
     assert_eq!(workspace["active"], true);
+}
+
+#[test]
+fn cli_doctor_json_reports_effective_upstream_auth_presence() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("nested");
+    let project_config = project.join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        &project_config,
+        r#"
+[upstream]
+openai_base_url = "http://project-openai"
+openai_auth_header = "Bearer project-openai"
+anthropic_base_url = "http://project-anthropic"
+anthropic_auth_header = "Basic project-anthropic"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer project-openai"));
+    assert!(!stdout.contains("Basic project-anthropic"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["upstream_auth"]["openai"], "unset");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "configured"
+    );
+}
+
+#[test]
+fn cli_doctor_json_reports_unknown_upstream_auth_when_resolution_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[upstream]\nopenai_auth_header = \"\"\"\\\nBearer private\nsecret\"\"\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("OPENAI_API_KEY", "sk-runtime")
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer private"));
+    assert!(!stdout.contains("secret"));
+    assert!(!stdout.contains("sk-runtime"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "fail");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["openai"],
+        "unknown"
+    );
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "unknown"
+    );
 }
 
 #[test]
@@ -3650,6 +3846,43 @@ mode = "append"
     assert!(stdout.contains("argv = codex"));
     let expected_atof_path = std::path::Path::new("logs").join("events.jsonl");
     assert!(stdout.contains(&format!("ATOF {}", expected_atof_path.display())));
+}
+
+#[test]
+fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let nested = project.join("nested");
+    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        project.join(".nemo-relay/config.toml"),
+        r#"
+[upstream]
+openai_base_url = "http://project-openai"
+openai_auth_header = "Bearer project-openai"
+anthropic_base_url = "http://project-anthropic"
+anthropic_auth_header = "Basic project-anthropic"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .args(["run", "--agent", "codex", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer project-openai"));
+    assert!(!stdout.contains("Basic project-anthropic"));
+    assert!(stdout.contains("openai_base_url = http://env-openai"));
+    assert!(stdout.contains("openai_auth = unset"));
+    assert!(stdout.contains("anthropic_auth = configured"));
 }
 
 #[test]

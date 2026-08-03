@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use crate::configuration::DynamicPluginHostConfigStatus;
+use crate::configuration::{DynamicPluginHostConfigStatus, GatewayConfig};
 
 /// Outcome of one check inside the doctor report.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -55,12 +55,77 @@ pub(crate) struct ConfigurationInfo {
     pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,
+    pub upstream_auth: UpstreamAuthInfo,
     pub plugin_configs: Vec<ConfigLayer>,
     pub plugin_resolution: Check,
     pub resolution: Check,
     pub default_agent: Option<String>,
     pub configured_agents: Vec<String>,
     pub dynamic_plugins: Vec<DynamicPluginReferenceInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct UpstreamAuthInfo {
+    pub openai: SecretPresence,
+    pub anthropic: SecretPresence,
+}
+
+impl UpstreamAuthInfo {
+    pub(crate) fn from_effective_gateway_auth(gateway: &GatewayConfig) -> Self {
+        Self {
+            openai: SecretPresence::from_effective_provider_auth(
+                gateway.openai_auth_header.as_deref(),
+                "OPENAI_API_KEY",
+            ),
+            anthropic: SecretPresence::from_effective_provider_auth(
+                gateway.anthropic_auth_header.as_deref(),
+                "ANTHROPIC_API_KEY",
+            ),
+        }
+    }
+
+    pub(crate) fn unknown() -> Self {
+        Self {
+            openai: SecretPresence::Unknown,
+            anthropic: SecretPresence::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SecretPresence {
+    Configured,
+    Unset,
+    Unknown,
+}
+
+impl SecretPresence {
+    pub(crate) fn from_effective_provider_auth(
+        configured_auth_header: Option<&str>,
+        fallback_env_var: &str,
+    ) -> Self {
+        if configured_auth_header.is_some() || env_var_is_nonempty(fallback_env_var) {
+            Self::Configured
+        } else {
+            Self::Unset
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Unset => "unset",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+fn env_var_is_nonempty(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .is_some()
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -209,10 +209,11 @@ describe('dynamic plugin host', () => {
     const projectRoot = path.join(tempRoot, 'file-static-base-project');
     const projectConfigDirectory = path.join(projectRoot, '.nemo-relay');
     const isolatedUserConfig = path.join(projectRoot, 'xdg');
+    const pluginsToml = path.join(projectConfigDirectory, 'plugins.toml');
     mkdirSync(projectConfigDirectory, { recursive: true });
     mkdirSync(isolatedUserConfig, { recursive: true });
     writeFileSync(
-      path.join(projectConfigDirectory, 'plugins.toml'),
+      pluginsToml,
       `version = 1
 
 [[components]]
@@ -237,6 +238,13 @@ enabled = true
       activation = await plugin.initializeWithDynamicPlugins({ version: 1, components: [] }, [
         activationSpec('fixture_native', 'rust_dynamic', nativeManifestRef),
       ]);
+      assert.equal(activation.report.diagnostics.length, 1);
+      const diagnostic = activation.report.diagnostics[0];
+      assert.equal(diagnostic.level, 'warning');
+      assert.equal(diagnostic.code, 'plugin.configuration_inherited');
+      assert.ok(diagnostic.message.endsWith(path.resolve(pluginsToml)));
+      assert.equal(diagnostic.component, undefined);
+      assert.equal(diagnostic.field, undefined);
       const result = await executeTool('node_static_and_dynamic_tool');
       assert.equal(result.staticBase, true);
       assert.equal(result.native_plugin_tool_execution, true);

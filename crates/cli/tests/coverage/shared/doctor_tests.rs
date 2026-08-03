@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::configuration::ResolvedDynamicPluginConfig;
+use crate::configuration::{GatewayConfig, ResolvedConfig, ResolvedDynamicPluginConfig};
 use crate::server::GatewayOverrides;
 use crate::test_support::{EnvScope, accept_bounded, read_headers};
 
@@ -74,6 +74,10 @@ fn empty_report() -> DoctorReport {
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
+            },
+            upstream_auth: UpstreamAuthInfo {
+                openai: SecretPresence::Unset,
+                anthropic: SecretPresence::Unset,
             },
             plugin_configs: vec![],
             plugin_resolution: Check {
@@ -248,6 +252,29 @@ fn format_human_distinguishes_plugin_files_from_plugin_resolution() {
 
     assert!(rendered.contains("Plugin files /tmp/plugins.toml"));
     assert!(rendered.contains("Plugins    · plugins.toml not configured"));
+}
+
+#[test]
+fn format_human_reports_effective_upstream_auth_presence() {
+    let mut report = empty_report();
+    report.configuration.upstream_auth = UpstreamAuthInfo {
+        openai: SecretPresence::Configured,
+        anthropic: SecretPresence::Unset,
+    };
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Upstream   openai=configured anthropic=unset"));
+}
+
+#[test]
+fn format_human_reports_unknown_upstream_auth_presence() {
+    let mut report = empty_report();
+    report.configuration.upstream_auth = UpstreamAuthInfo::unknown();
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Upstream   openai=unknown anthropic=unknown"));
 }
 
 #[test]
@@ -583,6 +610,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
     let configuration = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &ResolvedConfig::default(),
         &GatewayOverrides::default(),
         Check {
             name: "Resolution",
@@ -590,7 +618,6 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
             details: "using fallback layer".into(),
         },
         vec!["codex".into(), "hermes".into()],
-        &[],
         &PluginConfigurationDiagnostics {
             sources: vec![],
             error: None,
@@ -606,6 +633,8 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
     assert!(configuration.workspace.active);
     assert_eq!(configuration.global.path, global_config);
     assert_eq!(configuration.global.status, Status::Fail);
+    assert_eq!(configuration.upstream_auth.openai, SecretPresence::Unset);
+    assert_eq!(configuration.upstream_auth.anthropic, SecretPresence::Unset);
     assert!(configuration.global.details.contains("invalid TOML"));
 
     let mut report = empty_report();
@@ -858,6 +887,14 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
     let info = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &ResolvedConfig {
+            gateway: GatewayConfig {
+                openai_auth_header: Some("Bearer openai".into()),
+                anthropic_auth_header: None,
+                ..GatewayConfig::default()
+            },
+            ..ResolvedConfig::default()
+        },
         &GatewayOverrides::default(),
         Check {
             name: "Resolution",
@@ -865,7 +902,6 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
             details: "valid".into(),
         },
         vec!["codex".into()],
-        &[],
         &PluginConfigurationDiagnostics {
             sources: vec![],
             error: None,
@@ -879,6 +915,8 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
     assert_eq!(info.workspace.status, Status::Pass);
     assert!(info.global.path.starts_with(&home));
     assert_eq!(info.configured_agents, vec!["codex".to_string()]);
+    assert_eq!(info.upstream_auth.openai, SecretPresence::Configured);
+    assert_eq!(info.upstream_auth.anthropic, SecretPresence::Unset);
 
     assert_eq!(
         crate::process::resolve_executable("definitely-missing"),
@@ -896,6 +934,48 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
         crate::process::resolve_executable(binary.to_str().unwrap()).as_deref(),
         Some(binary.as_path())
     );
+}
+
+#[test]
+fn upstream_auth_info_reports_openai_env_fallback_as_configured() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", Some(std::ffi::OsStr::new("sk-openai"))),
+        ("ANTHROPIC_API_KEY", None),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Configured);
+    assert_eq!(info.anthropic, SecretPresence::Unset);
+}
+
+#[test]
+fn upstream_auth_info_reports_anthropic_env_fallback_as_configured() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", None),
+        (
+            "ANTHROPIC_API_KEY",
+            Some(std::ffi::OsStr::new("sk-anthropic")),
+        ),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Unset);
+    assert_eq!(info.anthropic, SecretPresence::Configured);
+}
+
+#[test]
+fn upstream_auth_info_treats_whitespace_env_values_as_unset() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", Some(std::ffi::OsStr::new("   "))),
+        ("ANTHROPIC_API_KEY", Some(std::ffi::OsStr::new("\t  "))),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Unset);
+    assert_eq!(info.anthropic, SecretPresence::Unset);
 }
 
 #[test]

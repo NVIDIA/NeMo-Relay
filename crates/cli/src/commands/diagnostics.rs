@@ -32,6 +32,7 @@ pub(crate) struct AgentsCommand {
 pub(super) async fn execute(
     command: DoctorCommand,
     server: &super::serve::ServerArgs,
+    logging_fallback_error: Option<&CliError>,
 ) -> Result<ExitCode, CliError> {
     if let Some(plugin) = command.plugin {
         return execute_plugin_doctor(plugin, command.install_dir, command.json);
@@ -41,6 +42,7 @@ pub(super) async fn execute(
         command.agent.map(Into::into),
         command.json,
         &gateway_overrides,
+        logging_fallback_error,
     )
     .await
 }

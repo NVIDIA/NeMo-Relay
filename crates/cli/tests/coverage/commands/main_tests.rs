@@ -501,7 +501,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
     ])
     .unwrap();
     assert_eq!(
-        run_command(cli.command.unwrap(), &cli.server)
+        run_command(cli.command.unwrap(), &cli.server, None)
             .await
             .unwrap(),
         ExitCode::SUCCESS
@@ -517,7 +517,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
     ])
     .unwrap();
     assert_eq!(
-        run_command(cli.command.unwrap(), &cli.server)
+        run_command(cli.command.unwrap(), &cli.server, None)
             .await
             .unwrap(),
         ExitCode::SUCCESS

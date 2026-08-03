@@ -603,8 +603,15 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 			t.Errorf("deferred Close() error = %v", err)
 		}
 	}()
-	if len(report.Diagnostics) != 0 {
-		t.Fatalf("activation diagnostics = %#v, want none", report.Diagnostics)
+	if len(report.Diagnostics) != 1 {
+		t.Fatalf("activation diagnostics = %#v, want one inherited-configuration warning", report.Diagnostics)
+	}
+	diagnostic := report.Diagnostics[0]
+	if diagnostic.Level != DiagnosticLevelWarning ||
+		diagnostic.Code != "plugin.configuration_inherited" ||
+		diagnostic.Component != nil || diagnostic.Field != nil ||
+		!strings.Contains(diagnostic.Message, pluginsTOML) {
+		t.Fatalf("activation diagnostic = %#v, want source-only inherited-configuration warning", diagnostic)
 	}
 	if staticRegistrations.Load() != 1 {
 		t.Fatalf("static registrations = %d, want 1", staticRegistrations.Load())

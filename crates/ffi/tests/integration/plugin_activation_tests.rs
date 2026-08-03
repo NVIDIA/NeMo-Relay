@@ -187,7 +187,18 @@ fn assert_empty_dynamic_specs_rejected(config: &CString, empty_specs: &CString) 
 #[track_caller]
 fn write_and_assert_discovered_activation(report: &Json, plugins_toml: &Path) {
     // The file-only component and its config must survive the merge.
-    assert_eq!(report["diagnostics"], json!([]));
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics array");
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic["level"], "warning");
+    assert_eq!(diagnostic["code"], "plugin.configuration_inherited");
+    assert!(diagnostic.get("component").is_none());
+    assert!(diagnostic.get("field").is_none());
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&plugins_toml.display().to_string()))
+    );
     assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
     assert_eq!(
         DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(),
