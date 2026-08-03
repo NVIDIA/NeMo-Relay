@@ -1285,16 +1285,6 @@ fn merge_plugin_config_value(
     }
 }
 
-const OBSERVABILITY_DESTINATION_FIELDS: [(&str, &str, &str); 3] = [
-    ("atof", "sinks", "config.atof.sinks"),
-    (
-        "opentelemetry",
-        "endpoints",
-        "config.opentelemetry.endpoints",
-    ),
-    ("atif", "storage", "config.atif.storage"),
-];
-
 fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> bool {
     path.len() == 1
         || (is_observability
@@ -1623,12 +1613,10 @@ async fn initialize_plugin_components_catching_panics(
 /// layering as the gateway. Each file's schema version is validated before
 /// layering. Declaring a component in `config` applies its `enabled` value,
 /// while default policy values inherit from discovered files and component
-/// `config` bodies merge field-by-field. Nonempty programmatic observability
-/// destination arrays replace their corresponding discovered-file arrays.
-/// The resolved configuration and diagnostics are passed to the shared
-/// `initialize_plugins_with_diagnostics` helper. Call
-/// [`initialize_plugins_exact`] directly when `config` is already fully
-/// resolved and every value must be applied exactly.
+/// `config` bodies merge field-by-field. The resolved configuration and
+/// diagnostics are passed to the shared `initialize_plugins_with_diagnostics`
+/// helper. Call [`initialize_plugins_exact`] directly when `config` is already
+/// fully resolved and every value must be applied exactly.
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
     let resolved = resolve_plugin_config(config)?;
     initialize_plugins_with_diagnostics(resolved.config, resolved.diagnostics).await
@@ -1644,22 +1632,17 @@ pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<ResolvedPlug
 }
 
 fn resolve_programmatic_plugin_config(
-    mut discovered: DiscoveredPluginConfig,
+    discovered: DiscoveredPluginConfig,
     config: PluginConfig,
 ) -> Result<ResolvedPluginConfig> {
-    let mut diagnostics = programmatic_enable_override_diagnostics(
+    let mut diagnostics = inherited_plugin_config_diagnostics(&discovered.sources);
+    diagnostics.extend(programmatic_enable_override_diagnostics(
         &discovered.value,
         &discovered.enabled_sources,
         &config,
-    );
-    replace_discovered_observability_destinations(&mut discovered.value, &config);
+    ));
     let mut base = discovered.value;
     layer_config(&mut base, plugin_config_overlay_value(&config)?);
-    diagnostics.extend(programmatic_observability_destination_diagnostics(
-        &discovered.observability_destination_sources,
-        &config,
-        &base,
-    ));
     Ok(ResolvedPluginConfig {
         config: serde_json::from_value(base)?,
         diagnostics,
@@ -1735,27 +1718,18 @@ fn resolve_discovered_plugin_config(
     documents: Vec<(PathBuf, Json)>,
 ) -> Result<DiscoveredPluginConfig> {
     let enabled_sources = component_enabled_sources(&documents);
-    // Keep per-file provenance before the canonical file merge concatenates destinations.
-    let observability_destination_sources = observability_destination_sources(&documents);
-    let value = merge_plugin_config_documents(documents)?
-        .map(|(value, _sources)| value)
-        .unwrap_or_else(|| Json::Object(Map::new()));
+    let (value, sources) = merge_plugin_config_documents(documents)?
+        .unwrap_or_else(|| (Json::Object(Map::new()), Vec::new()));
     Ok(DiscoveredPluginConfig {
         value,
         enabled_sources,
-        observability_destination_sources,
+        sources,
     })
 }
 
 struct DiscoveredPluginConfig {
     value: Json,
     enabled_sources: HashMap<String, PathBuf>,
-    observability_destination_sources: HashMap<&'static str, DestinationProvenance>,
-}
-
-#[derive(Default)]
-struct DestinationProvenance {
-    entry_count: usize,
     sources: Vec<PathBuf>,
 }
 
@@ -1810,172 +1784,26 @@ fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, P
     sources
 }
 
-fn observability_destination_sources(
-    documents: &[(PathBuf, Json)],
-) -> HashMap<&'static str, DestinationProvenance> {
-    let mut destinations = HashMap::<_, DestinationProvenance>::new();
-    for (source, document) in documents {
-        let Some(component) = observability_component(document) else {
-            continue;
-        };
-        for (section, field, dotted_path) in OBSERVABILITY_DESTINATION_FIELDS {
-            let Some(entries) = json_destination_array(component, section, field) else {
-                continue;
-            };
-            if entries.is_empty() {
-                continue;
+fn inherited_plugin_config_diagnostics(sources: &[PathBuf]) -> Vec<ConfigDiagnostic> {
+    sources
+        .iter()
+        .map(|source| {
+            let source = source.display().to_string();
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_inherited",
+                config_path = source.as_str();
+                "Inherited plugin configuration from discovered file"
+            );
+            ConfigDiagnostic {
+                level: DiagnosticLevel::Warning,
+                code: "plugin.configuration_inherited".to_string(),
+                component: None,
+                field: None,
+                message: format!("inherited plugin configuration from discovered file: {source}"),
             }
-            let provenance = destinations.entry(dotted_path).or_default();
-            provenance.entry_count += entries.len();
-            provenance.sources.push(source.clone());
-        }
-    }
-    destinations
-}
-
-fn replace_discovered_observability_destinations(
-    discovered: &mut Json,
-    programmatic: &PluginConfig,
-) {
-    let Some(programmatic_component) = programmatic_observability_component(programmatic) else {
-        return;
-    };
-    let Some(discovered_component) = observability_component_mut(discovered) else {
-        return;
-    };
-    for (section, field, _) in OBSERVABILITY_DESTINATION_FIELDS {
-        if programmatic_destination_array(programmatic_component, section, field)
-            .is_none_or(Vec::is_empty)
-        {
-            continue;
-        }
-        if let Some(section_config) = discovered_component
-            .get_mut("config")
-            .and_then(Json::as_object_mut)
-            .and_then(|config| config.get_mut(section))
-            .and_then(Json::as_object_mut)
-        {
-            section_config.remove(field);
-        }
-    }
-}
-
-fn programmatic_observability_destination_diagnostics(
-    sources: &HashMap<&'static str, DestinationProvenance>,
-    programmatic: &PluginConfig,
-    effective: &Json,
-) -> Vec<ConfigDiagnostic> {
-    let Some(programmatic_component) = programmatic_observability_component(programmatic) else {
-        return Vec::new();
-    };
-    let effective_component = observability_component(effective);
-    let mut diagnostics = Vec::new();
-    for (section, field, dotted_path) in OBSERVABILITY_DESTINATION_FIELDS {
-        let Some(provenance) = sources.get(dotted_path) else {
-            continue;
-        };
-        let replaced = programmatic_destination_array(programmatic_component, section, field)
-            .is_some_and(|entries| !entries.is_empty());
-        if !effective_component
-            .is_some_and(|component| observability_destination_is_active(component, section, field))
-        {
-            continue;
-        }
-
-        let source_paths = provenance
-            .sources
-            .iter()
-            .map(|source| source.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let entry_label = if provenance.entry_count == 1 {
-            "entry"
-        } else {
-            "entries"
-        };
-        let source_label = if provenance.sources.len() == 1 {
-            "file"
-        } else {
-            "files"
-        };
-        let (code, action) = if replaced {
-            ("plugin.observability_destinations_replaced", "replaced")
-        } else {
-            ("plugin.observability_destinations_inherited", "inherited")
-        };
-        diagnostics.push(ConfigDiagnostic {
-            level: DiagnosticLevel::Warning,
-            code: code.to_string(),
-            component: Some("observability".to_string()),
-            field: Some(dotted_path.to_string()),
-            message: format!(
-                "programmatic observability configuration {action} {} discovered destination {entry_label} for '{dotted_path}' from {} {source_label}: {source_paths}",
-                provenance.entry_count,
-                provenance.sources.len(),
-            ),
-        });
-    }
-    diagnostics
-}
-
-fn programmatic_observability_component(config: &PluginConfig) -> Option<&PluginComponentSpec> {
-    config
-        .components
-        .iter()
-        .find(|component| component.kind == "observability")
-}
-
-fn observability_component(document: &Json) -> Option<&Json> {
-    document
-        .get("components")?
-        .as_array()?
-        .iter()
-        .find(|component| component_kind(component) == Some("observability"))
-}
-
-fn observability_component_mut(document: &mut Json) -> Option<&mut Json> {
-    document
-        .get_mut("components")?
-        .as_array_mut()?
-        .iter_mut()
-        .find(|component| component_kind(component) == Some("observability"))
-}
-
-fn json_destination_array<'a>(
-    component: &'a Json,
-    section: &str,
-    field: &str,
-) -> Option<&'a Vec<Json>> {
-    component
-        .get("config")?
-        .get(section)?
-        .get(field)?
-        .as_array()
-}
-
-fn programmatic_destination_array<'a>(
-    component: &'a PluginComponentSpec,
-    section: &str,
-    field: &str,
-) -> Option<&'a Vec<Json>> {
-    component.config.get(section)?.get(field)?.as_array()
-}
-
-fn observability_destination_is_active(component: &Json, section: &str, field: &str) -> bool {
-    component
-        .get("enabled")
-        .and_then(Json::as_bool)
-        .unwrap_or(true)
-        && component
-            .get("config")
-            .and_then(|config| config.get(section))
-            .is_some_and(|section| {
-                section.get("enabled").and_then(Json::as_bool) == Some(true)
-                    && section
-                        .get(field)
-                        .and_then(Json::as_array)
-                        .is_some_and(|entries| !entries.is_empty())
-            })
+        })
+        .collect()
 }
 
 fn programmatic_enable_override_diagnostics(

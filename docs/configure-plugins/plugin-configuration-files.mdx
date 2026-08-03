@@ -278,10 +278,10 @@ precedence. System config overrides project config, and project config
 overrides the selected explicit-or-user config.
 
 TOML tables merge recursively. Top-level lists inside a component's `config`
-concatenate across files, as do the declared observability destination lists.
-Entries from the higher-precedence file are placed before entries from the
-lower-precedence file. Other nested lists replace. For example, the following
-user configuration enables one ATOF file sink:
+concatenate, as do the declared observability destination lists. Entries from
+the higher-precedence layer are placed before entries from the lower-precedence
+layer. Other nested lists replace. For example, the following user
+configuration enables one ATOF file sink:
 
 ```toml
 # user plugins.toml
@@ -355,26 +355,20 @@ follows:
    setting it specifies overrides the file value, and the result is the
    effective config that Relay validates and activates.
 
-The observability destination arrays have a specific rule at the file-to-code
-boundary. A nonempty programmatic `config.atof.sinks`,
-`config.opentelemetry.endpoints`, or `config.atif.storage` array replaces every
-entry contributed by discovered files. An omitted or empty programmatic array
-inherits the merged file entries. Other component `config` lists retain the
-general concatenation behavior.
+Programmatic lists participate in the same concatenation rules. For example, a
+programmatic `config.opentelemetry.endpoints` list appears before endpoints
+inherited from system, project, and explicit-or-user files; it does not remove
+those file entries.
 
-When code declares the Observability component and discovered files contributed
-active destinations, initialization and the active plugin report include one
-warning per affected field. The
-`plugin.observability_destinations_replaced` warning identifies a nonempty
-programmatic replacement. The `plugin.observability_destinations_inherited`
-warning identifies destinations inherited because the programmatic array was
-omitted or empty. Each warning reports only the field, entry count, and source
-file paths; it does not include destination values or credentials. Relay
-suppresses these routing warnings when the effective Observability component or
-corresponding exporter section is disabled.
+When library initialization discovers `plugins.toml` files, Relay emits one
+`plugin.configuration_inherited` warning per file. Each warning is written to
+the operational log and included in the initialization result and active plugin
+report. It names only the source path and does not include configuration values
+or credentials. Discovery itself does not block initialization, but validation
+or activation errors in the effective layered configuration still fail
+normally.
 
-Aside from the destination-array rule, files and code differ in how they treat
-a setting you **omit**:
+Files and code differ only in how they treat a setting you **omit**:
 
 | You omit | In a file | In code |
 |---|---|---|
@@ -417,11 +411,9 @@ the runtime ignores the section because `enabled = false`.
 
 To override an inherited non-default scalar field with its default value, write
 the default explicitly in the higher-precedence file. List entries are not
-merged item by item: higher-precedence file entries are added before inherited
-file entries. A nonempty programmatic observability destination array replaces
-the corresponding merged file array, but an empty array is not a clear
-operation. To remove every inherited destination, edit the file that declares
-it or disable the corresponding exporter section.
+merged item by item: higher-precedence entries are added before inherited
+entries. To change or remove an inherited sink, profile, source, or other list
+entry, edit the layer that declares it.
 
 There is no tombstone syntax for deleting an inherited nested field while
 keeping the rest of the lower-precedence component. To remove inherited settings
