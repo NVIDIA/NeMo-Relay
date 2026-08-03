@@ -8718,6 +8718,7 @@ unsafe extern "C" fn llm_response_alias(
     NemoRelayStatus::Ok
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_response_error_with_output(
     _user_data: *mut c_void,
     _response_json: *const NemoRelayNativeString,
@@ -8728,6 +8729,7 @@ unsafe extern "C" fn llm_response_error_with_output(
     NemoRelayStatus::InvalidArg
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_response_none(
     _user_data: *mut c_void,
     _response_json: *const NemoRelayNativeString,
@@ -8737,6 +8739,7 @@ unsafe extern "C" fn llm_response_none(
     NemoRelayStatus::Ok
 }
 
+#[cfg(unix)]
 unsafe extern "C" fn llm_execution_error_with_output(
     _user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
