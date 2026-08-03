@@ -366,6 +366,10 @@ Lower-precedence files fill fields that higher-precedence files omit. Typed code
 fields always have values, so they override file values. Only component
 selection and keys inside component `config` merge with files.
 
+When a component declared in code resolves `enabled = true` over a discovered
+`enabled = false`, initialization and the active plugin report include a
+`plugin.component_reenabled` warning that names the contributing file.
+
 Without filesystem access, no files are read, so the base is empty and only
 your `initialize` config applies.
 

@@ -98,6 +98,10 @@ their values cannot be isolated between endpoints.
 
 ### Fixed Known Issues in 0.7
 
+- Programmatically declared plugin components now apply their `enabled` value
+  over discovered file configuration. When code re-enables a component that a
+  discovered file disabled, initialization reports a warning that names the
+  component and source file.
 - LLM payload redaction now follows the codec active for each call instead of a
   codec captured from plugin configuration. Codec-dependent policies omit the
   observability payload and annotation when Relay cannot safely normalize the

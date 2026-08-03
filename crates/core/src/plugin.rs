@@ -1355,12 +1355,20 @@ pub fn plugin_config_schema() -> Json {
 /// is removed before the new configuration is activated.
 #[doc(hidden)]
 pub async fn initialize_plugins_exact(config: PluginConfig) -> Result<ConfigReport> {
+    initialize_plugins_with_diagnostics(config, Vec::new()).await
+}
+
+async fn initialize_plugins_with_diagnostics(
+    config: PluginConfig,
+    diagnostics: Vec<ConfigDiagnostic>,
+) -> Result<ConfigReport> {
     run_owned_plugin_mutation("plugin initialization", move || async move {
         let lease = LegacyPluginMutationLease::acquire()?;
         let rollback_failures = Arc::new(Mutex::new(Vec::new()));
         let initialization = tokio::spawn(initialize_plugins_exact_inner(
             config,
             Some(Arc::clone(&rollback_failures)),
+            diagnostics,
         ))
         .await
         .map_err(|error| {
@@ -1477,14 +1485,16 @@ pub(crate) async fn initialize_plugins_exact_for_host(
     config: PluginConfig,
     owner_id: u64,
     rollback_failures: Arc<Mutex<Vec<String>>>,
+    diagnostics: Vec<ConfigDiagnostic>,
 ) -> Result<ConfigReport> {
     verify_plugin_host_owner(owner_id)?;
-    initialize_plugins_exact_inner(config, Some(rollback_failures)).await
+    initialize_plugins_exact_inner(config, Some(rollback_failures), diagnostics).await
 }
 
 async fn initialize_plugins_exact_inner(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    diagnostics: Vec<ConfigDiagnostic>,
 ) -> Result<ConfigReport> {
     let enabled_component_count = config
         .components
@@ -1497,7 +1507,10 @@ async fn initialize_plugins_exact_inner(
         component_count = enabled_component_count;
         "Plugin configuration activation started"
     );
-    let report = validate_plugin_config(&config);
+    let mut report = ConfigReport { diagnostics };
+    report
+        .diagnostics
+        .extend(validate_plugin_config(&config).diagnostics);
     if report.has_errors() {
         return Err(PluginError::InvalidConfig(join_error_messages(&report)));
     }
@@ -1541,10 +1554,9 @@ async fn initialize_plugins_exact_inner(
             .await
             {
                 Ok(registrations) => {
-                    let previous_report = validate_plugin_config(&previous_state.config);
                     store_active_plugin_configuration(
                         previous_state.config,
-                        previous_report,
+                        previous_state.report,
                         registrations,
                     )?;
                     log::warn!(
@@ -1598,32 +1610,48 @@ async fn initialize_plugin_components_catching_panics(
 /// Validates and activates `config` layered on top of the discovered
 /// `plugins.toml` configuration, so a direct integration sees the same file
 /// layering as the gateway. Each file's schema version is validated before
-/// layering. Non-default values in `config` win on conflicts, while default
-/// `policy` and `enabled` values inherit from a matching file entry and
-/// component `config` bodies merge field-by-field. Delegates to
-/// [`initialize_plugins_exact`]. Call that function directly when `config`
-/// is already fully resolved and every value must be applied exactly.
+/// layering. Declaring a component in `config` applies its `enabled` value,
+/// while default policy values inherit from discovered files and component
+/// `config` bodies merge field-by-field. Delegates to
+/// [`initialize_plugins_exact`]. Call that function directly when `config` is
+/// already fully resolved and every value must be applied exactly.
 pub async fn initialize_plugins(config: PluginConfig) -> Result<ConfigReport> {
-    let config = resolve_plugin_config(config)?;
-    initialize_plugins_exact(config).await
+    let resolved = resolve_plugin_config(config)?;
+    initialize_plugins_with_diagnostics(resolved.config, resolved.diagnostics).await
 }
 
 /// Layers `config` over the default discovered `plugins.toml` files.
 ///
 /// This is crate-visible so owned dynamic-plugin activation can use the same
 /// one-time configuration resolution as regular harness-native initialization.
-pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<PluginConfig> {
-    let mut base = resolve_default_file_plugin_config()?;
+pub(crate) fn resolve_plugin_config(config: PluginConfig) -> Result<ResolvedPluginConfig> {
+    let discovered = resolve_default_file_plugin_config()?;
+    let diagnostics = programmatic_enable_override_diagnostics(
+        &discovered.value,
+        &discovered.enabled_sources,
+        &config,
+    );
+    let mut base = discovered.value;
     layer_config(&mut base, plugin_config_overlay_value(&config)?);
-    Ok(serde_json::from_value(base)?)
+    Ok(ResolvedPluginConfig {
+        config: serde_json::from_value(base)?,
+        diagnostics,
+    })
+}
+
+pub(crate) struct ResolvedPluginConfig {
+    pub(crate) config: PluginConfig,
+    pub(crate) diagnostics: Vec<ConfigDiagnostic>,
 }
 
 /// Serializes a typed configuration as a discovery overlay.
 ///
 /// A [`PluginConfig`] cannot record whether a default-valued field was supplied
 /// explicitly or filled by serde. Treating those defaults as overlay values
-/// would mask discovered file settings on every library initialization. Exact
-/// callers bypass discovery through [`initialize_plugins_exact`].
+/// would mask discovered file settings on every library initialization. A
+/// declared component is an activation intent, so its `enabled` value remains
+/// in the overlay. Exact callers bypass discovery through
+/// [`initialize_plugins_exact`].
 fn plugin_config_overlay_value(config: &PluginConfig) -> Result<Json> {
     let mut overlay = serde_json::to_value(config)?;
     let Json::Object(root) = &mut overlay else {
@@ -1635,7 +1663,6 @@ fn plugin_config_overlay_value(config: &PluginConfig) -> Result<Json> {
     }
 
     remove_default_policy_overlay(root, &config.policy);
-    remove_default_component_enabled_overlays(root, &config.components);
 
     Ok(overlay)
 }
@@ -1668,30 +1695,25 @@ fn remove_default_policy_overlay(root: &mut Map<String, Json>, config: &ConfigPo
     }
 }
 
-fn remove_default_component_enabled_overlays(
-    root: &mut Map<String, Json>,
-    configured: &[PluginComponentSpec],
-) {
-    let Some(Json::Array(components)) = root.get_mut("components") else {
-        return;
-    };
-    for (component, typed) in components.iter_mut().zip(configured) {
-        if typed.enabled == default_enabled()
-            && let Json::Object(component) = component
-        {
-            component.remove("enabled");
-        }
-    }
-}
-
 /// Resolves the default `plugins.toml` layering into one JSON document, or an
 /// empty object when no plugin file exists.
-fn resolve_default_file_plugin_config() -> Result<Json> {
+fn resolve_default_file_plugin_config() -> Result<DiscoveredPluginConfig> {
     let paths =
         default_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir());
-    Ok(load_plugin_config_files(paths)?
+    let documents = read_plugin_config_files(paths)?;
+    let enabled_sources = component_enabled_sources(&documents);
+    let value = merge_plugin_config_documents(documents)?
         .map(|(value, _sources)| value)
-        .unwrap_or_else(|| Json::Object(Map::new())))
+        .unwrap_or_else(|| Json::Object(Map::new()));
+    Ok(DiscoveredPluginConfig {
+        value,
+        enabled_sources,
+    })
+}
+
+struct DiscoveredPluginConfig {
+    value: Json,
+    enabled_sources: HashMap<String, PathBuf>,
 }
 
 use std::path::{Path, PathBuf};
@@ -1701,6 +1723,13 @@ use std::path::{Path, PathBuf};
 /// when none exist. Internal: `pub` only for cross-crate reuse by the gateway.
 #[doc(hidden)]
 pub fn load_plugin_config_files<I>(paths: I) -> Result<Option<(Json, Vec<PathBuf>)>>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    merge_plugin_config_documents(read_plugin_config_files(paths)?)
+}
+
+fn read_plugin_config_files<I>(paths: I) -> Result<Vec<(PathBuf, Json)>>
 where
     I: IntoIterator<Item = PathBuf>,
 {
@@ -1717,7 +1746,75 @@ where
         })?;
         documents.push((path, serde_json::to_value(parsed)?));
     }
-    merge_plugin_config_documents(documents)
+    Ok(documents)
+}
+
+fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, PathBuf> {
+    let mut sources = HashMap::new();
+    for (path, document) in documents {
+        let Some(components) = document.get("components").and_then(Json::as_array) else {
+            continue;
+        };
+        for component in components {
+            let Some(kind) = component_kind(component) else {
+                continue;
+            };
+            if component.get("enabled").and_then(Json::as_bool).is_some() {
+                sources.insert(kind.to_string(), path.clone());
+            }
+        }
+    }
+    sources
+}
+
+fn programmatic_enable_override_diagnostics(
+    discovered: &Json,
+    enabled_sources: &HashMap<String, PathBuf>,
+    programmatic: &PluginConfig,
+) -> Vec<ConfigDiagnostic> {
+    let Some(discovered_components) = discovered.get("components").and_then(Json::as_array) else {
+        return Vec::new();
+    };
+    let mut discovered_slots: HashMap<&str, Vec<&Json>> = HashMap::new();
+    for component in discovered_components {
+        if let Some(kind) = component_kind(component) {
+            discovered_slots.entry(kind).or_default().push(component);
+        }
+    }
+
+    let mut consumed = HashMap::new();
+    let mut diagnostics = Vec::new();
+    for component in &programmatic.components {
+        let nth = consumed.entry(component.kind.as_str()).or_insert(0usize);
+        let discovered_component = discovered_slots
+            .get(component.kind.as_str())
+            .and_then(|slots| slots.get(*nth));
+        *nth += 1;
+        if !component.enabled
+            || discovered_component
+                .and_then(|component| component.get("enabled"))
+                .and_then(Json::as_bool)
+                != Some(false)
+        {
+            continue;
+        }
+
+        let source = enabled_sources
+            .get(&component.kind)
+            .map(|path| format!(" from {}", path.display()))
+            .unwrap_or_default();
+        diagnostics.push(ConfigDiagnostic {
+            level: DiagnosticLevel::Warning,
+            code: "plugin.component_reenabled".to_string(),
+            component: Some(component.kind.clone()),
+            field: Some("enabled".to_string()),
+            message: format!(
+                "programmatic configuration enabled plugin component '{}' and overrode enabled = false{source}",
+                component.kind
+            ),
+        });
+    }
+    diagnostics
 }
 
 /// Removes physical duplicates while preserving the highest-precedence path.
