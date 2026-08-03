@@ -1634,33 +1634,54 @@ fn plugin_config_overlay_value(config: &PluginConfig) -> Result<Json> {
         root.remove("version");
     }
 
-    if let Some(Json::Object(policy)) = root.get_mut("policy") {
-        let defaults = ConfigPolicy::default();
-        if config.policy.unknown_component == defaults.unknown_component {
-            policy.remove("unknown_component");
-        }
-        if config.policy.unknown_field == defaults.unknown_field {
-            policy.remove("unknown_field");
-        }
-        if config.policy.unsupported_value == defaults.unsupported_value {
-            policy.remove("unsupported_value");
-        }
-        if policy.is_empty() {
-            root.remove("policy");
-        }
-    }
-
-    if let Some(Json::Array(components)) = root.get_mut("components") {
-        for (component, typed) in components.iter_mut().zip(&config.components) {
-            if typed.enabled == default_enabled()
-                && let Json::Object(component) = component
-            {
-                component.remove("enabled");
-            }
-        }
-    }
+    remove_default_policy_overlay(root, &config.policy);
+    remove_default_component_enabled_overlays(root, &config.components);
 
     Ok(overlay)
+}
+
+fn remove_default_policy_overlay(root: &mut Map<String, Json>, config: &ConfigPolicy) {
+    let Some(Json::Object(policy)) = root.get_mut("policy") else {
+        return;
+    };
+    let defaults = ConfigPolicy::default();
+    for (field, is_default) in [
+        (
+            "unknown_component",
+            config.unknown_component == defaults.unknown_component,
+        ),
+        (
+            "unknown_field",
+            config.unknown_field == defaults.unknown_field,
+        ),
+        (
+            "unsupported_value",
+            config.unsupported_value == defaults.unsupported_value,
+        ),
+    ] {
+        if is_default {
+            policy.remove(field);
+        }
+    }
+    if policy.is_empty() {
+        root.remove("policy");
+    }
+}
+
+fn remove_default_component_enabled_overlays(
+    root: &mut Map<String, Json>,
+    configured: &[PluginComponentSpec],
+) {
+    let Some(Json::Array(components)) = root.get_mut("components") else {
+        return;
+    };
+    for (component, typed) in components.iter_mut().zip(configured) {
+        if typed.enabled == default_enabled()
+            && let Json::Object(component) = component
+        {
+            component.remove("enabled");
+        }
+    }
 }
 
 /// Resolves the default `plugins.toml` layering into one JSON document, or an

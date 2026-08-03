@@ -1807,22 +1807,7 @@ fn build_otel_config(
             )));
         }
     };
-    for (header, variable) in &section.header_env {
-        if variable.trim().is_empty() || variable.trim() != variable {
-            return Err(PluginError::InvalidConfig(format!(
-                "OpenTelemetry endpoints[{index}].header_env.{header} must name a nonblank environment variable without surrounding whitespace"
-            )));
-        }
-        if section
-            .headers
-            .keys()
-            .any(|configured| configured.eq_ignore_ascii_case(header))
-        {
-            return Err(PluginError::InvalidConfig(format!(
-                "OpenTelemetry endpoints[{index}] header {header:?} cannot appear in both headers and header_env"
-            )));
-        }
-    }
+    validate_otel_header_env(index, &section)?;
     let mut config = CoreOpenTelemetryConfig::new(section.otel_type, section.endpoint)
         .with_transport(transport)
         .with_service_name(section.service_name)
@@ -1840,7 +1825,42 @@ fn build_otel_config(
     for (key, value) in section.headers {
         config = config.with_header(key, value);
     }
-    for (key, variable) in section.header_env {
+    config = apply_otel_environment_headers(config, index, section.header_env)?;
+    for (key, value) in section.resource_attributes {
+        config = config.with_resource_attribute(key, value);
+    }
+    Ok(config)
+}
+
+fn validate_otel_header_env(
+    index: usize,
+    section: &OpenTelemetryEndpointConfig,
+) -> PluginResult<()> {
+    for (header, variable) in &section.header_env {
+        if variable.trim().is_empty() || variable.trim() != variable {
+            return Err(PluginError::InvalidConfig(format!(
+                "OpenTelemetry endpoints[{index}].header_env.{header} must name a nonblank environment variable without surrounding whitespace"
+            )));
+        }
+        if section
+            .headers
+            .keys()
+            .any(|configured| configured.eq_ignore_ascii_case(header))
+        {
+            return Err(PluginError::InvalidConfig(format!(
+                "OpenTelemetry endpoints[{index}] header {header:?} cannot appear in both headers and header_env"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn apply_otel_environment_headers(
+    mut config: CoreOpenTelemetryConfig,
+    index: usize,
+    header_env: HashMap<String, String>,
+) -> PluginResult<CoreOpenTelemetryConfig> {
+    for (key, variable) in header_env {
         let value = std::env::var(&variable).map_err(|error| {
             PluginError::InvalidConfig(format!(
                 "OpenTelemetry endpoints[{index}].header_env.{key} could not read environment variable {variable:?}: {error}"
@@ -1852,9 +1872,6 @@ fn build_otel_config(
             )));
         }
         config = config.with_header(key, value);
-    }
-    for (key, value) in section.resource_attributes {
-        config = config.with_resource_attribute(key, value);
     }
     Ok(config)
 }
