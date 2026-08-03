@@ -351,7 +351,9 @@ separate from the synchronous `nemo-relay-ffi` middleware registration API.
 Existing plugins keep `compat.native_api = "1"`. This manifest contract
 version is separate from the host-table revision. Select `"2"` only when a
 plugin adopts the targeted LLM continuation surface; rebuilding an existing
-native API v1 plugin does not require that migration.
+native API v1 plugin does not require that migration. Rust plugins with an
+exhaustive `NemoRelayStatus` match must add an arm for `WouldBlock` when
+recompiling against the 0.8 SDK; existing plugin binaries remain compatible.
 
 Request and response callbacks now receive distinct context structures. Each
 structure contains structured codec identity and a borrowed directional codec

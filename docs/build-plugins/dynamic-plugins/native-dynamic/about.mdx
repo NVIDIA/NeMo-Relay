@@ -126,9 +126,12 @@ separate from the internal host-table `abi_version` field:
 | `"1"` | `nemo_relay_plugin!` | `NemoRelayNativeHostApiV3` | Existing subscribers, guardrails, scopes, and generic middleware |
 | `"2"` | `nemo_relay_plugin_v2!` | `NemoRelayNativeHostApiV4` | Host-dispatched LLM calls with typed HTTP targets and provider streams |
 
-Relay retains native API v1 unchanged. A v2-only plugin is rejected clearly by
-a v1 host and is not retried against an older table. Validation, inspection,
-and doctor output report the selected manifest API.
+Relay preserves native API v1 symbols, layouts, numeric values, and loader
+behavior. Existing binaries remain compatible. Rust plugins that exhaustively
+match `NemoRelayStatus` must handle the new `WouldBlock` variant when they
+recompile against the 0.8 SDK. A v2-only plugin is rejected clearly by a v1
+host and is not retried against an older table. Validation, inspection, and
+doctor output report the selected manifest API.
 
 Native API v2 is intended for in-process orchestrators that decide which LLM
 call to make while Relay still owns provider transport. The plugin supplies a
@@ -237,6 +240,11 @@ downstream continuation for a buffered call. For streaming, return
 its managed Relay LLM lifecycle, but Relay connects the downstream stream
 directly to the caller through its bounded queue, so pass-through events do not
 cross the plugin boundary.
+
+Continuation operations follow the outer callback mode. A streaming callback
+can open targeted streams or pass through to the downstream stream, but it
+cannot invoke a buffered continuation. A streaming policy that needs a judge
+or side call must consume that call as a stream and aggregate it itself.
 
 The SDK returns `Pending` to the host, which drives safe callback futures and
 returned streams as cooperative tasks. `LlmProviderStreamV2` implements

@@ -154,6 +154,11 @@ its managed Relay LLM lifecycle, but Relay pumps the downstream stream directly
 through its bounded queue; provider events do not cross into the plugin merely
 to be forwarded.
 
+Continuation operations follow the outer callback mode. A streaming callback
+can open targeted streams or pass through to the downstream stream, but it
+cannot invoke a buffered continuation. Aggregate a streamed judge or side call
+inside the policy when its result is needed before returning the caller stream.
+
 The plugin provides JSON, an absolute target URL, and explicit target headers.
 Relay sends the request with HTTP `POST` and binds that transport target to the
 current LLM continuation without storing it in `LlmRequest.headers`.
