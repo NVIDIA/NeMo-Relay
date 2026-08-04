@@ -327,7 +327,7 @@ jobs:
           mkdir -p "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli"
           cp "$source" "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli/${asset}"
 
-      - name: Package CLI binary for PyPI and npm
+      - name: Package CLI binary for PyPI
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
@@ -343,16 +343,11 @@ jobs:
           fi
           rm -rf "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
           mkdir -p "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
-          args=(
-            --binary "$source"
-            --target "$target"
-            --version "$version"
+          python scripts/package-cli-bin.py \
+            --binary "$source" \
+            --target "$target" \
+            --version "$version" \
             --output-dir "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
-          )
-          if [ "${{ matrix.platform }}" = "linux-amd64" ]; then
-            args+=(--npm-launcher)
-          fi
-          python scripts/package-cli-bin.py "${args[@]}"
 
       - name: Install and run CLI wheel
         if: ${{ !endsWith(matrix.target, '-musl') }}
@@ -401,11 +396,4 @@ jobs:
         with:
           name: cli-python-wheel-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.whl
-          if-no-files-found: error
-
-      - name: Upload CLI npm artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: cli-npm-package-${{ matrix.platform }}
-          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.tgz
           if-no-files-found: error

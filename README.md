@@ -58,12 +58,6 @@ Install the prebuilt CLI from PyPI:
 pip install nemo-relay-cli-bin
 ```
 
-Install the prebuilt CLI from npm:
-
-```bash
-npm install --global nemo-relay-cli-bin
-```
-
 Python API users can install the matching CLI through the optional extra:
 
 ```bash

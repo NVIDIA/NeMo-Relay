@@ -310,12 +310,10 @@ jobs:
             cli_binaries=(nemo-relay-cli-*)
             cli_wheels=(nemo_relay_cli_bin-*.whl)
             python_api_wheels=(nemo_relay-*.whl)
-            cli_npm=(nemo-relay-bin-npm-*.tgz)
             node_npm=(nemo-relay-node-npm-*.tgz)
             expect_count 7 "CLI binary" "${cli_binaries[@]}"
             expect_count 7 "CLI wheel" "${cli_wheels[@]}"
             expect_count 7 "Python API wheel" "${python_api_wheels[@]}"
-            expect_count 8 "CLI npm" "${cli_npm[@]}"
             expect_count 8 "Node npm" "${node_npm[@]}"
 
             mapfile -t distribution_assets < <(
@@ -523,13 +521,6 @@ jobs:
           name: openclaw-npm
           path: openclaw-package/
 
-      - name: Download CLI npm artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: cli-npm-package-*
-          merge-multiple: true
-          path: cli-packages/
-
       - name: Select npm dist-tag
         run: |
           set -e
@@ -556,25 +547,6 @@ jobs:
             echo "nemo-relay-node ${version} already exists on npm; skipping"
           else
             npm publish "./$metapackage" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
-          fi
-
-      - name: Publish CLI packages to npm
-        run: |
-          set -euo pipefail
-          version="${{ github.ref_name }}"
-          for pkg in cli-packages/nemo-relay-bin-npm-{linux-x64,linux-arm64,linux-x64-musl,linux-arm64-musl,darwin-arm64,win32-x64,win32-arm64}-${version}.tgz; do
-            name="$(tar xOf "$pkg" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).name')"
-            if npm view "${name}@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
-              echo "${name} ${version} already exists on npm; skipping"
-              continue
-            fi
-            npm publish "./$pkg" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
-          done
-          launcher="cli-packages/nemo-relay-bin-npm-${version}.tgz"
-          if npm view "nemo-relay-cli-bin@${version}" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "nemo-relay-cli-bin ${version} already exists on npm; skipping"
-          else
-            npm publish "./$launcher" --access public --tag "${NEMO_RELAY_NPM_DIST_TAG}"
           fi
 
       - name: Publish OpenClaw plugin package to npm

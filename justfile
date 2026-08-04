@@ -564,7 +564,6 @@ set_node_package_versions() {
     local version="$1"
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
-    set_npm_package_version packages/cli-bin/package.json package-lock.json "$version" packages/cli-bin
     set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
 }
 
@@ -1769,8 +1768,8 @@ package-python-plugin:
         exit 1
     fi
 
-# Package a prebuilt CLI binary for PyPI and npm.
-package-cli-bin binary target version package_dir npm_launcher="false":
+# Package a prebuilt CLI binary for PyPI.
+package-cli-bin binary target version package_dir:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "$NEMO_RELAY_REPO_ROOT"
@@ -1780,7 +1779,4 @@ package-cli-bin binary target version package_dir npm_launcher="false":
         --version "{{ version }}"
         --output-dir "{{ package_dir }}"
     )
-    if [[ "{{ npm_launcher }}" == "true" ]]; then
-        args+=(--npm-launcher)
-    fi
     uv run --no-project python scripts/package-cli-bin.py "${args[@]}"
