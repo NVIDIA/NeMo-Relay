@@ -198,10 +198,20 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
           let message = 'JavaScript callback failed';
+          let exceptionType = 'Error';
           try {
-            message = String(error?.message ?? error);
+            const errorMessage = error?.message;
+            if (typeof errorMessage === 'string') {
+              message = errorMessage;
+            }
           } catch {}
-          return { ok: false, error: message };
+          try {
+            const errorName = error?.name;
+            if (typeof errorName === 'string' && errorName.length > 0) {
+              exceptionType = errorName;
+            }
+          } catch {}
+          return { ok: false, error: message, exceptionType };
         }
       };
     },

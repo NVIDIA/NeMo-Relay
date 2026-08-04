@@ -1702,6 +1702,72 @@ fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
 }
 
 #[test]
+fn suppressed_function_error_propagates_to_agent_span() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+        provider,
+        "suppressed-error-propagation-test".to_string(),
+        OpenTelemetryType::GenAi,
+        MarkProjection::default(),
+        default_mark_exclude_names(),
+        Vec::new(),
+    );
+    let agent_uuid = Uuid::now_v7();
+    let function_uuid = Uuid::now_v7();
+    processor.process(&make_start_event(
+        agent_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        None,
+    ));
+    processor.process(&make_start_event(
+        function_uuid,
+        Some(agent_uuid),
+        "function",
+        ScopeType::Function,
+        None,
+    ));
+    processor.process(&make_end_event_with_metadata(
+        function_uuid,
+        Some(agent_uuid),
+        "function",
+        ScopeType::Function,
+        json!({
+            "otel.status_code": "ERROR",
+            "error.type": "internal_error",
+            "exception.type": "ValueError",
+        }),
+    ));
+    processor.process(&make_end_event_with_metadata(
+        agent_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        json!({"otel.status_code": "ERROR"}),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let agent_span = &spans[0];
+    assert_eq!(
+        attr_map(&agent_span.attributes).get("error.type"),
+        Some(&"internal_error".to_string())
+    );
+    let exception = agent_span
+        .events
+        .events
+        .iter()
+        .find(|event| event.name.as_ref() == "exception")
+        .expect("expected propagated exception event");
+    assert_eq!(
+        attr_map(&exception.attributes).get("exception.type"),
+        Some(&"ValueError".to_string())
+    );
+}
+
+#[test]
 fn suppressed_parent_error_propagation_isolated_by_trace_id() {
     let (provider, exporter) = make_provider();
     let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(

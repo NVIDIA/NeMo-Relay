@@ -1276,7 +1276,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         }
                         None => callback.bind(py).call1((py_req, py_next)),
                     }
-                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                    .map_err(python_callback_error)?;
                     let outcome = split_py_object_or_future_with_locals(
                         py,
                         result.unbind(),

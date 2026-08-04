@@ -1338,6 +1338,35 @@ class TestLLMStreaming:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_direct_error")
 
+    async def test_stream_execution_intercept_failure_emits_exception_type(self):
+        events = []
+        subscribers.register("py_llm_stream_intercept_failure_sub", events.append)
+
+        def failing_middleware(request, next):
+            raise ValueError("stream intercept boom")
+
+        intercepts.register_llm_stream_execution(
+            "py_llm_stream_failure",
+            1,
+            failing_middleware,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="stream intercept boom"):
+                await llm.stream_execute(
+                    "stream_intercept_failure_llm",
+                    make_request(),
+                    lambda request: _single_chunk_stream(),
+                    lambda chunk: None,
+                    lambda: {},
+                )
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_failure")
+            subscribers.deregister("py_llm_stream_intercept_failure_sub")
+
+        metadata = _llm_event(events, "stream_intercept_failure_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "ValueError"
+
     async def test_stream_execute_collector_failure_raises(self):
         events = []
         subscribers.register("py_llm_stream_collector_failure_sub", events.append)

@@ -288,10 +288,10 @@ describe('LLM execute', () => {
 
       await assert.rejects(
         () =>
-          llmCallExecuteAsync(
+          llmCallExecute(
             'exec_status_error_llm',
             makeNative(),
-            async () => {
+            () => {
               throw unprintableError();
             },
             null,
@@ -302,7 +302,7 @@ describe('LLM execute', () => {
             },
             null,
           ),
-        /unknown error/,
+        /JavaScript callback failed/,
       );
 
       await flushSubscribers();
@@ -323,7 +323,7 @@ describe('LLM execute', () => {
       assert.ok(errorEnd, 'expected failed llm end event');
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
-      assert.match(errorEnd.metadata['otel.status_description'], /unknown error/);
+      assert.match(errorEnd.metadata['otel.status_description'], /JavaScript callback failed/);
       assert.equal(errorEnd.metadata['error.type'], 'internal_error');
       assert.equal(errorEnd.metadata['exception.type'], 'GetterError');
     } finally {

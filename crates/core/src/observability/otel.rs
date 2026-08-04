@@ -1161,6 +1161,7 @@ impl OtelEventProcessor {
 
     fn process_end(&mut self, event: &Event) {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
+            self.propagate_suppressed_error_metadata(event);
             return;
         };
         self.record_completed_span_context(event.uuid(), active_span.span_context.clone());
@@ -1233,6 +1234,26 @@ impl OtelEventProcessor {
         active_span
             .span
             .end_with_timestamp(to_system_time(*event.timestamp()));
+    }
+
+    fn propagate_suppressed_error_metadata(&mut self, event: &Event) {
+        if self.otel_type != OpenTelemetryType::GenAi
+            || !self.suppressed_parent_contexts.contains_key(&event.uuid())
+            || metadata_string(event, "otel.status_code") != Some("ERROR")
+        {
+            return;
+        }
+        let error_type = metadata_string(event, "error.type").map(ToOwned::to_owned);
+        let exception_type = metadata_string(event, "exception.type").map(ToOwned::to_owned);
+        let Some(parent_span) = self.find_parent_span_mut(event) else {
+            return;
+        };
+        if parent_span.descendant_error_type.is_none() {
+            parent_span.descendant_error_type = error_type;
+        }
+        if parent_span.descendant_exception_type.is_none() {
+            parent_span.descendant_exception_type = exception_type;
+        }
     }
 
     fn process_mark(&mut self, event: &Event) {

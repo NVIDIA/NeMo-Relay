@@ -163,6 +163,8 @@ struct MiddlewareCallbackResult {
     value: Json,
     #[serde(default)]
     error: String,
+    #[serde(default, rename = "exceptionType")]
+    exception_type: String,
 }
 
 /// Wrap a middleware callback so exceptions cross the N-API boundary as data.
@@ -207,11 +209,16 @@ pub(crate) fn unwrap_middleware_result(value: Json, error_prefix: &str) -> Resul
     })?;
     if result.ok {
         Ok(result.value)
-    } else {
+    } else if result.exception_type.is_empty() {
         Err(FlowError::Internal(format!(
             "{error_prefix}: {}",
             result.error
         )))
+    } else {
+        Err(FlowError::CallbackException {
+            message: format!("{error_prefix}: {}", result.error),
+            exception_type: result.exception_type,
+        })
     }
 }
 

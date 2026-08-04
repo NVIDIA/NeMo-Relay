@@ -380,10 +380,10 @@ describe('Tool execute', () => {
 
       await assert.rejects(
         () =>
-          toolCallExecuteAsync(
+          toolCallExecute(
             'exec_status_error_tool',
             {},
-            async () => {
+            () => {
               throw new TypeError('tool status failure');
             },
             null,
