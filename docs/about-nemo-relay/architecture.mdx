@@ -8,96 +8,108 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-This page explains how NeMo Relay connects scopes, middleware, plugins, events,
-subscribers, and exporters.
+This page explains how NeMo Relay connects [scopes](/about-nemo-relay/concepts/scopes),
+[middleware](/about-nemo-relay/concepts/middleware),
+[plugins](/about-nemo-relay/concepts/plugins),
+[events](/about-nemo-relay/concepts/events), and
+[subscribers](/about-nemo-relay/concepts/subscribers).
 
 ## Architecture Diagram
 
-This diagram connects the runtime pieces to the layers they inhabit.
+This diagram shows the CLI and language bindings hosting the shared Rust
+runtime. Plugin components install behavior into that runtime, and subscribers
+deliver event snapshots to in-process consumers or external backends.
 
 <MermaidStyles />
 
 ```mermaid
 flowchart TB
-    subgraph AppLayer[Framework Integrations and Application Code]
+    subgraph Hosts[Runtime Hosts]
+        CLI[NeMo Relay CLI]
         App[Application Code]
         Framework[Framework Integration]
+        Bindings[Rust / Python / Node.js Bindings]
+        App -->|uses| Framework
+        App -. direct use .-> Bindings
+        Framework -->|calls| Bindings
     end
 
-    subgraph BindingLayer[Language Bindings]
-        Bindings[Language Bindings]
-    end
+    Config[Plugin Configuration]
 
-    subgraph PluginLayer[Plugin and Adaptive Layer]
-        PluginSystem[Plugin System]
-        Adaptive[Adaptive Component]
-    end
-
-    subgraph CoreLayer[Core Runtime]
+    subgraph Runtime[Relay Runtime]
         Core[Rust Core Runtime]
+        PluginSystem[Plugin System]
+        Components[Installed Plugin Components]
 
         subgraph RuntimeState[Runtime State]
-            Scope[Scope Stack]
+            Scope[Active Scope Stack]
             Registry[Middleware Registries]
+            Events[Parent-Linked Event Records]
         end
 
-        Events[Event Stream]
         Dispatcher[Async Subscriber Dispatcher]
+
+        PluginSystem -->|activates| Components
+        Components -->|register| Registry
+        Components -->|register| Dispatcher
+        Core -->|updates| Scope
+        Core -->|resolves| Registry
+        Core -->|emits| Events
+        Events -->|enqueue snapshots| Dispatcher
     end
 
-    subgraph ObsLayer[Subscribers and Observability Backends]
-        Subs[Subscribers / Exporters]
-        Backends[Files / OTLP / Other Backends]
+    subgraph Destinations[Subscriber and Export Destinations]
+        InProcess[In-Process Subscribers]
+        Files[ATOF / ATIF Files]
+        Backends[OTLP / HTTP / S3-Compatible Backends]
     end
 
-    App -->|uses| Framework
-    App -. direct use .-> Bindings
-    App -->|registers and configures| PluginSystem
-    Framework -->|calls| Bindings
+    CLI -->|hosts| Core
     Bindings --> Core
-    Adaptive -->|activates via| PluginSystem
-    PluginSystem -->|installs| Registry
-    PluginSystem -->|installs| Subs
-    Core -->|updates| Scope
-    Core -->|resolves| Registry
-    Core -->|emits| Events
-    Events -->|enqueue snapshots| Dispatcher
-    Dispatcher -->|deliver FIFO| Subs
-    Subs -->|export to| Backends
+    Config --> PluginSystem
+    Dispatcher -->|deliver FIFO| InProcess
+    Dispatcher -->|export| Files
+    Dispatcher -->|export| Backends
 
-    class AppLayer grey-hint;
-    class BindingLayer grey-hint;
-    class PluginLayer grey-hint;
-    class CoreLayer grey-hint;
-    class ObsLayer grey-hint;
+    class Hosts grey-hint;
+    class Runtime grey-hint;
+    class Destinations grey-hint;
     class RuntimeState grey-lightest;
+    class CLI purple-lightest;
     class App purple-lightest;
     class Framework yellow-lightest;
     class Bindings green-lightest;
+    class Config blue-lightest;
     class PluginSystem green-light;
-    class Adaptive blue-lightest;
+    class Components blue-lightest;
     class Core green-light;
     class Scope green-light;
     class Registry green-light;
     class Events green-light;
-    class Subs green-light;
+    class Dispatcher green-light;
+    class InProcess green-lightest;
+    class Files grey-light;
     class Backends grey-light;
 ```
 
-Adaptive appears here as a built-in plugin component rather than a separate runtime model because it activates through the same plugin lifecycle.
+Adaptive behavior is one plugin component installed through the same lifecycle
+as observability or PII redaction. It is not a separate runtime layer.
 
 ## Runtime Model
 
 NeMo Relay combines a small number of runtime pieces into one shared execution model:
 
-- The **scope stack** answers where work belongs
-- The **middleware registries** answer what should happen around that work
-- The **plugin system** installs reusable runtime behavior from configuration
-- The **event stream** records what happened
+- The **scope stack** answers where work currently belongs.
+- The **middleware registries** answer what should happen around that work.
+- The **plugin system** installs reusable runtime behavior from configuration.
+- The **event records** preserve what happened and how work was related.
 - The **async subscriber dispatcher** delivers event snapshots after emission
-- **subscribers** consume those events
+- **subscribers and exporters** consume those snapshots.
 
-Every emitted scope, tool, LLM, or mark event attaches to the active scope stack. Every managed tool or LLM call resolves the currently visible middleware before it executes.
+Every managed tool or LLM call resolves the middleware visible from the active
+scope before it executes. When the runtime emits an event, it records the active
+scope UUID as parentage. The scope stack changes as work opens and closes; the
+parent-linked event records remain available to subscribers.
 
 ## Main Runtime Pieces
 
@@ -105,7 +117,8 @@ These components are the primary building blocks that make up the runtime model.
 
 ### Scope Stack
 
-The active scope stack defines the ownership tree for runtime work. It establishes:
+The active scope stack defines the current ownership context for runtime work.
+It establishes:
 
 - Parent-child relationships between events
 - Scope-local visibility for middleware and subscribers
@@ -114,7 +127,15 @@ The active scope stack defines the ownership tree for runtime work. It establish
 
 ### Middleware Registries
 
-The middleware registries hold the active intercepts and guardrails for tool and LLM execution. Managed helpers read those registries before invoking the real callback.
+The middleware registries hold the active intercepts and guardrails for tool and
+LLM execution. Request intercepts can rewrite real requests, conditional
+guardrails can reject execution, and sanitize guardrails can change emitted
+observability payloads. Managed helpers read those registries before invoking
+the real callback.
+
+Async middleware callbacks are awaited as part of managed execution. The
+managed call does not advance past that middleware checkpoint until the callback
+returns.
 
 ### Plugin System
 
@@ -122,13 +143,24 @@ The plugin system installs reusable runtime components from configuration. A plu
 
 ### Event Emission
 
-The runtime emits structured events for scopes, tools, LLMs, and named marks. Those events are the canonical record of runtime behavior. Native Rust, Python, Node.js, and FFI event-producing APIs enqueue subscriber work and return without waiting for subscriber callbacks or exporter work.
+The runtime emits structured events for scopes, tools, LLMs, and named marks.
+Those parent-linked records are the canonical history of runtime behavior.
+Native Rust, Python, Node.js, and FFI event-producing APIs enqueue subscriber
+work and return without waiting for subscriber callbacks or exporter work.
 
 ### Subscribers and Exporters
 
-Subscribers consume the event stream through the background dispatcher. Some subscribers stay in-process. Others export that stream into files or tracing systems. Use the binding flush API when a test or shutdown path must wait for already-queued subscriber work.
+Subscribers consume event snapshots through the background dispatcher. Some
+stay in process. Exporter subscribers can write
+[ATOF JSONL](/configure-plugins/observability/atof), project events into
+[ATIF trajectories](/configure-plugins/observability/atif), or emit
+[OpenTelemetry traces](/configure-plugins/observability/opentelemetry).
 
-## Two Axes of Runtime State
+This delivery happens after event submission and is separate from awaited async
+middleware. Use the binding flush API when a test or shutdown path must wait for
+already queued subscriber work.
+
+## Where Runtime State Lives
 
 Runtime state is easiest to understand by separating ownership from process-wide
 registration.
@@ -168,30 +200,3 @@ Two distinctions matter:
 - Sanitize guardrails affect the emitted observability payload
 
 For the expanded request-to-response runtime path, including streaming and subscriber handoff, refer to [Middleware](/about-nemo-relay/concepts/middleware#detailed-execution-flow).
-
-## Runtime Layers
-
-From bottom to top, NeMo Relay is organized as:
-
-1. The Rust core runtime
-2. The plugin and adaptive layer
-3. Language bindings
-4. Framework integrations and application code
-5. Subscribers and observability backends
-
-The details of a binding can vary, but the conceptual model stays the same across those layers.
-
-## Design Goal
-
-NeMo Relay is designed so that application developers, framework integrators, plugin authors, and observability consumers all reason about the same runtime semantics. One conceptual model should remain stable even when the binding or integration style changes.
-
-## Related Concepts
-
-The following concepts are related to this architecture:
-
-- [Scopes](/about-nemo-relay/concepts/scopes)
-- [Middleware](/about-nemo-relay/concepts/middleware)
-- [Events](/about-nemo-relay/concepts/events)
-- [Subscribers](/about-nemo-relay/concepts/subscribers)
-- [Plugins](/about-nemo-relay/concepts/plugins)
-- [Codecs](/about-nemo-relay/concepts/codecs)
