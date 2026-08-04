@@ -1798,6 +1798,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",
+ "nemo-relay-plugin-host-config",
  "nemo-relay-switchyard",
  "opentelemetry",
  "opentelemetry_sdk",
@@ -1892,6 +1893,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo-relay-plugin-host-config"
+version = "0.7.0"
+dependencies = [
+ "base64",
+ "fs2",
+ "libc",
+ "log",
+ "nemo-relay",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "nemo-relay-python"
 version = "0.7.0"
 dependencies = [
@@ -1899,6 +1921,7 @@ dependencies = [
  "nemo-relay",
  "nemo-relay-adaptive",
  "nemo-relay-pii-redaction",
+ "nemo-relay-plugin-host-config",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",

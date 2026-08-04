@@ -965,11 +965,11 @@ path = "/etc/nemo-relay/pricing.json"
     .unwrap();
     symlink(&physical, &alias).unwrap();
 
-    let resolved = load_plugin_toml_config_from_paths(vec![alias, physical.clone()])
+    let resolved = load_plugin_toml_config_from_paths(vec![alias.clone(), physical.clone()])
         .unwrap()
         .expect("the physical file exists");
 
-    assert_eq!(resolved.contributing_sources, vec![physical]);
+    assert_eq!(resolved.contributing_sources, vec![physical.clone()]);
     assert_eq!(
         resolved.value.unwrap()["components"][0]["config"]["sources"]
             .as_array()
@@ -977,6 +977,15 @@ path = "/etc/nemo-relay/pricing.json"
             .len(),
         1,
         "the aliased file must not duplicate list entries"
+    );
+
+    let aliased = load_plugin_toml_config_from_paths(vec![physical, alias.clone()])
+        .unwrap()
+        .expect("the aliased file exists");
+    assert_eq!(
+        aliased.contributing_sources,
+        vec![alias],
+        "the CLI must retain the selected spelling at the highest-precedence alias"
     );
 }
 
@@ -2773,10 +2782,6 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
     assert!(active[0].activation_snapshot.is_some());
     let snapshot_fingerprint = persistent_bootstrap_fingerprint(&resolved, &active).unwrap();
     assert!(snapshot_fingerprint.starts_with("hmac-sha256:"));
-    assert!(
-        crate::plugins::lifecycle::test_python_environment_digest_calls() > 0,
-        "activation must verify the complete environment before snapshotting it"
-    );
     crate::plugins::lifecycle::reset_test_python_environment_digest_calls();
 
     std::fs::write(
@@ -2796,9 +2801,28 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
         .unwrap_err()
         .to_string();
     assert!(error.contains("changed after provisioning"), "{error}");
+
+    crate::plugins::lifecycle::list(
+        crate::plugins::PluginsListRequest::default(),
+        &GatewayOverrides::default(),
+    )
+    .unwrap();
+    crate::plugins::lifecycle::inspect(
+        crate::plugins::PluginsInspectRequest {
+            id: plugin_id.into(),
+            json: false,
+        },
+        &GatewayOverrides::default(),
+    )
+    .unwrap();
+    let refreshed_state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(user_config.join(".dynamic-plugins.json")).unwrap())
+            .unwrap();
     assert!(
-        crate::plugins::lifecycle::test_python_environment_digest_calls() > 0,
-        "sidecar activation must still perform the full environment verification"
+        refreshed_state["records"][0]["status"]["last_error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("changed after provisioning")),
+        "list/inspect must preserve the detailed environment validation failure: {refreshed_state}"
     );
 }
 

@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
-use serde::{Deserialize, Serialize};
+use nemo_relay_plugin_host_config::{
+    DynamicPluginLifecycleState, LifecycleStateLock, lock_lifecycle_state, pin_plugin_config_path,
+    read_lifecycle_state, read_locked_lifecycle_state, save_locked_lifecycle_state,
+    sibling_lifecycle_state_path,
+};
+use serde::Serialize;
 use strum::{Display, IntoStaticStr};
 
 use crate::configuration::{
@@ -18,9 +21,6 @@ use crate::error::CliError;
 use super::super::config_io::TargetScope;
 
 // Internal CLI-managed lifecycle state. This file is not intended to be user-edited.
-const DYNAMIC_PLUGIN_STATE_FILENAME: &str = ".dynamic-plugins.json";
-const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
-
 #[derive(Display, IntoStaticStr, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -33,10 +33,16 @@ pub(super) enum RegistryScope {
 
 #[derive(Debug)]
 pub(super) struct ScopedRegistry {
+    pub(super) sources: Vec<ScopedRegistrySource>,
+    pub(super) state_path: PathBuf,
+    pub(super) registry: DynamicPluginLifecycleState,
+    pub(super) state_lock: Option<LifecycleStateLock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ScopedRegistrySource {
     pub(super) scope: RegistryScope,
     pub(super) plugins_toml_path: PathBuf,
-    pub(super) state_path: PathBuf,
-    pub(super) registry: DynamicPluginRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -48,80 +54,150 @@ pub(super) struct ScopedDynamicPluginRecord {
     pub(super) record: DynamicPluginRecord,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct PersistedDynamicPluginRegistry {
-    #[serde(default = "default_state_schema_version")]
-    schema_version: u32,
-    #[serde(default)]
-    records: Vec<DynamicPluginRecord>,
-}
-
-const fn default_state_schema_version() -> u32 {
-    DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION
-}
-
 impl ScopedRegistry {
     pub(super) fn save(&self) -> Result<(), CliError> {
-        let mut rendered = serde_json::to_vec_pretty(&PersistedDynamicPluginRegistry {
-            schema_version: DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION,
-            records: self.registry.cloned_records(true),
-        })
-        .map_err(|error| {
+        let lock = self.state_lock.as_ref().ok_or_else(|| {
             CliError::Config(format!(
-                "could not serialize dynamic plugin registry state {}: {error}",
+                "dynamic plugin lifecycle state {} is not locked for mutation",
                 self.state_path.display()
             ))
         })?;
-        rendered.push(b'\n');
-        let parent = self
-            .state_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        std::fs::create_dir_all(&parent)?;
+        save_locked_lifecycle_state(lock, &self.registry)
+            .map_err(|error| CliError::Config(error.to_string()))
+    }
 
-        let temp_path = parent.join(format!(
-            ".{}.{}.tmp",
-            self.state_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("dynamic-plugins"),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock is after unix epoch")
-                .as_nanos()
-        ));
-
-        let write_result = (|| -> Result<(), CliError> {
-            let mut file = std::fs::File::create(&temp_path)?;
-            file.write_all(&rendered)?;
-            file.sync_all()?;
-            std::fs::rename(&temp_path, &self.state_path)?;
-            Ok(())
-        })();
-
-        if write_result.is_err() {
-            let _ = std::fs::remove_file(&temp_path);
+    pub(super) fn ensure_locked(&mut self) -> Result<(), CliError> {
+        if self.state_lock.is_some() {
+            return Ok(());
         }
-        write_result?;
+        if !self.registry.cloned_records(true).is_empty() {
+            return Err(CliError::Config(format!(
+                "refusing to lock lifecycle state {} after in-memory mutation",
+                self.state_path.display()
+            )));
+        }
+        let lock = lock_lifecycle_state(&self.state_path)
+            .map_err(|error| CliError::Config(error.to_string()))?;
+        self.registry = read_locked_lifecycle_state(&lock)
+            .map_err(|error| CliError::Config(error.to_string()))?;
+        self.state_lock = Some(lock);
         Ok(())
+    }
+
+    pub(super) fn add_source(&mut self, scope: RegistryScope, plugins_toml_path: PathBuf) {
+        if !self
+            .sources
+            .iter()
+            .any(|source| source.plugins_toml_path == plugins_toml_path)
+        {
+            self.sources.push(ScopedRegistrySource {
+                scope,
+                plugins_toml_path,
+            });
+        }
+    }
+
+    pub(super) fn source_for_path(&self, path: &PathBuf) -> Option<&ScopedRegistrySource> {
+        self.sources
+            .iter()
+            .find(|source| &source.plugins_toml_path == path)
+    }
+
+    pub(super) fn source_for_record(&self, plugin_id: &str) -> ScopedRegistrySource {
+        if let Some(owner) = self.registry.declaration_source(plugin_id) {
+            let owner = PathBuf::from(owner);
+            if let Some(source) = self.source_for_path(&owner) {
+                return source.clone();
+            }
+            return ScopedRegistrySource {
+                scope: RegistryScope::Explicit,
+                plugins_toml_path: owner,
+            };
+        }
+        self.sources
+            .first()
+            .cloned()
+            .expect("every lifecycle registry must retain at least one physical source")
     }
 }
 
 pub(super) fn load_scoped_registries(
     explicit_plugin_config: Option<&PathBuf>,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
-    scoped_registry_layouts(explicit_plugin_config)
+    let layouts = scoped_registry_layouts(explicit_plugin_config, None)?;
+    layouts
         .into_iter()
-        .map(|(scope, plugins_toml_path, state_path)| {
+        .map(|layout| {
+            let registry = read_lifecycle_state(&layout.state_path)
+                .map_err(|error| CliError::Config(error.to_string()))?;
             Ok(ScopedRegistry {
-                scope,
-                plugins_toml_path,
-                registry: read_registry(&state_path)?,
-                state_path,
+                sources: layout.sources,
+                state_path: layout.state_path,
+                registry,
+                state_lock: None,
             })
         })
         .collect()
+}
+
+pub(super) fn load_scoped_registries_for_update(
+    explicit_plugin_config: Option<&PathBuf>,
+    mutation_target: Option<(RegistryScope, PathBuf, PathBuf)>,
+) -> Result<Vec<ScopedRegistry>, CliError> {
+    let force_locked_state = mutation_target
+        .as_ref()
+        .map(|(_, _, state_path)| state_path.clone());
+    let layouts = scoped_registry_layouts(explicit_plugin_config, mutation_target)?;
+    let mut lock_order = Vec::new();
+    for (index, layout) in layouts.iter().enumerate() {
+        let mut plugin_exists = false;
+        for source in &layout.sources {
+            plugin_exists |= source.plugins_toml_path.try_exists()?;
+        }
+        let state_exists = layout.state_path.try_exists()?;
+        if plugin_exists
+            || state_exists
+            || force_locked_state
+                .as_ref()
+                .is_some_and(|forced| forced == &layout.state_path)
+        {
+            lock_order.push((layout.state_path.clone(), index));
+        }
+    }
+    lock_order.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut locks = HashMap::new();
+    for (_, index) in lock_order {
+        let lock = lock_lifecycle_state(&layouts[index].state_path)
+            .map_err(|error| CliError::Config(error.to_string()))?;
+        locks.insert(index, lock);
+    }
+    let mut locked = HashMap::new();
+    for (index, lock) in locks {
+        let registry = read_locked_lifecycle_state(&lock)
+            .map_err(|error| CliError::Config(error.to_string()))?;
+        locked.insert(index, (lock, registry));
+    }
+    Ok(layouts
+        .into_iter()
+        .enumerate()
+        .map(|(index, layout)| {
+            let (state_lock, registry) = locked.remove(&index).map_or_else(
+                || {
+                    (
+                        None,
+                        DynamicPluginLifecycleState::new(DynamicPluginRegistry::new()),
+                    )
+                },
+                |(lock, registry)| (Some(lock), registry),
+            );
+            ScopedRegistry {
+                sources: layout.sources,
+                state_path: layout.state_path,
+                registry,
+                state_lock,
+            }
+        })
+        .collect())
 }
 
 pub(super) fn scoped_paths_for_add(
@@ -129,9 +205,11 @@ pub(super) fn scoped_paths_for_add(
     explicit_plugin_config: Option<&PathBuf>,
 ) -> Result<(PathBuf, PathBuf, RegistryScope), CliError> {
     if let Some(explicit_plugin_config) = explicit_plugin_config {
+        let plugins_toml_path = pin_plugin_config_path(explicit_plugin_config)
+            .map_err(|error| CliError::Config(error.to_string()))?;
         return Ok((
-            explicit_plugin_config.clone(),
-            sibling_state_path(explicit_plugin_config),
+            plugins_toml_path.clone(),
+            sibling_lifecycle_state_path(&plugins_toml_path),
             RegistryScope::Explicit,
         ));
     }
@@ -148,7 +226,9 @@ pub(super) fn scoped_paths_for_add(
         }
         TargetScope::Global => global_plugin_config_path(),
     };
-    let state_path = sibling_state_path(&plugins_toml_path);
+    let plugins_toml_path = pin_plugin_config_path(&plugins_toml_path)
+        .map_err(|error| CliError::Config(error.to_string()))?;
+    let state_path = sibling_lifecycle_state_path(&plugins_toml_path);
     let scope = match scope {
         TargetScope::User => RegistryScope::User,
         TargetScope::Project => RegistryScope::Project,
@@ -164,10 +244,11 @@ pub(super) fn collect_records(
     let mut records = Vec::new();
     for (scope_index, scope) in scopes.iter().enumerate() {
         for record in scope.registry.cloned_records(include_tombstoned) {
+            let source = scope.source_for_record(&record.metadata.id);
             records.push(ScopedDynamicPluginRecord {
                 scope_index,
-                scope: scope.scope,
-                plugins_toml_path: scope.plugins_toml_path.clone(),
+                scope: source.scope,
+                plugins_toml_path: source.plugins_toml_path,
                 state_path: scope.state_path.clone(),
                 record,
             });
@@ -223,76 +304,60 @@ pub(super) fn find_record_by_id(
 
 fn scoped_registry_layouts(
     explicit_plugin_config: Option<&PathBuf>,
-) -> Vec<(RegistryScope, PathBuf, PathBuf)> {
+    mutation_target: Option<(RegistryScope, PathBuf, PathBuf)>,
+) -> Result<Vec<ScopedRegistryLayout>, CliError> {
     let mut layouts = Vec::new();
     if let Some(explicit_plugin_config) = explicit_plugin_config {
-        layouts.push((
-            RegistryScope::Explicit,
-            explicit_plugin_config.clone(),
-            sibling_state_path(explicit_plugin_config),
-        ));
+        layouts.push((RegistryScope::Explicit, explicit_plugin_config.clone()));
     } else if let Some(plugins_toml_path) = user_plugin_config_path() {
-        layouts.push((
-            RegistryScope::User,
-            plugins_toml_path.clone(),
-            sibling_state_path(&plugins_toml_path),
-        ));
+        layouts.push((RegistryScope::User, plugins_toml_path));
     }
 
     let user_only = std::env::var("NEMO_RELAY_CONFIG_SCOPE").ok().as_deref() == Some("user");
     if !user_only && let Ok(cwd) = std::env::current_dir() {
         let plugins_toml_path = project_plugin_config_path(&cwd);
-        layouts.push((
-            RegistryScope::Project,
-            plugins_toml_path.clone(),
-            sibling_state_path(&plugins_toml_path),
-        ));
+        layouts.push((RegistryScope::Project, plugins_toml_path));
     }
     let plugins_toml_path = global_plugin_config_path();
-    layouts.push((
-        RegistryScope::Global,
-        plugins_toml_path.clone(),
-        sibling_state_path(&plugins_toml_path),
-    ));
+    layouts.push((RegistryScope::Global, plugins_toml_path));
+    if let Some((scope, plugins_toml_path, _)) = mutation_target {
+        layouts.push((scope, plugins_toml_path));
+    }
 
-    let mut seen = HashSet::new();
-    let mut unique = Vec::with_capacity(layouts.len());
-    for layout in layouts.into_iter().rev() {
-        let identity = layout.1.canonicalize().unwrap_or_else(|_| layout.1.clone());
-        if seen.insert(identity) {
-            unique.push(layout);
+    let mut grouped = Vec::<ScopedRegistryLayout>::new();
+    for (scope, plugins_toml_path) in layouts {
+        let plugins_toml_path = pin_plugin_config_path(&plugins_toml_path)
+            .map_err(|error| CliError::Config(error.to_string()))?;
+        let state_path = sibling_lifecycle_state_path(&plugins_toml_path);
+        if let Some(existing) = grouped
+            .iter_mut()
+            .find(|existing| existing.state_path == state_path)
+        {
+            if !existing
+                .sources
+                .iter()
+                .any(|source| source.plugins_toml_path == plugins_toml_path)
+            {
+                existing.sources.push(ScopedRegistrySource {
+                    scope,
+                    plugins_toml_path,
+                });
+            }
+        } else {
+            grouped.push(ScopedRegistryLayout {
+                sources: vec![ScopedRegistrySource {
+                    scope,
+                    plugins_toml_path,
+                }],
+                state_path,
+            });
         }
     }
-    unique.reverse();
-    unique
+    Ok(grouped)
 }
 
-fn read_registry(path: &Path) -> Result<DynamicPluginRegistry, CliError> {
-    if !path.exists() {
-        return Ok(DynamicPluginRegistry::new());
-    }
-    let raw = std::fs::read_to_string(path)?;
-    let state: PersistedDynamicPluginRegistry = serde_json::from_str(&raw).map_err(|error| {
-        CliError::Config(format!(
-            "invalid dynamic plugin registry state in {}: {error}",
-            path.display()
-        ))
-    })?;
-    if state.schema_version != DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION {
-        return Err(CliError::Config(format!(
-            "unsupported dynamic plugin registry schema_version {} in {}; expected {}",
-            state.schema_version,
-            path.display(),
-            DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION
-        )));
-    }
-    DynamicPluginRegistry::from_records(state.records)
-        .map_err(|error| CliError::Config(error.to_string()))
-}
-
-fn sibling_state_path(plugins_toml_path: &Path) -> PathBuf {
-    plugins_toml_path
-        .parent()
-        .map(|parent| parent.join(DYNAMIC_PLUGIN_STATE_FILENAME))
-        .unwrap_or_else(|| PathBuf::from(DYNAMIC_PLUGIN_STATE_FILENAME))
+#[derive(Debug)]
+struct ScopedRegistryLayout {
+    sources: Vec<ScopedRegistrySource>,
+    state_path: PathBuf,
 }

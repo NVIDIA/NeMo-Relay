@@ -22,85 +22,6 @@ use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
 
-#[cfg(unix)]
-#[test]
-fn python_venv_launcher_detection_only_preserves_bin_python_links() {
-    assert!(is_python_venv_launcher(Path::new("env/bin/python")));
-    assert!(is_python_venv_launcher(Path::new("env/bin/python3.11")));
-    assert!(!is_python_venv_launcher(Path::new("env/bin/pip")));
-    assert!(!is_python_venv_launcher(Path::new("env/lib/python3.11")));
-}
-
-#[cfg(unix)]
-#[test]
-fn snapshot_protection_does_not_follow_python_launcher_symlink() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
-
-    let temp = tempfile::tempdir().unwrap();
-    let target = temp.path().join("external-python");
-    std::fs::write(&target, b"python").unwrap();
-    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let root = temp.path().join("snapshot");
-    let bin = root.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    symlink(&target, bin.join("python")).unwrap();
-
-    protect_snapshot_tree(&root).unwrap();
-
-    assert!(
-        std::fs::symlink_metadata(bin.join("python"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert_eq!(
-        std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
-        0o755
-    );
-    make_snapshot_removable(&root);
-}
-
-#[cfg(unix)]
-#[test]
-fn snapshot_digest_hashes_python_launcher_symlink_without_following_it() {
-    use std::os::unix::fs::symlink;
-
-    let temp = tempfile::tempdir().unwrap();
-    let root = temp.path().join("snapshot");
-    let bin = root
-        .join(MANAGED_ENVIRONMENTS_DIR)
-        .join("environment")
-        .join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let launcher = bin.join("python");
-    symlink("/missing/python-a", &launcher).unwrap();
-
-    let first_verification = snapshot_tree_digest(&root, false).unwrap();
-    let first_identity = snapshot_tree_digest(&root, true).unwrap();
-
-    std::fs::remove_file(&launcher).unwrap();
-    std::fs::write(&launcher, b"/missing/python-a").unwrap();
-    assert_ne!(
-        first_verification,
-        snapshot_tree_digest(&root, false).unwrap(),
-        "a regular file must not collide with an equivalent symlink target"
-    );
-
-    std::fs::remove_file(&launcher).unwrap();
-    symlink("/missing/python-b", &launcher).unwrap();
-
-    assert_ne!(
-        first_verification,
-        snapshot_tree_digest(&root, false).unwrap(),
-        "verification must include the exact launcher target"
-    );
-    assert_eq!(
-        first_identity,
-        snapshot_tree_digest(&root, true).unwrap(),
-        "managed environment contents are excluded from stable gateway identity"
-    );
-}
-
 struct CurrentDirGuard {
     original: PathBuf,
 }
@@ -728,10 +649,6 @@ entrypoint = "../worker-runtime/worker.sh"
         &crate::plugins::policy::DynamicPluginHostPolicy::default(),
     )
     .unwrap();
-    assert_eq!(
-        std::fs::read(snapshot.root.join("external-entrypoint/resource.txt")).unwrap(),
-        b"expected\n"
-    );
     let (activation_manifest, _) =
         DynamicPluginManifest::load_from_path(PathBuf::from(snapshot.activation_manifest_ref()))
             .unwrap();
@@ -743,6 +660,11 @@ entrypoint = "../worker-runtime/worker.sh"
     let DynamicPluginManifestLoad::Worker(activation_load) = &activation_manifest.load else {
         panic!("command activation must retain a worker load contract");
     };
+    let activation_entrypoint = PathBuf::from(activation_load.entrypoint.as_ref().unwrap());
+    assert_eq!(
+        std::fs::read(activation_entrypoint.parent().unwrap().join("resource.txt"),).unwrap(),
+        b"expected\n"
+    );
     assert_eq!(
         Some(activation_artifact),
         activation_load.entrypoint.as_deref(),
@@ -807,18 +729,13 @@ fn activation_snapshot_detects_mutation_of_the_runtime_copy() {
         &crate::plugins::policy::DynamicPluginHostPolicy::default(),
     )
     .unwrap();
-    std::fs::set_permissions(&snapshot.root, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::fs::set_permissions(
-        snapshot.activation_manifest.parent().unwrap(),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        &snapshot.activation_manifest,
-        std::fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
-    std::fs::write(&snapshot.activation_manifest, b"replaced").unwrap();
+    let activation_manifest = PathBuf::from(snapshot.activation_manifest_ref());
+    let runtime_root = activation_manifest.parent().unwrap();
+    let snapshot_root = runtime_root.parent().unwrap();
+    std::fs::set_permissions(snapshot_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(runtime_root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&activation_manifest, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&activation_manifest, b"replaced").unwrap();
 
     let error = snapshot.verify_current().unwrap_err().to_string();
     assert!(error.contains("changed before code load"), "{error}");
@@ -886,10 +803,17 @@ symbol = "nemo_relay_fixture_native_plugin"
     )
     .unwrap();
 
+    let (activation_manifest, _) =
+        DynamicPluginManifest::load_from_path(PathBuf::from(snapshot.activation_manifest_ref()))
+            .unwrap();
+    let DynamicPluginManifestLoad::RustDynamic(activation_load) = &activation_manifest.load else {
+        panic!("native activation must retain a Rust dynamic load contract");
+    };
     assert!(
-        snapshot
-            .root
-            .join("external-library/libadjacent_dependency.so")
+        Path::new(activation_load.library.as_deref().unwrap())
+            .parent()
+            .unwrap()
+            .join("libadjacent_dependency.so")
             .is_file()
     );
     assert_eq!(
@@ -907,7 +831,7 @@ fn activation_snapshot_and_python_attestation_enforce_exact_directory_depth_boun
     std::fs::create_dir_all(&plugin_dir).unwrap();
     let manifest_path = write_native_dynamic_manifest(&plugin_dir, "acme.deep-closure");
     let mut deep_plugin_path = plugin_dir.clone();
-    for _ in 1..MAX_SNAPSHOT_DEPTH {
+    for _ in 0..MAX_SNAPSHOT_DEPTH - 2 {
         deep_plugin_path.push("d");
     }
     std::fs::create_dir_all(&deep_plugin_path).unwrap();
@@ -922,14 +846,8 @@ fn activation_snapshot_and_python_attestation_enforce_exact_directory_depth_boun
     )
     .unwrap();
 
-    deep_plugin_path.push("too-deep");
+    deep_plugin_path.push("snapshot-too-deep");
     std::fs::create_dir(&deep_plugin_path).unwrap();
-
-    let error =
-        dynamic_plugin_runtime_closure_digest(manifest_path.to_string_lossy().as_ref(), None)
-            .unwrap_err()
-            .to_string();
-    assert!(error.contains("traversal depth"), "{error}");
 
     let error = DynamicPluginActivationSnapshot::create(
         manifest_path.to_string_lossy().as_ref(),
@@ -940,6 +858,15 @@ fn activation_snapshot_and_python_attestation_enforce_exact_directory_depth_boun
     )
     .unwrap_err()
     .to_string();
+    assert!(error.contains("traversal depth"), "{error}");
+
+    dynamic_plugin_runtime_closure_digest(manifest_path.to_string_lossy().as_ref(), None).unwrap();
+    deep_plugin_path.push("closure-too-deep");
+    std::fs::create_dir(&deep_plugin_path).unwrap();
+    let error =
+        dynamic_plugin_runtime_closure_digest(manifest_path.to_string_lossy().as_ref(), None)
+            .unwrap_err()
+            .to_string();
     assert!(error.contains("traversal depth"), "{error}");
 
     let environment_path = temp.path().join("deep-environment");
@@ -1069,6 +996,7 @@ fn activation_snapshot_rejects_identity_mismatch_missing_files_and_policy_denial
     let blocked = crate::plugins::policy::DynamicPluginHostPolicy {
         defaults: crate::plugins::policy::DynamicPluginHostPolicyEffect {
             allowed: Some(false),
+            startup: Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required),
             ..crate::plugins::policy::DynamicPluginHostPolicyEffect::default()
         },
         ..crate::plugins::policy::DynamicPluginHostPolicy::default()
@@ -1125,12 +1053,10 @@ fn activation_snapshot_copies_declared_signature_into_stable_identity() {
     )
     .unwrap();
 
-    let signature_logical = snapshot
-        .identity_files
-        .keys()
-        .find(|path| path.ends_with("plugin.py.sig"))
-        .cloned()
-        .expect("signature is part of the stable snapshot identity");
+    let signature_logical = Path::new(snapshot.original_manifest_ref())
+        .parent()
+        .unwrap()
+        .join("plugin.py.sig");
     assert!(snapshot.identity_file(&signature_logical).is_some());
     assert_eq!(
         snapshot.closure_digest(),
@@ -1189,148 +1115,12 @@ fn python_snapshot_contract_requires_environment_and_trusted_source_digest() {
     );
 }
 
-#[cfg(unix)]
 #[test]
-fn snapshot_directory_copy_preserves_python_launcher_and_rejects_special_entries() {
-    use std::ffi::CString;
-    use std::os::unix::fs::symlink;
-
+fn runtime_closure_directory_walk_rejects_cycles() {
     let temp = tempfile::tempdir().unwrap();
-    let source = temp.path().join("environment");
-    let bin = source.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let interpreter = temp.path().join("managed-python");
-    std::fs::write(&interpreter, b"python").unwrap();
-    symlink(&interpreter, bin.join("python3.11")).unwrap();
-    let destination = temp.path().join("snapshot");
-    let mut copied = HashMap::new();
-    let mut budget = SnapshotBudget::default();
-
-    copy_snapshot_directory(
-        &source,
-        &destination,
-        &mut copied,
-        &mut budget,
-        false,
-        &mut Vec::new(),
-    )
-    .unwrap();
-
-    assert!(
-        std::fs::symlink_metadata(destination.join("bin/python3.11"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert!(!is_python_venv_launcher(Path::new("/")));
-
-    let fifo_source = temp.path().join("fifo-source");
-    std::fs::create_dir(&fifo_source).unwrap();
-    let fifo = fifo_source.join("worker.pipe");
-    let fifo_c = CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
-    // SAFETY: `fifo_c` is a valid NUL-terminated path and the mode contains only permission bits.
-    assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
-    let special_error = copy_snapshot_directory(
-        &fifo_source,
-        &temp.path().join("fifo-snapshot"),
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-        false,
-        &mut Vec::new(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        special_error.contains("regular file or directory"),
-        "{special_error}"
-    );
-
-    let regular = temp.path().join("regular");
-    std::fs::write(&regular, b"regular").unwrap();
-    let destination_directory = temp.path().join("destination-directory");
-    std::fs::create_dir(&destination_directory).unwrap();
-    let write_error = copy_snapshot_regular_file(
-        &regular,
-        &destination_directory,
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-        "fixture",
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(write_error.contains("failed to write dynamic plugin snapshot file"));
-}
-
-#[cfg(unix)]
-#[test]
-fn snapshot_directory_walk_rejects_missing_cycles_dangling_links_and_depth() {
-    use std::os::unix::fs::symlink;
-
-    let temp = tempfile::tempdir().unwrap();
-    let missing = temp.path().join("missing");
-    let normalization_error = copy_snapshot_directory(
-        &missing,
-        &temp.path().join("destination"),
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-        false,
-        &mut Vec::new(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        normalization_error.contains("failed to normalize"),
-        "{normalization_error}"
-    );
-
     let source = temp.path().join("source");
     std::fs::create_dir(&source).unwrap();
     let canonical = source.canonicalize().unwrap();
-    let cycle_error = copy_snapshot_directory_contents(
-        &source,
-        &temp.path().join("cycle-destination"),
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-        false,
-        &mut vec![canonical.clone()],
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(cycle_error.contains("symlink cycle"), "{cycle_error}");
-
-    let destination_file = temp.path().join("destination-file");
-    std::fs::write(&destination_file, b"file").unwrap();
-    let destination_error = copy_snapshot_directory_contents(
-        &source,
-        &destination_file,
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-        false,
-        &mut Vec::new(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        destination_error.contains("failed to create"),
-        "{destination_error}"
-    );
-
-    symlink(temp.path().join("absent-target"), source.join("dangling")).unwrap();
-    let dangling_error = copy_snapshot_directory(
-        &source,
-        &temp.path().join("dangling-destination"),
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-        false,
-        &mut Vec::new(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        dangling_error.contains("failed to resolve"),
-        "{dangling_error}"
-    );
-
     let closure_cycle = collect_runtime_closure_directory_contents(
         &source,
         Path::new("runtime"),
@@ -1341,22 +1131,11 @@ fn snapshot_directory_walk_rejects_missing_cycles_dangling_links_and_depth() {
     .unwrap_err()
     .to_string();
     assert!(closure_cycle.contains("symlink cycle"), "{closure_cycle}");
-
-    let depth_error = collect_snapshot_files(
-        &source,
-        &source,
-        &mut Vec::new(),
-        Some(MAX_SNAPSHOT_DEPTH),
-        &mut 0,
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(depth_error.contains("traversal depth"), "{depth_error}");
 }
 
 #[cfg(unix)]
 #[test]
-fn snapshot_file_and_closure_helpers_cover_external_and_invalid_sources() {
+fn runtime_closure_helpers_cover_external_and_invalid_sources() {
     use std::ffi::CString;
     use std::os::unix::fs::symlink;
 
@@ -1365,54 +1144,8 @@ fn snapshot_file_and_closure_helpers_cover_external_and_invalid_sources() {
     std::fs::create_dir(&plugin_dir).unwrap();
     let manifest = plugin_dir.join("relay-plugin.toml");
     std::fs::write(&manifest, b"fixture").unwrap();
-    let root = temp.path().join("snapshot");
-    std::fs::create_dir(&root).unwrap();
-
-    let missing_error = copy_snapshot_file(
-        &root,
-        &manifest,
-        "missing.bin",
-        "artifact",
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        missing_error.contains("failed to normalize"),
-        "{missing_error}"
-    );
-
-    let root_error = copy_snapshot_file(
-        &root,
-        &manifest,
-        "/",
-        "library",
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-    )
-    .unwrap_err()
-    .to_string();
-    assert!(
-        root_error.contains("has no parent directory"),
-        "{root_error}"
-    );
-
     let external = temp.path().join("external-artifact.bin");
     std::fs::write(&external, b"external artifact").unwrap();
-    let (logical, canonical, copied) = copy_snapshot_file(
-        &root,
-        &manifest,
-        external.to_string_lossy().as_ref(),
-        "artifact",
-        &mut HashMap::new(),
-        &mut SnapshotBudget::default(),
-    )
-    .unwrap();
-    assert_eq!(logical, external);
-    assert_eq!(canonical, external.canonicalize().unwrap());
-    assert_eq!(std::fs::read(copied).unwrap(), b"external artifact");
-
     let mut closure = RuntimeClosureSources::default();
     let closure_missing =
         collect_declared_runtime_closure_file(&manifest, "missing.bin", "artifact", &mut closure)
@@ -1508,18 +1241,6 @@ fn snapshot_file_and_closure_helpers_cover_external_and_invalid_sources() {
         fifo_error.contains("regular file or directory"),
         "{fifo_error}"
     );
-
-    let one_file = temp.path().join("one-file");
-    std::fs::create_dir(&one_file).unwrap();
-    std::fs::write(one_file.join("entry"), b"entry").unwrap();
-    let mut entries = MAX_SNAPSHOT_FILES;
-    let entry_error =
-        collect_snapshot_files(&one_file, &one_file, &mut Vec::new(), None, &mut entries)
-            .unwrap_err()
-            .to_string();
-    assert!(entry_error.contains("verification budget"), "{entry_error}");
-
-    make_snapshot_removable(&temp.path().join("already-removed"));
 }
 
 #[test]
@@ -1768,6 +1489,22 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let rendered = std::fs::read_to_string(&plugins_toml).unwrap();
     assert!(rendered.contains("[[plugins.dynamic]]"));
     assert!(rendered.contains("relay-plugin.toml"));
+    let scopes = load_scoped_registries(None).unwrap();
+    let added = find_record_by_id(&scopes, "acme.guardrail")
+        .unwrap()
+        .expect("add should persist lifecycle state immediately");
+    assert_eq!(
+        scopes[added.scope_index]
+            .registry
+            .declaration_source("acme.guardrail"),
+        Some(
+            plugins_toml
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
 
     let resolved = resolve_plugins_config(None).unwrap();
     assert_eq!(resolved.dynamic_plugins.len(), 1);
@@ -1915,9 +1652,9 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         .record
         .source
         .environment_ref
-        .as_deref()
+        .clone()
         .expect("managed environment should be persisted");
-    let environment_path = PathBuf::from(environment_ref);
+    let environment_path = PathBuf::from(&environment_ref);
     assert_managed_environment_path(&environment_path);
     assert_eq!(
         added.record.status.validation.environment,
@@ -1943,6 +1680,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         serde_json::json!(environment_ref)
     );
     assert_python_environment_runner_calls(&runner.calls(), &environment_path, &plugin_dir);
+    drop(scopes);
 
     enable(
         PluginsEnableRequest {
@@ -1954,7 +1692,10 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     let resolved = resolve_plugins_config(None).unwrap();
     let active = active_dynamic_plugin_components(None, &resolved).unwrap();
     assert_eq!(active.len(), 1);
-    assert_eq!(active[0].environment_ref.as_deref(), Some(environment_ref));
+    assert_eq!(
+        active[0].environment_ref.as_deref(),
+        Some(environment_ref.as_str())
+    );
 
     let stale_marker = environment_path.join("stale-marker");
     std::fs::write(&stale_marker, b"stale").unwrap();
@@ -1972,6 +1713,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         .expect("tombstone should remain");
     assert!(removed.record.is_tombstoned());
     assert_eq!(removed.record.source.environment_ref, None);
+    drop(scopes);
 
     add_with_environment_runner(
         PluginsAddRequest {
@@ -2112,6 +1854,7 @@ fn enable_rejects_missing_managed_python_environment() {
         .clone()
         .unwrap();
     std::fs::remove_dir_all(&environment_ref).unwrap();
+    drop(scopes);
 
     let error = enable(
         PluginsEnableRequest {
@@ -2126,7 +1869,7 @@ fn enable_rejects_missing_managed_python_environment() {
         .expect("environment failure should be structured");
     assert_eq!(kind, PluginLifecycleFailureKind::Refused);
     assert_eq!(code, Some("environment_failed"));
-    assert!(message.contains("is unavailable"));
+    assert!(message.contains("failed to inspect lifecycle-managed Python environment"));
     let scopes = load_scoped_registries(None).unwrap();
     let record = find_record_by_id(&scopes, "acme.python-missing")
         .unwrap()
@@ -2163,7 +1906,7 @@ fn enable_rejects_python_environment_outside_managed_location() {
     let outside_python = environment::environment_python_path(&outside);
     std::fs::create_dir_all(outside_python.parent().unwrap()).unwrap();
     std::fs::write(&outside_python, b"not managed by Relay").unwrap();
-    let mut scopes = load_scoped_registries(None).unwrap();
+    let mut scopes = load_scoped_registries_for_update(None, None).unwrap();
     let scope = scopes
         .iter_mut()
         .find(|scope| scope.registry.get("acme.python-outside").is_some())
@@ -2177,6 +1920,7 @@ fn enable_rejects_python_environment_outside_managed_location() {
         )
         .unwrap();
     scope.save().unwrap();
+    drop(scopes);
 
     let error = enable(
         PluginsEnableRequest {
@@ -2191,7 +1935,7 @@ fn enable_rejects_python_environment_outside_managed_location() {
         .expect("environment refusal should be structured");
     assert_eq!(kind, PluginLifecycleFailureKind::Refused);
     assert_eq!(code, Some("environment_failed"));
-    assert!(message.contains("is unavailable"));
+    assert!(message.contains("is not its lifecycle-managed environment"));
     assert!(outside.exists());
     let scopes = load_scoped_registries(None).unwrap();
     let record = find_record_by_id(&scopes, "acme.python-outside")
@@ -2371,7 +2115,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     )
     .unwrap();
 
-    let mut scopes = load_scoped_registries(None).unwrap();
+    let mut scopes = load_scoped_registries_for_update(None, None).unwrap();
     let scope = scopes
         .iter_mut()
         .find(|scope| scope.registry.get("acme.python-retry").is_some())
@@ -2395,6 +2139,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
         )
         .unwrap();
     scope.save().unwrap();
+    drop(scopes);
 
     let error = remove(
         PluginsRemoveRequest {
@@ -2405,7 +2150,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     .expect_err("guarded cleanup should preserve unmanaged paths");
     assert!(error.to_string().contains("refusing to delete"));
     assert!(outside.exists());
-    let mut scopes = load_scoped_registries(None).unwrap();
+    let mut scopes = load_scoped_registries_for_update(None, None).unwrap();
     let scope = scopes
         .iter_mut()
         .find(|scope| scope.registry.get("acme.python-retry").is_some())
@@ -2426,6 +2171,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
         )
         .unwrap();
     scope.save().unwrap();
+    drop(scopes);
 
     remove(
         PluginsRemoveRequest {
@@ -2530,7 +2276,7 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
 }
 
 #[test]
-fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref() {
+fn active_dynamic_plugin_components_refresh_worker_records_without_manifest_ref() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
@@ -2555,7 +2301,7 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
     )
     .unwrap();
 
-    let mut scopes = load_scoped_registries(server.config.as_ref()).unwrap();
+    let mut scopes = load_scoped_registries_for_update(server.config.as_ref(), None).unwrap();
     let scope = scopes
         .iter_mut()
         .find(|scope| scope.registry.get("acme.worker").is_some())
@@ -2567,16 +2313,24 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
         .expect("worker record should exist")
         .source
         .manifest_ref = None;
-    scope.registry = nemo_relay::plugin::dynamic::DynamicPluginRegistry::from_records(records)
-        .expect("registry should accept worker without manifest_ref");
+    scope.registry.replace_registry(
+        nemo_relay::plugin::dynamic::DynamicPluginRegistry::from_records(records)
+            .expect("registry should accept worker without manifest_ref"),
+    );
     scope.save().unwrap();
+    drop(scopes);
 
     let resolved = resolve_plugins_config(None).unwrap();
     let active = active_dynamic_plugin_components(None, &resolved).unwrap();
     assert_eq!(active.len(), 1);
     assert_eq!(active[0].plugin_id, "acme.worker");
     assert_eq!(active[0].kind, DynamicPluginKind::Worker);
-    assert_eq!(active[0].manifest_ref, None);
+    assert!(
+        active[0]
+            .manifest_ref
+            .as_deref()
+            .is_some_and(|manifest_ref| manifest_ref.contains("relay-plugin.toml"))
+    );
 }
 
 #[test]
@@ -2607,6 +2361,102 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("already registered"));
+}
+
+#[test]
+fn read_only_lifecycle_snapshot_does_not_block_a_later_update() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.read-only-snapshot");
+    let server = GatewayOverrides::default();
+
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::Project,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let read_snapshot = load_scoped_registries(None).unwrap();
+    let stale_record = find_record_by_id(&read_snapshot, "acme.read-only-snapshot")
+        .unwrap()
+        .expect("registered plugin should be present in the read snapshot");
+    assert!(!stale_record.record.spec.enabled);
+
+    enable(
+        PluginsEnableRequest {
+            id: "acme.read-only-snapshot".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    assert!(
+        !find_record_by_id(&read_snapshot, "acme.read-only-snapshot")
+            .unwrap()
+            .unwrap()
+            .record
+            .spec
+            .enabled,
+        "a read-only snapshot should remain a stale value without retaining the update lock"
+    );
+    let current = load_scoped_registries(None).unwrap();
+    assert!(
+        find_record_by_id(&current, "acme.read-only-snapshot")
+            .unwrap()
+            .unwrap()
+            .record
+            .spec
+            .enabled
+    );
+}
+
+#[test]
+fn remove_hydrates_an_unregistered_declaration_without_relocking_itself() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let manifest = write_dynamic_manifest(&plugin_dir, "acme.remove-hydrated");
+    let plugins_toml = config_dir.join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    remove(
+        PluginsRemoveRequest {
+            id: "acme.remove-hydrated".into(),
+        },
+        &GatewayOverrides::default(),
+    )
+    .unwrap();
+
+    assert!(
+        !std::fs::read_to_string(&plugins_toml)
+            .unwrap()
+            .contains("plugins.dynamic")
+    );
+    let scopes = load_scoped_registries(None).unwrap();
+    assert!(
+        find_record_by_id(&scopes, "acme.remove-hydrated")
+            .unwrap()
+            .expect("hydrated record should remain as a tombstone")
+            .record
+            .is_tombstoned()
+    );
 }
 
 #[test]
@@ -2845,6 +2695,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
     .to_string();
     assert!(id_summary.contains("host_config: absent"));
     assert!(id_summary.contains("desired.enabled: false"));
+    drop(scopes);
 
     let missing_validate = validate(
         PluginsValidateRequest {
@@ -2911,6 +2762,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
         .unwrap()
         .expect("enabled record");
     assert!(enabled.record.spec.enabled);
+    drop(scopes);
 
     disable(
         PluginsDisableRequest {
@@ -2925,6 +2777,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
         .unwrap()
         .expect("disabled record");
     assert!(!disabled.record.spec.enabled);
+    drop(scopes);
 
     remove(
         PluginsRemoveRequest {
@@ -2950,6 +2803,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
     .to_string();
     assert!(all_list.contains("acme.guardrail"));
     assert!(all_list.contains("tombstoned"));
+    drop(scopes);
 
     let error = enable(
         PluginsEnableRequest {
@@ -3010,8 +2864,11 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
         .unwrap()
         .expect("explicit-scope record");
     assert_eq!(entry.scope.to_string(), "explicit");
-    assert_eq!(entry.plugins_toml_path, plugins_toml);
-    assert_eq!(entry.state_path, state_path);
+    assert_eq!(
+        entry.plugins_toml_path,
+        plugins_toml.canonicalize().unwrap()
+    );
+    assert_eq!(entry.state_path, state_path.canonicalize().unwrap());
 }
 
 #[test]
@@ -3083,13 +2940,166 @@ fn explicit_plugin_path_drives_plugin_command_lifecycle_scope() {
 
     list(PluginsListRequest::default(), &server).unwrap();
 
-    let scopes = load_scoped_registries(Some(&plugin_config_path)).unwrap();
+    let explicit_plugin_config = lifecycle_plugin_config_path(&server);
+    let scopes = load_scoped_registries(explicit_plugin_config.as_ref()).unwrap();
     let entry = find_record_by_id(&scopes, "acme.explicit-plugin-path")
         .unwrap()
         .expect("explicit plugin-path record");
     assert_eq!(entry.scope, RegistryScope::Explicit);
-    assert_eq!(entry.plugins_toml_path, plugin_config_path);
-    assert_eq!(entry.state_path, config_dir.join(".dynamic-plugins.json"));
+    assert_eq!(
+        entry.plugins_toml_path,
+        plugin_config_path.canonicalize().unwrap()
+    );
+    assert_eq!(
+        entry.state_path,
+        config_dir
+            .canonicalize()
+            .unwrap()
+            .join(".dynamic-plugins.json")
+    );
+    assert!(entry.state_path.exists());
+}
+
+#[test]
+fn same_directory_plugin_sources_share_state_without_losing_physical_ownership() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let custom_plugin_dir = temp.path().join("plugins").join("custom");
+    let project_plugin_dir = temp.path().join("plugins").join("project");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&custom_plugin_dir).unwrap();
+    std::fs::create_dir_all(&project_plugin_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let custom_manifest = write_dynamic_manifest(&custom_plugin_dir, "acme.custom-source");
+    let project_manifest = write_dynamic_manifest(&project_plugin_dir, "acme.project-source");
+    let custom_plugins_toml = config_dir.join("custom.toml");
+    let project_plugins_toml = config_dir.join("plugins.toml");
+    std::fs::write(
+        &custom_plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            custom_manifest.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &project_plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            project_manifest.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let server = GatewayOverrides {
+        plugin_config_path: Some(custom_plugins_toml.clone()),
+        ..GatewayOverrides::default()
+    };
+
+    let resolved = resolve_plugins_config_with_path(None, server.plugin_config_path.as_ref())
+        .expect("both same-directory sources should resolve");
+    assert_eq!(resolved.dynamic_plugins.len(), 2);
+    let explicit_plugin_config = lifecycle_plugin_config_path(&server);
+    let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved).unwrap();
+    let shared_state_path = config_dir
+        .join(".dynamic-plugins.json")
+        .canonicalize()
+        .unwrap();
+    assert_eq!(
+        scopes
+            .iter()
+            .filter(|scope| scope.state_path == shared_state_path)
+            .count(),
+        1,
+        "same-directory sources must share one lifecycle state and lock"
+    );
+    let custom = find_record_by_id(&scopes, "acme.custom-source")
+        .unwrap()
+        .expect("custom-source record");
+    assert_eq!(custom.scope, RegistryScope::Explicit);
+    assert_eq!(
+        custom.plugins_toml_path,
+        custom_plugins_toml.canonicalize().unwrap()
+    );
+    let project = find_record_by_id(&scopes, "acme.project-source")
+        .unwrap()
+        .expect("project-source record");
+    assert_eq!(project.scope, RegistryScope::Project);
+    assert_eq!(
+        project.plugins_toml_path,
+        project_plugins_toml.canonicalize().unwrap()
+    );
+    drop(scopes);
+
+    enable(
+        PluginsEnableRequest {
+            id: "acme.custom-source".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    enable(
+        PluginsEnableRequest {
+            id: "acme.project-source".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(explicit_plugin_config.as_ref()).unwrap();
+    assert!(
+        find_record_by_id(&scopes, "acme.custom-source")
+            .unwrap()
+            .unwrap()
+            .record
+            .spec
+            .enabled
+    );
+    assert!(
+        find_record_by_id(&scopes, "acme.project-source")
+            .unwrap()
+            .unwrap()
+            .record
+            .spec
+            .enabled
+    );
+}
+
+#[test]
+fn activation_uses_the_sources_captured_during_configuration_resolution() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let project = temp.path().join("project");
+    let other = temp.path().join("other");
+    let plugin_dir = temp.path().join("plugins").join("acme");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, "acme.captured-sources");
+    let _project = CurrentDirGuard::enter(&project);
+    let server = GatewayOverrides::default();
+
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::Project,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    enable(
+        PluginsEnableRequest {
+            id: "acme.captured-sources".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    let resolved = resolve_plugins_config(None).unwrap();
+    assert!(!resolved.plugin_selected_sources.is_empty());
+
+    let _other = CurrentDirGuard::enter(&other);
+    let active = active_dynamic_plugin_components(None, &resolved).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].plugin_id, "acme.captured-sources");
 }
 
 #[test]
@@ -3127,6 +3137,194 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
     assert_eq!(
         entry.record.source.manifest_ref.as_deref(),
         Some(canonical_manifest_path.to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn hydrate_refreshes_same_id_declaration_before_enable_validation() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let first_dir = temp.path().join("plugins").join("first");
+    let second_dir = temp.path().join("plugins").join("second");
+    let config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&first_dir).unwrap();
+    std::fs::create_dir_all(&second_dir).unwrap();
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let first_manifest = write_dynamic_manifest(&first_dir, "acme.redeclared");
+    let second_manifest = write_native_dynamic_manifest(&second_dir, "acme.redeclared");
+    let plugins_toml = config_dir.join("plugins.toml");
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            first_manifest.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    let resolved = resolve_plugins_config(None).unwrap();
+    load_and_hydrate_scopes(None, &resolved).unwrap();
+    let state_path = config_dir.join(".dynamic-plugins.json");
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+    state["records"][0]["spec"]["config_ref"] =
+        serde_json::json!("higher-level.plugins.acme-redeclared");
+    let mut rendered_state = serde_json::to_vec_pretty(&state).unwrap();
+    rendered_state.push(b'\n');
+    std::fs::write(&state_path, rendered_state).unwrap();
+
+    std::fs::write(
+        &plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            second_manifest.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        first_dir.join("plugin.py"),
+        b"tampered after declaration moved",
+    )
+    .unwrap();
+
+    enable(
+        PluginsEnableRequest {
+            id: "acme.redeclared".into(),
+        },
+        &GatewayOverrides::default(),
+    )
+    .unwrap();
+
+    let scopes = load_scoped_registries(None).unwrap();
+    let entry = find_record_by_id(&scopes, "acme.redeclared")
+        .unwrap()
+        .expect("redeclared plugin should remain registered");
+    let canonical_second_manifest = second_manifest.canonicalize().unwrap();
+    assert!(entry.record.spec.enabled);
+    assert_eq!(
+        entry.record.spec.config_ref.as_deref(),
+        Some("higher-level.plugins.acme-redeclared")
+    );
+    assert_eq!(entry.record.metadata.kind, DynamicPluginKind::RustDynamic);
+    assert_eq!(
+        entry.record.source.manifest_ref.as_deref(),
+        Some(canonical_second_manifest.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        entry.record.source.artifact_ref.as_deref(),
+        Some("libfixture_native.so")
+    );
+    match &entry.record.compatibility {
+        DynamicPluginCompatibility::RustDynamic(compatibility) => {
+            assert_eq!(compatibility.relay, "0.5");
+            assert_eq!(compatibility.native_api, "1");
+        }
+        other => panic!("expected refreshed native compatibility, got {other:?}"),
+    }
+    match &entry.record.load {
+        DynamicPluginLoadContract::RustDynamic(load) => {
+            assert_eq!(load.library, "libfixture_native.so");
+            assert_eq!(load.symbol, "nemo_relay_fixture_native_plugin");
+        }
+        other => panic!("expected refreshed native load contract, got {other:?}"),
+    }
+}
+
+#[test]
+fn hydrate_ignores_a_foreign_tombstone_and_creates_a_fresh_disabled_record() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let plugin_dir = temp.path().join("plugins").join("moved");
+    let project_config_dir = temp.path().join(".nemo-relay");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    std::fs::create_dir_all(&project_config_dir).unwrap();
+    let manifest = write_dynamic_manifest(&plugin_dir, "acme.moved-scope");
+    let server = GatewayOverrides::default();
+
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    enable(
+        PluginsEnableRequest {
+            id: "acme.moved-scope".into(),
+        },
+        &server,
+    )
+    .unwrap();
+
+    std::fs::remove_file(
+        temp.path()
+            .join("xdg")
+            .join("nemo-relay")
+            .join("plugins.toml"),
+    )
+    .unwrap();
+    let project_plugins_toml = project_config_dir.join("plugins.toml");
+    std::fs::write(
+        &project_plugins_toml,
+        format!(
+            "[[plugins.dynamic]]\nmanifest = {:?}\n",
+            manifest.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let resolved = resolve_plugins_config(None).unwrap();
+    let error = load_and_hydrate_scopes(None, &resolved)
+        .expect_err("a live record owned by another source must fail closed")
+        .to_string();
+    assert!(error.contains("multiple lifecycle scopes"), "{error}");
+    let scopes = load_scoped_registries(None).unwrap();
+    let still_enabled = find_record_by_id(&scopes, "acme.moved-scope")
+        .unwrap()
+        .expect("the original live record must remain unchanged");
+    assert_eq!(still_enabled.scope, RegistryScope::User);
+    assert!(still_enabled.record.spec.enabled);
+    drop(scopes);
+
+    remove(
+        PluginsRemoveRequest {
+            id: "acme.moved-scope".into(),
+        },
+        &server,
+    )
+    .unwrap();
+    let resolved = resolve_plugins_config(None).unwrap();
+    let scopes = load_and_hydrate_scopes(None, &resolved).unwrap();
+    let records = collect_records(&scopes, true)
+        .into_iter()
+        .filter(|entry| entry.record.metadata.id == "acme.moved-scope")
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+
+    let old_user_record = records
+        .iter()
+        .find(|entry| entry.scope == RegistryScope::User)
+        .unwrap_or_else(|| panic!("the old user tombstone should remain: {records:#?}"));
+    assert!(old_user_record.record.is_tombstoned());
+    let project_record = records
+        .iter()
+        .find(|entry| entry.scope == RegistryScope::Project)
+        .expect("the declaring project scope should receive a record");
+    assert!(project_record.record.spec.present);
+    assert!(!project_record.record.spec.enabled);
+    assert_eq!(
+        scopes[project_record.scope_index]
+            .registry
+            .declaration_source("acme.moved-scope"),
+        Some(
+            project_plugins_toml
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
     );
 }
 
@@ -3172,6 +3370,7 @@ fn manually_configured_python_worker_cannot_enable_without_lifecycle_add() {
     }
     .to_string();
     assert!(summary.contains("runtime environment is unavailable"));
+    drop(scopes);
 
     let error = enable(
         PluginsEnableRequest {
@@ -4285,10 +4484,10 @@ fn lifecycle_helpers_cover_environment_manifest_scope_and_restore_paths() {
     let temp = tempfile::tempdir().unwrap();
     let plugin_id = "acme.lifecycle-helpers";
     assert_eq!(
-        environment_last_error(plugin_id, DynamicPluginCheckState::Valid, None),
+        environment_last_error(plugin_id, DynamicPluginCheckState::Valid, None, None),
         None
     );
-    let missing = environment_last_error(plugin_id, DynamicPluginCheckState::Invalid, None)
+    let missing = environment_last_error(plugin_id, DynamicPluginCheckState::Invalid, None, None)
         .expect("invalid environment should produce a diagnostic");
     assert_eq!(missing.code, "environment_failed");
     assert!(missing.message.contains("has no lifecycle-managed"));
@@ -4296,12 +4495,24 @@ fn lifecycle_helpers_cover_environment_manifest_scope_and_restore_paths() {
         plugin_id,
         DynamicPluginCheckState::Invalid,
         Some("managed/python"),
+        None,
     )
     .expect("invalid referenced environment should produce a diagnostic");
     assert!(
         unavailable
             .message
             .contains("managed/python is unavailable")
+    );
+    let detailed = environment_last_error(
+        plugin_id,
+        DynamicPluginCheckState::Invalid,
+        Some("managed/python"),
+        Some("managed Python environment changed after provisioning".into()),
+    )
+    .expect("detailed validation failures should be retained");
+    assert_eq!(
+        detailed.message,
+        "managed Python environment changed after provisioning"
     );
 
     let mut scopes = Vec::new();

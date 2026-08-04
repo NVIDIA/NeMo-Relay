@@ -27,6 +27,7 @@ switchyard = ["dep:nemo-relay-switchyard"]
 
 [dependencies]
 nemo-relay = { workspace = true, features = ["guardrails-remote", "object-store", "worker-grpc"] }
+nemo-relay-plugin-host-config.workspace = true
 nemo-relay-adaptive = { workspace = true, features = ["redis-backend"] }
 nemo-relay-pii-redaction.workspace = true
 nemo-relay-switchyard = { workspace = true, optional = true, features = ["schema"] }

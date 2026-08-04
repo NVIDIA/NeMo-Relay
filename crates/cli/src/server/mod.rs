@@ -1062,7 +1062,9 @@ impl PluginActivation {
         }
         for plugin in &dynamic_plugins {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
-                snapshot.verify_current()?;
+                snapshot
+                    .verify_current()
+                    .map_err(|error| CliError::Config(error.to_string()))?;
             }
         }
         let native_specs = dynamic_plugins
@@ -1128,7 +1130,9 @@ impl PluginActivation {
             };
         for plugin in &dynamic_plugins {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
-                snapshot.verify_current()?;
+                snapshot
+                    .verify_current()
+                    .map_err(|error| CliError::Config(error.to_string()))?;
             }
         }
         let worker =

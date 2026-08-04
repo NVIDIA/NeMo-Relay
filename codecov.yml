@@ -112,6 +112,7 @@ component_management:
         - "crates/plugin/src"
         - "crates/worker-proto/src"
         - "crates/worker/src"
+        - "crates/plugin-host-config/src"
         - "python/plugin/src/nemo_relay_plugin"
       statuses:
         - type: project

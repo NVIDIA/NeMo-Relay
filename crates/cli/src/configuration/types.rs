@@ -63,6 +63,7 @@ pub(crate) struct ResolvedConfig {
     pub(crate) logging: LoggingConfig,
     pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
+    pub(crate) plugin_selected_sources: Vec<PathBuf>,
     pub(crate) bootstrap_fingerprint: Option<String>,
 }
 

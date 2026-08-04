@@ -411,6 +411,7 @@ jobs:
             nemo-relay-worker-proto
             nemo-relay-worker
             nemo-relay
+            nemo-relay-plugin-host-config
             nemo-relay-adaptive
             nemo-relay-pii-redaction
             nemo-relay-switchyard

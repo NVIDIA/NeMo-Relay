@@ -6,6 +6,7 @@ mod types;
 
 pub(crate) use types::*;
 
+#[cfg(test)]
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, OpenOptions};
@@ -16,16 +17,16 @@ use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue};
 use nemo_relay::logging::LoggingConfig;
+use nemo_relay::plugin::deduplicate_plugin_config_paths;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
-};
-use nemo_relay::plugin::{
-    PluginError, deduplicate_plugin_config_paths, merge_plugin_config_documents,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::{digest, hmac};
 use serde::Deserialize;
-use serde_json::{Map, Value};
+#[cfg(test)]
+use serde_json::Map;
+use serde_json::Value;
 
 use crate::error::CliError;
 use crate::filesystem::{LockAttempt, try_lock_exclusive, try_lock_shared};
@@ -604,6 +605,7 @@ pub(crate) fn sign_python_environment_attestation(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn verify_python_environment_attestation(
     source_artifact_sha256: &str,
     environment_sha256: &str,
@@ -1298,8 +1300,10 @@ struct PluginTomlConfig {
     dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     dynamic_plugin_policy: DynamicPluginHostPolicy,
     contributing_sources: Vec<PathBuf>,
+    selected_sources: Vec<PathBuf>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default, Deserialize)]
 struct PluginTomlPluginsSection {
     #[serde(default)]
@@ -1308,6 +1312,7 @@ struct PluginTomlPluginsSection {
     policy: Option<crate::plugins::policy::FileDynamicPluginHostPolicy>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileDynamicPluginConfig {
@@ -1365,69 +1370,47 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let paths = deduplicate_plugin_config_paths(paths);
-    let mut dynamic_plugins = Vec::new();
-    let mut dynamic_plugin_policy = DynamicPluginHostPolicy::default();
-    let mut seen_plugin_ids = HashSet::new();
-    let mut contributing_sources = Vec::new();
-    let mut runtime_documents = Vec::new();
-
-    for path in &paths {
-        let Some(raw) = read_config_file(path, false, "plugin configuration")? else {
-            continue;
-        };
-        let mut parsed = raw
-            .parse::<toml::Table>()
-            .map(toml::Value::Table)
-            .map_err(|error| {
-                CliError::Config(format!(
-                    "invalid plugin TOML in {}: {error}",
-                    path.display()
-                ))
-            })?;
-        let resolved_plugins =
-            resolve_dynamic_plugin_refs(path, &mut parsed, &mut seen_plugin_ids)?;
-        if !resolved_plugins.dynamic_plugins.is_empty()
-            || resolved_plugins.dynamic_plugin_policy != DynamicPluginHostPolicy::default()
-        {
-            contributing_sources.push(path.clone());
-        }
-        dynamic_plugins.extend(resolved_plugins.dynamic_plugins);
-        dynamic_plugin_policy.merge_from(resolved_plugins.dynamic_plugin_policy);
-        runtime_documents.push((
-            path.clone(),
-            serde_json::to_value(remove_dynamic_plugin_sections(parsed))
-                .expect("toml value serializes to JSON"),
-        ));
+    let selected_paths = deduplicate_plugin_config_paths(paths);
+    let resolved = nemo_relay_plugin_host_config::resolve_plugin_files_from_paths(
+        selected_paths.clone(),
+        None,
+    )
+    .map_err(|error| CliError::Config(error.to_string()))?;
+    if !resolved.had_input {
+        return Ok(None);
     }
-
-    // Delegate merged runtime plugin config to the shared core primitive after dynamic refs have
-    // been validated independently. Documents remain ordered from lowest to highest precedence.
-    let resolved = merge_plugin_config_documents(runtime_documents).map_err(|err| match err {
-        PluginError::InvalidConfig(message) => CliError::Config(message),
-        other => CliError::Config(other.to_string()),
-    })?;
-    match resolved {
-        Some((value, sources)) => {
-            contributing_sources.extend(sources.iter().cloned());
-            contributing_sources.sort();
-            contributing_sources.dedup();
-            Ok(Some(PluginTomlConfig {
-                value: plugin_toml_runtime_value(value),
-                dynamic_plugins,
-                dynamic_plugin_policy,
-                contributing_sources,
-            }))
-        }
-        None => Ok((!dynamic_plugins.is_empty()
-            || dynamic_plugin_policy != DynamicPluginHostPolicy::default())
-        .then_some(PluginTomlConfig {
-            value: None,
-            dynamic_plugins,
-            dynamic_plugin_policy,
-            contributing_sources,
-        })),
-    }
+    // The shared resolver pins sources to their physical paths so lifecycle state and snapshots
+    // cannot be split across aliases. Keep the CLI's established presentation contract, however:
+    // contributing sources use the selected spelling and are sorted independently of precedence.
+    let mut contributing_sources = selected_paths
+        .into_iter()
+        .filter(|selected| {
+            let physical = selected.canonicalize().unwrap_or_else(|_| selected.clone());
+            resolved
+                .contributing_sources
+                .iter()
+                .any(|source| source == &physical)
+        })
+        .collect::<Vec<_>>();
+    contributing_sources.sort();
+    contributing_sources.dedup();
+    Ok(Some(PluginTomlConfig {
+        value: resolved.runtime_value,
+        dynamic_plugins: resolved
+            .dynamic_plugins
+            .into_iter()
+            .map(|plugin| ResolvedDynamicPluginConfig {
+                plugin_id: plugin.plugin_id,
+                manifest_ref: plugin.manifest_ref,
+                config: plugin.config,
+                has_explicit_config: plugin.has_explicit_config,
+                source: plugin.source,
+            })
+            .collect(),
+        dynamic_plugin_policy: resolved.dynamic_plugin_policy,
+        contributing_sources,
+        selected_sources: resolved.selected_sources,
+    }))
 }
 
 fn apply_plugin_toml_config(resolved: &mut ResolvedConfig, plugin_toml: Option<PluginTomlConfig>) {
@@ -1439,13 +1422,16 @@ fn apply_plugin_toml_config(resolved: &mut ResolvedConfig, plugin_toml: Option<P
     }
     resolved.dynamic_plugins = plugin_toml.dynamic_plugins;
     resolved.dynamic_plugin_policy = plugin_toml.dynamic_plugin_policy;
+    resolved.plugin_selected_sources = plugin_toml.selected_sources;
 }
 
+#[cfg(test)]
 struct ResolvedDynamicPluginRefs {
     dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     dynamic_plugin_policy: DynamicPluginHostPolicy,
 }
 
+#[cfg(test)]
 fn resolve_dynamic_plugin_refs(
     source: &Path,
     value: &mut toml::Value,
@@ -1513,6 +1499,7 @@ fn resolve_dynamic_plugin_refs(
     })
 }
 
+#[cfg(test)]
 fn resolve_dynamic_manifest_path(source: &Path, manifest: &str) -> PathBuf {
     let manifest = PathBuf::from(manifest);
     if manifest.is_absolute() {
@@ -1525,6 +1512,7 @@ fn resolve_dynamic_manifest_path(source: &Path, manifest: &str) -> PathBuf {
     }
 }
 
+#[cfg(test)]
 fn plugin_toml_runtime_value(value: Value) -> Option<Value> {
     match value {
         Value::Object(ref object) if object.is_empty() => None,
@@ -1532,6 +1520,7 @@ fn plugin_toml_runtime_value(value: Value) -> Option<Value> {
     }
 }
 
+#[cfg(test)]
 fn remove_dynamic_plugin_sections(mut value: toml::Value) -> toml::Value {
     if let Some(root) = value.as_table_mut()
         && let Some(toml::Value::Table(plugins)) = root.get_mut("plugins")

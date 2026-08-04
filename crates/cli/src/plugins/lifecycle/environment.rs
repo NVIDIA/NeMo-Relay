@@ -13,8 +13,9 @@ use nemo_relay::plugin::dynamic::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub(super) const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";
-pub(super) const ENVIRONMENT_ATTESTATION_FILE: &str = ".nemo-relay-environment.sha256";
+pub(super) use nemo_relay_plugin_host_config::{
+    ENVIRONMENT_ATTESTATION_FILE, MANAGED_ENVIRONMENTS_DIR,
+};
 const MAX_ENVIRONMENT_FILES: usize = 100_000;
 pub(super) const MAX_ENVIRONMENT_DEPTH: usize = 128;
 #[cfg(test)]
@@ -62,100 +63,7 @@ pub(super) fn validate_python_entrypoint_artifact(
     manifest: &DynamicPluginManifest,
     manifest_ref: &str,
 ) -> Result<(), String> {
-    let DynamicPluginManifestLoad::Worker(load) = &manifest.load else {
-        return Ok(());
-    };
-    if load.runtime != Some(WorkerRuntime::Python) {
-        return Ok(());
-    }
-
-    let source = manifest.source.as_ref().ok_or_else(|| {
-        "Python worker plugins must declare source.manifest_root and source.artifact".to_string()
-    })?;
-    let manifest_root = source
-        .manifest_root
-        .as_deref()
-        .map(str::trim)
-        .filter(|root| !root.is_empty())
-        .ok_or_else(|| {
-            "Python worker plugins added through the CLI must declare source.manifest_root"
-                .to_string()
-        })?;
-    let artifact = source
-        .artifact
-        .as_deref()
-        .map(str::trim)
-        .filter(|artifact| !artifact.is_empty())
-        .ok_or_else(|| "Python worker plugins must declare source.artifact".to_string())?;
-    let entrypoint = load
-        .entrypoint
-        .as_deref()
-        .map(str::trim)
-        .filter(|entrypoint| !entrypoint.is_empty())
-        .ok_or_else(|| "Python worker plugins must declare load.entrypoint".to_string())?;
-    let (module, callable) = entrypoint.split_once(':').ok_or_else(|| {
-        format!(
-            "Python worker load.entrypoint '{entrypoint}' must use the unambiguous module:function form"
-        )
-    })?;
-    if callable.is_empty()
-        || callable.contains(':')
-        || module.is_empty()
-        || module
-            .split('.')
-            .any(|segment| segment.is_empty() || segment.contains(['/', '\\', ':']))
-    {
-        return Err(format!(
-            "Python worker load.entrypoint '{entrypoint}' must use the unambiguous module:function form"
-        ));
-    }
-
-    let manifest_path = Path::new(manifest_ref);
-    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let unresolved_manifest_root = resolve_relative_path(manifest_dir, manifest_root);
-    let manifest_root = unresolved_manifest_root.canonicalize().map_err(|error| {
-        format!(
-            "could not resolve Python plugin source.manifest_root {}: {error}",
-            unresolved_manifest_root.display()
-        )
-    })?;
-    let artifact = resolve_relative_path(manifest_dir, artifact)
-        .canonicalize()
-        .map_err(|error| format!("could not resolve Python source.artifact: {error}"))?;
-    let module_path = module
-        .split('.')
-        .fold(manifest_root.clone(), |path, segment| path.join(segment));
-    let module_file = module_path.with_extension("py");
-    let package_file = module_path.join("__init__.py");
-    let mut candidates = [module_file, package_file]
-        .into_iter()
-        .filter(|path| path.is_file())
-        .map(|path| {
-            path.canonicalize().map_err(|error| {
-                format!(
-                    "could not resolve Python entrypoint module file {}: {error}",
-                    path.display()
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    candidates.sort();
-    candidates.dedup();
-    let [entrypoint_artifact] = candidates.as_slice() else {
-        return Err(format!(
-            "Python worker load.entrypoint '{entrypoint}' must resolve to exactly one source module under source.manifest_root; expected {} or {}",
-            module_path.with_extension("py").display(),
-            module_path.join("__init__.py").display()
-        ));
-    };
-    if entrypoint_artifact != &artifact {
-        return Err(format!(
-            "Python worker load.entrypoint '{entrypoint}' resolves to {}, but integrity-checked source.artifact resolves to {}; the executed entrypoint module must be the integrity-checked artifact",
-            entrypoint_artifact.display(),
-            artifact.display()
-        ));
-    }
-    Ok(())
+    nemo_relay_plugin_host_config::validate_python_entrypoint_artifact(manifest, manifest_ref)
 }
 
 pub(super) fn provision_python_environment(
@@ -268,56 +176,23 @@ pub(super) fn read_environment_attestation(
     environment: &Path,
     expected_source_artifact_sha256: &str,
 ) -> Result<String, String> {
-    let attestation_path = environment.join(ENVIRONMENT_ATTESTATION_FILE);
-    let raw = std::fs::read_to_string(&attestation_path)
-        .map_err(|error| format!("failed to read {}: {error}", attestation_path.display()))?;
-    let attestation = serde_json::from_str::<EnvironmentAttestation>(&raw).map_err(|error| {
-        format!(
-            "managed Python environment attestation {} is invalid: {error}",
-            attestation_path.display()
-        )
-    })?;
-    if attestation.version != 1
-        || attestation.source_artifact_sha256 != expected_source_artifact_sha256.trim()
-        || attestation.environment_sha256.len() != 64
-        || !attestation
-            .environment_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err(format!(
-            "managed Python environment attestation {} does not match the trusted source artifact",
-            attestation_path.display()
-        ));
-    }
-    if !crate::configuration::verify_python_environment_attestation(
-        &attestation.source_artifact_sha256,
-        &attestation.environment_sha256,
-        &attestation.authentication,
+    nemo_relay_plugin_host_config::read_environment_attestation(
+        environment,
+        expected_source_artifact_sha256,
     )
-    .map_err(|error| error.to_string())?
-    {
-        return Err(format!(
-            "managed Python environment attestation {} failed authentication",
-            attestation_path.display()
-        ));
-    }
-    Ok(attestation.environment_sha256)
+    .map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 pub(super) fn verify_environment_attestation(
     environment: &Path,
     expected_source_artifact_sha256: &str,
 ) -> Result<String, String> {
-    let expected = read_environment_attestation(environment, expected_source_artifact_sha256)?;
-    let actual = environment_tree_digest(environment)?;
-    if actual != expected {
-        return Err(format!(
-            "managed Python environment {} changed after provisioning",
-            environment.display()
-        ));
-    }
-    Ok(actual)
+    nemo_relay_plugin_host_config::verify_environment_attestation(
+        environment,
+        expected_source_artifact_sha256,
+    )
+    .map_err(|error| error.to_string())
 }
 
 pub(super) fn write_environment_attestation(
@@ -551,37 +426,13 @@ pub(super) fn remove_managed_environment(
     remove_directory_if_present(&configured, "delete")
 }
 
-pub(super) fn environment_state(
+pub(super) fn validate_environment_state(
     manifest: &DynamicPluginManifest,
     state_path: &Path,
     environment_ref: Option<&str>,
-) -> DynamicPluginCheckState {
-    if !is_python_worker(manifest) {
-        return DynamicPluginCheckState::Unknown;
-    }
-    let Some(environment_ref) = environment_ref else {
-        return DynamicPluginCheckState::Invalid;
-    };
-    let Ok(expected) = managed_environment_path(state_path, &manifest.plugin.id) else {
-        return DynamicPluginCheckState::Invalid;
-    };
-    let Ok(configured) = absolute_path(Path::new(environment_ref)) else {
-        return DynamicPluginCheckState::Invalid;
-    };
-    if configured != expected
-        || std::fs::symlink_metadata(&configured)
-            .map(|metadata| !metadata.file_type().is_dir())
-            .unwrap_or(true)
-        || !environment_python_path(&configured).is_file()
-        || manifest
-            .integrity
-            .as_ref()
-            .and_then(|integrity| integrity.sha256.as_deref())
-            .is_none_or(|digest| verify_environment_attestation(&configured, digest).is_err())
-    {
-        return DynamicPluginCheckState::Invalid;
-    }
-    DynamicPluginCheckState::Valid
+) -> Result<DynamicPluginCheckState, String> {
+    nemo_relay_plugin_host_config::validate_environment_state(manifest, state_path, environment_ref)
+        .map_err(|error| error.to_string())
 }
 
 pub(super) fn environment_python_path(environment: &Path) -> PathBuf {

@@ -50,9 +50,8 @@ mod trust;
 
 use self::environment::{
     ENVIRONMENT_ATTESTATION_FILE, MANAGED_ENVIRONMENTS_DIR, ProcessPythonEnvironmentCommandRunner,
-    PythonEnvironmentCommandRunner, environment_state, provision_python_environment,
-    read_environment_attestation, remove_managed_environment, validate_python_entrypoint_artifact,
-    verify_environment_attestation,
+    PythonEnvironmentCommandRunner, provision_python_environment, read_environment_attestation,
+    remove_managed_environment, validate_environment_state, validate_python_entrypoint_artifact,
 };
 use self::render::*;
 pub(crate) use self::render::{render_generic_plugin_json_error, render_plugin_error};
@@ -62,10 +61,12 @@ use self::responses::{
 };
 use self::state::{
     RegistryScope, ScopedDynamicPluginRecord, ScopedRegistry, collect_records, find_record_by_id,
-    load_scoped_registries, scoped_paths_for_add,
+    load_scoped_registries, load_scoped_registries_for_update, scoped_paths_for_add,
 };
 use self::target::PluginTarget;
 use self::trust::{EvaluatedDynamicPluginTrust, evaluate_dynamic_plugin_trust};
+
+pub(crate) use nemo_relay_plugin_host_config::DynamicPluginActivationSnapshot;
 
 const VALIDATION_MESSAGE: &str = "validated by CLI";
 
@@ -103,11 +104,28 @@ fn add_with_environment_runner(
     const COMMAND: &str = "plugins add";
 
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
+    if explicit_plugin_config.is_some() && scope_flags_selected(&command.scope) {
+        return Err(CliError::Config(
+            "--config cannot be combined with --user, --project, or --global for `plugins add`; the same applies to --plugin-config-path"
+                .into(),
+        ));
+    }
+    let (plugins_toml_path, state_path, scope) = scoped_paths_for_add(
+        target_scope(&command.scope)?,
+        explicit_plugin_config.as_ref(),
+    )?;
     let resolved = resolve_plugins_config_with_path(
         server.config.as_ref(),
         server.plugin_config_path.as_ref(),
     )?;
-    let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+    let scopes = load_scoped_registries_for_update(
+        explicit_plugin_config.as_ref(),
+        Some((scope, plugins_toml_path.clone(), state_path.clone())),
+    )?;
+    let (mut scopes, touched_scope_indices) = hydrate_scopes_with_updates(scopes, &resolved)?;
+    for scope_index in touched_scope_indices {
+        scopes[scope_index].save()?;
+    }
     let (manifest, manifest_ref) = load_manifest_for_action("add", &command.path)?;
     let plugin_id = manifest.plugin.id.trim().to_owned();
     load_config_schema_for_manifest(&manifest, &manifest_ref)?;
@@ -122,18 +140,18 @@ fn add_with_environment_runner(
         None => false,
     };
 
-    if explicit_plugin_config.is_some() && scope_flags_selected(&command.scope) {
-        return Err(CliError::Config(
-            "--config cannot be combined with --user, --project, or --global for `plugins add`; the same applies to --plugin-config-path"
-                .into(),
-        ));
-    }
-
-    let (plugins_toml_path, state_path, scope) = scoped_paths_for_add(
-        target_scope(&command.scope)?,
-        explicit_plugin_config.as_ref(),
-    )?;
     let scope_index = ensure_scope(&mut scopes, scope, plugins_toml_path.clone(), state_path);
+    scopes[scope_index].ensure_locked()?;
+    if scopes[scope_index]
+        .registry
+        .get(&plugin_id)
+        .is_some_and(|existing| !existing.is_tombstoned())
+    {
+        return Err(CliError::Config(format!(
+            "dynamic plugin '{}' is already registered in the {} lifecycle scope",
+            plugin_id, scope
+        )));
+    }
     let policy = evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
     let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
     if !policy.policy_satisfied {
@@ -207,6 +225,21 @@ fn add_with_environment_runner(
         return Err(error);
     }
     if let Err(error) = append_dynamic_plugin_reference(&plugins_toml_path, &manifest_ref) {
+        cleanup_provisioned_environment(
+            &scopes[scope_index].state_path,
+            &plugin_id,
+            environment_ref.as_deref(),
+        );
+        return Err(error);
+    }
+    let declaration_source = pin_declaration_source(&plugins_toml_path);
+    if let Err(error) = declaration_source.and_then(|declaration_source| {
+        scopes[scope_index]
+            .registry
+            .set_declaration_source(&plugin_id, declaration_source)
+            .map_err(|error| CliError::Config(error.to_string()))
+    }) {
+        let _ = restore_plugins_toml(&plugins_toml_path, original_plugins_toml.as_deref());
         cleanup_provisioned_environment(
             &scopes[scope_index].state_path,
             &plugin_id,
@@ -326,7 +359,8 @@ pub(crate) fn validate(
                 server.plugin_config_path.as_ref(),
             )?;
             let host_config_by_id = host_config_by_id(&resolved);
-            let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+            let mut scopes =
+                load_and_hydrate_scopes_for_update(explicit_plugin_config.as_ref(), &resolved)?;
             let entry = find_registered_entry(&scopes, "plugins validate", &plugin_id)?;
             let manifest_ref = manifest_ref_from_record(&entry.record)?;
             let (manifest, manifest_ref) = load_manifest_for_action("validate", &manifest_ref)?;
@@ -480,13 +514,14 @@ pub(crate) fn remove(
     server: &GatewayOverrides,
 ) -> Result<(), CliError> {
     let explicit_plugin_config = lifecycle_plugin_config_path(server);
-    let mut scopes = load_scoped_registries(explicit_plugin_config.as_ref())?;
+    let mut scopes = load_scoped_registries_for_update(explicit_plugin_config.as_ref(), None)?;
     if find_record_by_id(&scopes, &command.id)?.is_none() {
+        drop(scopes);
         let resolved = resolve_plugins_config_with_path(
             server.config.as_ref(),
             server.plugin_config_path.as_ref(),
         )?;
-        scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+        scopes = load_and_hydrate_scopes_for_update(explicit_plugin_config.as_ref(), &resolved)?;
     }
     let entry = find_registered_entry(&scopes, "plugins remove", &command.id)?;
     let original_plugins_toml = std::fs::read(&entry.plugins_toml_path).ok();
@@ -531,401 +566,6 @@ pub(crate) struct ActiveDynamicPluginComponent {
     pub(crate) activation_snapshot: Option<Arc<DynamicPluginActivationSnapshot>>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct DynamicPluginActivationSnapshot {
-    root: PathBuf,
-    original_manifest_ref: String,
-    identity_manifest: PathBuf,
-    activation_manifest: PathBuf,
-    activation_environment_ref: Option<String>,
-    identity_files: HashMap<PathBuf, PathBuf>,
-    closure_digest: String,
-    verification_digest: String,
-}
-
-impl DynamicPluginActivationSnapshot {
-    fn create(
-        manifest_ref: &str,
-        expected_plugin_id: &str,
-        expected_kind: DynamicPluginKind,
-        environment_ref: Option<&str>,
-        host_policy: &crate::plugins::policy::DynamicPluginHostPolicy,
-    ) -> Result<Arc<Self>, CliError> {
-        let (mut manifest, original_manifest_ref, manifest_bytes) =
-            load_bounded_dynamic_plugin_manifest_bytes(manifest_ref)?;
-        if manifest.plugin.id.trim() != expected_plugin_id || manifest.plugin.kind != expected_kind
-        {
-            return Err(CliError::Config(format!(
-                "dynamic plugin manifest identity changed before activation for '{expected_plugin_id}'"
-            )));
-        }
-        let policy = evaluate_dynamic_plugin_host_policy(host_policy, &manifest);
-        validate_python_entrypoint_artifact(&manifest, &original_manifest_ref)
-            .map_err(CliError::Config)?;
-
-        let root = std::env::temp_dir().join(format!(
-            "nemo-relay-plugin-snapshot-{}",
-            uuid::Uuid::now_v7().simple()
-        ));
-        fs::create_dir(&root).map_err(|error| {
-            CliError::Config(format!(
-                "failed to create dynamic plugin activation snapshot {}: {error}",
-                root.display()
-            ))
-        })?;
-        let mut root_guard = SnapshotRootGuard(Some(root.clone()));
-        #[cfg(unix)]
-        fs::set_permissions(&root, {
-            use std::os::unix::fs::PermissionsExt;
-            fs::Permissions::from_mode(0o700)
-        })
-        .map_err(|error| {
-            CliError::Config(format!(
-                "failed to protect dynamic plugin activation snapshot {}: {error}",
-                root.display()
-            ))
-        })?;
-
-        let identity_manifest = root.join("identity-manifest.toml");
-        fs::write(&identity_manifest, &manifest_bytes).map_err(|error| {
-            CliError::Config(format!(
-                "failed to write dynamic plugin activation snapshot {}: {error}",
-                identity_manifest.display()
-            ))
-        })?;
-        let original_manifest_path = PathBuf::from(&original_manifest_ref);
-        let manifest_directory = original_manifest_path
-            .parent()
-            .ok_or_else(|| {
-                CliError::Config(format!(
-                    "dynamic plugin manifest {} has no parent directory",
-                    original_manifest_path.display()
-                ))
-            })?
-            .to_path_buf();
-        let runtime_root = root.join("runtime");
-        let mut budget = SnapshotBudget::default();
-        let mut copied_files = HashMap::new();
-        copy_snapshot_directory(
-            &manifest_directory,
-            &runtime_root,
-            &mut copied_files,
-            &mut budget,
-            false,
-            &mut Vec::new(),
-        )?;
-        let declared_artifact = manifest
-            .source
-            .as_ref()
-            .and_then(|source| source.artifact.as_deref())
-            .map(|artifact| fs::canonicalize(resolve_manifest_relative_path(&original_manifest_path, artifact)))
-            .transpose()
-            .map_err(|error| {
-                CliError::Config(format!(
-                    "failed to normalize dynamic plugin artifact for '{expected_plugin_id}': {error}"
-                ))
-            })?;
-        let mut identity_files = HashMap::new();
-
-        match &mut manifest.load {
-            DynamicPluginManifestLoad::RustDynamic(load) => {
-                if let Some(library) = load.library.as_deref() {
-                    let (logical, _, copied) = copy_snapshot_file(
-                        &root,
-                        &original_manifest_path,
-                        library,
-                        "library",
-                        &mut copied_files,
-                        &mut budget,
-                    )?;
-                    identity_files
-                        .entry(logical)
-                        .or_insert_with(|| copied.clone());
-                    load.library = Some(copied.to_string_lossy().into_owned());
-                }
-            }
-            DynamicPluginManifestLoad::Worker(load)
-                if matches!(
-                    load.runtime,
-                    Some(WorkerRuntime::Rust | WorkerRuntime::Command)
-                ) =>
-            {
-                if let Some(entrypoint) = load.entrypoint.as_deref() {
-                    let (logical, canonical, copied) = copy_snapshot_file(
-                        &root,
-                        &original_manifest_path,
-                        entrypoint,
-                        "entrypoint",
-                        &mut copied_files,
-                        &mut budget,
-                    )?;
-                    if declared_artifact.as_ref() != Some(&canonical) {
-                        return Err(CliError::Config(format!(
-                            "command worker dynamic plugin '{expected_plugin_id}' must declare its load.entrypoint as the integrity-checked source.artifact"
-                        )));
-                    }
-                    identity_files
-                        .entry(logical)
-                        .or_insert_with(|| copied.clone());
-                    load.entrypoint = Some(copied.to_string_lossy().into_owned());
-                }
-            }
-            DynamicPluginManifestLoad::Worker(_) => {}
-        }
-
-        if let Some(source) = manifest.source.as_mut()
-            && let Some(artifact) = source.artifact.as_deref()
-        {
-            let (logical, _, copied) = copy_snapshot_file(
-                &root,
-                &original_manifest_path,
-                artifact,
-                "artifact",
-                &mut copied_files,
-                &mut budget,
-            )?;
-            identity_files.insert(logical, copied.clone());
-            source.artifact = Some(copied.to_string_lossy().into_owned());
-        }
-        if let Some(integrity) = manifest.integrity.as_mut()
-            && let Some(signature) = integrity.signature.as_deref()
-        {
-            let (logical, _, copied) = copy_snapshot_file(
-                &root,
-                &original_manifest_path,
-                signature,
-                "signature",
-                &mut copied_files,
-                &mut budget,
-            )?;
-            identity_files.insert(logical, copied.clone());
-            integrity.signature = Some(copied.to_string_lossy().into_owned());
-        }
-
-        let activation_environment_ref = snapshot_python_environment(
-            &manifest,
-            environment_ref,
-            expected_plugin_id,
-            &root,
-            &mut copied_files,
-            &mut budget,
-        )?;
-
-        let activation_manifest = runtime_root.join("relay-plugin.toml");
-        let rendered = toml::to_string(&manifest).map_err(|error| {
-            CliError::Config(format!(
-                "failed to encode dynamic plugin activation snapshot for '{expected_plugin_id}': {error}"
-            ))
-        })?;
-        if rendered.len() as u64 > MAX_BOOTSTRAP_IDENTITY_FILE_BYTES {
-            return Err(CliError::Config(format!(
-                "dynamic plugin activation manifest for '{expected_plugin_id}' exceeds the {MAX_BOOTSTRAP_IDENTITY_FILE_BYTES}-byte activation snapshot budget"
-            )));
-        }
-        fs::write(&activation_manifest, rendered).map_err(|error| {
-            CliError::Config(format!(
-                "failed to write dynamic plugin activation manifest {}: {error}",
-                activation_manifest.display()
-            ))
-        })?;
-
-        let trust = evaluate_dynamic_plugin_trust(
-            &manifest,
-            activation_manifest.to_string_lossy().as_ref(),
-            &policy,
-        );
-        if !policy.policy_satisfied {
-            return Err(CliError::Config(format!(
-                "dynamic plugin '{expected_plugin_id}' activation snapshot violates host policy"
-            )));
-        }
-        if let Some(failure) = trust.failure() {
-            return Err(CliError::Config(
-                failure.display(expected_plugin_id).to_string(),
-            ));
-        }
-
-        let closure_digest = snapshot_tree_digest(&root, true)?;
-        let verification_digest = snapshot_tree_digest(&root, false)?;
-        #[cfg(unix)]
-        protect_snapshot_tree(&root)?;
-        #[cfg(windows)]
-        protect_snapshot_tree(&root)?;
-        root_guard.0 = None;
-        Ok(Arc::new(Self {
-            root,
-            original_manifest_ref,
-            identity_manifest,
-            activation_manifest,
-            activation_environment_ref,
-            identity_files,
-            closure_digest,
-            verification_digest,
-        }))
-    }
-
-    pub(crate) fn activation_manifest_ref(&self) -> String {
-        self.activation_manifest.to_string_lossy().into_owned()
-    }
-
-    pub(crate) fn activation_environment_ref(&self) -> Option<&str> {
-        self.activation_environment_ref.as_deref()
-    }
-
-    pub(crate) fn closure_digest(&self) -> &str {
-        &self.closure_digest
-    }
-
-    pub(crate) fn verify_current(&self) -> Result<(), CliError> {
-        let actual = snapshot_tree_digest(&self.root, false)?;
-        if actual == self.verification_digest {
-            Ok(())
-        } else {
-            Err(CliError::Config(format!(
-                "dynamic plugin activation snapshot {} changed before code load",
-                self.root.display()
-            )))
-        }
-    }
-
-    pub(crate) fn original_manifest_ref(&self) -> &str {
-        &self.original_manifest_ref
-    }
-
-    pub(crate) fn identity_manifest(&self) -> &Path {
-        &self.identity_manifest
-    }
-
-    pub(crate) fn identity_file(&self, logical_path: &Path) -> Option<&Path> {
-        self.identity_files.get(logical_path).map(PathBuf::as_path)
-    }
-}
-
-fn snapshot_python_environment(
-    manifest: &DynamicPluginManifest,
-    environment_ref: Option<&str>,
-    expected_plugin_id: &str,
-    root: &Path,
-    copied_files: &mut HashMap<PathBuf, PathBuf>,
-    budget: &mut SnapshotBudget,
-) -> Result<Option<String>, CliError> {
-    if !matches!(
-        &manifest.load,
-        DynamicPluginManifestLoad::Worker(load) if load.runtime == Some(WorkerRuntime::Python)
-    ) {
-        return Ok(None);
-    }
-    let environment = environment_ref.ok_or_else(|| {
-        CliError::Config(format!(
-            "Python worker dynamic plugin '{expected_plugin_id}' has no managed environment"
-        ))
-    })?;
-    let source_artifact_sha256 = trusted_source_artifact_sha256(manifest)?;
-    let environment = PathBuf::from(environment);
-    verify_environment_attestation(&environment, source_artifact_sha256)
-        .map_err(CliError::Config)?;
-    let environment_name = environment.file_name().ok_or_else(|| {
-        CliError::Config(format!(
-            "managed Python environment {} has no lifecycle environment name",
-            environment.display()
-        ))
-    })?;
-    let copied_environment = root.join(MANAGED_ENVIRONMENTS_DIR).join(environment_name);
-    copy_snapshot_directory(
-        &environment,
-        &copied_environment,
-        copied_files,
-        budget,
-        true,
-        &mut Vec::new(),
-    )?;
-    verify_environment_attestation(&copied_environment, source_artifact_sha256)
-        .map_err(CliError::Config)?;
-    Ok(Some(copied_environment.to_string_lossy().into_owned()))
-}
-
-struct SnapshotRootGuard(Option<PathBuf>);
-
-impl Drop for SnapshotRootGuard {
-    fn drop(&mut self) {
-        if let Some(root) = self.0.take() {
-            make_snapshot_removable(&root);
-            let _ = fs::remove_dir_all(root);
-        }
-    }
-}
-
-impl Drop for DynamicPluginActivationSnapshot {
-    fn drop(&mut self) {
-        make_snapshot_removable(&self.root);
-        let _ = fs::remove_dir_all(&self.root);
-    }
-}
-
-fn copy_snapshot_file(
-    root: &Path,
-    manifest_path: &Path,
-    reference: &str,
-    label: &str,
-    copied_files: &mut HashMap<PathBuf, PathBuf>,
-    budget: &mut SnapshotBudget,
-) -> Result<(PathBuf, PathBuf, PathBuf), CliError> {
-    let logical = resolve_manifest_relative_path(manifest_path, reference);
-    let canonical = fs::canonicalize(&logical).map_err(|error| {
-        CliError::Config(format!(
-            "failed to normalize dynamic plugin {label} {}: {error}",
-            logical.display()
-        ))
-    })?;
-    if let Some(copied) = copied_files.get(&canonical)
-        && !matches!(label, "library" | "entrypoint")
-    {
-        return Ok((logical, canonical, copied.clone()));
-    }
-    if matches!(label, "library" | "entrypoint") {
-        let manifest_directory = manifest_path
-            .parent()
-            .and_then(|parent| fs::canonicalize(parent).ok());
-        if manifest_directory
-            .as_ref()
-            .is_some_and(|directory| canonical.starts_with(directory))
-            && let Some(copied) = copied_files.get(&canonical)
-        {
-            // The manifest directory is copied as a complete closure before declared paths are
-            // rewritten, so in-tree load targets already retain adjacent resources.
-            return Ok((logical, canonical, copied.clone()));
-        }
-    }
-    let external = root.join(format!("external-{label}"));
-    if matches!(label, "library" | "entrypoint") {
-        let parent = canonical.parent().ok_or_else(|| {
-            CliError::Config(format!(
-                "dynamic plugin {label} {} has no parent directory",
-                canonical.display()
-            ))
-        })?;
-        copy_snapshot_directory(
-            parent,
-            &external,
-            copied_files,
-            budget,
-            false,
-            &mut Vec::new(),
-        )?;
-    } else {
-        fs::create_dir_all(&external).map_err(|error| CliError::Config(error.to_string()))?;
-        let destination = external.join(canonical.file_name().unwrap_or_default());
-        copy_snapshot_regular_file(&canonical, &destination, copied_files, budget, label)?;
-    }
-    let copied = copied_files.get(&canonical).cloned().ok_or_else(|| {
-        CliError::Config(format!(
-            "dynamic plugin {label} {} was not included in its activation snapshot",
-            canonical.display()
-        ))
-    })?;
-    Ok((logical, canonical, copied))
-}
-
 const MAX_SNAPSHOT_FILES: usize = 100_000;
 const MAX_SNAPSHOT_DEPTH: usize = 128;
 
@@ -962,233 +602,6 @@ impl SnapshotBudget {
         }
         Ok(())
     }
-
-    fn record_directory(&mut self, path: &Path) -> Result<(), CliError> {
-        self.record_entries(path, 1)
-    }
-}
-
-fn copy_snapshot_directory(
-    source: &Path,
-    destination: &Path,
-    copied_files: &mut HashMap<PathBuf, PathBuf>,
-    budget: &mut SnapshotBudget,
-    skip_python_cache: bool,
-    ancestors: &mut Vec<PathBuf>,
-) -> Result<(), CliError> {
-    budget.record_directory(source)?;
-    copy_snapshot_directory_contents(
-        source,
-        destination,
-        copied_files,
-        budget,
-        skip_python_cache,
-        ancestors,
-    )
-}
-
-fn copy_snapshot_directory_contents(
-    source: &Path,
-    destination: &Path,
-    copied_files: &mut HashMap<PathBuf, PathBuf>,
-    budget: &mut SnapshotBudget,
-    skip_python_cache: bool,
-    ancestors: &mut Vec<PathBuf>,
-) -> Result<(), CliError> {
-    if ancestors.len() >= MAX_SNAPSHOT_DEPTH {
-        return Err(CliError::Config(format!(
-            "dynamic plugin runtime closure exceeds the {MAX_SNAPSHOT_DEPTH}-directory traversal depth at {}",
-            source.display()
-        )));
-    }
-    let canonical = fs::canonicalize(source).map_err(|error| {
-        CliError::Config(format!(
-            "failed to normalize dynamic plugin runtime directory {}: {error}",
-            source.display()
-        ))
-    })?;
-    if ancestors.contains(&canonical) {
-        return Err(CliError::Config(format!(
-            "dynamic plugin runtime closure contains a directory symlink cycle at {}",
-            source.display()
-        )));
-    }
-    ancestors.push(canonical.clone());
-    fs::create_dir_all(destination).map_err(|error| {
-        CliError::Config(format!(
-            "failed to create dynamic plugin snapshot directory {}: {error}",
-            destination.display()
-        ))
-    })?;
-    let mut entries = bounded_runtime_directory_entries(
-        &canonical,
-        MAX_SNAPSHOT_FILES.saturating_sub(budget.entries),
-    )?;
-    budget.record_entries(source, entries.len())?;
-    entries.sort_by_key(fs::DirEntry::file_name);
-    for entry in entries {
-        copy_snapshot_entry(
-            entry,
-            destination,
-            copied_files,
-            budget,
-            skip_python_cache,
-            ancestors,
-        )?;
-    }
-    ancestors.pop();
-    Ok(())
-}
-
-fn copy_snapshot_entry(
-    entry: fs::DirEntry,
-    destination: &Path,
-    copied_files: &mut HashMap<PathBuf, PathBuf>,
-    budget: &mut SnapshotBudget,
-    skip_python_cache: bool,
-    ancestors: &mut Vec<PathBuf>,
-) -> Result<(), CliError> {
-    let source_path = entry.path();
-    if skip_python_cache
-        && (entry.file_name() == "__pycache__"
-            || source_path.extension().and_then(|value| value.to_str()) == Some("pyc"))
-    {
-        return Ok(());
-    }
-    let destination_path = destination.join(entry.file_name());
-    let metadata =
-        fs::symlink_metadata(&source_path).map_err(|error| CliError::Config(error.to_string()))?;
-    let resolved = resolve_snapshot_entry(&source_path, &metadata)?;
-    let resolved_metadata =
-        fs::metadata(&resolved).map_err(|error| CliError::Config(error.to_string()))?;
-    if resolved_metadata.is_dir() {
-        return copy_snapshot_directory_contents(
-            &resolved,
-            &destination_path,
-            copied_files,
-            budget,
-            skip_python_cache,
-            ancestors,
-        );
-    }
-    if !resolved_metadata.is_file() {
-        return Err(CliError::Config(format!(
-            "dynamic plugin runtime entry {} must resolve to a regular file or directory",
-            source_path.display()
-        )));
-    }
-    if preserve_python_launcher(
-        &source_path,
-        &destination_path,
-        &resolved,
-        &metadata,
-        copied_files,
-    )? {
-        return Ok(());
-    }
-    copy_snapshot_regular_file(
-        &resolved,
-        &destination_path,
-        copied_files,
-        budget,
-        "runtime file",
-    )
-}
-
-fn resolve_snapshot_entry(path: &Path, metadata: &fs::Metadata) -> Result<PathBuf, CliError> {
-    if metadata.file_type().is_symlink() {
-        fs::canonicalize(path).map_err(|error| {
-            CliError::Config(format!(
-                "failed to resolve dynamic plugin runtime symlink {}: {error}",
-                path.display()
-            ))
-        })
-    } else {
-        Ok(path.to_path_buf())
-    }
-}
-
-#[cfg(unix)]
-fn preserve_python_launcher(
-    source: &Path,
-    destination: &Path,
-    resolved: &Path,
-    metadata: &fs::Metadata,
-    copied_files: &mut HashMap<PathBuf, PathBuf>,
-) -> Result<bool, CliError> {
-    if !metadata.file_type().is_symlink() || !is_python_venv_launcher(source) {
-        return Ok(false);
-    }
-    let target = fs::read_link(source).map_err(|error| {
-        CliError::Config(format!(
-            "failed to read Python venv launcher symlink {}: {error}",
-            source.display()
-        ))
-    })?;
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|error| CliError::Config(error.to_string()))?;
-    }
-    std::os::unix::fs::symlink(&target, destination).map_err(|error| {
-        CliError::Config(format!(
-            "failed to preserve Python venv launcher symlink {}: {error}",
-            destination.display()
-        ))
-    })?;
-    copied_files.insert(resolved.to_path_buf(), destination.to_path_buf());
-    Ok(true)
-}
-
-#[cfg(not(unix))]
-fn preserve_python_launcher(
-    _source: &Path,
-    _destination: &Path,
-    _resolved: &Path,
-    _metadata: &fs::Metadata,
-    _copied_files: &mut HashMap<PathBuf, PathBuf>,
-) -> Result<bool, CliError> {
-    Ok(false)
-}
-
-#[cfg(unix)]
-fn is_python_venv_launcher(path: &Path) -> bool {
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    parent.file_name() == Some(std::ffi::OsStr::new("bin"))
-        && path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "python" || name.starts_with("python3"))
-}
-
-fn copy_snapshot_regular_file(
-    source: &Path,
-    destination: &Path,
-    copied_files: &mut HashMap<PathBuf, PathBuf>,
-    budget: &mut SnapshotBudget,
-    description: &str,
-) -> Result<(), CliError> {
-    let bytes = read_bounded_regular_file(source, &format!("dynamic plugin {description}"))
-        .map_err(CliError::Config)?;
-    budget.record_bytes(source, bytes.len())?;
-    fs::write(destination, bytes).map_err(|error| {
-        CliError::Config(format!(
-            "failed to write dynamic plugin snapshot file {}: {error}",
-            destination.display()
-        ))
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(source)
-            .map_err(|error| CliError::Config(error.to_string()))?
-            .permissions()
-            .mode();
-        fs::set_permissions(destination, fs::Permissions::from_mode(mode))
-            .map_err(|error| CliError::Config(error.to_string()))?;
-    }
-    copied_files.insert(source.to_path_buf(), destination.to_path_buf());
-    Ok(())
 }
 
 fn resolve_manifest_relative_path(manifest_path: &Path, reference: &str) -> PathBuf {
@@ -1201,102 +614,6 @@ fn resolve_manifest_relative_path(manifest_path: &Path, reference: &str) -> Path
             .map(|parent| parent.join(&path))
             .unwrap_or(path)
     }
-}
-
-#[cfg(unix)]
-fn protect_snapshot_tree(root: &Path) -> Result<(), CliError> {
-    use std::os::unix::fs::PermissionsExt;
-    for entry in fs::read_dir(root).map_err(|error| CliError::Config(error.to_string()))? {
-        let path = entry
-            .map_err(|error| CliError::Config(error.to_string()))?
-            .path();
-        let metadata =
-            fs::symlink_metadata(&path).map_err(|error| CliError::Config(error.to_string()))?;
-        if metadata.is_dir() {
-            protect_snapshot_tree(&path)?;
-            continue;
-        }
-        if metadata.file_type().is_symlink() {
-            continue;
-        }
-        let mode = metadata.permissions().mode() & !0o222;
-        fs::set_permissions(&path, fs::Permissions::from_mode(mode))
-            .map_err(|error| CliError::Config(error.to_string()))?;
-    }
-    fs::set_permissions(root, fs::Permissions::from_mode(0o500))
-        .map_err(|error| CliError::Config(error.to_string()))
-}
-
-#[cfg(windows)]
-fn protect_snapshot_tree(root: &Path) -> Result<(), CliError> {
-    for entry in fs::read_dir(root).map_err(|error| CliError::Config(error.to_string()))? {
-        let path = entry
-            .map_err(|error| CliError::Config(error.to_string()))?
-            .path();
-        let metadata =
-            fs::symlink_metadata(&path).map_err(|error| CliError::Config(error.to_string()))?;
-        if metadata.is_dir() {
-            protect_snapshot_tree(&path)?;
-        } else if !metadata.file_type().is_symlink() {
-            let mut permissions = metadata.permissions();
-            permissions.set_readonly(true);
-            fs::set_permissions(&path, permissions)
-                .map_err(|error| CliError::Config(error.to_string()))?;
-        }
-    }
-    Ok(())
-}
-
-fn snapshot_tree_digest(root: &Path, stable_identity: bool) -> Result<String, CliError> {
-    let mut files = Vec::new();
-    let mut entries = 0_usize;
-    collect_snapshot_files(root, root, &mut files, None, &mut entries)?;
-    files.sort();
-    let mut digest = Sha256::new();
-    let mut budget = SnapshotBudget::default();
-    for relative in files {
-        if stable_identity {
-            let activation_manifest = Path::new("runtime").join("relay-plugin.toml");
-            let is_python_environment_content = relative.starts_with(MANAGED_ENVIRONMENTS_DIR)
-                && relative.file_name() != Some(std::ffi::OsStr::new(ENVIRONMENT_ATTESTATION_FILE));
-            if relative == activation_manifest || is_python_environment_content {
-                continue;
-            }
-        }
-        let path = root.join(&relative);
-        let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            CliError::Config(format!(
-                "failed to inspect dynamic plugin activation snapshot entry {}: {error}",
-                path.display()
-            ))
-        })?;
-        if metadata.file_type().is_symlink() {
-            let target = fs::read_link(&path).map_err(|error| {
-                CliError::Config(format!(
-                    "failed to read dynamic plugin activation snapshot symlink {}: {error}",
-                    path.display()
-                ))
-            })?;
-            let target = target.as_os_str().as_encoded_bytes();
-            budget.record(&path, target.len())?;
-            update_snapshot_entry_digest(
-                &mut digest,
-                &relative,
-                SnapshotEntryKind::Symlink,
-                target,
-            );
-        } else {
-            let bytes = read_bounded_regular_file(&path, "dynamic plugin activation snapshot file")
-                .map_err(CliError::Config)?;
-            budget.record(&path, bytes.len())?;
-            update_snapshot_entry_digest(&mut digest, &relative, SnapshotEntryKind::File, &bytes);
-        }
-    }
-    Ok(digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
 }
 
 pub(crate) fn dynamic_plugin_runtime_closure_digest(
@@ -1519,7 +836,6 @@ impl RuntimeClosureSources {
 #[derive(Clone, Copy)]
 enum SnapshotEntryKind {
     File = 0,
-    Symlink = 1,
 }
 
 fn update_snapshot_entry_digest(
@@ -1699,81 +1015,6 @@ fn bounded_runtime_directory_entries(
     Ok(entries)
 }
 
-fn collect_snapshot_files(
-    root: &Path,
-    directory: &Path,
-    files: &mut Vec<PathBuf>,
-    logical_depth: Option<usize>,
-    entries: &mut usize,
-) -> Result<(), CliError> {
-    if let Some(depth) = logical_depth
-        && depth >= MAX_SNAPSHOT_DEPTH
-    {
-        return Err(CliError::Config(format!(
-            "dynamic plugin activation snapshot exceeds the {MAX_SNAPSHOT_DEPTH}-directory traversal depth at {}",
-            directory.display()
-        )));
-    }
-    let resets_child_depth =
-        directory == root || directory == root.join(environment::MANAGED_ENVIRONMENTS_DIR);
-    for entry in fs::read_dir(directory).map_err(|error| CliError::Config(error.to_string()))? {
-        *entries = entries.saturating_add(1);
-        if *entries > MAX_SNAPSHOT_FILES {
-            return Err(CliError::Config(format!(
-                "dynamic plugin activation snapshot exceeds the {MAX_SNAPSHOT_FILES}-entry verification budget at {}",
-                directory.display()
-            )));
-        }
-        let path = entry
-            .map_err(|error| CliError::Config(error.to_string()))?
-            .path();
-        let metadata =
-            fs::symlink_metadata(&path).map_err(|error| CliError::Config(error.to_string()))?;
-        if metadata.is_dir() {
-            let child_depth = if resets_child_depth {
-                0
-            } else {
-                logical_depth.unwrap_or(0).saturating_add(1)
-            };
-            collect_snapshot_files(root, &path, files, Some(child_depth), entries)?;
-        } else {
-            files.push(
-                path.strip_prefix(root)
-                    .map_err(|error| CliError::Config(error.to_string()))?
-                    .to_path_buf(),
-            );
-        }
-    }
-    Ok(())
-}
-
-fn make_snapshot_removable(root: &Path) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(root, fs::Permissions::from_mode(0o700));
-    }
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if metadata.is_dir() {
-            make_snapshot_removable(&path);
-        } else {
-            #[cfg(windows)]
-            if !metadata.file_type().is_symlink() {
-                let mut permissions = metadata.permissions();
-                permissions.set_readonly(false);
-                let _ = fs::set_permissions(&path, permissions);
-            }
-        }
-    }
-}
-
 pub(crate) fn active_dynamic_plugin_components(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
@@ -1794,8 +1035,78 @@ fn active_dynamic_plugin_components_inner(
     resolved: &ResolvedConfig,
     create_activation_snapshots: bool,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
+    if create_activation_snapshots {
+        return active_dynamic_plugin_components_from_shared_host_config(resolved);
+    }
     let scopes = load_and_hydrate_scopes(explicit_plugin_config, resolved)?;
     active_dynamic_plugin_components_from_scopes(&scopes, resolved, create_activation_snapshots)
+}
+
+fn active_dynamic_plugin_components_from_shared_host_config(
+    resolved: &ResolvedConfig,
+) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
+    let runtime_value = resolved.gateway.plugin_config.clone();
+    let config = runtime_value
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| CliError::Config(format!("invalid resolved plugin config: {error}")))?
+        .unwrap_or_default();
+    let selected_sources = resolved.plugin_selected_sources.clone();
+    let contributing_sources = resolved
+        .dynamic_plugins
+        .iter()
+        .map(|plugin| plugin.source.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let shared = nemo_relay_plugin_host_config::ResolvedPluginFileConfiguration {
+        config,
+        runtime_value,
+        dynamic_plugins: resolved
+            .dynamic_plugins
+            .iter()
+            .map(
+                |plugin| nemo_relay_plugin_host_config::ResolvedDynamicPluginConfig {
+                    plugin_id: plugin.plugin_id.clone(),
+                    manifest_ref: plugin.manifest_ref.clone(),
+                    config: plugin.config.clone(),
+                    has_explicit_config: plugin.has_explicit_config,
+                    source: plugin.source.clone(),
+                },
+            )
+            .collect(),
+        dynamic_plugin_policy: resolved.dynamic_plugin_policy.clone(),
+        diagnostics: Vec::new(),
+        contributing_sources,
+        selected_sources,
+        had_input: true,
+    };
+    let reconciled = nemo_relay_plugin_host_config::reconcile_plugin_lifecycle(&shared)
+        .map_err(|error| CliError::Config(error.to_string()))?;
+    reconciled
+        .enabled_plugins
+        .into_iter()
+        .map(|plugin| {
+            let snapshot = DynamicPluginActivationSnapshot::create(
+                &plugin.manifest_ref,
+                &plugin.plugin_id,
+                plugin.kind,
+                plugin.environment_ref.as_deref(),
+                &shared.dynamic_plugin_policy,
+            )
+            .map_err(|error| CliError::Config(error.to_string()))?;
+            Ok(ActiveDynamicPluginComponent {
+                plugin_id: plugin.plugin_id,
+                kind: plugin.kind,
+                lifecycle_generation: plugin.lifecycle_generation,
+                manifest_ref: Some(plugin.manifest_ref),
+                environment_ref: plugin.environment_ref,
+                config: plugin.config,
+                activation_snapshot: Some(snapshot),
+            })
+        })
+        .collect()
 }
 
 fn active_dynamic_plugin_components_from_scopes(
@@ -1809,7 +1120,7 @@ fn active_dynamic_plugin_components_from_scopes(
     for resolved_plugin in &resolved.dynamic_plugins {
         let Some(record) = scopes
             .iter()
-            .find(|scope| scope.plugins_toml_path == resolved_plugin.source)
+            .find(|scope| scope.source_for_path(&resolved_plugin.source).is_some())
             .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
         else {
             return Err(CliError::Config(format!(
@@ -1842,7 +1153,8 @@ fn active_dynamic_plugin_components_from_scopes(
                         &resolved.dynamic_plugin_policy,
                     )
                 })
-                .transpose()?
+                .transpose()
+                .map_err(|error| CliError::Config(error.to_string()))?
         } else {
             None
         };
@@ -1876,7 +1188,8 @@ fn mutate_enabled_state(
             server.config.as_ref(),
             server.plugin_config_path.as_ref(),
         )?;
-        let mut scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved)?;
+        let mut scopes =
+            load_and_hydrate_scopes_for_update(explicit_plugin_config.as_ref(), &resolved)?;
         let entry = find_registered_entry(&scopes, command, &plugin_id)?;
         if entry.record.is_tombstoned() {
             return Err(plugin_refused(
@@ -1941,7 +1254,7 @@ fn mutate_enabled_state(
         }
         scopes
     } else {
-        load_scoped_registries(explicit_plugin_config.as_ref())?
+        load_scoped_registries_for_update(explicit_plugin_config.as_ref(), None)?
     };
     let entry = find_registered_entry(&scopes, command, &plugin_id)?;
     if entry.record.is_tombstoned() {
@@ -1980,6 +1293,17 @@ fn load_and_hydrate_scopes(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<Vec<ScopedRegistry>, CliError> {
+    let mut scopes = load_and_hydrate_scopes_for_update(explicit_plugin_config, resolved)?;
+    for scope in &mut scopes {
+        scope.state_lock.take();
+    }
+    Ok(scopes)
+}
+
+fn load_and_hydrate_scopes_for_update(
+    explicit_plugin_config: Option<&PathBuf>,
+    resolved: &ResolvedConfig,
+) -> Result<Vec<ScopedRegistry>, CliError> {
     let (scopes, touched_scope_indices) =
         load_and_hydrate_scopes_with_updates(explicit_plugin_config, resolved)?;
     for scope_index in touched_scope_indices {
@@ -1992,12 +1316,19 @@ fn load_and_hydrate_scopes_with_updates(
     explicit_plugin_config: Option<&PathBuf>,
     resolved: &ResolvedConfig,
 ) -> Result<(Vec<ScopedRegistry>, Vec<usize>), CliError> {
-    let mut scopes = load_scoped_registries(explicit_plugin_config)?;
+    let scopes = load_scoped_registries_for_update(explicit_plugin_config, None)?;
+    hydrate_scopes_with_updates(scopes, resolved)
+}
+
+fn hydrate_scopes_with_updates(
+    mut scopes: Vec<ScopedRegistry>,
+    resolved: &ResolvedConfig,
+) -> Result<(Vec<ScopedRegistry>, Vec<usize>), CliError> {
     let mut touched_scope_indices = BTreeSet::new();
     for plugin in &resolved.dynamic_plugins {
         let scope_index = scopes
             .iter()
-            .position(|scope| scope.plugins_toml_path == plugin.source)
+            .position(|scope| scope.source_for_path(&plugin.source).is_some())
             .ok_or_else(|| {
                 CliError::Config(format!(
                     "dynamic plugin '{}' resolved from {} but no matching lifecycle scope exists",
@@ -2006,31 +1337,91 @@ fn load_and_hydrate_scopes_with_updates(
                 ))
             })?;
         touched_scope_indices.insert(scope_index);
+        let declaration_owner = plugin.source.display().to_string();
+        let declaring_scope = scopes[scope_index]
+            .source_for_path(&plugin.source)
+            .expect("declaring source was located immediately before use")
+            .scope;
+        let foreign_live_scopes = scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, scope)| {
+                if index == scope_index {
+                    return None;
+                }
+                scope
+                    .registry
+                    .get(&plugin.plugin_id)
+                    .filter(|record| !record.is_tombstoned())
+                    .map(|_| scope.source_for_record(&plugin.plugin_id).scope.to_string())
+            })
+            .collect::<Vec<_>>();
+        if !foreign_live_scopes.is_empty() {
+            let mut lifecycle_scopes = vec![declaring_scope.to_string()];
+            lifecycle_scopes.extend(foreign_live_scopes);
+            return Err(CliError::Config(format!(
+                "dynamic plugin '{}' is configured in multiple lifecycle scopes; inspect {}",
+                plugin.plugin_id,
+                lifecycle_scopes.join(", ")
+            )));
+        }
         let (manifest, manifest_ref) = load_manifest_for_action("hydrate", &plugin.manifest_ref)?;
         let policy =
             evaluate_dynamic_plugin_host_policy(&resolved.dynamic_plugin_policy, &manifest);
         let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
-        if find_record_by_id(&scopes, &plugin.plugin_id)?.is_some() {
-            update_registry_validation_status(
-                &mut scopes[scope_index],
-                &plugin.plugin_id,
-                &manifest,
-                &policy,
-                &trust,
-            )?;
+        let existing = scopes[scope_index].registry.get(&plugin.plugin_id).cloned();
+        let existing_owner = scopes[scope_index]
+            .registry
+            .declaration_source(&plugin.plugin_id);
+        if existing
+            .as_ref()
+            .is_some_and(|record| !record.is_tombstoned())
+            && existing_owner.is_some_and(|owner| owner != declaration_owner)
+        {
+            return Err(CliError::Config(format!(
+                "dynamic plugin '{}' is already live under declaration source {}; remove it before declaring it in {}",
+                plugin.plugin_id,
+                existing_owner.expect("checked as present immediately before use"),
+                declaration_owner
+            )));
+        }
+        let preserves_existing_lifecycle =
+            existing.is_some() && existing_owner.is_none_or(|owner| owner == declaration_owner);
+        let claims_legacy_owner = preserves_existing_lifecycle && existing_owner.is_none();
+        let environment_ref = existing
+            .as_ref()
+            .filter(|_| preserves_existing_lifecycle)
+            .and_then(|record| record.source.environment_ref.clone());
+        let state_path = scopes[scope_index].state_path.clone();
+        let record = validated_record_from_manifest(
+            manifest,
+            manifest_ref,
+            environment_ref,
+            &state_path,
+            &policy,
+            &trust,
+        )?;
+        if preserves_existing_lifecycle {
+            scopes[scope_index]
+                .registry
+                .refresh_manifest_record(&plugin.plugin_id, record)
+                .map_err(|error| CliError::Config(error.to_string()))?;
         } else {
-            let state_path = scopes[scope_index].state_path.clone();
-            let record = validated_record_from_manifest(
-                manifest,
-                manifest_ref,
-                None,
-                &state_path,
-                &policy,
-                &trust,
-            )?;
+            if existing.is_some() {
+                scopes[scope_index]
+                    .registry
+                    .remove(&plugin.plugin_id)
+                    .map_err(|error| CliError::Config(error.to_string()))?;
+            }
             scopes[scope_index]
                 .registry
                 .add(record)
+                .map_err(|error| CliError::Config(error.to_string()))?;
+        }
+        if claims_legacy_owner || !preserves_existing_lifecycle {
+            scopes[scope_index]
+                .registry
+                .set_declaration_source(&plugin.plugin_id, declaration_owner)
                 .map_err(|error| CliError::Config(error.to_string()))?;
         }
     }
@@ -2045,7 +1436,14 @@ fn validated_record_from_manifest(
     policy: &EvaluatedDynamicPluginHostPolicy,
     trust: &EvaluatedDynamicPluginTrust,
 ) -> Result<DynamicPluginRecord, CliError> {
-    let environment = environment_state(&manifest, state_path, environment_ref.as_deref());
+    let (environment, environment_error) =
+        match validate_environment_state(&manifest, state_path, environment_ref.as_deref()) {
+            Ok(environment) => (environment, None),
+            Err(error) => (
+                DynamicPluginCheckState::Invalid,
+                environment_ref.as_ref().map(|_| error),
+            ),
+        };
     let mut record = manifest
         .into_record(Some(manifest_ref))
         .map_err(|error| CliError::Config(error.to_string()))?;
@@ -2070,6 +1468,7 @@ fn validated_record_from_manifest(
                 &record.metadata.id,
                 environment,
                 record.source.environment_ref.as_deref(),
+                environment_error,
             )
         });
     Ok(record)
@@ -2112,8 +1511,16 @@ fn update_registry_validation_status(
         .registry
         .get(plugin_id)
         .and_then(|record| record.source.environment_ref.as_deref());
-    let environment = environment_state(manifest, &scope.state_path, environment_ref);
-    let environment_error = environment_last_error(plugin_id, environment, environment_ref);
+    let (environment, validation_error) =
+        match validate_environment_state(manifest, &scope.state_path, environment_ref) {
+            Ok(environment) => (environment, None),
+            Err(error) => (
+                DynamicPluginCheckState::Invalid,
+                environment_ref.map(|_| error),
+            ),
+        };
+    let environment_error =
+        environment_last_error(plugin_id, environment, environment_ref, validation_error);
     scope
         .registry
         .update_validation_status(
@@ -2147,24 +1554,27 @@ fn environment_last_error(
     plugin_id: &str,
     environment: DynamicPluginCheckState,
     environment_ref: Option<&str>,
+    detail: Option<String>,
 ) -> Option<DynamicPluginFailure> {
     (environment == DynamicPluginCheckState::Invalid).then(|| DynamicPluginFailure {
         phase: DynamicPluginFailurePhase::Validation,
         code: "environment_failed".into(),
-        message: environment_ref.map_or_else(
-            || {
-                format!(
-                    "dynamic plugin '{}' has no lifecycle-managed Python environment; run `nemo-relay plugins remove {}` to remove the manual registration, then run `nemo-relay plugins add <path>`",
-                    plugin_id, plugin_id
-                )
-            },
-            |environment_ref| {
-                format!(
-                    "dynamic plugin '{}' configured Python environment {} is unavailable",
-                    plugin_id, environment_ref
-                )
-            },
-        ),
+        message: detail.unwrap_or_else(|| {
+            environment_ref.map_or_else(
+                || {
+                    format!(
+                        "dynamic plugin '{}' has no lifecycle-managed Python environment; run `nemo-relay plugins remove {}` to remove the manual registration, then run `nemo-relay plugins add <path>`",
+                        plugin_id, plugin_id
+                    )
+                },
+                |environment_ref| {
+                    format!(
+                        "dynamic plugin '{}' configured Python environment {} is unavailable",
+                        plugin_id, environment_ref
+                    )
+                },
+            )
+        }),
     })
 }
 
@@ -2220,24 +1630,35 @@ fn manifest_ref_from_record(record: &DynamicPluginRecord) -> Result<String, CliE
     })
 }
 
+fn pin_declaration_source(path: &Path) -> Result<String, CliError> {
+    nemo_relay_plugin_host_config::pin_plugin_config_path(path)
+        .map(|path| path.display().to_string())
+        .map_err(|error| CliError::Config(error.to_string()))
+}
+
 fn ensure_scope(
     scopes: &mut Vec<ScopedRegistry>,
     scope: RegistryScope,
     plugins_toml_path: PathBuf,
     state_path: PathBuf,
 ) -> usize {
-    if let Some(index) = scopes.iter().position(|existing| {
-        existing.scope == scope
-            && existing.plugins_toml_path == plugins_toml_path
-            && existing.state_path == state_path
-    }) {
+    if let Some(index) = scopes
+        .iter()
+        .position(|existing| existing.state_path == state_path)
+    {
+        scopes[index].add_source(scope, plugins_toml_path);
         return index;
     }
     scopes.push(ScopedRegistry {
-        scope,
-        plugins_toml_path,
+        sources: vec![self::state::ScopedRegistrySource {
+            scope,
+            plugins_toml_path,
+        }],
         state_path,
-        registry: nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        registry: nemo_relay_plugin_host_config::DynamicPluginLifecycleState::new(
+            nemo_relay::plugin::dynamic::DynamicPluginRegistry::new(),
+        ),
+        state_lock: None,
     });
     scopes.len() - 1
 }
