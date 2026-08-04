@@ -241,7 +241,14 @@ fn enabled_python_worker_reports_a_missing_lifecycle_environment_contextually() 
         "{error}"
     );
     assert!(
-        error.contains(environment.to_string_lossy().as_ref()),
+        error.contains(
+            temp.path()
+                .canonicalize()
+                .unwrap()
+                .join(environment.strip_prefix(temp.path()).unwrap())
+                .to_string_lossy()
+                .as_ref()
+        ),
         "{error}"
     );
 }

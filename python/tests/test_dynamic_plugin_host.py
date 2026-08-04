@@ -69,6 +69,17 @@ def _enable_hydrated_plugin(plugins_toml: Path, plugin_id: str) -> None:
     state_path.write_text(json.dumps(state, indent=2) + "\n")
 
 
+def _assert_inherited_configuration_source(report: plugin.ConfigReport, expected: Path) -> None:
+    prefix = "inherited plugin configuration from discovered file: "
+    assert len(report["diagnostics"]) == 1
+    diagnostic = report["diagnostics"][0]
+    assert diagnostic["level"] == "warning"
+    assert diagnostic["code"] == "plugin.configuration_inherited"
+    message = diagnostic["message"]
+    assert message.startswith(prefix)
+    assert os.path.samefile(message.removeprefix(prefix), expected)
+
+
 @pytest.fixture(scope="session")
 def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlugin:
     root = _repo_root()
@@ -502,7 +513,7 @@ async def test_missing_declared_manifest_maps_to_file_not_found(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(isolated_user_config))
     monkeypatch.setenv("NEMO_RELAY_CONFIG_SCOPE", "user")
 
-    with pytest.raises(FileNotFoundError, match="missing/relay-plugin.toml"):
+    with pytest.raises(FileNotFoundError, match=r"missing[\\/]relay-plugin\.toml"):
         await plugin.initialize_from_plugins_toml(plugin_config_path=plugins_toml)
     assert not plugins_toml.with_name(".dynamic-plugins.json").exists()
 
@@ -641,19 +652,13 @@ async def test_file_activation_hydrates_disabled_then_loads_enabled_native_plugi
     monkeypatch.delenv("NEMO_RELAY_CONFIG_SCOPE", raising=False)
 
     hydrated = await plugin.initialize_from_plugins_toml()
-    assert hydrated.is_active
-    assert hydrated.report == {
-        "diagnostics": [
-            {
-                "level": "warning",
-                "code": "plugin.configuration_inherited",
-                "message": f"inherited plugin configuration from discovered file: {plugins_toml.resolve()}",
-            }
-        ]
-    }
-    result = await tools.execute("python-file-disabled", {"input": True}, lambda args: args)
-    assert result == {"input": True}
-    await hydrated.close()
+    try:
+        assert hydrated.is_active
+        _assert_inherited_configuration_source(hydrated.report, plugins_toml)
+        result = await tools.execute("python-file-disabled", {"input": True}, lambda args: args)
+        assert result == {"input": True}
+    finally:
+        await hydrated.close()
 
     _enable_hydrated_plugin(plugins_toml, native_dynamic_plugin.plugin_id)
 
@@ -1004,15 +1009,7 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
     activation = None
     try:
         activation = await plugin.initialize_with_dynamic_plugins(plugin.PluginConfig(), [native_dynamic_plugin.spec()])
-        assert activation.report == {
-            "diagnostics": [
-                {
-                    "level": "warning",
-                    "code": "plugin.configuration_inherited",
-                    "message": f"inherited plugin configuration from discovered file: {plugins_toml.resolve()}",
-                }
-            ]
-        }
+        _assert_inherited_configuration_source(activation.report, plugins_toml)
         result = await tools.execute("python-file-static-base", {"input": True}, lambda args: args)
         assert result["file_static_base"] is True
         assert result["native_plugin_tool_execution"] is True

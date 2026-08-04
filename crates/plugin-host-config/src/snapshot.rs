@@ -18,6 +18,8 @@ use crate::environment::{
     verify_environment_attestation,
 };
 use crate::error::{PluginHostConfigError, Result};
+#[cfg(target_os = "macos")]
+use crate::io::read_bounded_utf8_regular_file;
 use crate::io::{
     MAX_BOUNDED_FILE_BYTES, load_bounded_dynamic_plugin_manifest_bytes, read_bounded_regular_file,
 };
@@ -350,7 +352,118 @@ fn snapshot_python_environment(
         &mut Vec::new(),
     )?;
     verify_environment_attestation(&copied_environment, digest)?;
+    #[cfg(target_os = "macos")]
+    // Some relocatable CPython builds link their launcher through
+    // `@rpath/libpython*.dylib`. The launcher is materialized to keep it pinned,
+    // so retain that runtime library in the copied environment as well.
+    snapshot_macos_python_runtime_library(&copied_environment, copied_files, budget)?;
     Ok(Some(copied_environment.to_string_lossy().into_owned()))
+}
+
+#[cfg(target_os = "macos")]
+fn snapshot_macos_python_runtime_library(
+    copied_environment: &Path,
+    copied_files: &mut HashMap<PathBuf, PathBuf>,
+    budget: &mut SnapshotBudget,
+) -> Result<()> {
+    let pyvenv_config = copied_environment.join("pyvenv.cfg");
+    let contents = read_bounded_utf8_regular_file(&pyvenv_config, "Python environment config")?;
+    let value = |expected: &str| {
+        contents.lines().find_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            (key.trim() == expected)
+                .then_some(value.trim())
+                .filter(|value| !value.is_empty())
+        })
+    };
+    let Some(home) = value("home") else {
+        return Ok(());
+    };
+    let Some(version) = value("version_info").or_else(|| value("version")) else {
+        return Ok(());
+    };
+    let mut version = version.split('.');
+    let Some(major) = version
+        .next()
+        .filter(|part| !part.is_empty() && part.chars().all(|value| value.is_ascii_digit()))
+    else {
+        return Ok(());
+    };
+    let Some(minor) = version
+        .next()
+        .filter(|part| !part.is_empty() && part.chars().all(|value| value.is_ascii_digit()))
+    else {
+        return Ok(());
+    };
+    let home = PathBuf::from(home);
+    let Some(prefix) = home.parent() else {
+        return Ok(());
+    };
+    let library_name = format!("libpython{major}.{minor}.dylib");
+    let source = prefix.join("lib").join(&library_name);
+    let destination = copied_environment.join("lib").join(&library_name);
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_file() => return Ok(()),
+        Ok(_) => {
+            return Err(PluginHostConfigError::InvalidConfig(format!(
+                "snapshotted Python runtime library {} must be a regular file",
+                destination.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(PluginHostConfigError::io(
+                "inspect snapshotted Python runtime library",
+                &destination,
+                error,
+            ));
+        }
+    }
+    let source_metadata = match fs::symlink_metadata(&source) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(PluginHostConfigError::io(
+                "inspect Python runtime library",
+                &source,
+                error,
+            ));
+        }
+    };
+    let canonical = if source_metadata.file_type().is_symlink() {
+        fs::canonicalize(&source).map_err(|error| {
+            PluginHostConfigError::io("normalize Python runtime library", &source, error)
+        })?
+    } else {
+        source.clone()
+    };
+    if !fs::metadata(&canonical)
+        .map_err(|error| {
+            PluginHostConfigError::io("inspect Python runtime library", &canonical, error)
+        })?
+        .is_file()
+    {
+        return Err(PluginHostConfigError::InvalidConfig(format!(
+            "Python runtime library {} must resolve to a regular file",
+            source.display()
+        )));
+    }
+    let copied_library_directory = destination.parent().ok_or_else(|| {
+        PluginHostConfigError::InvalidConfig(format!(
+            "snapshotted Python runtime library {} has no parent directory",
+            destination.display()
+        ))
+    })?;
+    fs::create_dir_all(copied_library_directory).map_err(|error| {
+        PluginHostConfigError::io(
+            "create Python runtime library snapshot directory",
+            copied_library_directory,
+            error,
+        )
+    })?;
+    budget.record_entry(&source)?;
+    copy_snapshot_regular_file(&canonical, &destination, copied_files, budget)?;
+    Ok(())
 }
 
 fn trusted_source_artifact_sha256(manifest: &DynamicPluginManifest) -> Result<&str> {

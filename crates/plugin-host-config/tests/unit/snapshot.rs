@@ -7,6 +7,124 @@ use tempfile::tempdir;
 
 use super::*;
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_snapshot_copies_only_the_authenticated_venvs_matching_runtime_library() {
+    let temp = tempdir().unwrap();
+    let mutable_base = temp.path().join("mutable-base");
+    let authenticated_base = temp.path().join("authenticated-base");
+    fs::create_dir_all(mutable_base.join("bin")).unwrap();
+    fs::create_dir_all(mutable_base.join("lib")).unwrap();
+    fs::create_dir_all(authenticated_base.join("bin")).unwrap();
+    fs::create_dir_all(authenticated_base.join("lib")).unwrap();
+    fs::write(
+        mutable_base.join("lib/libpython3.11.dylib"),
+        b"mutable runtime",
+    )
+    .unwrap();
+    fs::write(
+        authenticated_base.join("lib/libpython3.11.dylib"),
+        b"authenticated runtime",
+    )
+    .unwrap();
+    fs::write(
+        authenticated_base.join("lib/libpython3.12.dylib"),
+        b"wrong version",
+    )
+    .unwrap();
+    fs::write(
+        authenticated_base.join("lib/libpython3.11.dylib.backup"),
+        b"backup",
+    )
+    .unwrap();
+
+    let mutable_environment = temp.path().join("mutable-environment");
+    fs::create_dir(&mutable_environment).unwrap();
+    fs::write(
+        mutable_environment.join("pyvenv.cfg"),
+        format!(
+            "home = {}\nversion_info = 3.11.14\n",
+            mutable_base.join("bin").display()
+        ),
+    )
+    .unwrap();
+    let copied_environment = temp.path().join("snapshot-environment");
+    fs::create_dir(&copied_environment).unwrap();
+    fs::write(
+        copied_environment.join("pyvenv.cfg"),
+        format!(
+            "home = {}\nversion_info = 3.11.14\n",
+            authenticated_base.join("bin").display()
+        ),
+    )
+    .unwrap();
+    let mut copied_files = HashMap::new();
+    let mut budget = SnapshotBudget::default();
+
+    snapshot_macos_python_runtime_library(&copied_environment, &mut copied_files, &mut budget)
+        .unwrap();
+
+    assert_eq!(
+        fs::read(copied_environment.join("lib/libpython3.11.dylib")).unwrap(),
+        b"authenticated runtime"
+    );
+    assert!(!copied_environment.join("lib/libpython3.12.dylib").exists());
+    assert!(
+        !copied_environment
+            .join("lib/libpython3.11.dylib.backup")
+            .exists()
+    );
+    assert_eq!(budget.entries, 1);
+    assert_eq!(budget.bytes, b"authenticated runtime".len() as u64);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_snapshot_preserves_an_attested_runtime_library_and_avoids_empty_directories() {
+    let temp = tempdir().unwrap();
+    let base = temp.path().join("base");
+    fs::create_dir_all(base.join("bin")).unwrap();
+    fs::create_dir_all(base.join("lib")).unwrap();
+    fs::write(base.join("lib/libpython3.11.dylib"), b"base runtime").unwrap();
+    let copied_environment = temp.path().join("snapshot-environment");
+    fs::create_dir_all(copied_environment.join("lib")).unwrap();
+    fs::write(
+        copied_environment.join("pyvenv.cfg"),
+        format!("home = {}\nversion = 3.11.14\n", base.join("bin").display()),
+    )
+    .unwrap();
+    let destination = copied_environment.join("lib/libpython3.11.dylib");
+    fs::write(&destination, b"attested runtime").unwrap();
+    let mut budget = SnapshotBudget::default();
+
+    snapshot_macos_python_runtime_library(&copied_environment, &mut HashMap::new(), &mut budget)
+        .unwrap();
+
+    assert_eq!(fs::read(destination).unwrap(), b"attested runtime");
+    assert_eq!(budget.entries, 0);
+    assert_eq!(budget.bytes, 0);
+
+    let static_base = temp.path().join("static-base");
+    fs::create_dir_all(static_base.join("bin")).unwrap();
+    let static_environment = temp.path().join("static-environment");
+    fs::create_dir(&static_environment).unwrap();
+    fs::write(
+        static_environment.join("pyvenv.cfg"),
+        format!(
+            "home = {}\nversion_info = 3.12.0\n",
+            static_base.join("bin").display()
+        ),
+    )
+    .unwrap();
+    snapshot_macos_python_runtime_library(
+        &static_environment,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+    )
+    .unwrap();
+    assert!(!static_environment.join("lib").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn snapshot_directory_copy_materializes_worker_launcher_and_preserves_versioned_aliases() {
