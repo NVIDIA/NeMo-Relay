@@ -170,10 +170,22 @@ from one explicitly selected file into the activation specs accepted by the
 0.7 host API:
 
 ```python
+import asyncio
+
 from nemo_relay import plugin
 
-dynamic_plugins = plugin.load_dynamic_plugin_activation_specs("path/to/plugins.toml")
-activation = await plugin.initialize_with_dynamic_plugins({}, dynamic_plugins)
+
+async def main() -> None:
+    dynamic_plugins = plugin.load_dynamic_plugin_activation_specs(
+        "path/to/plugins.toml"
+    )
+    activation = await plugin.initialize_with_dynamic_plugins({}, dynamic_plugins)
+    async with activation:
+        # Run your host application while dynamic plugins are active.
+        ...
+
+
+asyncio.run(main())
 ```
 
 The helper resolves each manifest relative to `plugins.toml` and reads the
