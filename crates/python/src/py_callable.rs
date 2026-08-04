@@ -59,6 +59,20 @@ use crate::py_types::{
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
 
+fn python_callback_error(error: PyErr) -> FlowError {
+    let exception_type = Python::attach(|py| {
+        error
+            .get_type(py)
+            .getattr("__name__")
+            .and_then(|name| name.extract::<String>())
+            .unwrap_or_else(|_| "Exception".to_string())
+    });
+    FlowError::CallbackException {
+        message: error.to_string(),
+        exception_type,
+    }
+}
+
 struct CancellablePyFuture {
     inner: PyValueFuture,
     scheduled: Arc<Mutex<ScheduledAwaitable>>,
@@ -296,9 +310,7 @@ async fn resolve_json_or_future(
     match outcome? {
         Ok(json) => Ok(json),
         Err(future) => {
-            let py_result = future
-                .await
-                .map_err(|e| FlowError::Internal(e.to_string()))?;
+            let py_result = future.await.map_err(python_callback_error)?;
             Python::attach(|py| {
                 py_to_json(py_result.bind(py))
                     .map_err(|e: PyErr| FlowError::Internal(e.to_string()))
@@ -505,7 +517,7 @@ async fn resolve_py_object_or_future(
 ) -> FlowResult<Py<PyAny>> {
     match outcome? {
         Ok(value) => Ok(value),
-        Err(future) => future.await.map_err(|e| FlowError::Internal(e.to_string())),
+        Err(future) => future.await.map_err(python_callback_error),
     }
 }
 
@@ -573,7 +585,7 @@ async fn await_async_iter_task_result(task: Py<PyAny>) -> FlowResult<AsyncIterTa
             } else if error.is_instance(py, &cancelled_error) {
                 Ok(AsyncIterTaskResult::Cancelled)
             } else {
-                Err(FlowError::Internal(error.to_string()))
+                Err(python_callback_error(error))
             }
         }),
     }
@@ -953,7 +965,7 @@ pub fn wrap_py_tool_exec_fn(
                     Some(context) => context.call_method1("run", (callback.bind(py), py_args)),
                     None => callback.bind(py).call1((py_args,)),
                 }
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                .map_err(python_callback_error)?;
                 split_json_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
             }))
             .await
@@ -1264,7 +1276,7 @@ pub fn wrap_py_llm_stream_exec_intercept_fn(
                         }
                         None => callback.bind(py).call1((py_req, py_next)),
                     }
-                    .map_err(|e: PyErr| FlowError::Internal(e.to_string()))?;
+                    .map_err(python_callback_error)?;
                     let outcome = split_py_object_or_future_with_locals(
                         py,
                         result.unbind(),
@@ -1508,7 +1520,7 @@ pub fn wrap_py_llm_exec_fn(
                     Some(context) => context.call_method1("run", (callback.bind(py), py_req)),
                     None => callback.bind(py).call1((py_req,)),
                 }
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                .map_err(python_callback_error)?;
                 split_json_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
             }))
             .await
@@ -1546,7 +1558,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                     Some(context) => context.call_method1("run", (callback.bind(py), py_req)),
                     None => callback.bind(py).call1((py_req,)),
                 }
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                .map_err(python_callback_error)?;
                 let outcome = split_py_object_or_future_with_locals(
                     py,
                     result.unbind(),
@@ -1566,7 +1578,7 @@ pub fn wrap_py_llm_stream_exec_fn(
 /// The collector is invoked with each intercepted chunk (after stream response
 /// intercepts have been applied). It receives a single JSON-converted Python
 /// object argument. If the Python callable raises an exception, it is converted
-/// to a `FlowError::Internal` and returned as `Err`, which terminates the
+/// to a `FlowError::CallbackException` and returned as `Err`, which terminates the
 /// stream. If the callable returns normally (including `None`), the collector
 /// returns `Ok(())`.
 pub fn wrap_py_collector_fn(
@@ -1578,7 +1590,7 @@ pub fn wrap_py_collector_fn(
                 .map_err(|e| FlowError::Internal(format!("collector json_to_py failed: {e}")))?;
             py_fn
                 .call1(py, (py_chunk,))
-                .map_err(|e| FlowError::Internal(format!("Python collector error: {e}")))?;
+                .map_err(python_callback_error)?;
             Ok(())
         })
     })

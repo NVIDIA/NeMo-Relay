@@ -453,8 +453,17 @@ import sys
 version = sys.argv[1]
 if version.startswith("v"):
     raise SystemExit("Release tags must not start with 'v'; use raw SemVer such as 0.1.0")
-if not re.fullmatch(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", version):
-    raise SystemExit(f"Unsupported release tag '{version}'; use 0.1.0 or prereleases like 0.1.0-rc.1")
+numeric_identifier = r"(?:0|[1-9][0-9]*)"
+if not re.fullmatch(
+    rf"{numeric_identifier}\.{numeric_identifier}\.{numeric_identifier}"
+    rf"(?:-(?:alpha|beta|rc)\.{numeric_identifier})?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?",
+    version,
+):
+    raise SystemExit(
+        f"Unsupported Cargo version '{version}'; use 0.1.0, prereleases like "
+        "0.1.0-rc.1, or build metadata like 0.1.0+deadbeef"
+    )
 
 path = Path("Cargo.toml")
 text = path.read_text()
@@ -1483,6 +1492,22 @@ set-version version="":
     fi
     cd "$NEMO_RELAY_REPO_ROOT"
     set_project_version "$version"
+
+# Set only the Cargo workspace version for release artifact builds.
+# [version] or --set ref_name=<version>
+set-cargo-version version="":
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    version="{{ version }}"
+    if [[ -z "$version" ]]; then
+        version="{{ ref_name }}"
+    fi
+    if [[ -z "$version" ]]; then
+        echo "Error: version is required for set-cargo-version" >&2
+        exit 1
+    fi
+    cd "$NEMO_RELAY_REPO_ROOT"
+    set_cargo_workspace_version "$version"
 
 # --set [output_dir=<path>] [ref_name=<name>]
 package-rust:

@@ -11,13 +11,13 @@ use std::time::SystemTime;
 use serde_json::{Map, Value, json};
 
 #[cfg(test)]
-use super::config::persistent_hook_command_for_platform;
+use super::config::persistent_hook_commands_for_platform;
 use super::config::{
     MCP_SERVER_NAME, expected_mcp_server, forwarded_environment_names, owned_install_command,
     parse_yaml_object, persistent_config, relay_is_executable, remove_owned_mcp, strip_owned_hooks,
     user_config_path_with_override, yaml_bytes,
 };
-pub(crate) use super::config::{persistent_hook_command, transparent_config};
+pub(crate) use super::config::{persistent_hook_commands, transparent_config};
 use super::files::{
     FileSnapshot, INSTALL_LOCK_TIMEOUT, PersistentPaths, acquire_allowlist_lock,
     acquire_install_lock, read_optional_utf8, remove_optional_file, replace_optional_file,
@@ -27,6 +27,7 @@ use crate::agents::CodingAgent;
 use crate::bootstrap::DEFAULT_BIND;
 use crate::error::CliError;
 use crate::filesystem::atomic_write;
+use crate::hooks::GeneratedHookCommands;
 #[cfg(test)]
 use crate::installation::generation::GENERATION_FILE_NAME;
 use crate::installation::generation::{
@@ -166,7 +167,10 @@ fn config_has_managed_state(config: &Value) -> bool {
     owned_command_from_config(config, None).is_some()
 }
 
-fn allowlist_has_owned_command(allowlist: &Value, command: Option<&str>) -> bool {
+fn allowlist_has_owned_command(
+    allowlist: &Value,
+    commands: Option<&GeneratedHookCommands>,
+) -> bool {
     allowlist
         .get("approvals")
         .and_then(Value::as_array)
@@ -174,16 +178,23 @@ fn allowlist_has_owned_command(allowlist: &Value, command: Option<&str>) -> bool
         .flatten()
         .filter_map(|entry| entry.get("command").and_then(Value::as_str))
         .any(|candidate| {
-            command == Some(candidate)
-                || (command.is_none() && is_persistent_relay_hook_command(candidate))
+            commands.is_some_and(|commands| commands.contains(candidate))
+                || (commands.is_none() && is_persistent_relay_hook_command(candidate))
         })
 }
 
 fn is_persistent_relay_hook_command(command: &str) -> bool {
     #[cfg(any(windows, test))]
     if let Some(arguments) = crate::hooks::decode_windows_hook_command(command) {
+        let arguments = arguments.as_slice();
+        let base = match arguments {
+            [base @ .., policy] if matches!(policy.as_str(), "--fail-open" | "--fail-closed") => {
+                base
+            }
+            base => base,
+        };
         return matches!(
-            arguments.as_slice(),
+            base,
             [
                 _,
                 hook_forward,
@@ -211,7 +222,10 @@ fn is_persistent_relay_hook_command(command: &str) -> bool {
         && command.contains("--generation-token")
 }
 
-fn owned_command_from_config(config: &Value, generation: Option<&Path>) -> Option<String> {
+fn owned_command_from_config(
+    config: &Value,
+    generation: Option<&Path>,
+) -> Option<GeneratedHookCommands> {
     let relay = config
         .pointer(&format!("/mcp_servers/{MCP_SERVER_NAME}/command"))
         .and_then(Value::as_str)
@@ -235,9 +249,9 @@ pub(crate) fn diagnose_persistent(config_path: &Path) -> Result<String, String> 
         ));
     }
     let generation = InstallGeneration::capture(paths.generation.clone())?;
-    let command = persistent_hook_command(&relay, &paths.generation, generation.token())?;
-    verify_hook_definitions(&config, &command)?;
-    verify_trust(&paths.allowlist, &command)?;
+    let commands = persistent_hook_commands(&relay, &paths.generation, generation.token())?;
+    verify_hook_definitions(&config, &commands)?;
+    verify_trust(&paths.allowlist, &commands)?;
 
     let mcp_env = config["mcp_servers"][MCP_SERVER_NAME]
         .get("env")
@@ -374,20 +388,20 @@ where
     };
     let environment = forwarded_environment_names(environment, plugin_config);
     let token = uuid::Uuid::now_v7().to_string();
-    let command =
-        persistent_hook_command(relay, &paths.generation, &token).map_err(CliError::Install)?;
+    let commands =
+        persistent_hook_commands(relay, &paths.generation, &token).map_err(CliError::Install)?;
     let config = persistent_config(
         existing_config.as_deref(),
         relay,
-        &command,
+        &commands,
         &paths.generation,
         &token,
         &environment,
     )?;
     let allowlist = trusted_hooks(
         existing_allowlist.as_deref(),
-        previous_command.as_deref(),
-        &command,
+        previous_command.as_ref(),
+        &commands,
         relay,
         now,
     )?;
@@ -404,7 +418,7 @@ where
         verify_install(
             &paths,
             relay,
-            &command,
+            &commands,
             &environment,
             &token,
             generation_transaction,
@@ -437,7 +451,7 @@ where
         .map(|raw| {
             let mut root = parse_yaml_object(Some(&raw), "Hermes config")?;
             let owned = owned_command_from_config(&root, Some(&paths.generation));
-            strip_owned_hooks(&mut root, owned.as_deref())?;
+            strip_owned_hooks(&mut root, owned.as_ref())?;
             remove_owned_mcp(&mut root, owned.is_some())?;
             if root.as_object().is_some_and(Map::is_empty) {
                 Ok(None)
@@ -466,7 +480,12 @@ where
                     entry
                         .get("command")
                         .and_then(Value::as_str)
-                        .is_none_or(|command| Some(command) != owned.as_deref())
+                        .is_none_or(|command| {
+                            owned.as_ref().map_or_else(
+                                || !is_persistent_relay_hook_command(command),
+                                |commands| !commands.contains(command),
+                            )
+                        })
                 });
                 if approvals.is_empty() {
                     object.remove("approvals");
@@ -485,7 +504,7 @@ where
         remove_optional_file(&paths.generation)?;
         replace_optional_file(&paths.allowlist, allowlist.as_deref(), &mut write)?;
         replace_optional_file(&paths.config, config.as_deref(), &mut write)?;
-        verify_uninstall(&paths, owned.as_deref())
+        verify_uninstall(&paths, owned.as_ref())
     })();
     if let Err(error) = result {
         return rollback_error("uninstall", error, &snapshots, &mut write);
@@ -520,7 +539,7 @@ where
 fn verify_install(
     paths: &PersistentPaths,
     relay: &Path,
-    command: &str,
+    commands: &GeneratedHookCommands,
     environment: &[String],
     token: &str,
     generation_transaction: Option<&GenerationRetirement>,
@@ -532,8 +551,8 @@ fn verify_install(
     if config.pointer("/mcp_servers/nemo-relay") != Some(&expected) {
         return Err("Hermes MCP server did not persist exactly".into());
     }
-    verify_hook_definitions(&config, command)?;
-    verify_trust(&paths.allowlist, command)?;
+    verify_hook_definitions(&config, commands)?;
+    verify_trust(&paths.allowlist, commands)?;
 
     let actual_token = match generation_transaction {
         Some(transaction) => transaction.active_visible_token()?,
@@ -547,7 +566,7 @@ fn verify_install(
     Ok(())
 }
 
-fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> {
+fn verify_hook_definitions(config: &Value, commands: &GeneratedHookCommands) -> Result<(), String> {
     for event in CodingAgent::Hermes.hook_events() {
         let groups = config
             .pointer(&format!("/hooks/{event}"))
@@ -555,7 +574,9 @@ fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> 
             .ok_or_else(|| format!("Hermes hook {event} is missing"))?;
         let matching = groups
             .iter()
-            .filter(|group| group.get("command").and_then(Value::as_str) == Some(command))
+            .filter(|group| {
+                group.get("command").and_then(Value::as_str) == Some(commands.for_event(event))
+            })
             .count();
         if matching != 1 {
             return Err(format!(
@@ -573,9 +594,12 @@ fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> 
             .as_array()
             .ok_or_else(|| format!("Hermes {event} hooks must be an array"))?;
         if !CodingAgent::Hermes.hook_events().contains(&event.as_str())
-            && groups
-                .iter()
-                .any(|group| group.get("command").and_then(Value::as_str) == Some(command))
+            && groups.iter().any(|group| {
+                group
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| commands.contains(command))
+            })
         {
             return Err("Hermes config contains an unexpected Relay hook handler".into());
         }
@@ -583,7 +607,10 @@ fn verify_hook_definitions(config: &Value, command: &str) -> Result<(), String> 
     Ok(())
 }
 
-fn verify_uninstall(paths: &PersistentPaths, owned_command: Option<&str>) -> Result<(), String> {
+fn verify_uninstall(
+    paths: &PersistentPaths,
+    owned_commands: Option<&GeneratedHookCommands>,
+) -> Result<(), String> {
     if paths.generation.exists() {
         return Err("Hermes MCP generation fence still exists".into());
     }
@@ -596,7 +623,7 @@ fn verify_uninstall(paths: &PersistentPaths, owned_command: Option<&str>) -> Res
     if let Some(raw) = read_optional_utf8(&paths.allowlist).map_err(|error| error.to_string())? {
         let allowlist = parse_json_object(Some(&raw), "Hermes shell-hook allowlist")
             .map_err(|e| e.to_string())?;
-        if allowlist_has_owned_command(&allowlist, owned_command) {
+        if allowlist_has_owned_command(&allowlist, owned_commands) {
             return Err("managed Hermes Relay trust approval still exists".into());
         }
     }

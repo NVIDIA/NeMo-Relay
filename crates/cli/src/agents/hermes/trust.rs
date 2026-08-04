@@ -12,11 +12,12 @@ use serde_json::{Value, json};
 
 use crate::agents::CodingAgent;
 use crate::error::CliError;
+use crate::hooks::GeneratedHookCommands;
 
 pub(super) fn trusted_hooks(
     existing: Option<&str>,
-    previous_command: Option<&str>,
-    command: &str,
+    previous_commands: Option<&GeneratedHookCommands>,
+    commands: &GeneratedHookCommands,
     relay: &Path,
     now: SystemTime,
 ) -> Result<Value, CliError> {
@@ -34,7 +35,9 @@ pub(super) fn trusted_hooks(
         entry
             .get("command")
             .and_then(Value::as_str)
-            .is_none_or(|candidate| Some(candidate) != previous_command)
+            .is_none_or(|candidate| {
+                previous_commands.is_none_or(|commands| !commands.contains(candidate))
+            })
     });
     let approved_at = timestamp(now);
     let script_mtime_at_approval = fs::metadata(relay)
@@ -44,7 +47,7 @@ pub(super) fn trusted_hooks(
     approvals.extend(CodingAgent::Hermes.hook_events().iter().map(|event| {
         json!({
             "event": event,
-            "command": command,
+            "command": commands.for_event(event),
             "approved_at": approved_at,
             "script_mtime_at_approval": script_mtime_at_approval,
         })
@@ -56,7 +59,10 @@ fn timestamp(time: SystemTime) -> String {
     DateTime::<Utc>::from(time).to_rfc3339_opts(SecondsFormat::Micros, true)
 }
 
-pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), String> {
+pub(super) fn verify_trust(
+    allowlist_path: &Path,
+    commands: &GeneratedHookCommands,
+) -> Result<(), String> {
     let raw = fs::read_to_string(allowlist_path)
         .map_err(|error| format!("failed to read {}: {error}", allowlist_path.display()))?;
     let allowlist =
@@ -70,7 +76,8 @@ pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), S
             .iter()
             .filter(|entry| {
                 entry.get("event").and_then(Value::as_str) == Some(event)
-                    && entry.get("command").and_then(Value::as_str) == Some(command)
+                    && entry.get("command").and_then(Value::as_str)
+                        == Some(commands.for_event(event))
             })
             .count();
         if matching != 1 {
@@ -80,14 +87,19 @@ pub(super) fn verify_trust(allowlist_path: &Path, command: &str) -> Result<(), S
         }
     }
     for entry in approvals {
-        if entry.get("command").and_then(Value::as_str) != Some(command) {
+        let Some(command) = entry.get("command").and_then(Value::as_str) else {
+            continue;
+        };
+        if !commands.contains(command) {
             continue;
         }
         let event = entry
             .get("event")
             .and_then(Value::as_str)
             .ok_or_else(|| "Hermes Relay hook approval is missing its event".to_string())?;
-        if !CodingAgent::Hermes.hook_events().contains(&event) {
+        if !CodingAgent::Hermes.hook_events().contains(&event)
+            || command != commands.for_event(event)
+        {
             return Err("Hermes allowlist contains an unexpected Relay hook approval".into());
         }
     }

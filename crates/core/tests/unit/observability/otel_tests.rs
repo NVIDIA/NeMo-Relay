@@ -528,6 +528,27 @@ fn make_end_event(
     )
 }
 
+fn make_end_event_with_metadata(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    scope_type: ScopeType,
+    metadata: Json,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .uuid(uuid)
+            .name(name)
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::from(scope_type),
+        None,
+    ))
+}
+
 fn make_scope_event(
     scope_category: ScopeCategory,
     uuid: Uuid,
@@ -1579,6 +1600,295 @@ fn gen_ai_end_projection_preserves_explicit_error_type() {
         attributes.get("error.type"),
         Some(&"invalid_argument".to_string())
     );
+}
+
+#[test]
+fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::GenAi] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+                provider,
+                "error-propagation-test".to_string(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+            );
+        let agent_uuid = Uuid::now_v7();
+        let function_uuid = Uuid::now_v7();
+        let llm_uuid = Uuid::now_v7();
+        processor.process(&make_start_event(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            None,
+        ));
+        let llm_parent_uuid = if otel_type == OpenTelemetryType::GenAi {
+            processor.process(&make_start_event(
+                function_uuid,
+                Some(agent_uuid),
+                "function",
+                ScopeType::Function,
+                None,
+            ));
+            function_uuid
+        } else {
+            agent_uuid
+        };
+        processor.process(&make_start_event(
+            llm_uuid,
+            Some(llm_parent_uuid),
+            "chat",
+            ScopeType::Llm,
+            None,
+        ));
+        processor.process(&make_end_event_with_metadata(
+            llm_uuid,
+            Some(llm_parent_uuid),
+            "chat",
+            ScopeType::Llm,
+            json!({
+                "otel.status_code": "ERROR",
+                "otel.status_description": "internal error: ValueError: boom",
+                "error.type": "internal_error",
+                "exception.type": "ValueError",
+            }),
+        ));
+        if otel_type == OpenTelemetryType::GenAi {
+            processor.process(&make_end_event_with_metadata(
+                function_uuid,
+                Some(agent_uuid),
+                "function",
+                ScopeType::Function,
+                json!({
+                    "otel.status_code": "ERROR",
+                    "otel.status_description": "internal error: ValueError: boom",
+                }),
+            ));
+        }
+        processor.process(&make_end_event_with_metadata(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            json!({
+                "otel.status_code": "ERROR",
+                "otel.status_description": "internal error: ValueError: boom",
+            }),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 2);
+        for span in &spans {
+            assert_eq!(
+                attr_map(&span.attributes).get("error.type"),
+                Some(&"internal_error".to_string())
+            );
+            let exception = span
+                .events
+                .events
+                .iter()
+                .find(|event| event.name.as_ref() == "exception")
+                .expect("expected exception event");
+            assert_eq!(
+                attr_map(&exception.attributes).get("exception.type"),
+                Some(&"ValueError".to_string())
+            );
+        }
+    }
+}
+
+#[test]
+fn suppressed_function_error_propagates_to_agent_span() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+        provider,
+        "suppressed-error-propagation-test".to_string(),
+        OpenTelemetryType::GenAi,
+        MarkProjection::default(),
+        default_mark_exclude_names(),
+        Vec::new(),
+    );
+    let agent_uuid = Uuid::now_v7();
+    let function_uuid = Uuid::now_v7();
+    processor.process(&make_start_event(
+        agent_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        None,
+    ));
+    processor.process(&make_start_event(
+        function_uuid,
+        Some(agent_uuid),
+        "function",
+        ScopeType::Function,
+        None,
+    ));
+    processor.process(&make_end_event_with_metadata(
+        function_uuid,
+        Some(agent_uuid),
+        "function",
+        ScopeType::Function,
+        json!({
+            "otel.status_code": "ERROR",
+            "error.type": "internal_error",
+            "exception.type": "ValueError",
+        }),
+    ));
+    processor.process(&make_end_event_with_metadata(
+        agent_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        json!({"otel.status_code": "ERROR"}),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let agent_span = &spans[0];
+    assert_eq!(
+        attr_map(&agent_span.attributes).get("error.type"),
+        Some(&"internal_error".to_string())
+    );
+    let exception = agent_span
+        .events
+        .events
+        .iter()
+        .find(|event| event.name.as_ref() == "exception")
+        .expect("expected propagated exception event");
+    assert_eq!(
+        attr_map(&exception.attributes).get("exception.type"),
+        Some(&"ValueError".to_string())
+    );
+}
+
+#[test]
+fn suppressed_parent_error_propagation_isolated_by_trace_id() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+        provider,
+        "error-trace-isolation-test".to_string(),
+        OpenTelemetryType::GenAi,
+        MarkProjection::default(),
+        default_mark_exclude_names(),
+        Vec::new(),
+    );
+    let shared_span_id = [0xAB; 8];
+    let mut first_agent_bytes = [0x11; 16];
+    first_agent_bytes[8..].copy_from_slice(&shared_span_id);
+    let mut second_agent_bytes = [0x22; 16];
+    second_agent_bytes[8..].copy_from_slice(&shared_span_id);
+    let cases = [
+        (
+            Uuid::from_bytes(first_agent_bytes),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            "first_error",
+            "FirstException",
+        ),
+        (
+            Uuid::from_bytes(second_agent_bytes),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            "second_error",
+            "SecondException",
+        ),
+    ];
+    assert_eq!(
+        relay_span_id(cases[0].0),
+        relay_span_id(cases[1].0),
+        "fixture agents must share a span ID"
+    );
+    assert_ne!(
+        relay_trace_id(cases[0].0),
+        relay_trace_id(cases[1].0),
+        "fixture agents must belong to different traces"
+    );
+
+    for (agent_uuid, function_uuid, llm_uuid, _, _) in cases {
+        processor.process(&make_start_event(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            None,
+        ));
+        processor.process(&make_start_event(
+            function_uuid,
+            Some(agent_uuid),
+            "function",
+            ScopeType::Function,
+            None,
+        ));
+        processor.process(&make_start_event(
+            llm_uuid,
+            Some(function_uuid),
+            "chat",
+            ScopeType::Llm,
+            None,
+        ));
+    }
+    for (agent_uuid, function_uuid, llm_uuid, error_type, exception_type) in cases {
+        processor.process(&make_end_event_with_metadata(
+            llm_uuid,
+            Some(function_uuid),
+            "chat",
+            ScopeType::Llm,
+            json!({
+                "otel.status_code": "ERROR",
+                "error.type": error_type,
+                "exception.type": exception_type,
+            }),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            function_uuid,
+            Some(agent_uuid),
+            "function",
+            ScopeType::Function,
+            json!({"otel.status_code": "ERROR"}),
+        ));
+    }
+    for (agent_uuid, _, _, _, _) in cases {
+        processor.process(&make_end_event_with_metadata(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            json!({"otel.status_code": "ERROR"}),
+        ));
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 4);
+    for (agent_uuid, _, _, error_type, exception_type) in cases {
+        let agent_span = spans
+            .iter()
+            .find(|span| {
+                span.span_context.trace_id() == relay_trace_id(agent_uuid)
+                    && span.parent_span_id == SpanId::INVALID
+            })
+            .expect("expected agent span for trace");
+        assert_eq!(
+            attr_map(&agent_span.attributes).get("error.type"),
+            Some(&error_type.to_string())
+        );
+        let exception = agent_span
+            .events
+            .events
+            .iter()
+            .find(|event| event.name.as_ref() == "exception")
+            .expect("expected propagated exception event");
+        assert_eq!(
+            attr_map(&exception.attributes).get("exception.type"),
+            Some(&exception_type.to_string())
+        );
+    }
 }
 
 #[test]

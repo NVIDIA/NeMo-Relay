@@ -12,22 +12,70 @@ use crate::agents::CodingAgent;
 #[cfg(any(windows, test))]
 use base64::Engine;
 
+#[cfg(test)]
 pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
+    generated_policy_hooks(agent, &GeneratedHookCommands::uniform(command))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GeneratedHookCommands {
+    fail_open: String,
+    fail_closed: String,
+    legacy: Option<String>,
+}
+
+impl GeneratedHookCommands {
+    pub(crate) fn new(fail_open: impl Into<String>, fail_closed: impl Into<String>) -> Self {
+        Self {
+            fail_open: fail_open.into(),
+            fail_closed: fail_closed.into(),
+            legacy: None,
+        }
+    }
+
+    pub(crate) fn uniform(command: impl Into<String>) -> Self {
+        let command = command.into();
+        Self::new(command.clone(), command)
+    }
+
+    pub(crate) fn for_event(&self, event: &str) -> &str {
+        if event_requires_fail_closed(event) {
+            &self.fail_closed
+        } else {
+            &self.fail_open
+        }
+    }
+
+    pub(crate) fn contains(&self, command: &str) -> bool {
+        command == self.fail_open
+            || command == self.fail_closed
+            || self.legacy.as_deref() == Some(command)
+    }
+
+    pub(crate) fn legacy(&self) -> Option<&str> {
+        self.legacy.as_deref()
+    }
+}
+
+pub(crate) fn generated_policy_hooks(
+    agent: CodingAgent,
+    commands: &GeneratedHookCommands,
+) -> Value {
     if agent.uses_direct_hook_entries() {
-        direct_hooks(agent.hook_events(), command)
+        direct_hooks(agent.hook_events(), commands)
     } else {
-        grouped_hooks(agent.hook_events(), command)
+        grouped_hooks(agent.hook_events(), commands)
     }
 }
 
 /// Canonical persistent hook command used by every supported host.
-pub(crate) fn persistent_hook_forward_command(
+pub(crate) fn persistent_hook_forward_commands(
     relay: &Path,
     agent: CodingAgent,
     generation_file: &Path,
     generation_token: &str,
-) -> Result<String, String> {
-    hook_command(
+) -> Result<GeneratedHookCommands, String> {
+    hook_commands(
         relay,
         &persistent_hook_arguments(agent, generation_file, generation_token),
     )
@@ -35,22 +83,22 @@ pub(crate) fn persistent_hook_forward_command(
 
 /// Canonical transparent hook command. It embeds the process-private dynamic gateway so hook hosts
 /// that filter inherited environment variables cannot redirect delivery to the fixed endpoint.
-pub(crate) fn transparent_hook_forward_command(
+pub(crate) fn transparent_hook_forward_commands(
     relay: &Path,
     agent: CodingAgent,
     gateway_url: &str,
-) -> Result<String, String> {
-    hook_command(relay, &transparent_hook_arguments(agent, gateway_url))
+) -> Result<GeneratedHookCommands, String> {
+    hook_commands(relay, &transparent_hook_arguments(agent, gateway_url))
 }
 
 #[cfg(test)]
-pub(crate) fn transparent_hook_forward_command_for_platform(
+pub(crate) fn transparent_hook_forward_commands_for_platform(
     relay: &Path,
     agent: CodingAgent,
     gateway_url: &str,
     windows: bool,
-) -> String {
-    hook_command_for_platform(
+) -> GeneratedHookCommands {
+    hook_commands_for_platform(
         relay,
         &transparent_hook_arguments(agent, gateway_url),
         windows,
@@ -58,14 +106,14 @@ pub(crate) fn transparent_hook_forward_command_for_platform(
 }
 
 #[cfg(test)]
-pub(crate) fn persistent_hook_forward_command_for_platform(
+pub(crate) fn persistent_hook_forward_commands_for_platform(
     relay: &Path,
     agent: CodingAgent,
     generation_file: &Path,
     generation_token: &str,
     windows: bool,
-) -> String {
-    hook_command_for_platform(
+) -> GeneratedHookCommands {
+    hook_commands_for_platform(
         relay,
         &persistent_hook_arguments(agent, generation_file, generation_token),
         windows,
@@ -97,6 +145,45 @@ pub(super) fn persistent_hook_arguments(
         "--generation-token".into(),
         generation_token.into(),
     ]
+}
+
+fn hook_commands(relay: &Path, arguments: &[String]) -> Result<GeneratedHookCommands, String> {
+    let mut commands = GeneratedHookCommands::new(
+        hook_command(relay, &with_failure_policy(arguments, "--fail-open"))?,
+        hook_command(relay, &with_failure_policy(arguments, "--fail-closed"))?,
+    );
+    commands.legacy = Some(hook_command(relay, arguments)?);
+    Ok(commands)
+}
+
+#[cfg(test)]
+fn hook_commands_for_platform(
+    relay: &Path,
+    arguments: &[String],
+    windows: bool,
+) -> GeneratedHookCommands {
+    let mut commands = GeneratedHookCommands::new(
+        hook_command_for_platform(
+            relay,
+            &with_failure_policy(arguments, "--fail-open"),
+            windows,
+        ),
+        hook_command_for_platform(
+            relay,
+            &with_failure_policy(arguments, "--fail-closed"),
+            windows,
+        ),
+    );
+    commands.legacy = Some(hook_command_for_platform(relay, arguments, windows));
+    commands
+}
+
+fn with_failure_policy(arguments: &[String], policy: &str) -> Vec<String> {
+    arguments
+        .iter()
+        .cloned()
+        .chain(std::iter::once(policy.to_string()))
+        .collect()
 }
 
 pub(super) fn hook_command(relay: &Path, arguments: &[String]) -> Result<String, String> {
@@ -302,14 +389,14 @@ pub(super) fn parse_powershell_single_quoted_arguments(mut raw: &str) -> Option<
     (!arguments.is_empty()).then_some(arguments)
 }
 
-pub(super) fn direct_hooks(events: &[&str], command: &str) -> Value {
+fn direct_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {
     let hooks: serde_json::Map<String, Value> = events
         .iter()
         .map(|event| {
             (
                 (*event).to_string(),
                 json!([{
-                    "command": command,
+                    "command": commands.for_event(event),
                     "timeout": 30
                 }]),
             )
@@ -321,7 +408,7 @@ pub(super) fn direct_hooks(events: &[&str], command: &str) -> Value {
 // Generates hook groups for Claude/Codex events and adds a wildcard matcher to tool events when
 // the target agent requires matcher-scoped tool hooks. Non-tool events omit matchers so they fire
 // for the full lifecycle.
-pub(super) fn grouped_hooks(events: &[&str], command: &str) -> Value {
+fn grouped_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {
     let hooks: serde_json::Map<String, Value> = events
         .iter()
         .map(|event| {
@@ -333,7 +420,7 @@ pub(super) fn grouped_hooks(events: &[&str], command: &str) -> Value {
                 "hooks".into(),
                 json!([{
                     "type": "command",
-                    "command": command,
+                    "command": commands.for_event(event),
                     "timeout": 30
                 }]),
             );
@@ -353,4 +440,8 @@ pub(crate) fn event_matches_tools(event: &str) -> bool {
         event,
         "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PermissionRequest"
     )
+}
+
+pub(crate) fn event_requires_fail_closed(event: &str) -> bool {
+    matches!(event, "PreToolUse" | "PermissionRequest" | "pre_tool_call")
 }

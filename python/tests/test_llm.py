@@ -1338,22 +1338,101 @@ class TestLLMStreaming:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_direct_error")
 
+    async def test_stream_execution_intercept_failure_emits_exception_type(self):
+        events = []
+        subscribers.register("py_llm_stream_intercept_failure_sub", events.append)
+
+        def failing_middleware(request, next):
+            raise ValueError("stream intercept boom")
+
+        intercepts.register_llm_stream_execution(
+            "py_llm_stream_failure",
+            1,
+            failing_middleware,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="stream intercept boom"):
+                await llm.stream_execute(
+                    "stream_intercept_failure_llm",
+                    make_request(),
+                    lambda request: _single_chunk_stream(),
+                    lambda chunk: None,
+                    lambda: {},
+                )
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_failure")
+            await subscribers.flush_async()
+            subscribers.deregister("py_llm_stream_intercept_failure_sub")
+
+        metadata = _llm_event(events, "stream_intercept_failure_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "ValueError"
+
     async def test_stream_execute_collector_failure_raises(self):
+        events = []
+        subscribers.register("py_llm_stream_collector_failure_sub", events.append)
+
         def stream_func(request):
             async def gen():
                 yield {"token": "hello"}
 
             return gen()
 
-        stream = await llm.stream_execute(
-            "stream_collector_fail_llm",
-            make_request(),
-            stream_func,
-            lambda chunk: raise_runtime_error("collector boom"),
-            lambda: {},
-        )
-        with pytest.raises(RuntimeError, match="collector boom"):
-            await anext(stream)
+        try:
+            stream = await llm.stream_execute(
+                "stream_collector_fail_llm",
+                make_request(),
+                stream_func,
+                lambda chunk: raise_runtime_error("collector boom"),
+                lambda: {},
+            )
+            with pytest.raises(RuntimeError, match="collector boom"):
+                await anext(stream)
+            await subscribers.flush_async()
+        finally:
+            subscribers.deregister("py_llm_stream_collector_failure_sub")
+
+        metadata = _llm_event(events, "stream_collector_fail_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "RuntimeError"
+
+    async def test_stream_execute_callback_failure_emits_exception_type(self):
+        events = []
+        subscribers.register("py_llm_stream_callback_failure_sub", events.append)
+
+        def stream_func(request):
+            raise ValueError("stream callback boom")
+
+        async def async_stream_func(request):
+            raise TypeError("async stream callback boom")
+
+        try:
+            with pytest.raises(RuntimeError, match="stream callback boom"):
+                await llm.stream_execute(
+                    "stream_callback_fail_llm",
+                    make_request(),
+                    stream_func,
+                    lambda chunk: None,
+                    lambda: {},
+                )
+            with pytest.raises(RuntimeError, match="async stream callback boom"):
+                await llm.stream_execute(
+                    "async_stream_callback_fail_llm",
+                    make_request(),
+                    async_stream_func,
+                    lambda chunk: None,
+                    lambda: {},
+                )
+            await subscribers.flush_async()
+        finally:
+            subscribers.deregister("py_llm_stream_callback_failure_sub")
+
+        metadata = _llm_event(events, "stream_callback_fail_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "ValueError"
+        metadata = _llm_event(events, "async_stream_callback_fail_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "TypeError"
 
     async def test_stream_execute_finalizer_failure_records_null_output(self):
         events = []

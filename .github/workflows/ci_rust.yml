@@ -254,6 +254,28 @@ jobs:
           cache-bin: false
           save-if: false
 
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        with:
+          version: ${{ steps.ci-config.outputs.uv_version }}
+
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Set CLI binary version
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          version="$REF_NAME"
+          if [[ "$REF_TYPE" != "tag" ]]; then
+            version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)+${GIT_COMMIT::8}"
+          fi
+          just set-cargo-version "$version"
+          printf 'NEMO_RELAY_CLI_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
       - name: Install musl tools
         if: ${{ startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-musl') }}
         run: |
@@ -300,8 +322,17 @@ jobs:
           docker run --rm \
             --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env NEMO_RELAY_CI_WORKSPACE \
+            --env NEMO_RELAY_CLI_PACKAGE_VERSION \
             "${{ matrix.runtime_image }}" \
-            "${{ env.NEMO_RELAY_CI_WORKSPACE }}/target/${{ matrix.target }}/release/nemo-relay" --version
+            /bin/sh -ec '
+              actual="$("$NEMO_RELAY_CI_WORKSPACE/target/${{ matrix.target }}/release/nemo-relay" --version)"
+              expected="nemo-relay $NEMO_RELAY_CLI_PACKAGE_VERSION"
+              if [ "$actual" != "$expected" ]; then
+                echo "Error: expected CLI version \"$expected\", got \"$actual\"" >&2
+                exit 1
+              fi
+            '
 
       - name: Stage CLI binary artifact
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
@@ -337,10 +368,7 @@ jobs:
             binary="${binary}.exe"
           fi
           source="${NEMO_RELAY_CI_WORKSPACE}/target/${target}/release/${binary}"
-          version="${{ github.ref_name }}"
-          if [ "${{ github.ref_type }}" != "tag" ]; then
-            version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)+${GIT_COMMIT::8}"
-          fi
+          version="$NEMO_RELAY_CLI_PACKAGE_VERSION"
           rm -rf "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
           mkdir -p "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
           python scripts/package-cli-bin.py \
@@ -364,7 +392,12 @@ jobs:
             venv_cli="${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-wheel-venv/bin/nemo-relay"
           fi
           "$venv_python" -m pip install --force-reinstall --no-deps "${wheels[0]}"
-          "$venv_cli" --version
+          actual="$("$venv_cli" --version)"
+          expected="nemo-relay $NEMO_RELAY_CLI_PACKAGE_VERSION"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Error: expected CLI version '$expected', got '$actual'" >&2
+            exit 1
+          fi
 
       - name: Install and run CLI wheel on musllinux
         if: ${{ endsWith(matrix.target, '-musl') }}
@@ -375,13 +408,19 @@ jobs:
             --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --env NEMO_RELAY_CI_WORKSPACE_TMP \
+            --env NEMO_RELAY_CLI_PACKAGE_VERSION \
             "${{ matrix.runtime_image }}" \
             /bin/sh -ec '
               wheel="$(find "$NEMO_RELAY_CI_WORKSPACE_TMP/cli-packages" -maxdepth 1 -name "*.whl" -print -quit)"
               test -n "$wheel"
               /opt/python/cp311-cp311/bin/python -m venv /tmp/nemo-relay-cli-wheel-venv
               /tmp/nemo-relay-cli-wheel-venv/bin/python -m pip install --force-reinstall --no-deps "$wheel"
-              /tmp/nemo-relay-cli-wheel-venv/bin/nemo-relay --version
+              actual="$(/tmp/nemo-relay-cli-wheel-venv/bin/nemo-relay --version)"
+              expected="nemo-relay $NEMO_RELAY_CLI_PACKAGE_VERSION"
+              if [ "$actual" != "$expected" ]; then
+                echo "Error: expected CLI version \"$expected\", got \"$actual\"" >&2
+                exit 1
+              fi
             '
 
       - name: Upload CLI binary artifact
