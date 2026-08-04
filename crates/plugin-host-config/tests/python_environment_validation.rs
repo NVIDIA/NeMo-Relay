@@ -242,8 +242,7 @@ fn enabled_python_worker_reports_a_missing_lifecycle_environment_contextually() 
     );
     assert!(
         error.contains(
-            temp.path()
-                .canonicalize()
+            dunce::canonicalize(temp.path())
                 .unwrap()
                 .join(environment.strip_prefix(temp.path()).unwrap())
                 .to_string_lossy()

@@ -201,11 +201,17 @@ fn same_directory_sources_share_state_without_collapsing_ownership() {
     assert_eq!(state["records"].as_array().unwrap().len(), 2);
     assert_eq!(
         state["declaration_sources"]["custom-owner"],
-        custom.canonicalize().unwrap().to_string_lossy().as_ref()
+        dunce::canonicalize(&custom)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
     assert_eq!(
         state["declaration_sources"]["default-owner"],
-        default.canonicalize().unwrap().to_string_lossy().as_ref()
+        dunce::canonicalize(&default)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
     assert!(
         state_record(&state, "custom-owner")["spec"]["config_ref"].is_null(),
@@ -243,7 +249,10 @@ fn moving_same_id_requires_removal_before_hydrating_new_owner_disabled() {
     assert_eq!(unchanged_record["spec"]["enabled"], true);
     assert_eq!(
         unchanged["declaration_sources"]["moved-owner"],
-        custom.canonicalize().unwrap().to_string_lossy().as_ref()
+        dunce::canonicalize(&custom)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
 
     mutate_state(&custom, |state| {
@@ -259,7 +268,10 @@ fn moving_same_id_requires_removal_before_hydrating_new_owner_disabled() {
     assert_eq!(record["spec"]["enabled"], false);
     assert_eq!(
         state["declaration_sources"]["moved-owner"],
-        default.canonicalize().unwrap().to_string_lossy().as_ref()
+        dunce::canonicalize(&default)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
     assert!(
         !temp
@@ -295,7 +307,10 @@ fn legacy_owner_claim_preserves_enablement_and_non_path_config_ref() {
     );
     assert_eq!(
         state["declaration_sources"]["legacy-owner"],
-        config.canonicalize().unwrap().to_string_lossy().as_ref()
+        dunce::canonicalize(&config)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
 }
 
@@ -471,7 +486,10 @@ fn cross_directory_move_requires_removal_before_new_owner_hydration() {
     );
     assert_eq!(
         old_state["declaration_sources"]["cross-source-move"],
-        user.canonicalize().unwrap().to_string_lossy().as_ref()
+        dunce::canonicalize(&user)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
     let new_state: serde_json::Value =
         serde_json::from_slice(&fs::read(project_dir.join(DYNAMIC_PLUGIN_STATE_FILENAME)).unwrap())
@@ -482,7 +500,10 @@ fn cross_directory_move_requires_removal_before_new_owner_hydration() {
     );
     assert_eq!(
         new_state["declaration_sources"]["cross-source-move"],
-        project.canonicalize().unwrap().to_string_lossy().as_ref()
+        dunce::canonicalize(&project)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
 }
 
@@ -676,7 +697,7 @@ fn reconciliation_cannot_overwrite_a_concurrent_enable_transaction() {
     let resolved = resolve_plugin_files_from_paths([config.clone()], None).unwrap();
     reconcile_plugin_lifecycle(&resolved).unwrap();
 
-    let state_path = sibling_lifecycle_state_path(&config.canonicalize().unwrap());
+    let state_path = sibling_lifecycle_state_path(&dunce::canonicalize(&config).unwrap());
     let control_plane_lock = lock_lifecycle_state(&state_path).unwrap();
     let mut control_plane_registry = read_locked_lifecycle_state(&control_plane_lock).unwrap();
     let (started_tx, started_rx) = mpsc::channel();

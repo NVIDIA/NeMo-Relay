@@ -138,14 +138,15 @@ pub fn sibling_lifecycle_state_path(plugins_toml_path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DYNAMIC_PLUGIN_STATE_FILENAME))
 }
 
-/// Pins a plugin configuration path to its physical location.
+/// Pins a plugin configuration path to its portable physical location.
 ///
 /// Existing files resolve through symlinks. For a not-yet-created file, the nearest existing
 /// parent is canonicalized so the CLI control plane and embedded runtime choose the same sibling
-/// lifecycle registry after creation.
+/// lifecycle registry after creation. On Windows, canonical paths use the legacy representation
+/// whenever it is unambiguous so child runtimes do not receive a verbatim path they cannot use.
 #[doc(hidden)]
 pub fn pin_plugin_config_path(path: &Path) -> Result<PathBuf> {
-    match std::fs::canonicalize(path) {
+    match dunce::canonicalize(path) {
         Ok(path) => return Ok(path),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -173,7 +174,7 @@ pub fn pin_plugin_config_path(path: &Path) -> Result<PathBuf> {
                 for component in unresolved_components.iter().rev() {
                     pinned.push(component);
                 }
-                return Ok(pinned);
+                return Ok(dunce::simplified(&pinned).to_path_buf());
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let Some(file_name) = candidate.file_name() else {

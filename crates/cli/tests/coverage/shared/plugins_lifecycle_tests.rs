@@ -285,7 +285,15 @@ impl PythonEnvironmentCommandRunner for FakePythonEnvironmentRunner {
             let environment = PathBuf::from(args.last().expect("venv environment path"));
             let python = environment::environment_python_path(&environment);
             std::fs::create_dir_all(python.parent().unwrap()).unwrap();
-            std::fs::write(python, b"fake python").unwrap();
+            std::fs::write(&python, b"fake python").unwrap();
+            std::fs::write(
+                environment.join("pyvenv.cfg"),
+                format!(
+                    "home = {}\nversion_info = 3.11.0\n",
+                    python.parent().unwrap().display()
+                ),
+            )
+            .unwrap();
             return Ok(());
         }
         if self.fail_install && args.get(1).is_some_and(|arg| arg == "pip") {
@@ -1730,6 +1738,8 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
 
 fn assert_managed_environment_path(environment_path: &Path) {
     assert!(environment_path.is_absolute());
+    #[cfg(windows)]
+    assert!(!environment_path.to_string_lossy().starts_with(r"\\?\"));
     let expected_environment_name = Sha256::digest(b"acme.python")
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -2865,10 +2875,13 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
         .expect("explicit-scope record");
     assert_eq!(entry.scope.to_string(), "explicit");
     assert_eq!(
-        entry.plugins_toml_path,
+        entry.plugins_toml_path.canonicalize().unwrap(),
         plugins_toml.canonicalize().unwrap()
     );
-    assert_eq!(entry.state_path, state_path.canonicalize().unwrap());
+    assert_eq!(
+        entry.state_path.canonicalize().unwrap(),
+        state_path.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -3001,14 +3014,14 @@ fn same_directory_plugin_sources_share_state_without_losing_physical_ownership()
     assert_eq!(resolved.dynamic_plugins.len(), 2);
     let explicit_plugin_config = lifecycle_plugin_config_path(&server);
     let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved).unwrap();
-    let shared_state_path = config_dir
-        .join(".dynamic-plugins.json")
-        .canonicalize()
-        .unwrap();
+    let shared_state_path = config_dir.join(".dynamic-plugins.json");
+    let shared_state_path = shared_state_path.canonicalize().unwrap();
     assert_eq!(
         scopes
             .iter()
-            .filter(|scope| scope.state_path == shared_state_path)
+            .filter(|scope| {
+                scope.state_path.canonicalize().ok().as_ref() == Some(&shared_state_path)
+            })
             .count(),
         1,
         "same-directory sources must share one lifecycle state and lock"
@@ -3018,7 +3031,7 @@ fn same_directory_plugin_sources_share_state_without_losing_physical_ownership()
         .expect("custom-source record");
     assert_eq!(custom.scope, RegistryScope::Explicit);
     assert_eq!(
-        custom.plugins_toml_path,
+        custom.plugins_toml_path.canonicalize().unwrap(),
         custom_plugins_toml.canonicalize().unwrap()
     );
     let project = find_record_by_id(&scopes, "acme.project-source")
@@ -3026,7 +3039,7 @@ fn same_directory_plugin_sources_share_state_without_losing_physical_ownership()
         .expect("project-source record");
     assert_eq!(project.scope, RegistryScope::Project);
     assert_eq!(
-        project.plugins_toml_path,
+        project.plugins_toml_path.canonicalize().unwrap(),
         project_plugins_toml.canonicalize().unwrap()
     );
     drop(scopes);

@@ -47,11 +47,37 @@ fn relative_existing_source_is_pinned_across_cwd_changes() {
     let _cwd = CurrentDirectoryGuard::enter(&second);
     assert_eq!(
         sibling_lifecycle_state_path(&pinned),
-        first
-            .canonicalize()
+        dunce::canonicalize(&first)
             .unwrap()
             .join(DYNAMIC_PLUGIN_STATE_FILENAME)
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn missing_and_existing_windows_sources_pin_to_portable_physical_paths() {
+    let temp = tempdir().unwrap();
+    let config = temp.path().join("plugins.toml");
+
+    let missing = pin_plugin_config_path(&config).unwrap();
+    assert!(missing.is_absolute());
+    assert!(!missing.to_string_lossy().starts_with(r"\\?\"));
+
+    std::fs::write(&config, "version = 1\n").unwrap();
+    let existing = pin_plugin_config_path(&config).unwrap();
+    assert_eq!(existing, missing);
+    assert!(!existing.to_string_lossy().starts_with(r"\\?\"));
+    assert_eq!(
+        std::fs::canonicalize(existing).unwrap(),
+        std::fs::canonicalize(config).unwrap()
+    );
+
+    let reserved = pin_plugin_config_path(&temp.path().join("CON").join("plugins.toml")).unwrap();
+    assert!(reserved.to_string_lossy().starts_with(r"\\?\"));
+
+    let overlong =
+        pin_plugin_config_path(&temp.path().join("a".repeat(240)).join("plugins.toml")).unwrap();
+    assert!(overlong.to_string_lossy().starts_with(r"\\?\"));
 }
 
 #[test]

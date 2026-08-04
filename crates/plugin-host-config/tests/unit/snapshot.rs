@@ -123,6 +123,16 @@ fn macos_snapshot_preserves_an_attested_runtime_library_and_avoids_empty_directo
     )
     .unwrap();
     assert!(!static_environment.join("lib").exists());
+
+    let standalone_environment = temp.path().join("standalone-environment");
+    fs::create_dir(&standalone_environment).unwrap();
+    snapshot_macos_python_runtime_library(
+        &standalone_environment,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+    )
+    .unwrap();
+    assert!(!standalone_environment.join("lib").exists());
 }
 
 #[cfg(unix)]

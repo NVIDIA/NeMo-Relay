@@ -367,7 +367,16 @@ fn snapshot_macos_python_runtime_library(
     budget: &mut SnapshotBudget,
 ) -> Result<()> {
     let pyvenv_config = copied_environment.join("pyvenv.cfg");
-    let contents = read_bounded_utf8_regular_file(&pyvenv_config, "Python environment config")?;
+    let contents = match read_bounded_utf8_regular_file(&pyvenv_config, "Python environment config")
+    {
+        Ok(contents) => contents,
+        Err(PluginHostConfigError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     let value = |expected: &str| {
         contents.lines().find_map(|line| {
             let (key, value) = line.split_once('=')?;

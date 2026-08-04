@@ -131,8 +131,8 @@ fn missing_selected_layer_falls_through_to_project_and_system() {
     assert_eq!(
         resolved.contributing_sources,
         vec![
-            project.canonicalize().unwrap(),
-            system.canonicalize().unwrap()
+            dunce::canonicalize(&project).unwrap(),
+            dunce::canonicalize(&system).unwrap()
         ]
     );
 }
@@ -159,8 +159,8 @@ fn user_only_selection_suppresses_project_but_retains_system() {
     assert_eq!(
         resolved.contributing_sources,
         vec![
-            selected.canonicalize().unwrap(),
-            system.canonicalize().unwrap()
+            dunce::canonicalize(&selected).unwrap(),
+            dunce::canonicalize(&system).unwrap()
         ]
     );
 }
@@ -263,7 +263,7 @@ fn dynamic_only_diagnostics_are_redacted() {
     let resolved = resolve_plugin_files_from_paths([config.clone()], None).unwrap();
     assert_eq!(
         resolved.contributing_sources,
-        vec![config.canonicalize().unwrap()]
+        vec![dunce::canonicalize(&config).unwrap()]
     );
     assert!(
         resolved
@@ -301,7 +301,7 @@ fn physical_source_aliases_are_deduplicated_after_pinning() {
     let resolved = resolve_plugin_files_from_paths([alias, config.clone()], None).unwrap();
     assert_eq!(
         resolved.contributing_sources,
-        vec![config.canonicalize().unwrap()]
+        vec![dunce::canonicalize(&config).unwrap()]
     );
     assert_eq!(resolved.dynamic_plugins.len(), 1);
 }

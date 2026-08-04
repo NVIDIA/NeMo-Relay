@@ -1897,6 +1897,7 @@ name = "nemo-relay-plugin-host-config"
 version = "0.7.0"
 dependencies = [
  "base64",
+ "dunce",
  "fs2",
  "libc",
  "log",
