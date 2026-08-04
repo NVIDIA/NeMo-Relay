@@ -220,8 +220,8 @@ NeMo Relay does not inspect error messages to recover exception class names.
 When an errored parent span has no useful classification of its own, it
 inherits the failed descendant's `error.type` and exception type. When no
 structured `FlowError` is available, such as a cancellation or dropped
-execution, the projection emits `_OTHER`. Caller-provided `error.type` metadata
-takes precedence over the derived mapping.
+execution, the projection emits `_OTHER`. Caller-provided `error.type` and
+`exception.type` metadata take precedence over values derived from `FlowError`.
 
 `FlowError` is an exhaustive Rust enum. Rust callers upgrading to this release
 must handle the new `CallbackException` variant in exhaustive matches. It maps
