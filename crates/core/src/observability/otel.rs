@@ -1358,7 +1358,9 @@ impl OtelEventProcessor {
         }
         let suppressed_parent = self.suppressed_parent_contexts.get(&parent_uuid)?;
         self.active_spans.iter().find_map(|(uuid, active_span)| {
-            (active_span.span_context.span_id() == suppressed_parent.span_id()).then_some(*uuid)
+            (active_span.span_context.trace_id() == suppressed_parent.trace_id()
+                && active_span.span_context.span_id() == suppressed_parent.span_id())
+            .then_some(*uuid)
         })
     }
 

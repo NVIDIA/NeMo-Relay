@@ -171,11 +171,17 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
             message = error;
           } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
             message = String(error);
-          } else if (error != null && typeof error.message === 'string') {
-            message = error.message;
+          } else if (error != null) {
+            const errorMessage = error.message;
+            if (typeof errorMessage === 'string') {
+              message = errorMessage;
+            }
           }
-          if (error != null && typeof error.name === 'string' && error.name.length > 0) {
-            exceptionType = error.name;
+        } catch {}
+        try {
+          const errorName = error?.name;
+          if (typeof errorName === 'string' && errorName.length > 0) {
+            exceptionType = errorName;
           }
         } catch {}
         reject(message, exceptionType);
@@ -219,8 +225,11 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           let exceptionType = 'Error';
           try {
             message = String(error?.message ?? error);
-            if (typeof error?.name === 'string' && error.name.length > 0) {
-              exceptionType = error.name;
+          } catch {}
+          try {
+            const errorName = error?.name;
+            if (typeof errorName === 'string' && errorName.length > 0) {
+              exceptionType = errorName;
             }
           } catch {}
           if (typeof reject === 'function') {

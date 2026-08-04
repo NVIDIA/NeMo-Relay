@@ -223,6 +223,11 @@ structured `FlowError` is available, such as a cancellation or dropped
 execution, the projection emits `_OTHER`. Caller-provided `error.type` metadata
 takes precedence over the derived mapping.
 
+`FlowError` is an exhaustive Rust enum. Rust callers upgrading to this release
+must handle the new `CallbackException` variant in exhaustive matches. It maps
+to the same internal status as `Internal`, while retaining `exception_type` for
+observability projection.
+
 ## Direct Subscriber
 
 <Tabs>
