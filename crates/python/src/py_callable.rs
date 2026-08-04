@@ -517,7 +517,7 @@ async fn resolve_py_object_or_future(
 ) -> FlowResult<Py<PyAny>> {
     match outcome? {
         Ok(value) => Ok(value),
-        Err(future) => future.await.map_err(|e| FlowError::Internal(e.to_string())),
+        Err(future) => future.await.map_err(python_callback_error),
     }
 }
 
@@ -1558,7 +1558,7 @@ pub fn wrap_py_llm_stream_exec_fn(
                     Some(context) => context.call_method1("run", (callback.bind(py), py_req)),
                     None => callback.bind(py).call1((py_req,)),
                 }
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                .map_err(python_callback_error)?;
                 let outcome = split_py_object_or_future_with_locals(
                     py,
                     result.unbind(),
@@ -1578,7 +1578,7 @@ pub fn wrap_py_llm_stream_exec_fn(
 /// The collector is invoked with each intercepted chunk (after stream response
 /// intercepts have been applied). It receives a single JSON-converted Python
 /// object argument. If the Python callable raises an exception, it is converted
-/// to a `FlowError::Internal` and returned as `Err`, which terminates the
+/// to a `FlowError::CallbackException` and returned as `Err`, which terminates the
 /// stream. If the callable returns normally (including `None`), the collector
 /// returns `Ok(())`.
 pub fn wrap_py_collector_fn(
@@ -1590,7 +1590,7 @@ pub fn wrap_py_collector_fn(
                 .map_err(|e| FlowError::Internal(format!("collector json_to_py failed: {e}")))?;
             py_fn
                 .call1(py, (py_chunk,))
-                .map_err(|e| FlowError::Internal(format!("Python collector error: {e}")))?;
+                .map_err(python_callback_error)?;
             Ok(())
         })
     })
