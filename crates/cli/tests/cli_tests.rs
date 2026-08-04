@@ -4077,8 +4077,9 @@ try:
     read_until("RELAY_SHELL> ")
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
 
-    os.write(master, b"bg\n")
-    read_until("RELAY_SHELL> ")
+    # Continue Relay's stopped shell job directly. Shell `bg` bookkeeping varies across the
+    # macOS runner shell, but Relay only observes the process-group SIGCONT.
+    os.killpg(relay_group, signal.SIGCONT)
     time.sleep(0.1)
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
     os.write(master, b"echo BG_SHELL_OK\n")
@@ -4099,8 +4100,7 @@ try:
     read_until("AGENT_DELAY_ARMED")
     os.write(master, b"\x1a")
     read_until("RELAY_SHELL> ")
-    os.write(master, b"bg\n")
-    read_until("RELAY_SHELL> ")
+    os.killpg(relay_group, signal.SIGCONT)
     wait_until_present("AGENT_BG_DELAY")
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
     os.write(master, b"fg\n")

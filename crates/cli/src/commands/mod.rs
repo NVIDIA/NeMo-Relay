@@ -233,7 +233,14 @@ async fn run_default(
         .await?;
         Ok(ExitCode::SUCCESS)
     } else if runtime_configuration::any_config_file_exists() {
-        runtime_diagnostics::run_doctor(None, false, &runtime_args, None).await
+        runtime_diagnostics::run_doctor(
+            None,
+            false,
+            runtime_diagnostics::DoctorProbeMode::Live,
+            &runtime_args,
+            None,
+        )
+        .await
     } else {
         configure::run(None, None).await?;
         Ok(ExitCode::SUCCESS)

@@ -17,6 +17,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -42,12 +43,21 @@ use opentelemetry::trace::{
     Tracer, TracerProvider as _,
 };
 use opentelemetry::{Context, KeyValue};
-use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_otlp::{
+    Protocol, SpanExporter as OtlpSpanExporter, WithExportConfig, WithHttpConfig,
+};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::trace::{
-    IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
+    BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
+    SpanData, SpanExporter, SpanProcessor,
 };
 use uuid::Uuid;
+
+use crate::plugin::{
+    OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, RuntimeDiagnostic,
+    record_active_plugin_runtime_diagnostic,
+};
 
 pub(super) const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
 
@@ -397,6 +407,25 @@ impl Drop for ExporterRuntime {
 impl OpenTelemetrySubscriber {
     /// Builds a subscriber backed by a new OTLP tracer provider.
     pub fn new(config: OpenTelemetryConfig) -> Result<Self> {
+        Self::new_with_runtime_diagnostics(config, None)
+    }
+
+    pub(crate) fn new_for_plugin(
+        config: OpenTelemetryConfig,
+        endpoint_index: usize,
+    ) -> Result<Self> {
+        Self::new_with_runtime_diagnostics(
+            config,
+            Some(format!(
+                "opentelemetry.endpoints[{endpoint_index}].endpoint"
+            )),
+        )
+    }
+
+    fn new_with_runtime_diagnostics(
+        config: OpenTelemetryConfig,
+        diagnostic_field: Option<String>,
+    ) -> Result<Self> {
         if config.endpoint.trim().is_empty() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "endpoint must be a nonblank string".to_string(),
@@ -406,7 +435,7 @@ impl OpenTelemetrySubscriber {
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
-        let (provider, runtime) = build_owned_tracer_provider(config.clone())?;
+        let (provider, runtime) = build_owned_tracer_provider(config.clone(), diagnostic_field)?;
         Ok(Self::from_tracer_provider_with_scope_and_type(
             provider,
             config.instrumentation_scope,
@@ -617,6 +646,7 @@ impl OpenTelemetrySubscriber {
 
 fn build_owned_tracer_provider(
     config: OpenTelemetryConfig,
+    diagnostic_field: Option<String>,
 ) -> Result<(SdkTracerProvider, ExporterRuntime)> {
     let (result_sender, result_receiver) = mpsc::sync_channel(1);
     let (stop_sender, stop_receiver) = mpsc::channel();
@@ -637,7 +667,7 @@ fn build_owned_tracer_provider(
             };
             let provider = {
                 let _guard = runtime.enter();
-                build_tracer_provider(&config)
+                build_tracer_provider(&config, diagnostic_field)
             };
             let keep_runtime_alive = provider.is_ok();
             let _ = result_sender.send(provider);
@@ -696,10 +726,13 @@ pub(crate) fn validate_headers(headers: &HashMap<String, String>) -> Result<()> 
     Ok(())
 }
 
-fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvider> {
+fn build_tracer_provider(
+    config: &OpenTelemetryConfig,
+    diagnostic_field: Option<String>,
+) -> Result<SdkTracerProvider> {
     let exporter = match config.transport {
         OtlpTransport::HttpBinary => {
-            let mut builder = SpanExporter::builder()
+            let mut builder = OtlpSpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
                 .with_timeout(config.timeout);
@@ -713,7 +746,7 @@ fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvid
                 .map_err(|e| OpenTelemetryError::ExporterBuild(e.to_string()))?
         }
         OtlpTransport::Grpc => {
-            let mut builder = SpanExporter::builder()
+            let mut builder = OtlpSpanExporter::builder()
                 .with_tonic()
                 .with_protocol(Protocol::Grpc)
                 .with_timeout(config.timeout);
@@ -754,7 +787,140 @@ fn build_tracer_provider(config: &OpenTelemetryConfig) -> Result<SdkTracerProvid
         .with_max_attributes_per_span(u32::MAX)
         .with_max_attributes_per_event(u32::MAX);
 
-    Ok(builder.with_batch_exporter(exporter).build())
+    let processor =
+        DiagnosticBatchSpanProcessor::new(exporter, config.endpoint.clone(), diagnostic_field);
+    Ok(builder.with_span_processor(processor).build())
+}
+
+#[derive(Debug)]
+struct CountingSpanExporter<E> {
+    inner: E,
+    accepted_spans: Arc<AtomicU64>,
+}
+
+impl<E: SpanExporter> SpanExporter for CountingSpanExporter<E> {
+    async fn export(&self, batch: Vec<SpanData>) -> OTelSdkResult {
+        self.accepted_spans
+            .fetch_add(batch.len() as u64, Ordering::Relaxed);
+        self.inner.export(batch).await
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        self.inner.shutdown_with_timeout(timeout)
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.inner.force_flush()
+    }
+
+    fn set_resource(&mut self, resource: &Resource) {
+        self.inner.set_resource(resource);
+    }
+}
+
+#[derive(Debug)]
+struct DiagnosticBatchSpanProcessor {
+    inner: BatchSpanProcessor,
+    completed_spans: AtomicU64,
+    accepted_spans: Arc<AtomicU64>,
+    endpoint: String,
+    diagnostic_field: Option<String>,
+    diagnostic_reported: AtomicBool,
+}
+
+impl DiagnosticBatchSpanProcessor {
+    fn new<E: SpanExporter + 'static>(
+        exporter: E,
+        endpoint: String,
+        diagnostic_field: Option<String>,
+    ) -> Self {
+        Self::new_with_batch_config(
+            exporter,
+            endpoint,
+            diagnostic_field,
+            opentelemetry_sdk::trace::BatchConfig::default(),
+        )
+    }
+
+    fn new_with_batch_config<E: SpanExporter + 'static>(
+        exporter: E,
+        endpoint: String,
+        diagnostic_field: Option<String>,
+        batch_config: opentelemetry_sdk::trace::BatchConfig,
+    ) -> Self {
+        let accepted_spans = Arc::new(AtomicU64::new(0));
+        let exporter = CountingSpanExporter {
+            inner: exporter,
+            accepted_spans: Arc::clone(&accepted_spans),
+        };
+        Self {
+            inner: BatchSpanProcessor::builder(exporter)
+                .with_batch_config(batch_config)
+                .build(),
+            completed_spans: AtomicU64::new(0),
+            accepted_spans,
+            endpoint,
+            diagnostic_field,
+            diagnostic_reported: AtomicBool::new(false),
+        }
+    }
+
+    fn record_dropped_spans(&self) -> u64 {
+        let dropped = self
+            .completed_spans
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.accepted_spans.load(Ordering::Relaxed));
+        if dropped == 0
+            || self.diagnostic_field.is_none()
+            || self.diagnostic_reported.swap(true, Ordering::Relaxed)
+        {
+            return dropped;
+        }
+        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+            code: "otel.spans_dropped".to_string(),
+            component: "observability".to_string(),
+            field: self.diagnostic_field.clone(),
+            message: format!(
+                "OpenTelemetry dropped {dropped} spans before export to endpoint {} because the batch queue was full",
+                self.endpoint
+            ),
+            session_id: None,
+            count: dropped,
+        });
+        dropped
+    }
+}
+
+impl SpanProcessor for DiagnosticBatchSpanProcessor {
+    fn on_start(&self, span: &mut Span, cx: &Context) {
+        self.inner.on_start(span, cx);
+    }
+
+    fn on_end(&self, span: SpanData) {
+        self.completed_spans.fetch_add(1, Ordering::Relaxed);
+        self.inner.on_end(span);
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.inner.force_flush()
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        let result = self.inner.shutdown_with_timeout(timeout);
+        if result.is_ok() {
+            let dropped = self.record_dropped_spans();
+            if dropped > 0 && self.diagnostic_field.is_some() {
+                return Err(OTelSdkError::InternalFailure(format!(
+                    "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: otel.spans_dropped ({dropped})"
+                )));
+            }
+        }
+        result
+    }
+
+    fn set_resource(&mut self, resource: &Resource) {
+        self.inner.set_resource(resource);
+    }
 }
 
 fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {

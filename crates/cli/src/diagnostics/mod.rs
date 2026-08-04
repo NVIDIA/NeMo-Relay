@@ -46,6 +46,22 @@ use crate::server::{GatewayOverrides, register_and_validate_plugin_components};
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(2);
 const PRICING_PLUGIN_KIND: &str = "pricing";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DoctorProbeMode {
+    Live,
+    Offline,
+}
+
+impl DoctorProbeMode {
+    pub(crate) fn from_offline_flag(offline: bool) -> Self {
+        if offline { Self::Offline } else { Self::Live }
+    }
+
+    fn is_offline(self) -> bool {
+        matches!(self, Self::Offline)
+    }
+}
+
 struct PluginConfigurationDiagnostics {
     sources: Vec<PathBuf>,
     error: Option<String>,
@@ -57,6 +73,7 @@ struct PluginConfigurationDiagnostics {
 /// the first missing directory.
 pub(crate) async fn collect_report(
     target_agent: Option<CodingAgent>,
+    probe_mode: DoctorProbeMode,
     gateway_overrides: &GatewayOverrides,
 ) -> Result<DoctorReport, CliError> {
     let (resolved, resolution) = match resolve_server_config(gateway_overrides) {
@@ -131,7 +148,7 @@ pub(crate) async fn collect_report(
         ),
         agents: collect_agents(target_agent, &resolved).await,
         host_plugins: crate::agents::collect_default_integration_readiness(),
-        observability: collect_observability(&resolved.gateway).await,
+        observability: collect_observability(&resolved.gateway, probe_mode).await,
         completions: collect_completions(home.as_deref()),
     })
 }
@@ -569,7 +586,7 @@ async fn probe_version(argv: &[String]) -> Option<String> {
     }
 }
 
-async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
+async fn collect_observability(gateway: &GatewayConfig, probe_mode: DoctorProbeMode) -> Vec<Check> {
     let mut checks = Vec::new();
 
     let Some(plugin_value) = &gateway.plugin_config else {
@@ -630,7 +647,7 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
     }
 
     if let Some(config) = observability_component_config(plugin_value) {
-        collect_observability_component_checks(&mut checks, config).await;
+        collect_observability_component_checks(&mut checks, config, probe_mode).await;
     } else {
         checks.push(Check {
             name: "Observability plugin",
@@ -639,8 +656,13 @@ async fn collect_observability(gateway: &GatewayConfig) -> Vec<Check> {
         });
     }
     collect_pricing_component_checks(&mut checks, &plugin_config);
-    collect_response_cache_component_checks(&mut checks, &plugin_config, response_cache_invalid)
-        .await;
+    collect_response_cache_component_checks(
+        &mut checks,
+        &plugin_config,
+        response_cache_invalid,
+        probe_mode,
+    )
+    .await;
 
     checks
 }
@@ -649,6 +671,7 @@ async fn collect_response_cache_component_checks(
     checks: &mut Vec<Check>,
     plugin_config: &PluginConfig,
     config_invalid: bool,
+    probe_mode: DoctorProbeMode,
 ) {
     // The response cache is a section of the adaptive component, not its own
     // plugin kind: find the adaptive component and look for `response_cache`.
@@ -705,6 +728,27 @@ async fn collect_response_cache_component_checks(
             return;
         }
     };
+    if probe_mode.is_offline()
+        && let Err(error) = response_cache::store::validate_backend_target(&config)
+    {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Fail,
+            details: format!("invalid backend target: {error}"),
+        });
+        return;
+    }
+    if probe_mode.is_offline() && config.backend.kind != "in_memory" {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Info,
+            details: format!(
+                "configured; live {} backend probe skipped (--offline)",
+                config.backend.kind
+            ),
+        });
+        return;
+    }
     checks.push(response_cache_backend_check(response_cache::check_backend_health(&config)).await);
 }
 
@@ -733,15 +777,19 @@ async fn response_cache_backend_check(
     }
 }
 
-async fn collect_observability_component_checks(checks: &mut Vec<Check>, config: &Value) {
+async fn collect_observability_component_checks(
+    checks: &mut Vec<Check>,
+    config: &Value,
+    probe_mode: DoctorProbeMode,
+) {
     checks.extend(observability_atof_file_checks(config));
     if let Some(check) = observability_file_exporter_check(config, "atif") {
         checks.push(check);
     }
-    checks.extend(observability_http_exporter_checks(config).await);
+    checks.extend(observability_http_exporter_checks(config, probe_mode).await);
     if section_enabled(config, "atof") && !atof_stream_sinks(config).is_empty() {
         if atof_streaming_supported() {
-            checks.extend(observability_atof_stream_checks(config).await);
+            checks.extend(observability_atof_stream_checks(config, probe_mode).await);
         } else {
             checks.push(Check {
                 name: "ATOF stream sink",
@@ -810,7 +858,10 @@ fn observability_file_exporter_check(config: &Value, section: &str) -> Option<Ch
     })
 }
 
-async fn observability_http_exporter_checks(config: &Value) -> Vec<Check> {
+async fn observability_http_exporter_checks(
+    config: &Value,
+    probe_mode: DoctorProbeMode,
+) -> Vec<Check> {
     if !section_enabled(config, "opentelemetry") {
         return Vec::new();
     }
@@ -838,13 +889,53 @@ async fn observability_http_exporter_checks(config: &Value) -> Vec<Check> {
                 match endpoint.get("endpoint").and_then(Value::as_str) {
                     Some(url) => {
                         let mut check = if transport == "grpc" {
-                            probe_tcp_named(label, url).await
+                            if probe_mode.is_offline() {
+                                match validate_grpc_endpoint(url) {
+                                    Ok(_) => Check {
+                                        name: label,
+                                        status: Status::Info,
+                                        details: format!(
+                                            "endpoints[{index}] ({endpoint_type}): live network probe skipped (--offline)"
+                                        ),
+                                    },
+                                    Err(details) => Check {
+                                        name: label,
+                                        status: Status::Fail,
+                                        details: format!(
+                                            "endpoints[{index}] ({endpoint_type}): {details}"
+                                        ),
+                                    },
+                                }
+                            } else {
+                                probe_tcp_named(label, url).await
+                            }
                         } else {
                             let effective_url = resolve_http_trace_endpoint(url);
-                            probe_otlp_http_named(label, effective_url.as_ref()).await
+                            if probe_mode.is_offline() {
+                                match validate_otlp_http_endpoint(effective_url.as_ref()) {
+                                    Ok(()) => Check {
+                                        name: label,
+                                        status: Status::Info,
+                                        details: format!(
+                                            "endpoints[{index}] ({endpoint_type}): live network probe skipped (--offline)"
+                                        ),
+                                    },
+                                    Err(details) => Check {
+                                        name: label,
+                                        status: Status::Fail,
+                                        details: format!(
+                                            "endpoints[{index}] ({endpoint_type}): {details}"
+                                        ),
+                                    },
+                                }
+                            } else {
+                                probe_otlp_http_named(label, effective_url.as_ref()).await
+                            }
                         };
-                        check.details =
-                            format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
+                        if !probe_mode.is_offline() {
+                            check.details =
+                                format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
+                        }
                         check
                     }
                     None => Check {
@@ -993,16 +1084,23 @@ fn atof_streaming_supported() -> bool {
     cfg!(feature = "atof-streaming")
 }
 
-async fn observability_atof_stream_checks(config: &Value) -> Vec<Check> {
+async fn observability_atof_stream_checks(
+    config: &Value,
+    probe_mode: DoctorProbeMode,
+) -> Vec<Check> {
     let streams = atof_stream_sinks(config);
     let mut checks = Vec::with_capacity(streams.len());
     for (index, sink) in streams {
-        checks.push(probe_atof_stream_sink(index, sink).await);
+        checks.push(probe_atof_stream_sink(index, sink, probe_mode).await);
     }
     checks
 }
 
-async fn probe_atof_stream_sink(index: usize, endpoint: &Value) -> Check {
+async fn probe_atof_stream_sink(
+    index: usize,
+    endpoint: &Value,
+    probe_mode: DoctorProbeMode,
+) -> Check {
     let name = "ATOF stream sink";
     let Some(url) = endpoint.get("url").and_then(Value::as_str) else {
         return Check {
@@ -1036,6 +1134,22 @@ async fn probe_atof_stream_sink(index: usize, endpoint: &Value) -> Check {
             };
         }
     };
+    if let Err(details) = validate_atof_stream_probe_target(index, transport, url) {
+        return Check {
+            name,
+            status: Status::Fail,
+            details,
+        };
+    }
+    if probe_mode.is_offline() {
+        return Check {
+            name,
+            status: Status::Info,
+            details: format!(
+                "sinks[{index}] {transport} {url}: live network probe skipped (--offline)"
+            ),
+        };
+    }
     let payload = match doctor_atof_probe_payload() {
         Ok(payload) => payload,
         Err(err) => {
@@ -1061,7 +1175,40 @@ async fn probe_atof_stream_sink(index: usize, endpoint: &Value) -> Check {
 
 #[cfg(test)]
 async fn probe_atof_endpoint(index: usize, endpoint: &Value) -> Check {
-    probe_atof_stream_sink(index, endpoint).await
+    probe_atof_stream_sink(index, endpoint, DoctorProbeMode::Live).await
+}
+
+fn validate_atof_stream_probe_target(
+    index: usize,
+    transport: &str,
+    url: &str,
+) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|error| format!("sinks[{index}] {transport} {url}: {error}"))?;
+    if parsed.host_str().is_none() {
+        return Err(format!("sinks[{index}] {transport} {url}: missing host"));
+    }
+    let valid_scheme = match transport {
+        "http_post" | "ndjson" => matches!(parsed.scheme(), "http" | "https"),
+        "websocket" => matches!(parsed.scheme(), "ws" | "wss"),
+        _ => {
+            return Err(format!(
+                "sinks[{index}] {transport} {url}: unsupported transport"
+            ));
+        }
+    };
+    if valid_scheme {
+        Ok(())
+    } else {
+        let expected = match transport {
+            "http_post" | "ndjson" => "http or https",
+            "websocket" => "ws or wss",
+            _ => unreachable!("unsupported transports return earlier"),
+        };
+        Err(format!(
+            "sinks[{index}] {transport} {url}: invalid scheme (must be {expected})"
+        ))
+    }
 }
 
 fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
@@ -1077,7 +1224,14 @@ fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
             let Some(value) = value.as_str() else {
                 return Err(format!("headers.{key} must be a string"));
             };
-            names.insert(name);
+            if value.trim().is_empty() {
+                return Err(format!("headers.{key} must not be blank"));
+            }
+            reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+                .map_err(|error| format!("headers.{key} invalid: {error}"))?;
+            if !names.insert(name) {
+                return Err(format!("header {key:?} appears more than once"));
+            }
             out.push((key.clone(), value.to_string()));
         }
     }
@@ -1101,6 +1255,8 @@ fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
             if value.trim().is_empty() {
                 return Err(format!("environment variable {variable:?} is blank"));
             }
+            reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+                .map_err(|error| format!("header_env.{key} invalid: {error}"))?;
             names.insert(name);
             out.push((key.clone(), value));
         }
@@ -1374,10 +1530,11 @@ pub(crate) fn format_agents_json(agents: &[AgentInfo]) -> Result<String, CliErro
 pub(crate) async fn run_doctor(
     target_agent: Option<CodingAgent>,
     json: bool,
+    probe_mode: DoctorProbeMode,
     gateway_overrides: &GatewayOverrides,
     logging_fallback_error: Option<&CliError>,
 ) -> Result<std::process::ExitCode, CliError> {
-    let mut report = collect_report(target_agent, gateway_overrides).await?;
+    let mut report = collect_report(target_agent, probe_mode, gateway_overrides).await?;
     if let Some(error) = logging_fallback_error {
         let logging_details = format!(
             "could not resolve logging configuration: {error}; repair or recreate the named logging configuration file"

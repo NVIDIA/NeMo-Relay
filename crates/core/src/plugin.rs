@@ -44,7 +44,6 @@ use crate::api::runtime::{
     ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
-use crate::observability::plugin_component::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER;
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
 
 pub mod dynamic;
@@ -126,6 +125,12 @@ pub enum PluginError {
 
 /// Specialized [`Result`](std::result::Result) type for plugin operations.
 pub type Result<T> = std::result::Result<T, PluginError>;
+
+/// Identifies teardown errors caused by recoverable ATIF delivery failures.
+pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime delivery failures";
+/// Identifies teardown errors caused by recoverable OpenTelemetry delivery failures.
+pub(crate) const OTEL_RUNTIME_DELIVERY_FAILURE_MARKER: &str =
+    "OpenTelemetry runtime delivery failures";
 
 /// Canonical plugin configuration document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2138,7 +2143,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     // removal itself as unsafe.
     let callbacks_cleared = deregistration_errors
         .iter()
-        .all(|error| error.contains(ATIF_RUNTIME_DELIVERY_FAILURE_MARKER));
+        .all(|error| is_runtime_delivery_failure(error));
     let deregistration_error = (!deregistration_errors.is_empty()).then(|| {
         PluginError::RegistrationFailed(format!(
             "plugin teardown failed: {}",
@@ -2167,6 +2172,15 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
         result,
         callbacks_cleared,
     }
+}
+
+fn is_runtime_delivery_failure(error: &str) -> bool {
+    [
+        ATIF_RUNTIME_DELIVERY_FAILURE_MARKER,
+        OTEL_RUNTIME_DELIVERY_FAILURE_MARKER,
+    ]
+    .iter()
+    .any(|marker| error.contains(&format!("registration failed: {marker}:")))
 }
 
 pub(crate) fn plugin_configuration_is_active() -> Result<bool> {

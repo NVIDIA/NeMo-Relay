@@ -25,13 +25,14 @@ use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use crate::observability::{relay_span_id, relay_trace_id};
 use opentelemetry::trace::TraceContextExt;
-use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
+use opentelemetry_sdk::trace::{BatchConfigBuilder, InMemorySpanExporterBuilder};
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use uuid::Uuid;
 
@@ -43,11 +44,66 @@ impl Drop for ResetPricingResolverGuard {
     }
 }
 
+struct ClearPluginConfigurationGuard;
+
+impl Drop for ClearPluginConfigurationGuard {
+    fn drop(&mut self) {
+        let _ = crate::plugin::clear_plugin_configuration();
+    }
+}
+
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
 
 impl Drop for RestoreThreadScopeStackGuard {
     fn drop(&mut self) {
         restore_thread_scope_stack(self.0.clone());
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct BlockingSpanExporter {
+    state: Arc<(Mutex<BlockingExporterState>, Condvar)>,
+}
+
+#[derive(Debug, Default)]
+struct BlockingExporterState {
+    export_started: bool,
+    release_export: bool,
+}
+
+impl BlockingSpanExporter {
+    fn wait_until_export_starts(&self) {
+        let (state, changed) = &*self.state;
+        let guard = state.lock().unwrap();
+        let (guard, timeout) = changed
+            .wait_timeout_while(guard, Duration::from_secs(5), |state| !state.export_started)
+            .unwrap();
+        assert!(guard.export_started && !timeout.timed_out());
+    }
+
+    fn release(&self) {
+        let (state, changed) = &*self.state;
+        state.lock().unwrap().release_export = true;
+        changed.notify_all();
+    }
+}
+
+impl Drop for BlockingSpanExporter {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl SpanExporter for BlockingSpanExporter {
+    async fn export(&self, _batch: Vec<SpanData>) -> OTelSdkResult {
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap();
+        state.export_started = true;
+        changed.notify_all();
+        while !state.release_export {
+            state = changed.wait(state).unwrap();
+        }
+        Ok(())
     }
 }
 
@@ -3062,6 +3118,7 @@ fn provider_builders_cover_success_paths() {
             .with_resource_attribute("deployment.environment", "test")
             .with_service_namespace("agents")
             .with_service_version("1.2.3"),
+        None,
     )
     .unwrap();
     http_provider.force_flush().unwrap();
@@ -3074,6 +3131,63 @@ fn provider_builders_cover_success_paths() {
     .unwrap();
     subscriber.force_flush().unwrap();
     subscriber.shutdown().unwrap();
+}
+
+#[test]
+fn dropped_spans_are_recorded_in_the_active_plugin_report() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _ = crate::plugin::clear_plugin_configuration();
+    let _clear_guard = ClearPluginConfigurationGuard;
+    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+        crate::plugin::PluginConfig::default(),
+    ))
+    .unwrap();
+
+    let exporter = BlockingSpanExporter::default();
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        exporter.clone(),
+        "https://collector.example/v1/traces".to_string(),
+        Some("opentelemetry.endpoints[2].endpoint".to_string()),
+        BatchConfigBuilder::default()
+            .with_max_queue_size(1)
+            .with_max_export_batch_size(1)
+            .with_scheduled_delay(Duration::from_secs(60))
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let tracer = provider.tracer("dropped-span-diagnostic-test");
+
+    tracer.start("export-in-progress").end();
+    exporter.wait_until_export_starts();
+    tracer.start("queued").end();
+    tracer.start("dropped-1").end();
+    tracer.start("dropped-2").end();
+    exporter.release();
+    let shutdown = provider.shutdown().unwrap_err();
+    assert!(
+        shutdown
+            .to_string()
+            .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
+    );
+
+    let report = crate::plugin::active_plugin_report().unwrap();
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.spans_dropped")
+        .unwrap();
+    assert_eq!(diagnostic.count, 2);
+    assert_eq!(
+        diagnostic.field.as_deref(),
+        Some("opentelemetry.endpoints[2].endpoint")
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/traces")
+    );
 }
 
 #[test]
@@ -3097,6 +3211,7 @@ fn grpc_metadata_and_runtime_builder_paths_succeed() {
             &OpenTelemetryConfig::grpc("grpc-demo")
                 .with_endpoint("http://127.0.0.1:4317")
                 .with_header("authorization", "Bearer token"),
+            None,
         )
         .unwrap();
         provider.force_flush().ok();

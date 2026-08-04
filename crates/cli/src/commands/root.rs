@@ -112,7 +112,7 @@ pub(crate) enum Command {
     Uninstall(UninstallCommand),
     /// Validate and configure model pricing catalogs.
     ModelPricing(PricingCommand),
-    /// Diagnose env, agents, config, observability (optionally scoped to one agent)
+    /// Diagnose env, agents, config, observability (use --offline to skip live network probes)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
     Agents(AgentsCommand),

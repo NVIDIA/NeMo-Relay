@@ -21,6 +21,11 @@ pub(crate) struct DoctorCommand {
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
     pub(crate) json: bool,
+    #[arg(
+        long,
+        help = "Validate configuration and endpoint syntax without running live network probes"
+    )]
+    pub(crate) offline: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -41,6 +46,7 @@ pub(super) async fn execute(
     crate::diagnostics::run_doctor(
         command.agent.map(Into::into),
         command.json,
+        crate::diagnostics::DoctorProbeMode::from_offline_flag(command.offline),
         &gateway_overrides,
         logging_fallback_error,
     )
