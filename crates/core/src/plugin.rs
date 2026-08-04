@@ -2397,7 +2397,10 @@ fn rollback_registrations_checked(
         match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
             Ok(PluginRegistrationCleanupOutcome::Removed) => {}
             Ok(PluginRegistrationCleanupOutcome::RemovedWithError(error)) => {
-                outcome.errors.push(error.to_string());
+                outcome.errors.push(format!(
+                    "{} registration '{}' reported a delivery failure: {error}",
+                    registration.kind, registration.name
+                ));
             }
             Ok(PluginRegistrationCleanupOutcome::NotRemoved(error)) => {
                 outcome.callbacks_cleared = false;

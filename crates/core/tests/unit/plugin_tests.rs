@@ -1675,6 +1675,16 @@ fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
         error.to_string().contains("ATIF delivery failed"),
         "{error}"
     );
+    assert!(
+        error
+            .to_string()
+            .contains("fixture registration 'atif-shutdown' reported a delivery failure"),
+        "{error}"
+    );
+    assert!(
+        !plugin_configuration_is_active().unwrap(),
+        "a replacement aborted by delivery failure must not leave a configuration active"
+    );
     let report = active_plugin_report().expect("failed replacement should retain its report");
     assert_eq!(report.runtime_diagnostics.len(), 1);
     assert_eq!(
