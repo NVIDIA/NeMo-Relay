@@ -1,6 +1,6 @@
 ---
 title: "Events"
-description: ""
+description: "Understand ATOF lifecycle events, fields, relationships, and delivery."
 position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -85,8 +85,8 @@ subscriber work.
 
 ## Semantic Meaning
 
-These sections describe how event shapes and relationships should be interpreted by
-consumers.
+These sections describe how consumers should interpret event fields and
+relationships.
 
 ### Start and End Pairing
 
@@ -136,12 +136,11 @@ annotations are part of the canonical event JSON under `category_profile` when
 they are present, so ATOF JSONL export and in-process subscriber JSON expose the
 same payload shape. Request annotations use the owning agent's freshness state.
 
-### Event Contract Boundary
+### Event Handoff
 
-The event is the canonical envelope and handoff point for subscribers and
-exporters. Consumers should prefer typed event fields, binding helpers, and
-annotated request or response data before falling back to raw payload
-re-reading.
+Subscribers and exporters receive the completed event after sanitization.
+Consumers should prefer typed event fields, binding helpers, and annotated
+request or response data before reading raw payloads again.
 
 Before that handoff, event sanitizers can replace `data`, `category_profile`,
 and `metadata`. The runtime keeps identity, lifecycle, category, timestamp,
@@ -151,7 +150,7 @@ ordering.
 
 Events preserve runtime facts. They do not decide which scope owns a call, how
 replay or cost policy is applied, how redaction policy is configured, how
-streams are blocked, or how exporter-specific semantic projection works. Those
+streams are blocked, or how an exporter maps fields into its output format. Those
 decisions stay in the session, codec, plugin, guardrail, or exporter layer that
 owns them.
 
@@ -304,7 +303,7 @@ Claude Code provides it. Keep inferred and observed counts separate.
 
 Exporters handle the mark as follows:
 
-- ATOF preserves the canonical mark event.
+- ATOF preserves the mark event.
 - ATIF omits marks because it models trajectory steps rather than independent
   point-in-time events.
 - The `full` and `openinference` OpenTelemetry projections use their fixed
@@ -319,5 +318,5 @@ the runtime record important state transitions even when there is no full nested
 callback to wrap. Subscriber delivery is downstream from event construction and
 does not block the emitting call on native bindings.
 
-ATOF export writes this raw canonical event stream. ATIF and the typed
+ATOF export writes the raw ATOF event stream. ATIF and the typed
 OpenTelemetry formats are downstream projections over the same events.
