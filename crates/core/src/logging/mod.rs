@@ -181,7 +181,15 @@ pub fn initialize_default_logging() -> Result<()> {
         FlowError::Internal(format!("default logging runtime lock poisoned: {error}"))
     })?;
     if runtime.is_none() {
-        *runtime = Some(LoggingRuntime::configure_from_environment()?);
+        let config = LoggingConfig::from_environment()?;
+        let uses_default_config = config.is_none();
+        match LoggingRuntime::configure(config.unwrap_or_default()) {
+            Ok(configured) => *runtime = Some(configured),
+            // Language bindings initialize logging automatically. When Relay was not explicitly
+            // configured, defer to an application logger that already owns the process facade.
+            Err(FlowError::AlreadyExists(_)) if uses_default_config => {}
+            Err(error) => return Err(error),
+        }
     }
     Ok(())
 }

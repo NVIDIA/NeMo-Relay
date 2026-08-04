@@ -88,6 +88,10 @@ export NEMO_RELAY_LOG_CONFIG_PATH=/absolute/path/to/logging.toml
 `NEMO_RELAY_LOG_CONFIG_PATH` cannot be combined with the other logging
 environment variables.
 
+When none of these variables are set, Python, Node.js, and Go defer to an
+existing application logger if it already owns Rust's process-global `log`
+facade. Set one of these variables when Relay must configure its own logging.
+
 Python and Node.js drain pending file-sink records during normal runtime
 teardown. Go applications that configure file sinks must call
 `nemo_relay.ShutdownLogging` before `main` returns; defer it near the start of

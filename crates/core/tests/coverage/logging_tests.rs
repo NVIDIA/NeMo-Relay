@@ -1647,6 +1647,17 @@ fn configure_rejects_preinstalled_foreign_logger() {
                 .contains("process-global log facade is already initialized by another logger"),
             "{error}"
         );
+        initialize_default_logging()
+            .expect("unconfigured default logging should defer to the foreign logger");
+        unsafe { std::env::set_var("NEMO_RELAY_LOG", "info") };
+        let error = initialize_default_logging()
+            .expect_err("explicit default logging should reject the foreign logger");
+        assert!(
+            error
+                .to_string()
+                .contains("process-global log facade is already initialized by another logger"),
+            "{error}"
+        );
         return;
     }
 
@@ -1655,6 +1666,9 @@ fn configure_rejects_preinstalled_foreign_logger() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test_name, "--nocapture"])
         .env(FOREIGN_LOGGER_CHILD_ENV, "1")
+        .env_remove("NEMO_RELAY_LOG")
+        .env_remove("NEMO_RELAY_LOG_STDERR_FORMAT")
+        .env_remove("NEMO_RELAY_LOG_CONFIG_PATH")
         .output()
         .expect("foreign logger child test should start");
 
