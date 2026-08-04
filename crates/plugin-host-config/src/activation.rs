@@ -71,18 +71,24 @@ pub async fn initialize_from_plugins_toml(
     config: Option<PluginConfig>,
     plugin_config_path: Option<PathBuf>,
 ) -> Result<PluginFileActivation> {
-    let resolved = tokio::task::spawn_blocking(move || {
-        resolve_plugin_files(
-            config,
-            PluginFileResolveOptions::from_environment(plugin_config_path),
-        )
-    })
+    initialize_from_plugins_toml_with_options(
+        config,
+        PluginFileResolveOptions::from_environment(plugin_config_path),
+    )
     .await
-    .map_err(|error| {
-        PluginHostConfigError::Relay(PluginError::Internal(format!(
-            "plugin file resolution task failed: {error}"
-        )))
-    })??;
+}
+
+async fn initialize_from_plugins_toml_with_options(
+    config: Option<PluginConfig>,
+    options: PluginFileResolveOptions,
+) -> Result<PluginFileActivation> {
+    let resolved = tokio::task::spawn_blocking(move || resolve_plugin_files(config, options))
+        .await
+        .map_err(|error| {
+            PluginHostConfigError::Relay(PluginError::Internal(format!(
+                "plugin file resolution task failed: {error}"
+            )))
+        })??;
 
     if !resolved.had_input {
         return Ok(PluginFileActivation::inactive());
@@ -97,3 +103,7 @@ pub async fn initialize_from_plugins_toml(
         })??;
     PluginFileActivation::activate_plan(plan).await
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/activation.rs"]
+mod tests;

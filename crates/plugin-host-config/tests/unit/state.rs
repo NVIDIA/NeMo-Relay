@@ -5,6 +5,8 @@ use std::sync::{Mutex, OnceLock};
 
 use tempfile::tempdir;
 
+use nemo_relay::plugin::dynamic::{DynamicPluginManifest, DynamicPluginRegistry};
+
 use super::*;
 
 fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -197,4 +199,188 @@ fn special_file_lifecycle_state_is_rejected_without_reading_it() {
     let error = read_lifecycle_registry(Path::new("/dev/zero"))
         .expect_err("a character device must not be read as lifecycle state");
     assert!(error.to_string().contains("must be a regular file"));
+}
+
+fn fixture_record(id: &str) -> DynamicPluginRecord {
+    DynamicPluginManifest::parse_toml(&format!(
+        r#"manifest_version = 1
+[plugin]
+id = "{id}"
+kind = "rust_dynamic"
+[compat]
+relay = ">=0.5,<1.0"
+native_api = "v1"
+[capabilities]
+items = ["plugin_native"]
+[defaults]
+enabled = false
+[load]
+library = "plugin.so"
+symbol = "nemo_relay_plugin_entrypoint_v1"
+[source]
+artifact = "plugin.so"
+[integrity]
+sha256 = "sha256:placeholder"
+"#,
+    ))
+    .unwrap()
+    .into_record(Some(format!("/{id}/relay-plugin.toml")))
+    .unwrap()
+}
+
+#[test]
+fn lifecycle_state_ownership_methods_reject_unknown_ids_and_follow_registry_replacement() {
+    let mut state = DynamicPluginLifecycleState::new(DynamicPluginRegistry::default());
+    let error = state
+        .set_declaration_source("missing", "/tmp/plugins.toml".into())
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unknown dynamic plugin 'missing'")
+    );
+
+    state.add(fixture_record("owned")).unwrap();
+    state
+        .set_declaration_source("owned", "/tmp/plugins.toml".into())
+        .unwrap();
+    assert_eq!(state.declaration_source("owned"), Some("/tmp/plugins.toml"));
+    state.clear_declaration_source("owned");
+    assert_eq!(state.declaration_source("owned"), None);
+
+    state
+        .set_declaration_source("owned", "/tmp/plugins.toml".into())
+        .unwrap();
+    state.replace_registry(DynamicPluginRegistry::default());
+    assert!(state.list(true).is_empty());
+    assert_eq!(state.declaration_source("owned"), None);
+}
+
+#[test]
+fn lifecycle_state_defaults_schema_and_reports_invalid_documents() {
+    let temp = tempdir().unwrap();
+    let state_path = temp.path().join(DYNAMIC_PLUGIN_STATE_FILENAME);
+
+    assert!(
+        read_lifecycle_state(&state_path)
+            .unwrap()
+            .list(true)
+            .is_empty()
+    );
+
+    std::fs::write(&state_path, r#"{"records":[]}"#).unwrap();
+    assert!(
+        read_lifecycle_state(&state_path)
+            .unwrap()
+            .list(true)
+            .is_empty()
+    );
+
+    std::fs::write(&state_path, r#"{"schema_version":99,"records":[]}"#).unwrap();
+    let error = read_lifecycle_state(&state_path).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported dynamic plugin registry schema_version 99")
+    );
+
+    std::fs::write(&state_path, r#"{"schema_version":1,"records":["secret"}"#).unwrap();
+    let error = read_lifecycle_state(&state_path).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("invalid dynamic plugin registry state")
+    );
+    assert!(!error.to_string().contains("secret"));
+}
+
+#[test]
+fn locked_registry_wrappers_persist_records_and_declaration_ownership() {
+    let temp = tempdir().unwrap();
+    let state_path = temp.path().join(DYNAMIC_PLUGIN_STATE_FILENAME);
+    let lock = lock_lifecycle_state(&state_path).unwrap();
+    assert!(format!("{lock:?}").contains("LifecycleStateLock"));
+
+    let mut state = read_locked_lifecycle_state(&lock).unwrap();
+    state.add(fixture_record("persisted")).unwrap();
+    state
+        .set_declaration_source(
+            "persisted",
+            temp.path().join("plugins.toml").display().to_string(),
+        )
+        .unwrap();
+    save_locked_lifecycle_state(&lock, &state).unwrap();
+
+    let registry = read_locked_lifecycle_registry(&lock).unwrap();
+    assert!(registry.get("persisted").is_some());
+    save_locked_lifecycle_registry(&lock, &registry).unwrap();
+    drop(lock);
+
+    let persisted = read_lifecycle_state(&state_path).unwrap();
+    assert!(persisted.get("persisted").is_some());
+    assert!(persisted.declaration_source("persisted").is_some());
+    assert!(
+        read_lifecycle_registry(&state_path)
+            .unwrap()
+            .get("persisted")
+            .is_some()
+    );
+}
+
+#[test]
+fn sibling_state_path_handles_a_parentless_plugin_filename() {
+    assert_eq!(
+        sibling_lifecycle_state_path(Path::new("")),
+        PathBuf::from(DYNAMIC_PLUGIN_STATE_FILENAME)
+    );
+}
+
+#[test]
+fn lifecycle_lock_directory_creation_errors_are_contextualized() {
+    let temp = tempdir().unwrap();
+    let blocking_file = temp.path().join("blocking-file");
+    std::fs::write(&blocking_file, b"file").unwrap();
+
+    let error =
+        lock_lifecycle_state(&blocking_file.join(DYNAMIC_PLUGIN_STATE_FILENAME)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("create lifecycle state directory")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn lifecycle_temp_creation_and_directory_sync_errors_are_contextualized() {
+    let temp = tempdir().unwrap();
+    let state_directory = temp.path().join("state");
+    let state_path = state_directory.join(DYNAMIC_PLUGIN_STATE_FILENAME);
+    let lock = lock_lifecycle_state(&state_path).unwrap();
+    let state = DynamicPluginLifecycleState::default();
+
+    // Keep the lock descriptor open while replacing its unlinked parent directory with a file.
+    // This makes temporary-file creation fail deterministically, including under a privileged
+    // test runner that could bypass directory permission bits.
+    std::fs::remove_file(state_directory.join(DYNAMIC_PLUGIN_STATE_LOCK_FILENAME)).unwrap();
+    std::fs::remove_dir(&state_directory).unwrap();
+    std::fs::write(&state_directory, b"blocking file").unwrap();
+
+    let error = save_locked_lifecycle_state(&lock, &state).unwrap_err();
+    assert!(error.to_string().contains("create lifecycle state"));
+
+    let error = sync_lifecycle_state_directory(&temp.path().join("missing-directory")).unwrap_err();
+    assert!(error.to_string().contains("open lifecycle state directory"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_lifecycle_replace_reports_a_missing_staged_file() {
+    let temp = tempdir().unwrap();
+    let error = replace_lifecycle_state(
+        &temp.path().join("missing.tmp"),
+        &temp.path().join(DYNAMIC_PLUGIN_STATE_FILENAME),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("replace lifecycle state"));
 }

@@ -724,3 +724,92 @@ fn reconciliation_cannot_overwrite_a_concurrent_enable_transaction() {
     assert_eq!(reconciled.enabled_plugins.len(), 1);
     assert_eq!(reconciled.enabled_plugins[0].plugin_id, "concurrent-enable");
 }
+
+#[test]
+fn lifecycle_helper_invariants_report_context_and_environment_failures() {
+    let temp = tempdir().unwrap();
+    let manifest_path = write_native_plugin(temp.path(), "helper-invariants");
+    let (manifest, manifest_ref) = load_bounded_dynamic_plugin_manifest(&manifest_path).unwrap();
+    let record_without_manifest = manifest.clone().into_record(None).unwrap();
+    let declaration = ResolvedDynamicPluginConfig {
+        plugin_id: "helper-invariants".into(),
+        manifest_ref: manifest_ref.clone(),
+        config: serde_json::Map::new(),
+        has_explicit_config: false,
+        source: temp.path().join("plugins.toml"),
+    };
+    let error = reconciled_enabled_plugin(&declaration, &record_without_manifest).unwrap_err();
+    assert!(error.to_string().contains("has no manifest_ref"));
+
+    assert!(
+        environment_last_error(
+            "helper-invariants",
+            DynamicPluginCheckState::Valid,
+            None,
+            None,
+        )
+        .is_none()
+    );
+    let missing = environment_last_error(
+        "helper-invariants",
+        DynamicPluginCheckState::Invalid,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(
+        missing
+            .message
+            .contains("has no lifecycle-managed Python environment")
+    );
+    let unavailable = environment_last_error(
+        "helper-invariants",
+        DynamicPluginCheckState::Invalid,
+        Some("/managed/environment"),
+        None,
+    )
+    .unwrap();
+    assert!(unavailable.message.contains("is unavailable"));
+    let detailed = environment_last_error(
+        "helper-invariants",
+        DynamicPluginCheckState::Invalid,
+        Some("/managed/environment"),
+        Some("attestation mismatch".into()),
+    )
+    .unwrap();
+    assert_eq!(detailed.message, "attestation mismatch");
+
+    let state_path = temp.path().join(DYNAMIC_PLUGIN_STATE_FILENAME);
+    let lock = lock_lifecycle_state(&state_path).unwrap();
+    let mut source = SourceRegistry {
+        state_path,
+        registry: DynamicPluginLifecycleState::default(),
+        _lock: lock,
+    };
+    let policy = evaluate_dynamic_plugin_host_policy(&Default::default(), &manifest);
+    let trust = evaluate_dynamic_plugin_trust(&manifest, &manifest_ref, &policy);
+    let error = refresh_registry_record(
+        &mut source,
+        "missing",
+        manifest.clone(),
+        manifest_ref,
+        &policy,
+        &trust,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("disappeared during lifecycle reconciliation")
+    );
+
+    let live = manifest.into_record(Some("/manifest.toml".into())).unwrap();
+    source.registry.add(live.clone()).unwrap();
+    let error =
+        revive_registry_record_for_new_owner(&mut source, "helper-invariants", live).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to replace live lifecycle state")
+    );
+}

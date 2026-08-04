@@ -554,3 +554,282 @@ fn snapshot_budget_rejects_entry_and_byte_overflow() {
         .to_string();
     assert!(byte_error.contains("byte activation snapshot budget"));
 }
+
+#[test]
+fn snapshot_helpers_reject_missing_python_integrity_and_directory_depth() {
+    let temp = tempdir().unwrap();
+    let manifest = DynamicPluginManifest::parse_toml(
+        r#"manifest_version = 1
+[plugin]
+id = "python-without-integrity"
+kind = "worker"
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+[capabilities]
+items = ["plugin_worker"]
+[defaults]
+enabled = false
+[source]
+manifest_root = "."
+artifact = "plugin.py"
+[load]
+runtime = "python"
+entrypoint = "plugin:main"
+"#,
+    )
+    .unwrap();
+    let error = trusted_source_artifact_sha256(&manifest).unwrap_err();
+    assert!(error.to_string().contains("requires integrity.sha256"));
+
+    let source = temp.path().join("source");
+    fs::create_dir(&source).unwrap();
+    let error = copy_snapshot_directory_contents(
+        &source,
+        &temp.path().join("destination"),
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        false,
+        &mut vec![PathBuf::new(); MAX_SNAPSHOT_DEPTH],
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("traversal depth"));
+
+    fs::write(source.join("keep.py"), b"keep").unwrap();
+    fs::write(source.join("cached.pyc"), b"ignored").unwrap();
+    fs::create_dir(source.join("__pycache__")).unwrap();
+    let destination = temp.path().join("cache-filtered");
+    copy_snapshot_directory(
+        &source,
+        &destination,
+        &mut HashMap::new(),
+        &mut SnapshotBudget::default(),
+        true,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(destination.join("keep.py").exists());
+    assert!(!destination.join("cached.pyc").exists());
+    assert!(!destination.join("__pycache__").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn python_launcher_preservation_reports_each_filesystem_failure_context() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    let source_bin = temp.path().join("environment/bin");
+    fs::create_dir_all(&source_bin).unwrap();
+    let target = temp.path().join("python");
+    fs::write(&target, b"python").unwrap();
+    let source = source_bin.join("python3.11");
+    symlink(&target, &source).unwrap();
+    let metadata = fs::symlink_metadata(&source).unwrap();
+    let resolved = source.canonicalize().unwrap();
+
+    fs::remove_file(&source).unwrap();
+    let error = preserve_python_launcher(
+        &source,
+        &temp.path().join("snapshot/bin/python3.11"),
+        &resolved,
+        &metadata,
+        &mut HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("read Python launcher symlink"));
+
+    symlink(&target, &source).unwrap();
+    let blocked_parent = temp.path().join("blocked-parent");
+    fs::write(&blocked_parent, b"file").unwrap();
+    let error = preserve_python_launcher(
+        &source,
+        &blocked_parent.join("python3.11"),
+        &resolved,
+        &metadata,
+        &mut HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("create Python launcher directory")
+    );
+
+    let destination = temp.path().join("existing/python3.11");
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::write(&destination, b"existing").unwrap();
+    let error = preserve_python_launcher(
+        &source,
+        &destination,
+        &resolved,
+        &metadata,
+        &mut HashMap::new(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("preserve Python launcher symlink")
+    );
+}
+
+#[test]
+fn required_snapshot_policy_and_signature_failures_stop_before_activation() {
+    use nemo_relay::plugin::dynamic::{DynamicPluginAttestationMode, DynamicPluginStartupClass};
+
+    let temp = tempdir().unwrap();
+    let artifact = b"native fixture";
+    fs::write(temp.path().join("plugin.so"), artifact).unwrap();
+    let digest = Sha256::digest(artifact)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let manifest = temp.path().join("relay-plugin.toml");
+    fs::write(
+        &manifest,
+        format!(
+            r#"manifest_version = 1
+[plugin]
+id = "required-native"
+kind = "rust_dynamic"
+[compat]
+relay = ">=0.5,<1.0"
+native_api = "v1"
+[capabilities]
+items = ["plugin_native"]
+[defaults]
+enabled = false
+[load]
+library = "plugin.so"
+symbol = "nemo_relay_plugin_entrypoint_v1"
+[source]
+artifact = "plugin.so"
+[integrity]
+sha256 = "sha256:{digest}"
+"#,
+        ),
+    )
+    .unwrap();
+
+    let blocked = DynamicPluginHostPolicy {
+        defaults: crate::policy::DynamicPluginHostPolicyEffect {
+            allowed: Some(false),
+            startup: Some(DynamicPluginStartupClass::Required),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "required-native",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &blocked,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("violates host policy"));
+
+    let signature_required = DynamicPluginHostPolicy {
+        defaults: crate::policy::DynamicPluginHostPolicyEffect {
+            startup: Some(DynamicPluginStartupClass::Required),
+            attestation: Some(DynamicPluginAttestationMode::SignatureRequired),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest.to_string_lossy().as_ref(),
+        "required-native",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &signature_required,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("signature"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_runtime_library_snapshot_rejects_malformed_and_unsafe_runtime_layouts() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().unwrap();
+    for (name, config) in [
+        ("missing-home", "version = 3.11.0\n".to_owned()),
+        ("missing-version", "home = /tmp/bin\n".to_owned()),
+        (
+            "invalid-major",
+            "home = /tmp/bin\nversion = x.11\n".to_owned(),
+        ),
+        (
+            "invalid-minor",
+            "home = /tmp/bin\nversion = 3.x\n".to_owned(),
+        ),
+        ("root-home", "home = /\nversion = 3.11\n".to_owned()),
+    ] {
+        let environment = temp.path().join(name);
+        fs::create_dir(&environment).unwrap();
+        fs::write(environment.join("pyvenv.cfg"), config).unwrap();
+        snapshot_macos_python_runtime_library(
+            &environment,
+            &mut HashMap::new(),
+            &mut SnapshotBudget::default(),
+        )
+        .unwrap();
+        assert!(!environment.join("lib").exists());
+    }
+
+    let base = temp.path().join("base");
+    fs::create_dir_all(base.join("bin")).unwrap();
+    fs::create_dir_all(base.join("lib/libpython3.11.dylib")).unwrap();
+    let environment = temp.path().join("directory-source");
+    fs::create_dir(&environment).unwrap();
+    fs::write(
+        environment.join("pyvenv.cfg"),
+        format!("home = {}\nversion = 3.11\n", base.join("bin").display()),
+    )
+    .unwrap();
+    assert!(
+        snapshot_macos_python_runtime_library(
+            &environment,
+            &mut HashMap::new(),
+            &mut SnapshotBudget::default(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("must resolve to a regular file")
+    );
+
+    fs::remove_dir_all(base.join("lib/libpython3.11.dylib")).unwrap();
+    symlink(
+        base.join("lib/missing.dylib"),
+        base.join("lib/libpython3.11.dylib"),
+    )
+    .unwrap();
+    assert!(
+        snapshot_macos_python_runtime_library(
+            &environment,
+            &mut HashMap::new(),
+            &mut SnapshotBudget::default(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("normalize Python runtime library")
+    );
+
+    fs::remove_file(base.join("lib/libpython3.11.dylib")).unwrap();
+    fs::write(base.join("lib/libpython3.11.dylib"), b"runtime").unwrap();
+    let destination = environment.join("lib/libpython3.11.dylib");
+    fs::create_dir_all(&destination).unwrap();
+    assert!(
+        snapshot_macos_python_runtime_library(
+            &environment,
+            &mut HashMap::new(),
+            &mut SnapshotBudget::default(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("must be a regular file")
+    );
+}

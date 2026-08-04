@@ -287,3 +287,7 @@ impl From<FileDynamicPluginHostPolicyRule> for DynamicPluginHostPolicyRule {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/policy.rs"]
+mod tests;

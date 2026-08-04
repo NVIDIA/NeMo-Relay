@@ -524,6 +524,10 @@ fn load_or_create_hmac_key() -> Result<[u8; HMAC_KEY_BYTES]> {
                     .into(),
             )
         })?;
+    load_or_create_hmac_key_at(&path)
+}
+
+fn load_or_create_hmac_key_at(path: &Path) -> Result<[u8; HMAC_KEY_BYTES]> {
     let parent = path.parent().expect("bootstrap HMAC key has a parent");
     std::fs::create_dir_all(parent).map_err(|error| {
         PluginHostConfigError::io("create bootstrap state directory", parent, error)
@@ -543,8 +547,8 @@ fn load_or_create_hmac_key() -> Result<[u8; HMAC_KEY_BYTES]> {
     })?;
 
     #[cfg(windows)]
-    let mut file = open_private_windows_file(&path)
-        .map_err(|error| PluginHostConfigError::io("open bootstrap HMAC key", &path, error))?;
+    let mut file = open_private_windows_file(path)
+        .map_err(|error| PluginHostConfigError::io("open bootstrap HMAC key", path, error))?;
     #[cfg(not(windows))]
     let mut file = {
         let mut options = OpenOptions::new();
@@ -555,8 +559,8 @@ fn load_or_create_hmac_key() -> Result<[u8; HMAC_KEY_BYTES]> {
             options.mode(0o600);
         }
         options
-            .open(&path)
-            .map_err(|error| PluginHostConfigError::io("open bootstrap HMAC key", &path, error))?
+            .open(path)
+            .map_err(|error| PluginHostConfigError::io("open bootstrap HMAC key", path, error))?
     };
     let deadline = Instant::now() + HMAC_LOCK_TIMEOUT;
     loop {
@@ -570,7 +574,7 @@ fn load_or_create_hmac_key() -> Result<[u8; HMAC_KEY_BYTES]> {
             Err(error) => {
                 return Err(PluginHostConfigError::io(
                     "lock bootstrap HMAC key",
-                    &path,
+                    path,
                     error,
                 ));
             }
@@ -581,10 +585,10 @@ fn load_or_create_hmac_key() -> Result<[u8; HMAC_KEY_BYTES]> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::Permissions::from_mode(0o600)
     })
-    .map_err(|error| PluginHostConfigError::io("protect bootstrap HMAC key", &path, error))?;
+    .map_err(|error| PluginHostConfigError::io("protect bootstrap HMAC key", path, error))?;
     let length = file
         .metadata()
-        .map_err(|error| PluginHostConfigError::io("inspect bootstrap HMAC key", &path, error))?
+        .map_err(|error| PluginHostConfigError::io("inspect bootstrap HMAC key", path, error))?
         .len();
     if length == 0 {
         let mut key = [0_u8; HMAC_KEY_BYTES];
@@ -592,9 +596,9 @@ fn load_or_create_hmac_key() -> Result<[u8; HMAC_KEY_BYTES]> {
             PluginHostConfigError::InvalidConfig("failed to generate bootstrap HMAC key".into())
         })?;
         file.write_all(&key)
-            .map_err(|error| PluginHostConfigError::io("write bootstrap HMAC key", &path, error))?;
+            .map_err(|error| PluginHostConfigError::io("write bootstrap HMAC key", path, error))?;
         file.sync_all()
-            .map_err(|error| PluginHostConfigError::io("sync bootstrap HMAC key", &path, error))?;
+            .map_err(|error| PluginHostConfigError::io("sync bootstrap HMAC key", path, error))?;
         return Ok(key);
     }
     if length != HMAC_KEY_BYTES as u64 {
@@ -604,10 +608,10 @@ fn load_or_create_hmac_key() -> Result<[u8; HMAC_KEY_BYTES]> {
         )));
     }
     file.seek(SeekFrom::Start(0))
-        .map_err(|error| PluginHostConfigError::io("seek bootstrap HMAC key", &path, error))?;
+        .map_err(|error| PluginHostConfigError::io("seek bootstrap HMAC key", path, error))?;
     let mut key = [0_u8; HMAC_KEY_BYTES];
     file.read_exact(&mut key)
-        .map_err(|error| PluginHostConfigError::io("read bootstrap HMAC key", &path, error))?;
+        .map_err(|error| PluginHostConfigError::io("read bootstrap HMAC key", path, error))?;
     Ok(key)
 }
 
@@ -902,3 +906,7 @@ fn windows_wide(value: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
 
     value.as_ref().encode_wide().chain(Some(0)).collect()
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/environment.rs"]
+mod tests;

@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use nemo_relay::plugin::PluginComponentSpec;
+use nemo_relay::plugin::{PluginComponentSpec, UnsupportedBehavior};
 use tempfile::tempdir;
 
 use super::*;
@@ -358,4 +358,214 @@ fn special_file_plugin_configuration_is_rejected_without_reading_it() {
     let error = resolve_plugin_files_from_paths([PathBuf::from("/dev/zero")], None)
         .expect_err("a character device must not be read as plugins.toml");
     assert!(error.to_string().contains("must be a regular file"));
+}
+
+#[test]
+fn source_selection_covers_ambient_user_and_environment_construction() {
+    let temp = tempdir().unwrap();
+    let selected = temp.path().join("selected.toml");
+    let options = PluginFileResolveOptions::from_environment(Some(selected.clone()));
+    assert_eq!(options.plugin_config_path, Some(selected));
+
+    let user = temp.path().join("user");
+    let system = temp.path().join("system.toml");
+    let ambient = PluginFileResolveOptions {
+        plugin_config_path: None,
+        current_dir: None,
+        user_config_dir: Some(user.clone()),
+        system_config_path: system.clone(),
+    };
+    assert_eq!(
+        ambient.selected_paths(),
+        vec![user.join("plugins.toml"), system]
+    );
+}
+
+#[test]
+fn source_normalization_errors_are_contextualized() {
+    let temp = tempdir().unwrap();
+    let blocking_file = temp.path().join("not-a-directory");
+    fs::write(&blocking_file, "fixture").unwrap();
+
+    let error =
+        resolve_plugin_files_from_paths([blocking_file.join("plugins.toml")], None).unwrap_err();
+    assert!(error.to_string().contains("plugin configuration file"));
+    assert!(error.to_string().contains("not-a-directory"));
+}
+
+#[test]
+fn private_resolution_helpers_cover_defensive_and_diagnostic_shapes() {
+    let mut seen = HashSet::new();
+    let mut scalar_toml = toml::Value::String("fixture".into());
+    let dynamic =
+        resolve_dynamic_plugin_refs(Path::new("plugins.toml"), &mut scalar_toml, &mut seen)
+            .unwrap();
+    assert!(dynamic.dynamic_plugins.is_empty());
+
+    let no_components = serde_json::json!({"version": 1});
+    let programmatic = PluginConfig {
+        components: vec![PluginComponentSpec::new("fixture")],
+        ..PluginConfig::default()
+    };
+    assert!(
+        programmatic_enable_override_diagnostics(&no_components, &HashMap::new(), &programmatic,)
+            .is_empty()
+    );
+
+    let discovered = serde_json::json!({
+        "components": [
+            {"kind": "fixture", "enabled": false},
+            {"kind": "fixture", "enabled": true}
+        ]
+    });
+    let mut first = PluginComponentSpec::new("fixture");
+    first.enabled = true;
+    let mut second = PluginComponentSpec::new("fixture");
+    second.enabled = false;
+    let diagnostics = programmatic_enable_override_diagnostics(
+        &discovered,
+        &HashMap::new(),
+        &PluginConfig {
+            components: vec![first, second],
+            ..PluginConfig::default()
+        },
+    );
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "plugin.component_reenabled");
+}
+
+#[test]
+fn private_merge_helpers_cover_scalar_nested_and_policy_overlays() {
+    let mut no_components = serde_json::json!({"version": 1});
+    layer_config(&mut no_components, serde_json::json!("replacement"));
+    assert_eq!(no_components, serde_json::json!("replacement"));
+    layer_config(&mut no_components, serde_json::json!({"inserted": true}));
+    assert_eq!(no_components, serde_json::json!({"inserted": true}));
+
+    let mut non_array = serde_json::json!(null);
+    merge_plugin_components(&mut non_array, serde_json::json!([{"kind": "fixture"}]));
+    assert!(non_array.is_array());
+    merge_plugin_components(&mut non_array, serde_json::json!("not-an-array"));
+    assert_eq!(non_array, serde_json::json!("not-an-array"));
+
+    let mut observability = serde_json::json!({
+        "kind": "observability",
+        "config": {
+            "atof": {"sinks": ["low"]},
+            "opentelemetry": {"endpoints": ["low"]},
+            "atif": {"storage": ["low"]},
+            "ordinary": {"values": ["low"]}
+        }
+    });
+    merge_plugin_component(
+        &mut observability,
+        serde_json::json!({
+            "kind": "observability",
+            "config": {
+                "atof": {"sinks": ["high"]},
+                "opentelemetry": {"endpoints": ["high"]},
+                "atif": {"storage": ["high"]},
+                "ordinary": {"values": ["high"]}
+            }
+        }),
+    );
+    assert_eq!(
+        observability["config"]["atof"]["sinks"],
+        serde_json::json!(["high", "low"])
+    );
+    assert_eq!(
+        observability["config"]["opentelemetry"]["endpoints"],
+        serde_json::json!(["high", "low"])
+    );
+    assert_eq!(
+        observability["config"]["atif"]["storage"],
+        serde_json::json!(["high", "low"])
+    );
+    assert_eq!(
+        observability["config"]["ordinary"]["values"],
+        serde_json::json!(["high"])
+    );
+
+    let mut generic = serde_json::json!({"kind": "fixture", "config": {"list": ["low"]}});
+    merge_plugin_component(
+        &mut generic,
+        serde_json::json!({"kind": "fixture", "config": {"list": ["high"]}}),
+    );
+    assert_eq!(
+        generic["config"]["list"],
+        serde_json::json!(["high", "low"])
+    );
+
+    let mut policy_root = serde_json::Map::new();
+    remove_default_policy_overlay(&mut policy_root, &ConfigPolicy::default());
+    let custom = ConfigPolicy {
+        unknown_component: UnsupportedBehavior::Error,
+        ..ConfigPolicy::default()
+    };
+    policy_root.insert("policy".into(), serde_json::to_value(custom).unwrap());
+    remove_default_policy_overlay(&mut policy_root, &custom);
+    assert_eq!(
+        policy_root["policy"]["unknown_component"],
+        serde_json::json!("error")
+    );
+    assert!(policy_root["policy"].get("unknown_field").is_none());
+    assert!(policy_root["policy"].get("unsupported_value").is_none());
+}
+
+#[test]
+fn private_resolution_helpers_cover_invalid_config_and_component_sources() {
+    let invalid = finish_resolution(
+        serde_json::json!("not-a-plugin-config"),
+        Vec::new(),
+        DynamicPluginHostPolicy::default(),
+        Vec::new(),
+        ResolvedPluginFileSourcePaths {
+            contributing_sources: Vec::new(),
+            contributing_selected_sources: Vec::new(),
+            selected_sources: Vec::new(),
+        },
+        true,
+    )
+    .unwrap_err();
+    assert!(
+        invalid
+            .to_string()
+            .contains("resolved static plugin configuration is invalid")
+    );
+
+    let mut enabled_sources = HashMap::new();
+    record_enabled_sources(
+        Path::new("plugins.toml"),
+        &serde_json::json!({
+            "components": [
+                {"enabled": false},
+                {"kind": "fixture", "enabled": "not-a-boolean"},
+                {"kind": "recorded", "enabled": false}
+            ]
+        }),
+        &mut enabled_sources,
+    );
+    assert_eq!(enabled_sources.len(), 1);
+    assert!(!enabled_sources["recorded"].enabled);
+
+    let mut layered = serde_json::json!({"nested": {"low": true}});
+    layer_config(
+        &mut layered,
+        serde_json::json!({"nested": {"high": true}, "inserted": 3}),
+    );
+    assert_eq!(
+        layered,
+        serde_json::json!({"nested": {"low": true, "high": true}, "inserted": 3})
+    );
+
+    let mut components = serde_json::json!([{"kind": "existing"}]);
+    merge_plugin_components(
+        &mut components,
+        serde_json::json!([{"value": "no-kind"}, {"kind": "new"}]),
+    );
+    assert_eq!(components.as_array().unwrap().len(), 3);
+
+    let mut scalar_component = serde_json::json!("low");
+    merge_plugin_component(&mut scalar_component, serde_json::json!("high"));
+    assert_eq!(scalar_component, serde_json::json!("high"));
 }

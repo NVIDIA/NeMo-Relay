@@ -1212,6 +1212,7 @@ test-python:
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
             -p nemo-relay-python \
+            -p nemo-relay-plugin-host-config \
             --ignore-filename-regex '.*/tests/.*\.rs$' \
             --cobertura \
             --output-path "$rust_coverage_out"
