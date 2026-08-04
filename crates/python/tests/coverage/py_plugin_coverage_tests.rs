@@ -199,6 +199,21 @@ async def clear(module):
 }
 
 #[test]
+fn stale_async_clear_completion_keeps_the_newer_state() {
+    let _plugin_test_state = lock_plugin_test_state_for_tests();
+    let older = plugin_configuration_clear_state();
+    let newer = Arc::new(PluginConfigurationClearState::new());
+    *PLUGIN_CONFIGURATION_CLEAR_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::clone(&newer);
+
+    reset_plugin_configuration_clear_state_if(&older);
+
+    assert!(Arc::ptr_eq(&plugin_configuration_clear_state(), &newer));
+    reset_plugin_configuration_clear_state();
+}
+
+#[test]
 fn plugin_context_registers_all_runtime_hooks_and_drains_registrations() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {

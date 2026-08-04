@@ -2471,6 +2471,11 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
         .prepare_destination("session-1", Some(&nested_null))
         .unwrap();
     assert_eq!(destination.0, "unassigned/trajectory-session-1.json");
+    let nested_string = json!({"artifact": {"path": "tenant-a/team_1"}});
+    let destination = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_string))
+        .unwrap();
+    assert_eq!(destination.0, "tenant-a/team_1/trajectory-session-1.json");
 
     for template in [
         "/tmp/trajectory-{session_id}.json",

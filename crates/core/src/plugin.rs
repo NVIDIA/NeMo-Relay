@@ -2505,7 +2505,9 @@ impl PendingPluginRegistrations {
 impl Drop for PendingPluginRegistrations {
     fn drop(&mut self) {
         let outcome = rollback_registrations_checked(&mut self.registrations);
-        record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        if !outcome.callbacks_cleared {
+            record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        }
     }
 }
 
@@ -2530,7 +2532,9 @@ impl PendingPluginRegistrationContext {
 impl Drop for PendingPluginRegistrationContext {
     fn drop(&mut self) {
         let outcome = rollback_registrations_checked(&mut self.context.registrations);
-        record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        if !outcome.callbacks_cleared {
+            record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        }
     }
 }
 
