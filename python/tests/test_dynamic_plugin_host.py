@@ -497,7 +497,7 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
     activation = None
     try:
         dynamic_plugins = plugin.load_dynamic_plugin_activation_specs(plugins_toml)
-        activation = await plugin.initialize_with_dynamic_plugins(plugin.PluginConfig(), dynamic_plugins)
+        activation = await plugin.initialize_with_dynamic_plugins(plugin.PluginConfig(), tuple(dynamic_plugins))
         assert activation.report == {
             "diagnostics": [
                 {
