@@ -120,14 +120,21 @@ The OpenTelemetry SDK logs
 first drops a span. It suppresses additional first-drop warnings for that
 endpoint to avoid a log storm. During graceful shutdown, it logs
 `BatchSpanProcessor.SpansDropped` with the endpoint processor's exact
-`dropped_span_count` and `max_queue_size`. The SDK diagnostics do not include
-the Relay endpoint index or URL.
+`dropped_span_count` and `max_queue_size`.
+
+For plugin-managed exporters, NeMo Relay also records `otel.spans_dropped` in the
+active plugin report's `runtime_diagnostics`. Its `count` is the exact number
+of dropped spans, `field` identifies the affected
+`opentelemetry.endpoints[N].endpoint`, and `message` includes the configured
+endpoint URL. If spans were dropped, clearing the plugin returns a delivery
+failure error and retains the diagnostic for inspection. This error does not
+disable later plugin configuration.
 </Warning>
 
 Increasing `OTEL_BSP_MAX_QUEUE_SIZE` can reduce the risk for a known burst
 size, but a finite queue does not guarantee lossless telemetry. Always clear
-the plugin during graceful shutdown so the SDK can report its final drop count
-and attempt to export queued spans.
+the plugin during graceful shutdown so NeMo Relay can record the final drop count
+and the SDK can attempt to export queued spans.
 
 ## Endpoint Capacity and Sizing
 
