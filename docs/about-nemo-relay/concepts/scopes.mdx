@@ -96,14 +96,18 @@ When the scope closes, those registrations disappear automatically.
 
 Consider an agent that calls one tool and then one LLM:
 
-1. Relay pushes an `Agent` scope beneath the root and emits its start event.
+1. The application or framework integration pushes an `Agent` scope beneath the
+   root and emits its start event.
 2. The application registers middleware and a subscriber on the agent scope.
    Both are visible while the agent or any of its nested scopes are active.
-3. Relay pushes a `Tool` scope, runs the tool, emits the tool events, and pops
-   the scope. The agent scope becomes active again.
-4. Relay pushes an `Llm` scope, runs the model call, emits the LLM events, and
-   pops the scope.
-5. Relay emits the agent end event and pops the agent scope. Its local
+3. A managed tool wrapper emits the tool start event, runs the tool, and emits
+   the tool end event. The agent remains the active scope.
+4. The application emits a mark under the active agent scope. The mark does not
+   change the stack.
+5. A managed LLM wrapper emits the LLM start event, runs the model call, and
+   emits the LLM end event. The agent remains the active scope.
+6. The application or framework integration emits the agent end event and pops
+   the agent scope. Its local
    middleware and subscriber are removed.
 
 The active scope stack changes over time. The emitted events remain in a
@@ -116,16 +120,17 @@ active scope but does not push another scope onto the stack.
 flowchart LR
   subgraph Stack["Active scope stack over time"]
     direction LR
-    s1["root → agent"] --> s2["root → agent → tool"]
-    s2 --> s3["root → agent"]
-    s3 --> s4["root → agent → llm"]
-    s4 --> s5["root"]
+    s1["root → agent<br/>agent starts"] --> s2["root → agent<br/>tool lifecycle emits"]
+    s2 --> s3["root → agent<br/>mark emits"]
+    s3 --> s4["root → agent<br/>LLM lifecycle emits"]
+    s4 --> s5["root<br/>agent closes"]
   end
 
   subgraph Events["Emitted event tree"]
     direction TB
     root["root"] --> agent["agent start/end"]
     agent --> tool["tool start/end"]
+    agent --> mark["mark"]
     agent --> llm["llm start/end"]
   end
 ```
@@ -158,12 +163,13 @@ local state accidentally.
 Choose the context behavior based on whether the work belongs to the same
 logical trace and whether it runs concurrently:
 
-| Work | Context behavior |
+| Work | Context Behavior |
 | --- | --- |
 | Sequential nested work in the same trace | Reuse the active stack |
 | Concurrent branches in the same trace | Fork the stack for each branch |
 | Independent work | Start with a fresh isolated stack |
-| Work crossing a process boundary | Carry Relay propagation context |
+| Same-trace work crossing a process boundary | Carry Relay propagation context; scope-local registrations do not cross the boundary |
+| Independent work crossing a process boundary | Start with a fresh isolated stack instead of importing context |
 
 ### Why Isolation Matters
 
