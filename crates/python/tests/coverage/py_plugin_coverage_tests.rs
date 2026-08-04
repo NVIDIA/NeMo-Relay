@@ -209,8 +209,9 @@ fn stale_async_clear_completion_keeps_the_newer_state() {
 
     reset_plugin_configuration_clear_state_if(&older);
 
-    assert!(Arc::ptr_eq(&plugin_configuration_clear_state(), &newer));
+    let newer_state_remained_current = Arc::ptr_eq(&plugin_configuration_clear_state(), &newer);
     reset_plugin_configuration_clear_state();
+    assert!(newer_state_remained_current);
 }
 
 #[test]
