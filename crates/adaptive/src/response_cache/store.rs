@@ -445,6 +445,18 @@ pub async fn check_backend_health(
     Ok(store.backend_kind().to_string())
 }
 
+/// Validates the configured backend target without attempting network access.
+///
+/// Intended for offline `nemo-relay doctor` checks: it rejects malformed
+/// backend targets while still skipping live reachability probes.
+pub fn validate_backend_target(config: &ResponseCacheConfig) -> std::result::Result<(), String> {
+    match config.backend.kind.as_str() {
+        "in_memory" => Ok(()),
+        "redis" => validate_redis_backend_target(config).map_err(|err| err.to_string()),
+        other => Err(format!("response_cache: unknown backend kind '{other}'")),
+    }
+}
+
 /// Builds the response-cache backend from config.
 ///
 /// Returns the boxed [`CacheStore`] used by the intercept and the `doctor`
@@ -465,16 +477,7 @@ pub(crate) async fn build_store(config: &ResponseCacheConfig) -> Result<Arc<dyn 
 async fn build_redis_store(config: &ResponseCacheConfig) -> Result<Arc<dyn CacheStore>> {
     use crate::response_cache::store::RedisCacheStore;
 
-    let url = config
-        .backend
-        .config
-        .get("url")
-        .and_then(Json::as_str)
-        .ok_or_else(|| {
-            AdaptiveError::InvalidConfig(
-                "response_cache: redis backend requires backend.config.url".to_string(),
-            )
-        })?;
+    let url = redis_backend_url(config)?;
     let key_prefix = config
         .backend
         .config
@@ -489,6 +492,36 @@ async fn build_redis_store(config: &ResponseCacheConfig) -> Result<Arc<dyn Cache
 
 #[cfg(not(feature = "redis-backend"))]
 async fn build_redis_store(_config: &ResponseCacheConfig) -> Result<Arc<dyn CacheStore>> {
+    Err(AdaptiveError::InvalidConfig(
+        "response_cache: backend.kind = \"redis\" requires building with the 'redis-backend' \
+         feature"
+            .to_string(),
+    ))
+}
+
+fn redis_backend_url(config: &ResponseCacheConfig) -> Result<&str> {
+    config
+        .backend
+        .config
+        .get("url")
+        .and_then(Json::as_str)
+        .ok_or_else(|| {
+            AdaptiveError::InvalidConfig(
+                "response_cache: redis backend requires backend.config.url".to_string(),
+            )
+        })
+}
+
+#[cfg(feature = "redis-backend")]
+fn validate_redis_backend_target(config: &ResponseCacheConfig) -> Result<()> {
+    let url = redis_backend_url(config)?;
+    redis::Client::open(url)
+        .map(|_| ())
+        .map_err(|err| AdaptiveError::Storage(format!("response_cache: redis client: {err}")))
+}
+
+#[cfg(not(feature = "redis-backend"))]
+fn validate_redis_backend_target(_config: &ResponseCacheConfig) -> Result<()> {
     Err(AdaptiveError::InvalidConfig(
         "response_cache: backend.kind = \"redis\" requires building with the 'redis-backend' \
          feature"

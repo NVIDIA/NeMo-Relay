@@ -728,6 +728,16 @@ async fn collect_response_cache_component_checks(
             return;
         }
     };
+    if probe_mode.is_offline()
+        && let Err(error) = response_cache::store::validate_backend_target(&config)
+    {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Fail,
+            details: format!("invalid backend target: {error}"),
+        });
+        return;
+    }
     if probe_mode.is_offline() && config.backend.kind != "in_memory" {
         checks.push(Check {
             name: "Response cache",
@@ -1214,7 +1224,14 @@ fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
             let Some(value) = value.as_str() else {
                 return Err(format!("headers.{key} must be a string"));
             };
-            names.insert(name);
+            if value.trim().is_empty() {
+                return Err(format!("headers.{key} must not be blank"));
+            }
+            reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+                .map_err(|error| format!("headers.{key} invalid: {error}"))?;
+            if !names.insert(name) {
+                return Err(format!("header {key:?} appears more than once"));
+            }
             out.push((key.clone(), value.to_string()));
         }
     }
@@ -1238,6 +1255,8 @@ fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
             if value.trim().is_empty() {
                 return Err(format!("environment variable {variable:?} is blank"));
             }
+            reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+                .map_err(|error| format!("header_env.{key} invalid: {error}"))?;
             names.insert(name);
             out.push((key.clone(), value));
         }

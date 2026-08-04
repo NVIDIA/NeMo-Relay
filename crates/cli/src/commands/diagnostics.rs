@@ -21,7 +21,10 @@ pub(crate) struct DoctorCommand {
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
     pub(crate) json: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Validate configuration and endpoint syntax without running live network probes"
+    )]
     pub(crate) offline: bool,
 }
 

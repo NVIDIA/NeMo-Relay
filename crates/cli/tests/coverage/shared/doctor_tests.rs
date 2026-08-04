@@ -1468,6 +1468,57 @@ async fn collect_observability_skips_redis_response_cache_probe_offline() {
     );
 }
 
+#[tokio::test]
+async fn collect_observability_fails_invalid_redis_response_cache_target_offline() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "response_cache": {
+                            "ttl_seconds": 3600,
+                            "namespace": "doctor-test",
+                            "backend": {
+                                "kind": "redis",
+                                "config": {
+                                    "url": "not-a-redis-url",
+                                    "key_prefix": "doctor-test:"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_offline_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Fail, "checks: {checks:?}");
+    assert!(
+        cache.details.contains("invalid backend target"),
+        "details: {}",
+        cache.details
+    );
+    assert!(
+        cache.details.contains("redis client"),
+        "details: {}",
+        cache.details
+    );
+    assert!(
+        !cache.details.contains("probe skipped"),
+        "must not report skipped for an invalid backend target"
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn response_cache_backend_check_reports_timeout() {
     let check = response_cache_backend_check(std::future::pending()).await;
@@ -1790,8 +1841,23 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
             .contains("headers.x-test must be a string")
     );
 
-    let mixed_case_duplicate = probe_atof_endpoint(
+    let blank_static_header = probe_atof_endpoint(
         4,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {"x-test": "   "}
+        }),
+    )
+    .await;
+    assert_eq!(blank_static_header.status, Status::Fail);
+    assert!(
+        blank_static_header
+            .details
+            .contains("headers.x-test must not be blank")
+    );
+
+    let mixed_case_duplicate = probe_atof_endpoint(
+        5,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "headers": {"Authorization": "Bearer literal"},
@@ -1806,8 +1872,26 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
             .contains("cannot appear in both headers and header_env")
     );
 
+    let duplicate_static_header = probe_atof_endpoint(
+        6,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {
+                "Authorization": "Bearer a",
+                "authorization": "Bearer b"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(duplicate_static_header.status, Status::Fail);
+    assert!(
+        duplicate_static_header
+            .details
+            .contains("appears more than once")
+    );
+
     let unsupported = probe_atof_endpoint(
-        5,
+        7,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "transport": "grpc"
@@ -1866,6 +1950,39 @@ async fn atof_endpoint_offline_still_rejects_invalid_transport_and_scheme() {
         unsupported_transport
             .details
             .contains("unsupported transport")
+    );
+
+    let blank_static_header = offline_atof_endpoint(
+        2,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {"x-test": "   "}
+        }),
+    )
+    .await;
+    assert_eq!(blank_static_header.status, Status::Fail);
+    assert!(
+        blank_static_header
+            .details
+            .contains("headers.x-test must not be blank")
+    );
+
+    let duplicate_static_header = offline_atof_endpoint(
+        3,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {
+                "Authorization": "Bearer a",
+                "authorization": "Bearer b"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(duplicate_static_header.status, Status::Fail);
+    assert!(
+        duplicate_static_header
+            .details
+            .contains("appears more than once")
     );
 }
 
