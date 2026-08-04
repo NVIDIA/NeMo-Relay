@@ -28,7 +28,10 @@ with collector or backend schemas.
 
 NeMo Relay uses OpenTelemetry Rust `0.32`. It deterministically derives
 compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
-receive the same event stream use the same identifiers and parentage.
+receive the same event stream use the same identifiers and parentage. Different
+endpoint types must therefore use independent OTLP destinations; configuring
+them with the same endpoint and transport is rejected to prevent identifier
+collisions at the receiver.
 Rooted Relay propagation continues the Relay-derived trace across the import
 boundary. Rootless propagation retains Relay event parentage but starts a new
 OpenTelemetry trace from the first local event. Carry W3C `traceparent` and
@@ -77,7 +80,7 @@ work or delivery to the other exporters.
 | Field | Default | Notes |
 |---|---|---|
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
-| `endpoint` | Required | Nonblank OTLP endpoint. |
+| `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |

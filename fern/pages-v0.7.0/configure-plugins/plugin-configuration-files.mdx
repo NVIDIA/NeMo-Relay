@@ -319,10 +319,16 @@ The effective Agent Trajectory Observability Format (ATOF) configuration keeps
 `version` and `enabled` from the user file. Its `sinks` list contains the system
 sink first, followed by the user sink.
 
-The top-level `components` array is special. Relay matches components by `kind`
-across files. A higher-precedence component with the same `kind` merges into the
-lower-precedence component. Relay adds a component with a different `kind` to
-the effective configuration.
+The top-level `components` array is special. Relay matches enabled components
+by `kind` across files. A higher-precedence component with the same `kind`
+merges into the lower-precedence component. Relay adds a component with a
+different `kind` to the effective configuration.
+
+A component entry that explicitly sets `enabled = false` is skipped before
+matching and merging. It does not change a lower-precedence component's enabled
+state or contribute any `config` fields or list entries. If every layer for a
+component kind sets `enabled = false`, that kind is absent from the effective
+configuration.
 
 This behavior applies to list fields declared at the top level of a component's
 `config`. It also applies to the observability destination lists
@@ -355,8 +361,21 @@ follows:
    setting it specifies overrides the file value, and the result is the
    effective config that Relay validates and activates.
 
+Programmatic lists participate in the same concatenation rules. For example, a
+programmatic `config.opentelemetry.endpoints` list appears before endpoints
+inherited from system, project, and explicit-or-user files; it does not remove
+those file entries.
+
+When library initialization discovers `plugins.toml` files, Relay emits one
+`plugin.configuration_inherited` warning per file. Each warning is written to
+the operational log and included in the initialization result and active plugin
+report. It names only the source path and does not include configuration values
+or credentials. Discovery itself does not block initialization, but validation
+or activation errors in the effective layered configuration still fail
+normally.
 
 Files and code differ only in how they treat a setting you **omit**:
+
 | You omit | In a file | In code |
 |---|---|---|
 | `version`, `policy`, or the `enabled` flag of a component you declare | Inherited from a lower-precedence file | **Always taken from code** — its default if you did not set it |
@@ -365,6 +384,10 @@ Files and code differ only in how they treat a setting you **omit**:
 Lower-precedence files fill fields that higher-precedence files omit. Typed code
 fields always have values, so they override file values. Only component
 selection and keys inside component `config` merge with files.
+
+When a component declared in code resolves `enabled = true` over a discovered
+`enabled = false`, initialization and the active plugin report include a
+`plugin.component_reenabled` warning that names the contributing file.
 
 Without filesystem access, no files are read, so the base is empty and only
 your `initialize` config applies.

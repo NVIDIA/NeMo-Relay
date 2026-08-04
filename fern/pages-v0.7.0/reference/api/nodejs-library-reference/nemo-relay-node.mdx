@@ -1015,10 +1015,10 @@ export declare function deregisterLlmStreamExecutionIntercept(name: string): boo
 
 Register a named event subscriber that receives all lifecycle events.
 
-The `callback` receives each event as the canonical JSON event object. Events are delivered asynchronously and non-blocking. Throws if a subscriber with the same `name` already exists.
+The `callback` receives each event as the canonical JSON event object and may return a Promise. Events are delivered asynchronously and non-blocking. Callback failures are isolated, reported to stderr and `getLastCallbackError()`, and do not reject `flushSubscribers()`. Throws if a subscriber with the same `name` already exists.
 
 ```ts
-export declare function registerSubscriber(name: string, callback: (arg: Json) => any): void
+export declare function registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void
 ```
 
 ### `deregisterSubscriber`
@@ -1317,10 +1317,10 @@ export declare function scopeDeregisterLlmStreamExecutionIntercept(scopeUuid: st
 
 Register a scope-local named event subscriber that receives lifecycle events for the specified scope.
 
-The `callback` receives each event as the canonical JSON event object. Events are delivered asynchronously and non-blocking. Throws if a subscriber with the same `name` already exists on the specified scope.
+The `callback` receives each event as the canonical JSON event object and may return a Promise. Events are delivered asynchronously and non-blocking. Callback failures are isolated, reported to stderr and `getLastCallbackError()`, and do not reject `flushSubscribers()`. Throws if a subscriber with the same `name` already exists on the specified scope.
 
 ```ts
-export declare function scopeRegisterSubscriber(scopeUuid: string, name: string, callback: (arg: Json) => any): void
+export declare function scopeRegisterSubscriber(scopeUuid: string, name: string, callback: (event: Json) => void | Promise<void>): void
 ```
 
 ### `scopeDeregisterSubscriber`
@@ -1443,7 +1443,7 @@ export declare function clearPluginConfiguration(): void
 
 ### `activePluginReport`
 
-Return the last successfully configured plugin report.
+Return the active plugin report or one retained after a teardown failure with runtime diagnostics.
 
 ```ts
 export declare function activePluginReport(): Json | null
