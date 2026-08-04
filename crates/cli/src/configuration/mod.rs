@@ -1385,7 +1385,8 @@ where
     let mut contributing_sources = selected_paths
         .into_iter()
         .filter(|selected| {
-            let physical = selected.canonicalize().unwrap_or_else(|_| selected.clone());
+            let physical = nemo_relay_plugin_host_config::pin_plugin_config_path(selected)
+                .unwrap_or_else(|_| selected.clone());
             resolved
                 .contributing_sources
                 .iter()

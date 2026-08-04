@@ -1501,17 +1501,13 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
     let added = find_record_by_id(&scopes, "acme.guardrail")
         .unwrap()
         .expect("add should persist lifecycle state immediately");
+    let declaration_source = scopes[added.scope_index]
+        .registry
+        .declaration_source("acme.guardrail")
+        .expect("the declaration source should be persisted");
     assert_eq!(
-        scopes[added.scope_index]
-            .registry
-            .declaration_source("acme.guardrail"),
-        Some(
-            plugins_toml
-                .canonicalize()
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-        )
+        Path::new(declaration_source).canonicalize().unwrap(),
+        plugins_toml.canonicalize().unwrap()
     );
 
     let resolved = resolve_plugins_config(None).unwrap();
@@ -2960,15 +2956,15 @@ fn explicit_plugin_path_drives_plugin_command_lifecycle_scope() {
         .expect("explicit plugin-path record");
     assert_eq!(entry.scope, RegistryScope::Explicit);
     assert_eq!(
-        entry.plugins_toml_path,
+        entry.plugins_toml_path.canonicalize().unwrap(),
         plugin_config_path.canonicalize().unwrap()
     );
     assert_eq!(
-        entry.state_path,
+        entry.state_path.canonicalize().unwrap(),
         config_dir
+            .join(".dynamic-plugins.json")
             .canonicalize()
             .unwrap()
-            .join(".dynamic-plugins.json")
     );
     assert!(entry.state_path.exists());
 }
@@ -3327,17 +3323,13 @@ fn hydrate_ignores_a_foreign_tombstone_and_creates_a_fresh_disabled_record() {
         .expect("the declaring project scope should receive a record");
     assert!(project_record.record.spec.present);
     assert!(!project_record.record.spec.enabled);
+    let declaration_source = scopes[project_record.scope_index]
+        .registry
+        .declaration_source("acme.moved-scope")
+        .expect("the project declaration source should be persisted");
     assert_eq!(
-        scopes[project_record.scope_index]
-            .registry
-            .declaration_source("acme.moved-scope"),
-        Some(
-            project_plugins_toml
-                .canonicalize()
-                .unwrap()
-                .to_string_lossy()
-                .as_ref()
-        )
+        Path::new(declaration_source).canonicalize().unwrap(),
+        project_plugins_toml.canonicalize().unwrap()
     );
 }
 

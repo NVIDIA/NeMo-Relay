@@ -72,11 +72,12 @@ fn missing_and_existing_windows_sources_pin_to_portable_physical_paths() {
         std::fs::canonicalize(config).unwrap()
     );
 
-    let reserved = pin_plugin_config_path(&temp.path().join("CON").join("plugins.toml")).unwrap();
+    let verbatim_root = std::fs::canonicalize(temp.path()).unwrap();
+    let reserved = pin_plugin_config_path(&verbatim_root.join("CON").join("plugins.toml")).unwrap();
     assert!(reserved.to_string_lossy().starts_with(r"\\?\"));
 
     let overlong =
-        pin_plugin_config_path(&temp.path().join("a".repeat(240)).join("plugins.toml")).unwrap();
+        pin_plugin_config_path(&verbatim_root.join("a".repeat(240)).join("plugins.toml")).unwrap();
     assert!(overlong.to_string_lossy().starts_with(r"\\?\"));
 }
 
