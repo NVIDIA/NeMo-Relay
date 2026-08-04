@@ -328,7 +328,7 @@ jobs:
               actual="$("$NEMO_RELAY_CI_WORKSPACE/target/${{ matrix.target }}/release/nemo-relay" --version)"
               expected="nemo-relay $NEMO_RELAY_CLI_PACKAGE_VERSION"
               if [ "$actual" != "$expected" ]; then
-                echo "Error: expected CLI version '$expected', got '$actual'" >&2
+                echo "Error: expected CLI version \"$expected\", got \"$actual\"" >&2
                 exit 1
               fi
             '
@@ -422,7 +422,7 @@ jobs:
               actual="$(/tmp/nemo-relay-cli-wheel-venv/bin/nemo-relay --version)"
               expected="nemo-relay $NEMO_RELAY_CLI_PACKAGE_VERSION"
               if [ "$actual" != "$expected" ]; then
-                echo "Error: expected CLI version '$expected', got '$actual'" >&2
+                echo "Error: expected CLI version \"$expected\", got \"$actual\"" >&2
                 exit 1
               fi
             '
