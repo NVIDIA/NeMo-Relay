@@ -100,12 +100,18 @@ as observability or PII redaction. It is not a separate runtime layer.
 NeMo Relay combines a small number of runtime pieces into one shared execution
 model:
 
-- The **scope stack** answers where work currently belongs.
-- The **middleware registries** answer what should happen around that work.
-- The **plugin system** installs reusable runtime behavior from configuration.
-- The **event records** preserve what happened and how work was related.
-- The **async subscriber dispatcher** delivers event snapshots after emission.
-- **Subscribers and exporters** consume those snapshots.
+- The [**scope stack**](/about-nemo-relay/concepts/scopes) answers where work
+  currently belongs.
+- The [**middleware registries**](/about-nemo-relay/concepts/middleware) answer
+  what should happen around that work.
+- The [**plugin system**](/about-nemo-relay/concepts/plugins) installs reusable
+  runtime behavior from configuration.
+- The [**event records**](/about-nemo-relay/concepts/events) preserve what
+  happened and how work was related.
+- The [**async subscriber dispatcher**](/about-nemo-relay/concepts/subscribers#waiting-for-delivery)
+  delivers event snapshots after emission.
+- [**Subscribers and exporters**](/about-nemo-relay/concepts/subscribers#common-subscriber-roles)
+  consume those snapshots.
 
 Every managed tool or LLM call resolves the middleware visible from the active
 scope before it executes. When the runtime emits an event, it records the active
