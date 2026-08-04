@@ -516,9 +516,17 @@ stores the canonical absolute command and trusts only its exact event pairs; it
 does not enable global hook auto-acceptance.
 
 `hook-forward` reads the canonical hook payload from standard input, sends it
-to the matching endpoint, and prints the endpoint response. It fails open by
-default so observability outages do not block the coding agent. Add
-`--fail-closed` only when policy requires hook delivery to block the agent.
+to the matching endpoint, and prints the endpoint response. Generated
+`PreToolUse`, `PermissionRequest`, and Hermes `pre_tool_call` hooks use
+`--fail-closed`; generated lifecycle and after-the-fact hooks use
+`--fail-open`. This blocks permission-bearing operations when Relay cannot
+evaluate them without making observability-only hooks a runtime dependency.
+Rerun `nemo-relay install <agent> --force` after upgrading to replace legacy
+generated hooks.
+
+Manually authored commands fail open when neither policy flag is present.
+`NEMO_RELAY_FAIL_CLOSED=1` changes that default for compatibility, while an
+explicit flag takes precedence over the environment.
 
 These flags control delivery and metadata:
 
@@ -530,9 +538,11 @@ These flags control delivery and metadata:
 - `--session-metadata` sets `x-nemo-relay-session-metadata`.
 - `--profile` sets `x-nemo-relay-config-profile`.
 - `--gateway-mode` sets `x-nemo-relay-gateway-mode`.
+- `--fail-open` allows the agent to continue after a delivery failure, even
+  when `NEMO_RELAY_FAIL_CLOSED=1` is set. Structured guardrail rejections still
+  return a failure.
 - `--fail-closed` returns a failure when delivery fails or Relay rejects the
-  hook. Without it, forwarding fails open so an observability outage does not
-  block the coding agent.
+  hook.
 
 ## Agent Guides
 

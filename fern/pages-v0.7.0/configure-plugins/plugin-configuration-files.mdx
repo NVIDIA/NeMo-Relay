@@ -163,6 +163,50 @@ manifest’s optional static JSON Schema before you enable or run the plugin. Us
 dynamic-plugin lifecycle. Refer to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
 for manifest, trust, and policy requirements.
 
+### Embedded Python Compatibility Helper
+
+Python hosts that already own plugin activation can convert the dynamic records
+from one explicitly selected file into the activation specs accepted by the
+0.7 host API:
+
+```python
+import asyncio
+
+from nemo_relay import plugin
+
+
+async def main() -> None:
+    dynamic_plugins = plugin.load_dynamic_plugin_activation_specs(
+        "path/to/plugins.toml"
+    )
+    activation = await plugin.initialize_with_dynamic_plugins({}, dynamic_plugins)
+    async with activation:
+        # Run your host application while dynamic plugins are active.
+        ...
+
+
+asyncio.run(main())
+```
+
+The helper resolves each manifest relative to `plugins.toml` and reads the
+plugin ID and execution lane from the manifest. It does not perform discovery,
+consult CLI lifecycle state, provision a Python worker environment, or change
+enablement.
+
+On success, the helper returns every `[[plugins.dynamic]]` declaration in file
+order; it does not skip invalid entries. A missing `plugins.toml` or referenced
+manifest raises `FileNotFoundError`. Malformed TOML, invalid records or required
+manifest fields, duplicate plugin IDs, and non-JSON configuration raise
+`ValueError`. The helper does not apply an optional manifest-declared static
+JSON Schema.
+
+Passing the result to `initialize_with_dynamic_plugins()` is explicit consent
+to load those trusted native libraries or worker processes.
+
+This helper is a 0.7 compatibility surface for embedded integrations and is
+planned for deprecation after Relay provides a unified file-backed
+initializer. Keep its use localized so migration is straightforward.
+
 The runtime reads only files named `plugins.toml` during default discovery.
 
 ## Runtime Discovery

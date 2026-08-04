@@ -41,7 +41,7 @@ navigation:
     title: PII Redaction
     title-source: frontmatter
   - folder: ../pages-v0.7.0/configure-plugins/switchyard
-    title: Switchyard (Experimental)
+    title: Switchyard (Deprecated)
     title-source: frontmatter
   - page: Model Pricing
     path: ../pages-v0.7.0/configure-plugins/model-pricing.mdx

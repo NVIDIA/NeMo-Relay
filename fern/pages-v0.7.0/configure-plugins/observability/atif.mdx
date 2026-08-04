@@ -89,18 +89,20 @@ With scope metadata `{"atif_prefix":"tenant-a/session-123"}`, Relay writes
 still contain `{session_id}`.
 
 Use `:-` to provide a literal fallback when metadata can be absent, for example
-`{metadata.atif_prefix:-unassigned}`. Relay also uses the fallback when the
-metadata value is not a string.
+`{metadata.atif_prefix:-unassigned}`. Relay uses the fallback when the selected
+metadata field is absent or `null`. A present non-string value is rejected
+instead of being routed through the fallback.
 
 Each metadata placeholder must resolve to a string containing a non-empty,
 relative path fragment. Slash-separated segments can contain ASCII letters,
 digits, `-`, `_`, `.`, and `~`. Relay rejects empty segments, `.` and `..`
 segments, absolute paths, backslashes, spaces, and other characters. If a
-placeholder has no fallback and is missing or non-string, or if its resolved
-value is unsafe, Relay skips that trajectory. It records a runtime diagnostic
-in `plugin.report()` and causes plugin teardown to fail. Literal template text
-must also be a relative, traversal-free path. The rendered filename applies to
-local, S3, and HTTP storage in the same way as a static filename.
+placeholder is missing without a fallback, is present but non-string, or
+resolves to an unsafe value, Relay skips that trajectory. It records a runtime
+diagnostic in `plugin.report()` and causes plugin teardown to fail. Literal
+template text must also be a relative, traversal-free path. The rendered
+filename applies to local, S3, and HTTP storage in the same way as a static
+filename.
 
 The CLI gateway parses `x-nemo-relay-session-metadata` as JSON and merges it
 into the top-level scope metadata:
@@ -245,10 +247,15 @@ delivery diagnostic and retries that destination for each later trajectory.
 Other destinations continue to receive writes. When every remote destination
 fails for one trajectory, Relay writes a local recovery copy under
 `output_directory`; a successful remote destination does not create that copy.
-The diagnostic remains visible in `plugin.report()` and is retained there after
-a failed teardown. Teardown also reports the degraded delivery, even when the
-local recovery write succeeds. Fatal dispatcher failures, such as trajectory
-serialization failures, are also reported during teardown.
+The diagnostic becomes visible in `plugin.report()` after subscriber delivery
+is flushed and is retained there after a failed teardown. Teardown also reports
+the degraded delivery, even when the local recovery write succeeds. This error
+reports delivery degradation, not a registration leak; callbacks have already
+been removed. If the failure is still pending when initialization replaces the
+configuration, that replacement returns the delivery error and leaves no
+configuration active; a subsequent clear or initialization is safe. Fatal
+dispatcher failures, such as trajectory serialization failures, are also
+reported during teardown.
 
 ## Expected Output
 
