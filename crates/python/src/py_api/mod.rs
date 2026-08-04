@@ -108,6 +108,16 @@ impl SafeFutureCompleter {
     }
 }
 
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        message
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "unknown error"
+    }
+}
+
 fn safe_future_into_py<'py, F>(py: Python<'py>, future: F) -> PyResult<Bound<'py, PyAny>>
 where
     F: Future<Output = PyResult<Py<PyAny>>> + Send + 'static,
@@ -126,7 +136,15 @@ where
     let completion_future = python_future.clone_ref(py);
     pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
         let result = tokio::select! {
-            result = pyo3_async_runtimes::tokio::scope(locals, future) => Some(result),
+            result = tokio::spawn(pyo3_async_runtimes::tokio::scope(locals, future)) => Some(
+                match result {
+                    Ok(result) => result,
+                    Err(error) if error.is_panic() => Err(pyo3_async_runtimes::err::RustPanic::new_err(
+                        format!("rust future panicked: {}", panic_message(error.into_panic().as_ref())),
+                    )),
+                    Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(error.to_string())),
+                },
+            ),
             _ = &mut cancel_receiver => None,
         };
         let Some(result) = result else { return };

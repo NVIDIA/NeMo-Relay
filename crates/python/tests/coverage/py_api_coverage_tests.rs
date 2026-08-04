@@ -39,6 +39,30 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
 }
 
 #[test]
+fn safe_future_into_py_settles_rust_panics() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        with_event_loop(py, |event_loop| {
+            let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone());
+            let future = pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(pyo3_async_runtimes::tokio::scope(locals, async move {
+                    Python::attach(|py| {
+                        safe_future_into_py(py, async move { panic!("expected test panic") })
+                            .map(Bound::unbind)
+                    })
+                }))
+                .unwrap();
+
+            let error = event_loop
+                .call_method1("run_until_complete", (future,))
+                .unwrap_err();
+            assert!(error.is_instance_of::<pyo3_async_runtimes::err::RustPanic>(py));
+            assert!(error.to_string().contains("expected test panic"));
+        });
+    });
+}
+
+#[test]
 fn py_api_helpers_and_scope_lifecycle_round_trip() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
