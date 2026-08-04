@@ -21,6 +21,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::net::IpAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
@@ -2364,6 +2365,23 @@ struct OpenTelemetryDestinationCollision {
     message: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum OpenTelemetryDestinationKey {
+    Url {
+        scheme: String,
+        host: String,
+        port: Option<u16>,
+        path: String,
+        query: Option<String>,
+    },
+    Raw(String),
+}
+
+struct OpenTelemetryDestination {
+    key: OpenTelemetryDestinationKey,
+    display: String,
+}
+
 fn validate_distinct_opentelemetry_destinations(
     endpoints: &[OpenTelemetryEndpointConfig],
 ) -> PluginResult<()> {
@@ -2385,7 +2403,7 @@ fn opentelemetry_destination_collision_errors(
             let endpoint_destination = opentelemetry_destination(endpoint);
             let other_destination = opentelemetry_destination(other);
             if endpoint.transport == other.transport
-                && endpoint_destination == other_destination
+                && endpoint_destination.key == other_destination.key
                 && endpoint.otel_type != other.otel_type
             {
                 errors.push(OpenTelemetryDestinationCollision {
@@ -2395,7 +2413,7 @@ fn opentelemetry_destination_collision_errors(
                         opentelemetry_type_name(other.otel_type),
                         opentelemetry_type_name(endpoint.otel_type),
                         endpoint.transport,
-                        endpoint_destination,
+                        endpoint_destination.display,
                     ),
                 });
             }
@@ -2404,13 +2422,94 @@ fn opentelemetry_destination_collision_errors(
     errors
 }
 
-fn opentelemetry_destination(endpoint: &OpenTelemetryEndpointConfig) -> Cow<'_, str> {
+fn opentelemetry_destination(endpoint: &OpenTelemetryEndpointConfig) -> OpenTelemetryDestination {
     let configured_endpoint = endpoint.endpoint.trim();
-    if endpoint.transport == "http_binary" {
+    let effective_endpoint = if endpoint.transport == "http_binary" {
         resolve_http_trace_endpoint(configured_endpoint)
     } else {
         Cow::Borrowed(configured_endpoint)
+    };
+    canonicalize_opentelemetry_destination(&effective_endpoint)
+}
+
+fn canonicalize_opentelemetry_destination(endpoint: &str) -> OpenTelemetryDestination {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return raw_opentelemetry_destination(endpoint);
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return raw_opentelemetry_destination(endpoint);
     }
+    let Some(url_host) = url.host_str() else {
+        return raw_opentelemetry_destination(endpoint);
+    };
+
+    let scheme = url.scheme().to_string();
+    let host = canonical_opentelemetry_host(url_host);
+    let port = url.port_or_known_default();
+    let path = normalize_opentelemetry_path(url.path());
+    let query = url.query().map(str::to_string);
+    let display = format!(
+        "{scheme}://{host}{}{path}{}",
+        port.map(|port| format!(":{port}")).unwrap_or_default(),
+        query
+            .as_deref()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default(),
+    );
+    OpenTelemetryDestination {
+        key: OpenTelemetryDestinationKey::Url {
+            scheme,
+            host,
+            port,
+            path,
+            query,
+        },
+        display,
+    }
+}
+
+fn raw_opentelemetry_destination(endpoint: &str) -> OpenTelemetryDestination {
+    OpenTelemetryDestination {
+        key: OpenTelemetryDestinationKey::Raw(endpoint.to_string()),
+        display: endpoint.to_string(),
+    }
+}
+
+fn canonical_opentelemetry_host(host: &str) -> String {
+    let domain = host.strip_suffix('.').unwrap_or(host);
+    let unbracketed = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    let is_loopback_domain = domain == "localhost" || domain.ends_with(".localhost");
+    let is_loopback_address = unbracketed
+        .parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback());
+    if is_loopback_domain || is_loopback_address {
+        "<loopback>".to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+fn normalize_opentelemetry_path(path: &str) -> String {
+    let mut normalized = String::with_capacity(path.len());
+    let mut previous_was_slash = false;
+    for character in path.chars() {
+        if character == '/' {
+            if !previous_was_slash {
+                normalized.push(character);
+            }
+            previous_was_slash = true;
+        } else {
+            normalized.push(character);
+            previous_was_slash = false;
+        }
+    }
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
 }
 
 const fn opentelemetry_type_name(otel_type: OpenTelemetryType) -> &'static str {
