@@ -56,6 +56,8 @@ Use provider codecs when:
 
 ### Request Path
 
+The following diagram shows the request path.
+
 ```mermaid
 flowchart LR
   native["Provider-native request"] --> decode["Request codec decodes"]
@@ -66,6 +68,8 @@ flowchart LR
 ```
 
 ### Response Path
+
+The following diagram shows the response path.
 
 ```mermaid
 flowchart LR
@@ -103,7 +107,7 @@ changing a key overlays it.
   OpenAI Chat Completions, or OpenAI Responses controls.
 - Provider-only messages, content blocks, input items, tools, and tool choices
   use `{ provider, kind, value }`, where `value` is the exact native JSON.
-- Top-level `extra` is reserved for unknown future fields.
+- Top-level `extra` preserves unknown or unmodeled fields.
 
 A provider-native component can only be encoded by the provider API named
 in its `provider` field. Provider mismatches and portable edits that the target
