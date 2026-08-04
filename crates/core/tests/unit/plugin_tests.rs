@@ -1550,6 +1550,59 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
 }
 
 #[test]
+fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(format!(
+                    "{}: otel.spans_dropped (2)",
+                    crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                )))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    assert!(outcome.result.is_err());
+    reset_global();
+}
+
+#[test]
+fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(format!(
+                    "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
+                    crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                )))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    reset_global();
+}
+
+#[test]
 fn test_legacy_clear_retains_mutation_owner_after_incomplete_teardown() {
     let _guard = lock_runtime_owner();
     let owner_cleanup = PluginMutationOwnerCleanup;

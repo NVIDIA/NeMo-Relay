@@ -44,6 +44,14 @@ impl Drop for ResetPricingResolverGuard {
     }
 }
 
+struct ClearPluginConfigurationGuard;
+
+impl Drop for ClearPluginConfigurationGuard {
+    fn drop(&mut self) {
+        let _ = crate::plugin::clear_plugin_configuration();
+    }
+}
+
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
 
 impl Drop for RestoreThreadScopeStackGuard {
@@ -3129,6 +3137,7 @@ fn provider_builders_cover_success_paths() {
 fn dropped_spans_are_recorded_in_the_active_plugin_report() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let _ = crate::plugin::clear_plugin_configuration();
+    let _clear_guard = ClearPluginConfigurationGuard;
     futures::executor::block_on(crate::plugin::initialize_plugins_exact(
         crate::plugin::PluginConfig::default(),
     ))
@@ -3179,8 +3188,6 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
             .message
             .contains("https://collector.example/v1/traces")
     );
-
-    crate::plugin::clear_plugin_configuration().unwrap();
 }
 
 #[test]

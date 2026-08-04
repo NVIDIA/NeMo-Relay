@@ -2141,10 +2141,9 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     // Runtime delivery failures are reported by an otherwise successful
     // deregistration callback. They must propagate without treating callback
     // removal itself as unsafe.
-    let callbacks_cleared = deregistration_errors.iter().all(|error| {
-        error.contains(ATIF_RUNTIME_DELIVERY_FAILURE_MARKER)
-            || error.contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
-    });
+    let callbacks_cleared = deregistration_errors
+        .iter()
+        .all(|error| is_runtime_delivery_failure(error));
     let deregistration_error = (!deregistration_errors.is_empty()).then(|| {
         PluginError::RegistrationFailed(format!(
             "plugin teardown failed: {}",
@@ -2173,6 +2172,15 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
         result,
         callbacks_cleared,
     }
+}
+
+fn is_runtime_delivery_failure(error: &str) -> bool {
+    [
+        ATIF_RUNTIME_DELIVERY_FAILURE_MARKER,
+        OTEL_RUNTIME_DELIVERY_FAILURE_MARKER,
+    ]
+    .iter()
+    .any(|marker| error.contains(&format!("registration failed: {marker}:")))
 }
 
 pub(crate) fn plugin_configuration_is_active() -> Result<bool> {
