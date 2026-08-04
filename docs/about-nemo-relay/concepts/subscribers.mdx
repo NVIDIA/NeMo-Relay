@@ -71,18 +71,20 @@ source of truth.
 
 ATOF and ATIF describe different stages of the observability path:
 
-| Format | What it represents | What subscribers or exporters do with it |
+| Format | What It Represents | What Subscribers or Exporters Do With It |
 | --- | --- | --- |
 | ATOF | The canonical record for each Relay scope lifecycle event or mark | Subscribers receive these events directly. The ATOF JSONL exporter writes one raw event per line. |
 | ATIF | A trajectory projection assembled from related ATOF events | The ATIF exporter maps model and tool activity into trajectory steps for analysis, replay, or evaluation. |
 
-Marks are point-in-time ATOF events, not ATIF trajectory steps, so they do not
-appear in ATIF `steps`. ATIF is designed primarily for evaluation and
+Marks are point-in-time ATOF events, not ATIF trajectory steps, so ATIF `steps`
+are not a lossless event log. ATIF is designed primarily for evaluation and
 visualization. Its steps do not represent the complete parent-child graph needed
 for perfect session replay. This limitation comes from the ATIF data model, not
-from converting ATOF events. Plugin-managed ATIF files preserve the raw events
-associated with the trajectory under `extra.observed_events`; this retains the
-observed marks without changing the ATIF step model. Refer to
+from converting ATOF events. Plugin-managed ATIF files preserve nested scope
+lineage and the raw events associated with the trajectory under
+`extra.observed_events`, including observed marks, for analysis and debugging.
+Those fields do not change the ATIF step model or make `steps` a complete replay
+log. Refer to
 [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif)
 for the complete projection and file contract.
 
