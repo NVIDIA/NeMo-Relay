@@ -164,6 +164,9 @@ stay in process. Exporter subscribers can write
 [ATOF JSONL](/configure-plugins/observability/atof), project events into
 [ATIF trajectories](/configure-plugins/observability/atif), or emit
 [OpenTelemetry traces](/configure-plugins/observability/opentelemetry).
+Typical destinations include in-process application logic, local files and
+artifact pipelines, OTLP-compatible observability backends, and evaluation or
+visualization tools.
 
 This delivery happens after event submission and is separate from awaited async
 middleware. Use the binding flush API when a test or shutdown path must wait for
