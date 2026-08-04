@@ -16,11 +16,11 @@ Plugins let NeMo Relay install reusable runtime behavior from configuration
 instead of requiring every application or framework integration to register the
 same middleware and subscribers by hand.
 
-They are the main packaging layer for reusable runtime components.
+Plugins package reusable runtime components.
 
 ## Plugin Configuration Model
 
-The canonical plugin document has three main areas:
+A plugin configuration document has three main areas:
 
 - `version`
 - `components`
@@ -32,8 +32,8 @@ The version identifies the configuration format expected by the plugin system.
 
 ### Components
 
-Components describe the individual runtime pieces to activate. Each component
-declares what it is and which config it should use.
+Components identify the runtime behavior to activate. Each component declares
+its kind and configuration.
 
 ### Policy
 
@@ -54,7 +54,7 @@ manifest.
 
 ## Component Lifecycle
 
-Plugins follow a small lifecycle rather than registering everything blindly.
+Relay validates plugin configuration before it activates any component.
 
 ### Validation
 
@@ -73,7 +73,7 @@ what did not.
 
 ### Deactivation and Cleanup
 
-Plugin initialization owns the registrations it installs. Clearing active
+Relay tracks registrations created during plugin initialization. Clearing active
 plugin configuration removes those registrations and runs component cleanup.
 Dynamic plugin teardown also stops managed workers and releases native
 activations after their callbacks are no longer registered. Applications should
@@ -81,11 +81,11 @@ clear plugin configuration during graceful shutdown and test teardown. Refer to
 [Register Plugin Behavior](/build-plugins/language-binding/register-behavior)
 for the binding lifecycle.
 
-### Failure Boundary
+### Setup Failures
 
-Plugin validation and initialization are setup boundaries. If configuration is
-invalid, a component kind is unavailable, or initialization fails, callers should
-treat the plugin setup as failed before relying on the new runtime behavior.
+Plugin validation and initialization happen during setup. If configuration is
+invalid, a component kind is unavailable, or initialization fails, callers
+should treat setup as failed before relying on the new runtime behavior.
 Activation reports are the public way to inspect what validated or activated.
 
 Runtime behavior after activation still belongs to the installed component. For
@@ -142,8 +142,8 @@ flowchart TB
 
 ## Plugin Context
 
-The plugin context is the runtime surface that a component uses to register its
-behavior. This is where plugins connect configuration to real runtime state.
+The plugin context is the API that a component uses to register its behavior.
+It connects plugin configuration to the active runtime.
 
 ## What Plugins Can Register
 
@@ -179,7 +179,7 @@ in how their component kind becomes available to the host:
 | Delivery model | How it becomes available | Use when |
 | --- | --- | --- |
 | Built-in | The Relay host registers a linked first-party component automatically. | The component ships as part of that host. |
-| Host-registered | An embedding application links a component crate and registers its kind before validation. | A direct host controls its linked feature set. |
+| Host-registered | An embedding application links a component crate and registers its kind before validation. | An embedding application decides which component crates to link. |
 | Discoverable | The CLI loads a manifest-backed native library or worker at startup. | A separately packaged extension should be installed without rebuilding Relay. |
 
 ## Built-In Plugin Components
@@ -283,7 +283,7 @@ evidence before enabling or running a dynamic plugin. During startup, Relay
 loads the enabled adapter and then validates the synthesized component. Refer
 to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
 for the operator workflow and [Discoverable Plugins](/build-plugins/dynamic-plugins/about)
-for the authoring model.
+for the authoring workflow.
 
 The operator lifecycle is explicit:
 
