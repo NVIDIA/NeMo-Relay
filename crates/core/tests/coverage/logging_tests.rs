@@ -263,13 +263,14 @@ fn implicit_default_logging_preserves_an_existing_relay_logger() {
     shutdown_default_logging().unwrap();
 
     let receiver = spdlog::log_crate_proxy().swap_logger(None);
+    let preserves_host_logger = receiver
+        .as_ref()
+        .is_some_and(|receiver| Arc::ptr_eq(receiver, &host_runtime.logger));
+    spdlog::log_crate_proxy().set_logger(receiver);
     assert!(
-        receiver
-            .as_ref()
-            .is_some_and(|receiver| Arc::ptr_eq(receiver, &host_runtime.logger)),
+        preserves_host_logger,
         "implicit binding startup must preserve the host Relay logger"
     );
-    spdlog::log_crate_proxy().set_logger(receiver);
     drop(host_runtime);
 }
 
