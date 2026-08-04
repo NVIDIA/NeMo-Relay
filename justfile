@@ -453,8 +453,10 @@ import sys
 version = sys.argv[1]
 if version.startswith("v"):
     raise SystemExit("Release tags must not start with 'v'; use raw SemVer such as 0.1.0")
+numeric_identifier = r"(?:0|[1-9][0-9]*)"
 if not re.fullmatch(
-    r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?"
+    rf"{numeric_identifier}\.{numeric_identifier}\.{numeric_identifier}"
+    rf"(?:-(?:alpha|beta|rc)\.{numeric_identifier})?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?",
     version,
 ):
