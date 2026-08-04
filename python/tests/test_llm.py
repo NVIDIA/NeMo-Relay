@@ -1361,6 +1361,7 @@ class TestLLMStreaming:
                 )
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_failure")
+            await subscribers.flush_async()
             subscribers.deregister("py_llm_stream_intercept_failure_sub")
 
         metadata = _llm_event(events, "stream_intercept_failure_llm", "end").metadata
