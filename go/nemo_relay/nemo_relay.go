@@ -46,6 +46,7 @@ typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
 // Core API
+extern int32_t nemo_relay_initialize_default_logging(void);
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
 extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
@@ -297,6 +298,12 @@ import (
 )
 
 const defaultServiceName = "nemo-relay"
+
+func init() {
+	if err := checkStatus(C.nemo_relay_initialize_default_logging()); err != nil {
+		panic(fmt.Sprintf("failed to initialize NeMo Relay operational logging: %v", err))
+	}
+}
 
 func checkedValue[T any](status int32, value T) (T, error) {
 	if err := checkStatus(C.int32_t(status)); err != nil {

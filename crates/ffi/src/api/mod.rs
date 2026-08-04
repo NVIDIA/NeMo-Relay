@@ -99,6 +99,22 @@ fn tokio_runtime() -> &'static Runtime {
     })
 }
 
+/// Initializes the Go binding runtime and installs default operational logging.
+///
+/// Logging configuration is resolved from `NEMO_RELAY_LOG`,
+/// `NEMO_RELAY_LOG_STDERR_FORMAT`, or `NEMO_RELAY_LOG_CONFIG_PATH`, with built-in defaults when
+/// none are set. Repeated initialization is a no-op.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
+    clear_last_error();
+    let result = nemo_relay::shared_runtime::initialize_shared_runtime_binding("go")
+        .and_then(|()| nemo_relay::logging::initialize_default_logging());
+    match result {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
 fn block_on_sync_ffi<T, F>(future: F) -> FlowResult<T>
 where
     T: Send,

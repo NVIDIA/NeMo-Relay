@@ -33,6 +33,7 @@ use sink::log_level_filter;
 pub(crate) use format::format_event_for_test;
 
 static LOGGER_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
+static DEFAULT_LOGGING_RUNTIME: Mutex<Option<LoggingRuntime>> = Mutex::new(None);
 
 fn lock_logger_lifecycle() -> MutexGuard<'static, ()> {
     LOGGER_LIFECYCLE_LOCK
@@ -168,6 +169,21 @@ impl Drop for LoggingRuntime {
 /// process-global `log` proxy when it is still installed.
 pub fn init_logging(config: &LoggingConfig) -> Result<LoggingRuntime> {
     LoggingRuntime::configure(config.clone())
+}
+
+/// Installs and retains the default process-wide logging runtime for a language binding.
+///
+/// Configuration is resolved from the supported logging environment variables, with built-in
+/// defaults when none are present. Repeated initialization in the same linked runtime is a no-op.
+#[doc(hidden)]
+pub fn initialize_default_logging() -> Result<()> {
+    let mut runtime = DEFAULT_LOGGING_RUNTIME.lock().map_err(|error| {
+        FlowError::Internal(format!("default logging runtime lock poisoned: {error}"))
+    })?;
+    if runtime.is_none() {
+        *runtime = Some(LoggingRuntime::configure_from_environment()?);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

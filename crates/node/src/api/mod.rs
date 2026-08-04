@@ -119,6 +119,8 @@ fn effective_scope_top(
 fn init() {
     initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
+    nemo_relay::logging::initialize_default_logging()
+        .expect("node operational logging initialization should succeed");
     register_adaptive_component()
         .expect("node adaptive plugin component registration should succeed");
     register_pii_redaction_component()
