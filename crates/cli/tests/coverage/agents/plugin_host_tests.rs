@@ -86,7 +86,7 @@ impl CodexHooksClient for FakeCodexHooksClient {
     }
 }
 
-fn expected_plugin_command() -> String {
+fn expected_plugin_command() -> crate::hooks::GeneratedHookCommands {
     let relay = current_exe().unwrap();
     let relay = relay.canonicalize().unwrap_or(relay);
     let relay = portable_executable_path(relay);
@@ -108,7 +108,7 @@ fn write_plugin_generation_for_hooks(path: &Path) {
     .unwrap();
 }
 
-fn expected_plugin_command_for_hooks(path: &Path) -> String {
+fn expected_plugin_command_for_hooks(path: &Path, event: &str) -> String {
     fs::read_to_string(path)
         .ok()
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
@@ -116,8 +116,9 @@ fn expected_plugin_command_for_hooks(path: &Path) -> String {
             value
                 .get("hooks")?
                 .as_object()?
-                .values()
-                .next()?
+                .iter()
+                .find(|(name, _)| normalize_hook_event(name) == normalize_hook_event(event))?
+                .1
                 .as_array()?
                 .first()?
                 .get("hooks")?
@@ -127,7 +128,7 @@ fn expected_plugin_command_for_hooks(path: &Path) -> String {
                 .as_str()
                 .map(str::to_owned)
         })
-        .unwrap_or_else(expected_plugin_command)
+        .unwrap_or_else(|| expected_plugin_command().for_event(event).to_owned())
 }
 
 fn empty_codex_hooks_client() -> FakeCodexHooksClient {
@@ -143,7 +144,7 @@ fn write_plugin_hooks(plugin_root: &Path) -> PathBuf {
     write_plugin_generation_for_hooks(&path);
     fs::write(
         &path,
-        serde_json::to_vec_pretty(&generated_hooks(
+        serde_json::to_vec_pretty(&crate::hooks::generated_policy_hooks(
             CodingAgent::Codex,
             &expected_plugin_hook_command(&path).unwrap(),
         ))
@@ -170,9 +171,9 @@ fn codex_hook_metadata(
         fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
         fs::write(
             &hooks_path,
-            serde_json::to_vec_pretty(&generated_hooks(
+            serde_json::to_vec_pretty(&crate::hooks::generated_policy_hooks(
                 CodingAgent::Codex,
-                &expected_plugin_command_for_hooks(&hooks_path),
+                &expected_plugin_command(),
             ))
             .unwrap(),
         )
@@ -182,7 +183,7 @@ fn codex_hook_metadata(
         key: key.into(),
         event_name: event_name.into(),
         handler_type: "command".into(),
-        command: Some(expected_plugin_command_for_hooks(&hooks_path)),
+        command: Some(expected_plugin_command_for_hooks(&hooks_path, event_name)),
         source_path: hooks_path.display().to_string(),
         source: "plugin".into(),
         plugin_id: Some(CODEX_PLUGIN_ID.into()),
@@ -949,8 +950,13 @@ fn codex_auto_trust_rejects_modified_loaded_plugin_hook_file() {
     let config_path = dir.path().join("config.toml");
     fs::write(&config_path, "").unwrap();
     let mut hooks = required_codex_hook_metadata(&reported_hooks_path, "untrusted", true);
+    let expected = expected_plugin_command();
     for hook in &mut hooks {
-        hook.command = Some(expected_plugin_command());
+        hook.command = Some(
+            expected_codex_hook_command(&expected, &hook.event_name)
+                .unwrap()
+                .to_owned(),
+        );
     }
     let mut client = FakeCodexHooksClient {
         hook_lists: VecDeque::from([Ok(hooks)]),
@@ -1896,7 +1902,11 @@ fn codex_setup_can_validate_hooks_while_installer_holds_the_generation_lock() {
     fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
     fs::write(
         &hooks_path,
-        serde_json::to_vec_pretty(&generated_hooks(CodingAgent::Codex, &command)).unwrap(),
+        serde_json::to_vec_pretty(&crate::hooks::generated_policy_hooks(
+            CodingAgent::Codex,
+            &command,
+        ))
+        .unwrap(),
     )
     .unwrap();
     let _transaction =
@@ -2000,7 +2010,7 @@ fn codex_setup_uses_plugin_hooks_without_writing_user_hooks() {
         DEFAULT_URL,
         &expected_plugin_command(),
         |_home, _config, command| {
-            assert_eq!(command, expected_plugin_command());
+            assert_eq!(command, &expected_plugin_command());
             Ok(())
         },
     )
@@ -2876,12 +2886,10 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
         r#""C:\Program Files\NeMo 100%%cd:~,%\bin\nemo-relay.exe""#
     );
     assert_eq!(
-        crate::hooks::decode_windows_hook_command(&codex_plugin_hook_command_for_platform(
-            &relay,
-            &generation,
-            "test-generation",
-            true,
-        ))
+        crate::hooks::decode_windows_hook_command(
+            codex_plugin_hook_command_for_platform(&relay, &generation, "test-generation", true,)
+                .for_event("PreToolUse")
+        )
         .unwrap(),
         vec![
             relay.display().to_string(),
@@ -2893,6 +2901,7 @@ fn windows_shell_argument_quoting_and_hook_encoding_preserve_paths() {
             generation.display().to_string(),
             "--generation-token".into(),
             "test-generation".into(),
+            "--fail-closed".into(),
         ]
     );
     assert_eq!(
@@ -2913,7 +2922,10 @@ fn generated_windows_hook_command_executes_exact_arguments() {
     let marker = temp.path().join("hook-ran.txt");
     let input_marker = temp.path().join("hook-input.txt");
     let generation = temp.path().join("Generation & %USERPROFILE%");
-    let command = codex_plugin_hook_command(&relay, &generation, "test-generation").unwrap();
+    let command = codex_plugin_hook_command(&relay, &generation, "test-generation")
+        .unwrap()
+        .for_event("PreToolUse")
+        .to_owned();
     let mut child = std::process::Command::new("cmd.exe")
         .arg("/C")
         .arg(&command)
@@ -2950,7 +2962,10 @@ fn generated_windows_hook_command_propagates_the_relay_exit_code() {
     let relay = temp.path().join("relay failure.exe");
     compile_windows_hook_test_relay(&relay);
     let generation = temp.path().join("generation");
-    let command = codex_plugin_hook_command(&relay, &generation, "test-generation").unwrap();
+    let command = codex_plugin_hook_command(&relay, &generation, "test-generation")
+        .unwrap()
+        .for_event("PreToolUse")
+        .to_owned();
 
     let status = std::process::Command::new("cmd.exe")
         .arg("/C")
@@ -2990,8 +3005,9 @@ fn posix_shell_argument_quoting_and_hook_encoding_preserve_paths() {
         "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay'"
     );
     assert_eq!(
-        codex_plugin_hook_command_for_platform(&relay, &generation, "test-generation", false),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632 --generation-file '/tmp/NeMo $Relay`test'\\''/plugin/.nemo-relay-generation' --generation-token test-generation"
+        codex_plugin_hook_command_for_platform(&relay, &generation, "test-generation", false)
+            .for_event("SessionStart"),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:47632 --generation-file '/tmp/NeMo $Relay`test'\\''/plugin/.nemo-relay-generation' --generation-token test-generation --fail-open"
     );
     assert_eq!(shell_quote_arg_for_platform("", false), "''");
     assert_eq!(
@@ -3780,7 +3796,7 @@ fn plugin_host_entrypoints_reject_unsupported_agents_and_report_json() {
                 "SessionStart": [{
                     "hooks": [{
                         "type": "command",
-                        "command": expected_plugin_command(),
+                        "command": expected_plugin_command().for_event("SessionStart"),
                         "timeout": 30
                     }]
                 }]

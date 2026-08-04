@@ -262,14 +262,16 @@ URL.
 For Codex, the installed plugin file is the sole persistent Relay hook source;
 installation does not add Relay groups to `~/.codex/hooks.json`.
 
-Since hook forwarding fails open by default, gateway or sidecar outages do not
-block the coding agent. The hook command exits successfully after logging the
-forwarding problem, so the host agent can continue even though that hook
-payload can be missing from telemetry. For wrapper-generated `hook-forward`
-commands, add `--fail-closed` when policy requires hook delivery to block the
-agent. For generated persistent hooks, set `NEMO_RELAY_FAIL_CLOSED=1` in the hook
-execution environment. In that mode, forwarding failures return a non-zero
-hook command status to the host.
+Generated hooks select an explicit failure policy by event. `PreToolUse`,
+`PermissionRequest`, and Hermes `pre_tool_call` hooks use `--fail-closed`, so
+Relay startup, authentication, delivery, and response failures block the
+permission-bearing operation. Lifecycle and after-the-fact hooks use
+`--fail-open`, so observability outages do not block unrelated agent work.
+
+After upgrading, rerun `nemo-relay install <agent> --force` to replace legacy
+generated hooks that did not carry an explicit policy. Manually authored
+`hook-forward` commands still fail open by default; set
+`NEMO_RELAY_FAIL_CLOSED=1` or add `--fail-closed` when they enforce policy.
 
 These `hook-forward` options control delivery and metadata:
 
@@ -284,6 +286,8 @@ These `hook-forward` options control delivery and metadata:
 - `--profile <name>` records a configuration profile in session metadata.
 - `--gateway-mode hook-only|passthrough|required` records the expected gateway
   behavior in session metadata.
+- `--fail-open` allows the coding agent to continue after a delivery failure,
+  even when `NEMO_RELAY_FAIL_CLOSED=1` is set.
 - `--fail-closed` returns a failure when delivery fails or Relay rejects the
   hook instead of allowing the coding agent to continue.
 
