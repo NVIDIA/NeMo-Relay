@@ -186,6 +186,24 @@ pub fn initialize_default_logging() -> Result<()> {
     Ok(())
 }
 
+/// Shuts down and releases the default process-wide logging runtime for a language binding.
+///
+/// Repeated shutdown in the same linked runtime is a no-op. The runtime is removed from shared
+/// state before its sinks are drained so shutdown does not hold the default-runtime lock.
+#[doc(hidden)]
+pub fn shutdown_default_logging() -> Result<()> {
+    let runtime = DEFAULT_LOGGING_RUNTIME
+        .lock()
+        .map_err(|error| {
+            FlowError::Internal(format!("default logging runtime lock poisoned: {error}"))
+        })?
+        .take();
+    if let Some(runtime) = runtime {
+        runtime.shutdown();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "../../tests/coverage/logging_tests.rs"]
 mod tests;

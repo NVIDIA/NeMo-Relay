@@ -115,6 +115,19 @@ pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
     }
 }
 
+/// Shuts down and releases the default operational logging runtime.
+///
+/// Pending file-sink records are drained before this function returns. Repeated shutdown is a
+/// no-op.
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_shutdown_default_logging() -> NemoRelayStatus {
+    clear_last_error();
+    match nemo_relay::logging::shutdown_default_logging() {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
 fn block_on_sync_ffi<T, F>(future: F) -> FlowResult<T>
 where
     T: Send,

@@ -6,6 +6,8 @@ package nemo_relay
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -30,14 +32,19 @@ func loggingTestEnvironment(values ...string) []string {
 }
 
 func TestBindingLoggingEnvironment(t *testing.T) {
-	if os.Getenv(loggingHelperEnvironment) == "1" {
+	if helper := os.Getenv(loggingHelperEnvironment); helper != "" {
+		if helper == "shutdown" {
+			if err := ShutdownLogging(); err != nil {
+				t.Fatalf("logging shutdown failed: %v", err)
+			}
+		}
 		return
 	}
 
 	t.Run("initializes from environment", func(t *testing.T) {
 		command := exec.Command(os.Args[0], "-test.run=TestBindingLoggingEnvironment")
 		command.Env = loggingTestEnvironment(
-			loggingHelperEnvironment+"=1",
+			loggingHelperEnvironment+"=shutdown",
 			"NEMO_RELAY_LOG=info",
 			"NEMO_RELAY_LOG_STDERR_FORMAT=jsonl",
 		)
@@ -62,6 +69,43 @@ func TestBindingLoggingEnvironment(t *testing.T) {
 		}
 		if !strings.Contains(string(output), "NEMO_RELAY_LOG must not be empty") {
 			t.Fatalf("logging initialization error missing from output:\n%s", output)
+		}
+	})
+
+	t.Run("flushes file sink during shutdown", func(t *testing.T) {
+		directory := t.TempDir()
+		configPath := filepath.Join(directory, "logging.toml")
+		logPath := filepath.Join(directory, "operational.jsonl")
+		config := `[logging]
+level = "info"
+stderr_format = "human"
+flush_interval_millis = 0
+
+[[logging.sinks]]
+path = ` + strconv.Quote(logPath) + `
+level = "info"
+format = "jsonl"
+queue_capacity = 16
+`
+		if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+			t.Fatalf("write logging config: %v", err)
+		}
+
+		command := exec.Command(os.Args[0], "-test.run=TestBindingLoggingEnvironment")
+		command.Env = loggingTestEnvironment(
+			loggingHelperEnvironment+"=shutdown",
+			"NEMO_RELAY_LOG_CONFIG_PATH="+configPath,
+		)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("binding logging shutdown failed: %v\n%s", err, output)
+		}
+		contents, err := os.ReadFile(logPath)
+		if err != nil {
+			t.Fatalf("read operational log: %v", err)
+		}
+		if !strings.Contains(string(contents), `"event":"logging_shutdown_started"`) {
+			t.Fatalf("logging shutdown event missing from file:\n%s", contents)
 		}
 	})
 }

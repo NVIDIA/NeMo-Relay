@@ -4,7 +4,7 @@
 use crate::logging::{
     FileLogRotationConfig, FileLogSinkConfig, LogFormat, LogLevel, LogSinkConfig, LoggingConfig,
     LoggingRuntime, MAX_FILE_SINK_QUEUE_ENTRIES, MAX_FILE_SINK_RETAINED_FILES, build_logger,
-    format_event_for_test, init_logging,
+    format_event_for_test, init_logging, initialize_default_logging, shutdown_default_logging,
 };
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
 use opentelemetry_sdk::error::OTelSdkResult;
@@ -190,6 +190,64 @@ queue_capacity = 16
     assert_eq!(record["target"], "nemo_relay.logging_test");
     assert_eq!(record["event"], "configured_from_file");
     assert_eq!(record["fields"]["source"], "toml");
+}
+
+#[test]
+fn default_logging_runtime_initializes_once_and_shuts_down_idempotently() {
+    let temp = tempfile::tempdir().unwrap();
+    let config_path = temp.path().join("logging.toml");
+    let log_path = temp.path().join("relay.log.jsonl");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[logging]
+level = "info"
+stderr_format = "human"
+flush_interval_millis = 0
+
+[[logging.sinks]]
+path = {}
+level = "info"
+format = "jsonl"
+queue_capacity = 16
+"#,
+            toml_basic_string(log_path.to_string_lossy().as_ref())
+        ),
+    )
+    .unwrap();
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", Some(config_path.as_os_str())),
+    ]);
+
+    shutdown_default_logging().unwrap();
+    initialize_default_logging().unwrap();
+    initialize_default_logging().unwrap();
+    shutdown_default_logging().unwrap();
+    shutdown_default_logging().unwrap();
+
+    let records = std::fs::read_to_string(log_path).unwrap();
+    assert!(records.contains("logging_initialized"));
+    assert!(records.contains("logging_shutdown_started"));
+}
+
+#[test]
+fn default_logging_runtime_rejects_invalid_environment() {
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", Some(OsStr::new(""))),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+
+    shutdown_default_logging().unwrap();
+    let error = initialize_default_logging().unwrap_err().to_string();
+
+    assert!(
+        error.contains("NEMO_RELAY_LOG must not be empty"),
+        "{error}"
+    );
 }
 
 #[test]

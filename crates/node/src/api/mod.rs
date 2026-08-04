@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use chrono::{DateTime, Utc};
@@ -88,6 +88,8 @@ use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
 use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
 
+static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(
@@ -129,7 +131,18 @@ fn init() {
 
 #[cfg(not(test))]
 #[napi_derive::module_exports]
-fn install_well_known_symbol_methods(exports: JsObject, env: Env) -> napi::Result<()> {
+fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::Result<()> {
+    NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
+    if let Err(error) = env.add_env_cleanup_hook((), |_| {
+        if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
+            && let Err(error) = nemo_relay::logging::shutdown_default_logging()
+        {
+            eprintln!("nemo-relay: operational logging shutdown failed: {error}");
+        }
+    }) {
+        NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel);
+        return Err(error);
+    }
     let activation: JsFunction = exports.get_named_property("DynamicPluginActivation")?;
     let activation = activation.coerce_to_object()?;
     let mut prototype: JsObject = activation.get_named_property("prototype")?;

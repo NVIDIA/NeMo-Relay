@@ -455,6 +455,14 @@ typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 NemoRelayStatus nemo_relay_initialize_default_logging(void);
 
 /**
+ * Shuts down and releases the default operational logging runtime.
+ *
+ * Pending file-sink records are drained before this function returns. Repeated shutdown is a
+ * no-op.
+ */
+NemoRelayStatus nemo_relay_shutdown_default_logging(void);
+
+/**
  * Run the registered tool request intercept chain on the given arguments.
  *
  * This helper applies only the request-intercept middleware and does not emit

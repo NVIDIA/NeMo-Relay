@@ -88,6 +88,11 @@ export NEMO_RELAY_LOG_CONFIG_PATH=/absolute/path/to/logging.toml
 `NEMO_RELAY_LOG_CONFIG_PATH` cannot be combined with the other logging
 environment variables.
 
+Python and Node.js drain pending file-sink records during normal runtime
+teardown. Go applications that configure file sinks must call
+`nemo_relay.ShutdownLogging` before `main` returns; defer it near the start of
+`main` so it runs after other Relay cleanup.
+
 ## TOML Configuration
 
 Logging settings use a `[logging]` table:
