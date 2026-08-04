@@ -261,13 +261,21 @@ def test_load_dynamic_plugin_activation_specs_resolves_standard_toml(tmp_path: P
     ]
 
 
-def test_load_dynamic_plugin_activation_specs_rejects_unsupported_version(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("toml_version", "version"),
+    [("true", True), ("0", 0), ("2", 2), ('"1"', "1")],
+)
+def test_load_dynamic_plugin_activation_specs_rejects_unsupported_version(
+    tmp_path: Path, toml_version: str, version: object
+):
     plugins_toml = tmp_path / "plugins.toml"
-    plugins_toml.write_text("version = 2\n")
+    plugins_toml.write_text(f"version = {toml_version}\n")
 
     with pytest.raises(ValueError) as error:
         plugin.load_dynamic_plugin_activation_specs(plugins_toml)
-    assert str(error.value) == f"plugin config version 2 in {plugins_toml.resolve()} is unsupported; expected 1"
+    assert str(error.value) == (
+        f"plugin config version {version!r} in {plugins_toml.resolve()} is unsupported; expected 1"
+    )
 
 
 def test_load_dynamic_plugin_activation_specs_rejects_duplicate_ids(tmp_path: Path):
