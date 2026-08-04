@@ -172,7 +172,15 @@ visualization tools.
 
 This delivery happens after event submission and is separate from awaited async
 middleware. Use the binding flush API when a test or shutdown path must wait for
-already queued subscriber work.
+already queued subscriber work. For manually registered exporters, follow the
+exporter's documented teardown order before process exit. The
+[ATOF](/configure-plugins/observability/atof),
+[OpenTelemetry](/configure-plugins/observability/opentelemetry), and
+[OpenInference](/configure-plugins/observability/openinference) exporters flush,
+deregister, and then shut down. The
+[ATIF](/configure-plugins/observability/atif) exporter drains subscriber work,
+exports, deregisters, and then clears its state. Clearing plugin configuration
+owns teardown for plugin-installed exporters.
 
 ## Where Runtime State Lives
 
@@ -220,6 +228,9 @@ Middleware exists at two levels:
 
 That split lets long-lived defaults coexist with request-specific or task-specific behavior.
 
+The following diagram shows how global and scope-local middleware are resolved
+for two concurrent requests.
+
 ```mermaid
 flowchart TB
     Global["Global middleware<br/>process-wide"]
@@ -264,6 +275,9 @@ Managed tool and LLM execution follows the same high-level order:
 4. Execution intercepts wrap or replace the user callback.
 5. The user callback runs.
 6. Sanitize-response guardrails can rewrite the emitted end-event payload.
+
+The following sequence shows where each middleware family runs during a managed
+call.
 
 ```mermaid
 sequenceDiagram
