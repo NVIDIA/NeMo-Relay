@@ -1,6 +1,6 @@
 ---
 title: "Scopes"
-description: ""
+description: "Understand scope hierarchy, lifetime, cleanup, and concurrent isolation."
 position: 1
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
@@ -13,7 +13,7 @@ isolation.
 
 ## Why Scopes Exist
 
-Scopes are the ownership backbone of NeMo Relay. Every tool call, LLM call, and
+Scopes track where work belongs in NeMo Relay. Every tool call, LLM call, and
 mark event attaches to a scope hierarchy.
 
 That hierarchy lets the runtime:
@@ -32,14 +32,14 @@ A scope represents a logical unit of work such as:
 - A request
 - A workflow step
 - A background task
-- A nested function or tool orchestration boundary
+- A nested function or tool workflow
 
-Scopes are not just labels. They define ownership and visibility for other
-runtime behavior.
+Scopes are not just labels. They determine event parentage and which local
+middleware and subscribers are visible.
 
 ## Scope Hierarchy and Ownership
 
-Scopes form a tree. A child scope inherits the active execution context from its
+Scopes form a tree. A child scope inherits the active context from its
 parent and contributes new nested work beneath it.
 
 That hierarchy determines:
