@@ -229,8 +229,16 @@ queue_capacity = 16
     shutdown_default_logging().unwrap();
 
     let records = std::fs::read_to_string(log_path).unwrap();
-    assert!(records.contains("logging_initialized"));
-    assert!(records.contains("logging_shutdown_started"));
+    assert_eq!(
+        records.matches(r#""event":"logging_initialized""#).count(),
+        1
+    );
+    assert_eq!(
+        records
+            .matches(r#""event":"logging_shutdown_started""#)
+            .count(),
+        1
+    );
 }
 
 #[test]

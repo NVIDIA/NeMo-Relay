@@ -89,6 +89,27 @@ use crate::stream::LlmStream;
 use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
 
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NODE_ENVIRONMENT_LIFECYCLE_LOCK: StdMutex<()> = StdMutex::new(());
+
+fn register_node_environment() -> FlowResult<()> {
+    let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    nemo_relay::logging::initialize_default_logging()?;
+    NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
+    Ok(())
+}
+
+fn cleanup_node_environment() {
+    let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
+        && let Err(error) = nemo_relay::logging::shutdown_default_logging()
+    {
+        eprintln!("nemo-relay: operational logging shutdown failed: {error}");
+    }
+}
 
 fn effective_scope_context(
     env: &Env,
@@ -121,8 +142,6 @@ fn effective_scope_top(
 fn init() {
     initialize_shared_runtime_binding("node")
         .expect("node runtime ownership initialization should succeed");
-    nemo_relay::logging::initialize_default_logging()
-        .expect("node operational logging initialization should succeed");
     register_adaptive_component()
         .expect("node adaptive plugin component registration should succeed");
     register_pii_redaction_component()
@@ -132,15 +151,9 @@ fn init() {
 #[cfg(not(test))]
 #[napi_derive::module_exports]
 fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::Result<()> {
-    NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
-    if let Err(error) = env.add_env_cleanup_hook((), |_| {
-        if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
-            && let Err(error) = nemo_relay::logging::shutdown_default_logging()
-        {
-            eprintln!("nemo-relay: operational logging shutdown failed: {error}");
-        }
-    }) {
-        NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel);
+    register_node_environment().map_err(to_napi_err)?;
+    if let Err(error) = env.add_env_cleanup_hook((), |_| cleanup_node_environment()) {
+        cleanup_node_environment();
         return Err(error);
     }
     let activation: JsFunction = exports.get_named_property("DynamicPluginActivation")?;
