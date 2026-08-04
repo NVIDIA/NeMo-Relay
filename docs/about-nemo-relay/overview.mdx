@@ -45,35 +45,52 @@ Pick the row closest to what you are trying to do.
 | Goal | Start With | Why |
 |---|---|---|
 | Observe Codex, Claude Code, or Hermes locally | [NeMo Relay CLI](/nemo-relay-cli/about) and [Basic Usage](/nemo-relay-cli/basic-usage) | Relay runs as a local sidecar, forwards hooks, routes provider traffic when configured, and writes observability artifacts without changing application code. |
-| Run the smallest binding-specific example | [Quick Start](/getting-started/quick-start) | Use this when you want a minimal Rust, Python, or Node.js workflow before adding Relay to real application code. |
 | Instrument application-owned LLM or tool calls | [Instrument Applications](/instrument-applications/about) | Direct SDK instrumentation gives Relay full managed-call semantics around callbacks your code owns. |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](/supported-integrations/about) | Maintained integrations use public framework or plugin APIs where they preserve enough lifecycle fidelity. |
-| Build a framework, host, or provider integration | [Integrate into Frameworks](/integrate-into-frameworks/about) | Integration guidance helps you choose managed wrappers, explicit lifecycle APIs, hook replay, provider codecs, or upstream support. |
-| Package reusable exporters, middleware, or policy | [Build Plugins](/build-plugins/about) and [Configure Plugins](/configure-plugins/about) | Plugins are the configuration-driven path for behavior that should be shared across applications or teams. |
-| Develop or validate the repository itself | [Development Setup](/contribute/development-setup) and [Testing and Docs](/contribute/testing-and-docs) | Use the contributor workflow when you are changing Relay source, docs, examples, bindings, or integrations. |
+| Configure traces, trajectories, or raw event export | [Observability](/configure-plugins/observability/about) | Exporters consume the same lifecycle event stream and write ATOF, ATIF, OpenTelemetry, or OpenInference output. |
 
 <Note>
-If you are unsure how much Relay you need, capture one boundary first. Confirm
-that Relay emits raw lifecycle events, then add normalized exports, middleware,
-guardrails, or adaptive behavior.
+To evaluate a language binding with the smallest complete example, start with
+[Quick Start](/getting-started/quick-start).
 </Note>
 
-## Validate Raw Capture First
+Relay records canonical lifecycle events in Agent Trajectory Observability
+Format (ATOF). Exporters can write those events directly as
+[ATOF JSONL](/configure-plugins/observability/atof), project completed runs into
+[Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif)
+trajectories, or translate them into typed OpenTelemetry output.
 
-Start with [Agent Trajectory Observability Format (ATOF) JSONL](/configure-plugins/observability/atof),
-the raw canonical event stream. It shows the lifecycle events Relay actually
-captured before anything is translated into
-[Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif),
-or a typed OpenTelemetry projection.
+## Build on Relay
 
-A good first integration process workflow is as follows:
+Use these paths when you need to extend Relay instead of using an existing
+runtime surface.
 
-1. Create or identify one scope boundary.
-2. Capture one LLM, tool, session, or turn boundary.
-3. Export ATOF JSONL and inspect the raw event stream.
-4. Add ATIF or a typed OpenTelemetry projection when the raw events are trustworthy.
-5. Add middleware only when Relay must block, sanitize, rewrite, route, or
-   replace real execution.
+| Goal | Start With |
+|---|---|
+| Build a framework, host, or provider integration | [Integrate into Frameworks](/integrate-into-frameworks/about) |
+| Package reusable exporters, middleware, or policy | [Build Plugins](/build-plugins/about) and [Configure Plugins](/configure-plugins/about) |
+| Develop or validate the repository | [Development Setup](/contribute/development-setup) and [Testing and Docs](/contribute/testing-and-docs) |
+
+Rust is the source of truth for runtime behavior. The Python and Node.js
+bindings expose the same core model for primary application use. Go and raw C
+FFI are experimental and source-first surfaces.
+
+### Choose an Integration Boundary
+
+Identify where the actual LLM or tool function is invoked. If that invocation
+can be routed through NeMo Relay, use managed execution: NeMo Relay runs the
+applicable middleware and then invokes the real function. If the framework
+retains control but provides before-and-after notifications, translate those
+lifecycle hooks into NeMo Relay events. NeMo Relay can then observe the call's
+lifecycle but does not execute or control it. If provider-native requests and
+responses must be intercepted, route the real provider traffic through the
+NeMo Relay gateway and treat NeMo Relay as a production dependency.
+
+<Warning>
+Do not add behavior to one primary binding without checking Rust, Python, and
+Node.js parity. Public behavior should stay consistent across the supported
+runtime surfaces.
+</Warning>
 
 ## Key Features
 
@@ -93,27 +110,6 @@ NeMo Relay offers the following features when you use it with your agent stacks:
 Use [Concepts](/about-nemo-relay/concepts) when you want the deeper model for
 scopes, events, middleware, subscribers, and plugins.
 
-## Developer Background
-
-Rust is the source of truth for runtime behavior. The Python and Node.js
-bindings expose the same core model for primary application use. Go and raw C
-FFI are experimental and source-first surfaces.
-
-First, identify where the actual LLM or tool function is invoked. If that
-invocation can be routed through NeMo Relay, use managed execution: NeMo Relay
-runs the applicable middleware and then invokes the real function. If the
-framework retains control but provides before-and-after notifications, translate
-those lifecycle hooks into NeMo Relay events. NeMo Relay can then observe the
-call's lifecycle but does not execute or control it. If provider-native requests
-and responses must be intercepted, route the real provider traffic through the
-NeMo Relay gateway and treat NeMo Relay as a production dependency.
-
-<Warning>
-Do not add behavior to one primary binding without checking Rust, Python, and
-Node.js parity. Public behavior should stay consistent across the supported
-runtime surfaces.
-</Warning>
-
 ## Documentation
 
 Use the tasks below to build your understanding and set up Relay:
@@ -128,59 +124,45 @@ Use the tasks below to build your understanding and set up Relay:
 | Debug trace incidents | [Trace Incident Runbook](/resources/troubleshooting/trace-incident-runbook) |
 | Look up symbols | [APIs](/reference/api) |
 
-## Conceptual Diagram
+## How Relay Connects to Your Stack
 
-The diagram below shows how applications, runtime components, and exporters
-relate to each other. Scopes define where work belongs, middleware registries
-define what runs around that work, and subscribers consume the lifecycle events
-that the core emits.
+The diagram shows the external flow from application work through Relay to
+observability output. Applications and frameworks keep ownership of their real
+payloads and callbacks. Relay records lifecycle events for subscribers and
+exporters to consume.
 
 <MermaidStyles />
 
 ```mermaid
-flowchart TB
-    Plugin[Plugin]
-    App[Application Code / Agent Harness / Agent Framework]
-    Framework[Framework Integration]
+flowchart LR
+    Sources[Application Code / Agent Harness / Agent Framework]
+    Runtime[Relay Runtime]
+    Consumers[Subscribers / Exporters]
 
-    subgraph Runtime[Runtime]
-        PluginSystem[Plugin System]
-        Bindings[Language Bindings]
-        Core[Rust Core Runtime]
-        Events[Lifecycle Events]
-
-        subgraph RuntimeState[Runtime State]
-            Registry[<strong>Middleware Registries</strong><br/>what runs around work]
-            Scope[<strong>Scope Stack</strong><br/>where work belongs]
-        end
-
-        Subs[Subscribers / Exporters]
-
-        PluginSystem --->|installs| Registry
-        PluginSystem ----->|installs| Subs
-        Bindings --> Core
-        Core -->|emits| Events -->|consumed by| Subs
-        Core -->|updates| Scope
-        Core -->|resolves| Registry
+    subgraph Outputs[Outputs and Destinations]
+        ATOF[ATOF JSONL]
+        ATIF[ATIF Trajectories]
+        OTEL[OpenTelemetry]
+        OI[OpenInference]
     end
 
-    App -->|registers| Plugin
-    App -->|uses| Framework
-    App -->|configures/initializes| PluginSystem
-    App -->|uses| Bindings
-    Framework -->|calls| Bindings
-    Plugin -->|registers with| PluginSystem
+    Sources -->|managed calls, hooks, or routed traffic| Runtime
+    Runtime -->|canonical lifecycle events| Consumers
+    Consumers --> ATOF
+    Consumers --> ATIF
+    Consumers --> OTEL
+    Consumers --> OI
 
-    class Runtime grey-lightest;
-    class RuntimeState grey-lightest;
-    class App purple-lightest;
-    class Framework yellow-lightest;
-    class Plugin blue-lightest;
-    class Bindings green-lightest;
-    class PluginSystem green-light;
-    class Core green-light;
-    class Scope green-light;
-    class Registry green-light;
-    class Events green-light;
-    class Subs green-light;
+    class Sources purple-lightest;
+    class Runtime green-light;
+    class Consumers green-lightest;
+    class Outputs grey-lightest;
+    class ATOF,ATIF,OTEL,OI blue-lightest;
 ```
+
+Configure the output that matches your destination:
+
+- [ATOF JSONL](/configure-plugins/observability/atof) for the canonical event stream.
+- [ATIF trajectories](/configure-plugins/observability/atif) for replay, analysis, and evaluation.
+- [OpenTelemetry](/configure-plugins/observability/opentelemetry) for OTLP-compatible backends.
+- [OpenInference](/configure-plugins/observability/openinference) for OpenInference-compatible tracing.
