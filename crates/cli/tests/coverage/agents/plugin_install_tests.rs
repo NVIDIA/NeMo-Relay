@@ -1420,13 +1420,14 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
         )
         .unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(
-            crate::hooks::persistent_hook_forward_command(
+            crate::hooks::persistent_hook_forward_commands(
                 Path::new("/bin/nemo-relay"),
                 CodingAgent::Codex,
                 &generation_fence,
                 TEST_GENERATION_TOKEN,
             )
             .unwrap()
+            .for_event("SessionStart")
         )
     );
     assert_eq!(
@@ -1438,13 +1439,14 @@ fn plugin_manifests_and_hooks_use_path_based_relay_command() {
         )
         .unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(
-            crate::hooks::persistent_hook_forward_command(
+            crate::hooks::persistent_hook_forward_commands(
                 Path::new("/bin/nemo-relay"),
                 CodingAgent::ClaudeCode,
                 &generation_fence,
                 TEST_GENERATION_TOKEN,
             )
             .unwrap()
+            .for_event("SessionStart")
         )
     );
 }
@@ -1471,13 +1473,14 @@ fn relay_identity_prefers_the_path_resolved_executable() {
         )
         .unwrap()["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(
-            crate::hooks::persistent_hook_forward_command(
+            crate::hooks::persistent_hook_forward_commands(
                 &relay,
                 CodingAgent::Codex,
                 &generation,
                 TEST_GENERATION_TOKEN,
             )
             .unwrap()
+            .for_event("SessionStart")
         )
     );
     assert_eq!(

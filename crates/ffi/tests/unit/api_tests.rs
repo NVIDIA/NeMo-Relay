@@ -244,6 +244,19 @@ unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
 }
 
 #[test]
+fn default_logging_shutdown_is_idempotent() {
+    let _guard = lock_unpoisoned(&TEST_MUTEX);
+    assert_status!(
+        api::nemo_relay_shutdown_default_logging(),
+        NemoRelayStatus::Ok
+    );
+    assert_status!(
+        api::nemo_relay_shutdown_default_logging(),
+        NemoRelayStatus::Ok
+    );
+}
+
+#[test]
 fn propagation_context_json_round_trips_through_the_ffi() {
     let _guard = lock_unpoisoned(&TEST_MUTEX);
     let root_uuid = "018f13f0-7c1a-7a80-8000-000000000001";

@@ -2447,6 +2447,35 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
             .prepare_destination("session-1", Some(&non_string))
             .is_err()
     );
+    let dispatcher_with_fallback = AtifDispatcher::new(AtifSectionConfig {
+        filename_template: "{metadata.artifact_path:-unassigned}/trajectory-{session_id}.json"
+            .to_string(),
+        ..AtifSectionConfig::default()
+    });
+    let error = dispatcher_with_fallback
+        .prepare_destination("session-1", Some(&non_string))
+        .unwrap_err();
+    assert!(error.contains("resolved to a non-string value"), "{error}");
+    let nested_non_string = json!({"artifact": 123});
+    let nested_dispatcher = AtifDispatcher::new(AtifSectionConfig {
+        filename_template: "{metadata.artifact.path:-unassigned}/trajectory-{session_id}.json"
+            .to_string(),
+        ..AtifSectionConfig::default()
+    });
+    let error = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_non_string))
+        .unwrap_err();
+    assert!(error.contains("traversed a non-object value"), "{error}");
+    let nested_null = json!({"artifact": null});
+    let destination = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_null))
+        .unwrap();
+    assert_eq!(destination.0, "unassigned/trajectory-session-1.json");
+    let nested_string = json!({"artifact": {"path": "tenant-a/team_1"}});
+    let destination = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_string))
+        .unwrap();
+    assert_eq!(destination.0, "tenant-a/team_1/trajectory-session-1.json");
 
     for template in [
         "/tmp/trajectory-{session_id}.json",
@@ -3037,9 +3066,13 @@ fn opentelemetry_shutdown_helper_retains_every_endpoint_failure() {
     })
     .collect::<Vec<_>>();
 
-    let error = shutdown_opentelemetry_subscribers(&subscribers)
-        .expect("mixed endpoint shutdown failures should be reported")
-        .to_string();
+    let OpenTelemetryShutdownFailure::Other(error) =
+        shutdown_opentelemetry_subscribers(&subscribers)
+            .expect("mixed endpoint shutdown failures should be reported")
+    else {
+        panic!("mixed endpoint shutdown failures must retain the registration failure outcome");
+    };
+    let error = error.to_string();
 
     assert_eq!(dropped_calls.load(Ordering::SeqCst), 1);
     assert_eq!(timeout_calls.load(Ordering::SeqCst), 1);

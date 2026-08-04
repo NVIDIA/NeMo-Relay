@@ -948,6 +948,8 @@ pub(super) struct ActiveSpan {
     span_context: SpanContext,
     start_model_name: Option<String>,
     projected_attributes: Vec<KeyValue>,
+    descendant_error_type: Option<String>,
+    descendant_exception_type: Option<String>,
 }
 
 pub(super) struct OtelEventProcessor {
@@ -1151,12 +1153,15 @@ impl OtelEventProcessor {
                 span_context,
                 start_model_name,
                 projected_attributes,
+                descendant_error_type: None,
+                descendant_exception_type: None,
             },
         );
     }
 
     fn process_end(&mut self, event: &Event) {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
+            self.propagate_suppressed_error_metadata(event);
             return;
         };
         self.record_completed_span_context(event.uuid(), active_span.span_context.clone());
@@ -1167,6 +1172,36 @@ impl OtelEventProcessor {
             OpenTelemetryType::GenAi => super::otel_genai::end_attributes(event),
             OpenTelemetryType::OpenInference => super::openinference::end_attributes(event),
         };
+        let is_error = metadata_string(event, "otel.status_code") == Some("ERROR");
+        let explicit_error_type = metadata_string(event, "error.type");
+        let error_type = is_error.then(|| {
+            explicit_error_type
+                .map(ToOwned::to_owned)
+                .or(active_span.descendant_error_type.take())
+                .unwrap_or_else(|| "_OTHER".to_string())
+        });
+        let exception_type = is_error
+            .then(|| {
+                metadata_string(event, "exception.type")
+                    .map(ToOwned::to_owned)
+                    .or(active_span.descendant_exception_type.take())
+            })
+            .flatten();
+        if matches!(
+            self.otel_type,
+            OpenTelemetryType::Full | OpenTelemetryType::GenAi
+        ) && let Some(error_type) = error_type.as_ref()
+        {
+            attributes.retain(|attribute| attribute.key.as_str() != "error.type");
+            attributes.push(KeyValue::new("error.type", error_type.clone()));
+        }
+        if let Some(exception_type) = exception_type.as_ref() {
+            active_span.span.add_event_with_timestamp(
+                "exception",
+                to_system_time(*event.timestamp()),
+                vec![KeyValue::new("exception.type", exception_type.clone())],
+            );
+        }
         let end_model_name =
             model_name_for_llm_event(event).or_else(|| active_span.start_model_name.take());
         if self.otel_type == OpenTelemetryType::Full
@@ -1187,10 +1222,38 @@ impl OtelEventProcessor {
                 &self.attribute_mappings,
             ));
         }
+        if is_error && let Some(parent_span) = self.find_parent_span_mut(event) {
+            if parent_span.descendant_error_type.is_none() {
+                parent_span.descendant_error_type = error_type;
+            }
+            if parent_span.descendant_exception_type.is_none() {
+                parent_span.descendant_exception_type = exception_type;
+            }
+        }
         active_span.span.set_attributes(attributes);
         active_span
             .span
             .end_with_timestamp(to_system_time(*event.timestamp()));
+    }
+
+    fn propagate_suppressed_error_metadata(&mut self, event: &Event) {
+        if self.otel_type != OpenTelemetryType::GenAi
+            || !self.suppressed_parent_contexts.contains_key(&event.uuid())
+            || metadata_string(event, "otel.status_code") != Some("ERROR")
+        {
+            return;
+        }
+        let error_type = metadata_string(event, "error.type").map(ToOwned::to_owned);
+        let exception_type = metadata_string(event, "exception.type").map(ToOwned::to_owned);
+        let Some(parent_span) = self.find_parent_span_mut(event) else {
+            return;
+        };
+        if parent_span.descendant_error_type.is_none() {
+            parent_span.descendant_error_type = error_type;
+        }
+        if parent_span.descendant_exception_type.is_none() {
+            parent_span.descendant_exception_type = exception_type;
+        }
     }
 
     fn process_mark(&mut self, event: &Event) {
@@ -1310,9 +1373,16 @@ impl OtelEventProcessor {
     }
 
     fn parent_span_uuid(&self, event: &Event) -> Option<Uuid> {
-        event
-            .parent_uuid()
-            .filter(|uuid| self.active_spans.contains_key(uuid))
+        let parent_uuid = event.parent_uuid()?;
+        if self.active_spans.contains_key(&parent_uuid) {
+            return Some(parent_uuid);
+        }
+        let suppressed_parent = self.suppressed_parent_contexts.get(&parent_uuid)?;
+        self.active_spans.iter().find_map(|(uuid, active_span)| {
+            (active_span.span_context.trace_id() == suppressed_parent.trace_id()
+                && active_span.span_context.span_id() == suppressed_parent.span_id())
+            .then_some(*uuid)
+        })
     }
 
     fn find_parent_span(&self, event: &Event) -> Option<&ActiveSpan> {
@@ -1366,6 +1436,10 @@ impl OtelEventProcessor {
             }
         }
     }
+}
+
+fn metadata_string<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
+    event.metadata()?.get(key)?.as_str()
 }
 
 fn span_kind(event: &Event) -> SpanKind {

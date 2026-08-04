@@ -16,7 +16,24 @@ pub(crate) struct HookForwardRequest {
     pub(crate) profile: Option<String>,
     pub(crate) session_metadata: Option<String>,
     pub(crate) gateway_mode: Option<GatewayMode>,
-    pub(crate) fail_closed: bool,
+    pub(crate) failure_policy: HookFailurePolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookFailurePolicy {
+    Default,
+    FailOpen,
+    FailClosed,
+}
+
+impl HookFailurePolicy {
+    pub(crate) fn fail_closed(self) -> bool {
+        match self {
+            Self::Default => std::env::var("NEMO_RELAY_FAIL_CLOSED").ok().as_deref() == Some("1"),
+            Self::FailOpen => false,
+            Self::FailClosed => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

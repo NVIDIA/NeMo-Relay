@@ -200,13 +200,13 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         generation_fence: &std::path::Path,
         generation_token: &str,
     ) -> Result<serde_json::Value, String> {
-        let command = crate::hooks::persistent_hook_forward_command(
+        let commands = crate::hooks::persistent_hook_forward_commands(
             relay,
             self,
             generation_fence,
             generation_token,
         )?;
-        Ok(crate::hooks::generated_hooks(self, &command))
+        Ok(crate::hooks::generated_policy_hooks(self, &commands))
     }
 
     fn plugin_registration_args(self, plugin_id: &str) -> Vec<String> {

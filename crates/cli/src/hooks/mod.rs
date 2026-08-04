@@ -23,18 +23,19 @@ pub(crate) use destination::{
 pub(crate) use encoding::decode_windows_hook_command;
 #[cfg(all(test, windows))]
 pub(crate) use encoding::windows_powershell_path;
+pub(crate) use encoding::{
+    GeneratedHookCommands, generated_policy_hooks, persistent_hook_forward_commands,
+    transparent_hook_forward_commands,
+};
 #[cfg(test)]
 pub(crate) use encoding::{
-    encoded_windows_hook_command, event_matches_tools,
-    persistent_hook_forward_command_for_platform, transparent_hook_forward_command_for_platform,
-};
-pub(crate) use encoding::{
-    generated_hooks, persistent_hook_forward_command, transparent_hook_forward_command,
+    encoded_windows_hook_command, event_matches_tools, event_requires_fail_closed, generated_hooks,
+    persistent_hook_forward_commands_for_platform, transparent_hook_forward_commands_for_platform,
 };
 pub(crate) use merging::merge_hooks;
 #[cfg(test)]
 pub(crate) use response::{handle_hook_forward_status, handle_verified_hook_forward_response};
-pub(crate) use types::{GatewayMode, HookForwardRequest};
+pub(crate) use types::{GatewayMode, HookFailurePolicy, HookForwardRequest};
 
 #[cfg(test)]
 use serde_json::json;

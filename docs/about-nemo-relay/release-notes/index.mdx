@@ -32,6 +32,10 @@ compatibility information applies to the current 0.7 prerelease.
 
 ### Highlights
 
+- Generated coding-agent enforcement hooks now fail closed when Relay cannot
+  start, authenticate, evaluate, or deliver a response. Lifecycle and
+  after-the-fact hooks explicitly fail open. Reinstall each coding-agent
+  integration with `nemo-relay install <agent> --force` after upgrading.
 - LLM observability sanitizers now receive the active request or response codec
   for each managed call. Sanitizers can normalize built-in,
   runtime-registered, and opaque codec payloads without changing the

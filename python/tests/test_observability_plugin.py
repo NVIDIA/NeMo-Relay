@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from nemo_relay import ScopeType, plugin, scope
+from nemo_relay import ScopeType, plugin, scope, subscribers
 from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
@@ -438,6 +438,51 @@ class TestObservabilityConfigHelpers:
             assert (tmp_path / f"nemo-relay-atif-{handle.uuid}.json").exists()
         finally:
             scope.pop(handle)
+
+    async def test_atif_non_string_metadata_is_reported_and_failed_clear_is_drainable(self, tmp_path):
+        await plugin.initialize(
+            plugin.PluginConfig(
+                components=[
+                    ComponentSpec(
+                        ObservabilityConfig(
+                            atif=AtifConfig(
+                                enabled=True,
+                                output_directory=str(tmp_path),
+                                filename_template="{metadata.atif_prefix:-unassigned}/trajectory-{session_id}.json",
+                            )
+                        )
+                    )
+                ]
+            )
+        )
+
+        try:
+            with scope.scope("python-invalid-metadata-agent", ScopeType.Agent, metadata={"atif_prefix": 123}):
+                pass
+            await subscribers.flush_async()
+
+            report = plugin.report()
+            assert report is not None
+            assert any(
+                diagnostic["code"] == "atif.destination_render_failed" and "non-string" in diagnostic["message"]
+                for diagnostic in report["runtime_diagnostics"]
+            )
+            assert not (tmp_path / "unassigned").exists()
+
+            with pytest.raises(RuntimeError, match=r"atif\.destination_render_failed") as teardown:
+                await plugin.clear_async()
+            assert "could not be removed" not in str(teardown.value)
+            retained = plugin.report()
+            assert retained is not None
+            assert any(
+                diagnostic["code"] == "atif.destination_render_failed" for diagnostic in retained["runtime_diagnostics"]
+            )
+        finally:
+            try:
+                await plugin.clear_async()
+            except RuntimeError:
+                await plugin.clear_async()
+        assert plugin.report() is None
 
     async def test_atif_splits_multiple_top_level_agent_scopes(self, tmp_path):
         await plugin.initialize(

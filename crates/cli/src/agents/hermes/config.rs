@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::error::CliError;
-use crate::hooks::{generated_hooks, merge_hooks};
+use crate::hooks::{GeneratedHookCommands, generated_policy_hooks, merge_hooks};
 
 pub(super) use crate::mcp::SERVER_NAME as MCP_SERVER_NAME;
 
@@ -32,9 +32,9 @@ pub(crate) fn transparent_config(
 ) -> Result<String, CliError> {
     let mut root = parse_yaml_object(Some(existing), "Hermes config")?;
     let owned = owned_install_command(&root, relay, None)?;
-    strip_owned_hooks(&mut root, owned.as_deref())?;
+    strip_owned_hooks(&mut root, owned.as_ref())?;
     remove_owned_mcp(&mut root, owned.is_some())?;
-    let command = crate::hooks::transparent_hook_forward_command(
+    let commands = crate::hooks::transparent_hook_forward_commands(
         relay,
         crate::agents::CodingAgent::Hermes,
         gateway_url,
@@ -42,7 +42,7 @@ pub(crate) fn transparent_config(
     .map_err(CliError::Install)?;
     let mut root = merge_hooks(
         root,
-        generated_hooks(crate::agents::CodingAgent::Hermes, &command),
+        generated_policy_hooks(crate::agents::CodingAgent::Hermes, &commands),
     )?;
     let object = root
         .as_object_mut()
@@ -75,12 +75,12 @@ pub(crate) fn transparent_config(
     serde_yaml::to_string(&root).map_err(|error| CliError::Install(error.to_string()))
 }
 
-pub(crate) fn persistent_hook_command(
+pub(crate) fn persistent_hook_commands(
     relay: &Path,
     generation: &Path,
     generation_token: &str,
-) -> Result<String, String> {
-    crate::hooks::persistent_hook_forward_command(
+) -> Result<GeneratedHookCommands, String> {
+    crate::hooks::persistent_hook_forward_commands(
         relay,
         crate::agents::CodingAgent::Hermes,
         generation,
@@ -89,13 +89,13 @@ pub(crate) fn persistent_hook_command(
 }
 
 #[cfg(test)]
-pub(super) fn persistent_hook_command_for_platform(
+pub(super) fn persistent_hook_commands_for_platform(
     relay: &Path,
     generation: &Path,
     generation_token: &str,
     windows: bool,
-) -> String {
-    crate::hooks::persistent_hook_forward_command_for_platform(
+) -> GeneratedHookCommands {
+    crate::hooks::persistent_hook_forward_commands_for_platform(
         relay,
         crate::agents::CodingAgent::Hermes,
         generation,
@@ -107,7 +107,7 @@ pub(super) fn persistent_hook_command_for_platform(
 pub(super) fn persistent_config(
     existing: Option<&str>,
     relay: &Path,
-    command: &str,
+    commands: &GeneratedHookCommands,
     generation: &Path,
     generation_token: &str,
     environment: &[String],
@@ -123,10 +123,10 @@ pub(super) fn persistent_config(
             "Hermes MCP server `{MCP_SERVER_NAME}` already exists and is not managed by Relay; rename or remove it before installing the Relay integration"
         )));
     }
-    strip_owned_hooks(&mut root, owned.as_deref())?;
+    strip_owned_hooks(&mut root, owned.as_ref())?;
     root = merge_hooks(
         root,
-        generated_hooks(crate::agents::CodingAgent::Hermes, command),
+        generated_policy_hooks(crate::agents::CodingAgent::Hermes, commands),
     )?;
     let servers = object_field_mut(&mut root, "mcp_servers", "mcp_servers")?;
     servers.insert(
@@ -162,7 +162,7 @@ pub(super) fn forwarded_environment_names(
 
 pub(super) fn strip_owned_hooks(
     root: &mut Value,
-    owned_command: Option<&str>,
+    owned_commands: Option<&GeneratedHookCommands>,
 ) -> Result<(), CliError> {
     let Some(hooks) = root.get_mut("hooks") else {
         return Ok(());
@@ -180,7 +180,9 @@ pub(super) fn strip_owned_hooks(
                 group
                     .get("command")
                     .and_then(Value::as_str)
-                    .is_none_or(|command| Some(command) != owned_command)
+                    .is_none_or(|command| {
+                        owned_commands.is_none_or(|commands| !commands.contains(command))
+                    })
             });
             if groups.is_empty() {
                 empty.push(event.clone());
@@ -221,7 +223,7 @@ pub(super) fn owned_install_command(
     root: &Value,
     relay: &Path,
     expected_generation: Option<&Path>,
-) -> Result<Option<String>, CliError> {
+) -> Result<Option<GeneratedHookCommands>, CliError> {
     let Some(server) = root.pointer(&format!("/mcp_servers/{MCP_SERVER_NAME}")) else {
         return Ok(None);
     };
@@ -243,15 +245,18 @@ pub(super) fn owned_install_command(
             && !token.is_empty()
             && expected_generation.is_none_or(|expected| Path::new(generation) == expected)
         {
-            let command = persistent_hook_command(relay, Path::new(generation), token)
+            let commands = persistent_hook_commands(relay, Path::new(generation), token)
                 .map_err(CliError::Install)?;
-            return Ok(Some(command));
+            return Ok(Some(commands));
         }
     }
     legacy_owned_command(root, relay)
 }
 
-fn legacy_owned_command(root: &Value, relay: &Path) -> Result<Option<String>, CliError> {
+fn legacy_owned_command(
+    root: &Value,
+    relay: &Path,
+) -> Result<Option<GeneratedHookCommands>, CliError> {
     let server = &root["mcp_servers"][MCP_SERVER_NAME];
     if server.get("args") != Some(&json!(["mcp", "--agent", "hermes"])) {
         return Ok(None);
@@ -274,7 +279,7 @@ fn legacy_owned_command(root: &Value, relay: &Path) -> Result<Option<String>, Cl
         }
         common = Some(commands[0]);
     }
-    Ok(common.map(str::to_owned))
+    Ok(common.map(GeneratedHookCommands::uniform))
 }
 
 fn legacy_command_uses_relay(command: &str, relay: &Path) -> bool {

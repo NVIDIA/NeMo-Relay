@@ -92,7 +92,7 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
         profile: None,
         session_metadata: None,
         gateway_mode: None,
-        fail_closed: true,
+        failure_policy: HookFailurePolicy::FailClosed,
     };
     let gateway = transparent_gateway_spec(&gateway_url).unwrap();
 
@@ -329,42 +329,39 @@ fn helper_formatting_and_headers_cover_optional_paths() {
 
 #[test]
 fn generated_hook_dispatch_covers_all_agents() {
-    for agent in [
-        CodingAgent::ClaudeCode,
-        CodingAgent::Codex,
-        CodingAgent::Hermes,
-    ] {
-        assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
-    }
+    assert_generated_hook_policies();
     assert_eq!(
-        transparent_hook_forward_command_for_platform(
+        transparent_hook_forward_commands_for_platform(
             Path::new("nemo-relay"),
             CodingAgent::Hermes,
             "http://127.0.0.1:1234",
             false,
-        ),
-        "nemo-relay hook-forward hermes --gateway-url http://127.0.0.1:1234 --transparent-run"
+        )
+        .for_event("on_session_start"),
+        "nemo-relay hook-forward hermes --gateway-url http://127.0.0.1:1234 --transparent-run --fail-open"
     );
     assert_eq!(
-        transparent_hook_forward_command_for_platform(
+        transparent_hook_forward_commands_for_platform(
             Path::new("/abs/path/to/nemo-relay"),
             CodingAgent::Codex,
             "http://127.0.0.1:1234",
             false,
-        ),
-        "/abs/path/to/nemo-relay hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run"
+        )
+        .for_event("PreToolUse"),
+        "/abs/path/to/nemo-relay hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run --fail-closed"
     );
     let relay = Path::new("/opt/NeMo Relay's & tools/nemo-relay");
     assert_eq!(
-        transparent_hook_forward_command_for_platform(
+        transparent_hook_forward_commands_for_platform(
             relay,
             CodingAgent::Codex,
             "http://127.0.0.1:1234",
             false
-        ),
-        r#"'/opt/NeMo Relay'\''s & tools/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run"#
+        )
+        .for_event("SessionStart"),
+        r#"'/opt/NeMo Relay'\''s & tools/nemo-relay' hook-forward codex --gateway-url http://127.0.0.1:1234 --transparent-run --fail-open"#
     );
-    let native = transparent_hook_forward_command(
+    let native = transparent_hook_forward_commands(
         Path::new("nemo-relay"),
         CodingAgent::Hermes,
         "http://127.0.0.1:1234",
@@ -372,7 +369,7 @@ fn generated_hook_dispatch_covers_all_agents() {
     .unwrap();
     if cfg!(windows) {
         assert_eq!(
-            decode_windows_hook_command(&native).unwrap(),
+            decode_windows_hook_command(native.for_event("on_session_start")).unwrap(),
             vec![
                 String::from("nemo-relay"),
                 String::from("hook-forward"),
@@ -380,12 +377,13 @@ fn generated_hook_dispatch_covers_all_agents() {
                 String::from("--gateway-url"),
                 String::from("http://127.0.0.1:1234"),
                 String::from("--transparent-run"),
+                String::from("--fail-open"),
             ]
         );
     } else {
         assert_eq!(
             native,
-            transparent_hook_forward_command_for_platform(
+            transparent_hook_forward_commands_for_platform(
                 Path::new("nemo-relay"),
                 CodingAgent::Hermes,
                 "http://127.0.0.1:1234",
@@ -393,12 +391,13 @@ fn generated_hook_dispatch_covers_all_agents() {
             )
         );
     }
-    let windows = transparent_hook_forward_command_for_platform(
+    let windows = transparent_hook_forward_commands_for_platform(
         relay,
         CodingAgent::ClaudeCode,
         "http://127.0.0.1:1234",
         true,
     );
+    let windows = windows.for_event("PreToolUse");
     let (launcher, encoded) = windows.rsplit_once(' ').unwrap();
     assert_eq!(
         launcher,
@@ -412,7 +411,7 @@ fn generated_hook_dispatch_covers_all_agents() {
                     || matches!(character, '+' | '/' | '='))
     );
     assert_eq!(
-        decode_windows_hook_command(&windows).unwrap(),
+        decode_windows_hook_command(windows).unwrap(),
         vec![
             relay.display().to_string(),
             "hook-forward".into(),
@@ -420,6 +419,7 @@ fn generated_hook_dispatch_covers_all_agents() {
             "--gateway-url".into(),
             "http://127.0.0.1:1234".into(),
             "--transparent-run".into(),
+            "--fail-closed".into(),
         ]
     );
     assert!(decode_windows_hook_command("powershell.exe -EncodedCommand invalid").is_none());
@@ -444,6 +444,38 @@ fn generated_hook_dispatch_covers_all_agents() {
     .unwrap_err();
     assert!(error.contains("exceeds the 8000-character safety limit"));
     assert!(error.contains("shorten the Relay or plugin installation path"));
+}
+
+fn assert_generated_hook_policies() {
+    for agent in [
+        CodingAgent::ClaudeCode,
+        CodingAgent::Codex,
+        CodingAgent::Hermes,
+    ] {
+        assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
+        let commands = GeneratedHookCommands::new("cmd --fail-open", "cmd --fail-closed");
+        let generated = generated_policy_hooks(agent, &commands);
+        for event in agent.hook_events() {
+            let command = if agent.uses_direct_hook_entries() {
+                generated["hooks"][event][0]["command"].as_str()
+            } else {
+                generated["hooks"][event][0]["hooks"][0]["command"].as_str()
+            }
+            .unwrap();
+            assert_eq!(
+                command,
+                commands.for_event(event),
+                "unexpected policy for {} {event}",
+                agent.label()
+            );
+            assert_eq!(
+                command.ends_with("--fail-closed"),
+                event_requires_fail_closed(event),
+                "unexpected enforcement classification for {} {event}",
+                agent.label()
+            );
+        }
+    }
 }
 
 #[test]
@@ -521,34 +553,46 @@ fn packaged_plugin_hooks_use_expected_forwarding_commands() {
     assert_eq!(
         claude["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(format!(
-            "nemo-relay hook-forward claude --gateway-url {} --forward-only",
+            "nemo-relay hook-forward claude --gateway-url {} --forward-only --fail-open",
             crate::bootstrap::DEFAULT_URL
         ))
     );
     assert_eq!(
         codex["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         json!(format!(
-            "nemo-relay hook-forward codex --gateway-url {} --forward-only",
+            "nemo-relay hook-forward codex --gateway-url {} --forward-only --fail-open",
             crate::bootstrap::DEFAULT_URL
         ))
     );
     assert_eq!(
         claude["hooks"],
-        generated_hooks(
+        generated_policy_hooks(
             CodingAgent::ClaudeCode,
-            &format!(
-                "nemo-relay hook-forward claude --gateway-url {} --forward-only",
-                crate::bootstrap::DEFAULT_URL
+            &GeneratedHookCommands::new(
+                format!(
+                    "nemo-relay hook-forward claude --gateway-url {} --forward-only --fail-open",
+                    crate::bootstrap::DEFAULT_URL
+                ),
+                format!(
+                    "nemo-relay hook-forward claude --gateway-url {} --forward-only --fail-closed",
+                    crate::bootstrap::DEFAULT_URL
+                ),
             ),
         )["hooks"]
     );
     assert_eq!(
         codex["hooks"],
-        generated_hooks(
+        generated_policy_hooks(
             CodingAgent::Codex,
-            &format!(
-                "nemo-relay hook-forward codex --gateway-url {} --forward-only",
-                crate::bootstrap::DEFAULT_URL
+            &GeneratedHookCommands::new(
+                format!(
+                    "nemo-relay hook-forward codex --gateway-url {} --forward-only --fail-open",
+                    crate::bootstrap::DEFAULT_URL
+                ),
+                format!(
+                    "nemo-relay hook-forward codex --gateway-url {} --forward-only --fail-closed",
+                    crate::bootstrap::DEFAULT_URL
+                ),
             ),
         )["hooks"]
     );

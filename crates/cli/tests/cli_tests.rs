@@ -24,6 +24,7 @@ fn gateway_bin() -> &'static str {
 }
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
+const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
 const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
@@ -639,8 +640,9 @@ fn cli_mcp_starts_gateway_even_when_stdio_closes_before_request() {
 fn cli_mcp_rejects_an_unauthenticated_transparent_gateway() {
     let temp = tempfile::tempdir().unwrap();
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"transparent"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"transparent"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     let (gateway_url, received) = spawn_single_request_server(200, &body);
     let mut child = Command::new(gateway_bin())
@@ -786,17 +788,23 @@ fn assert_hermes_install_config(config_path: &std::path::Path, hermes_home: &std
             .unwrap()
             .contains("not-written-to-config")
     );
-    let command = config["hooks"]["on_session_start"][0]["command"]
-        .as_str()
-        .unwrap();
-    assert!(command.contains("hook-forward hermes"));
     let approvals: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(hermes_home.join("shell-hooks-allowlist.json")).unwrap(),
     )
     .unwrap();
     let approvals = approvals["approvals"].as_array().unwrap();
     assert_eq!(approvals.len(), 13);
-    assert!(approvals.iter().all(|entry| entry["command"] == command));
+    for approval in approvals {
+        let event = approval["event"].as_str().unwrap();
+        let command = approval["command"].as_str().unwrap();
+        assert!(command.contains("hook-forward hermes"));
+        assert_eq!(approval["command"], config["hooks"][event][0]["command"]);
+        if event == "pre_tool_call" {
+            assert!(command.ends_with(" --fail-closed"));
+        } else {
+            assert!(command.ends_with(" --fail-open"));
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -1127,8 +1135,9 @@ fn write_fake_bootstrap_health(
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce").unwrap();
     let proof_header = fake_bootstrap_proof_header(proof, key_path, fingerprint, nonce);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
@@ -1171,8 +1180,9 @@ fn handle_fake_bootstrap_tunnel(
     let health = read_http_request(&mut stream);
     requests.lock().unwrap().push(health);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
@@ -1312,6 +1322,60 @@ fn cli_codex_hook_launch_resolution_error_respects_forwarding_policy() {
         assert!(stderr.contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS"));
         assert!(output.stdout.is_empty());
     }
+}
+
+#[test]
+fn cli_hook_forward_explicit_policy_overrides_the_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let generation = write_active_generation(temp.path());
+    for (policy, environment, succeeds) in [
+        ("--fail-open", Some("1"), true),
+        ("--fail-closed", None, false),
+    ] {
+        let mut command = Command::new(gateway_bin());
+        command
+            .args([
+                "hook-forward",
+                "codex",
+                "--gateway-url",
+                "http://127.0.0.1:1",
+                "--generation-file",
+            ])
+            .arg(&generation)
+            .arg("--generation-token")
+            .arg(ACTIVE_GENERATION_TOKEN)
+            .arg(policy)
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+            .env("TMPDIR", temp.path())
+            .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "not-a-number")
+            .env_remove("NEMO_RELAY_FAIL_CLOSED")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(value) = environment {
+            command.env("NEMO_RELAY_FAIL_CLOSED", value);
+        }
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(b"{}").unwrap();
+        let output = wait_child_with_output(child);
+        assert_eq!(output.status.success(), succeeds, "{policy}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS")
+        );
+    }
+}
+
+#[test]
+fn cli_hook_forward_rejects_conflicting_failure_policies() {
+    let output = Command::new(gateway_bin())
+        .args(["hook-forward", "codex", "--fail-open", "--fail-closed"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
 }
 
 #[test]
@@ -1635,7 +1699,7 @@ fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
     let health = relay_health(address);
     assert_eq!(health["service"], "nemo-relay");
     assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(health["bootstrap_protocol"], 2);
+    assert_eq!(health["bootstrap_protocol"], BOOTSTRAP_PROTOCOL_VERSION);
     assert!(
         health["instance_id"]
             .as_str()
@@ -4500,8 +4564,9 @@ fn write_phase_health_response(
         .ok_or_else(|| "health probe omitted its nonce".to_string())?;
     let proof = fake_bootstrap_proof(key, fingerprint, nonce);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"phase-health"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"phase-health"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
