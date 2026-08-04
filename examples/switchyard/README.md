@@ -11,9 +11,10 @@ SPDX-License-Identifier: Apache-2.0
 > will include updated examples and a migration plan when the replacement is
 > available.
 
-These examples exercise the experimental NeMo Relay 0.6.0 integration with a separately running
-Switchyard Decision API service and the in-process Switchyard translation library. They are
-manual, local validation workflows rather than production startup orchestration.
+These examples exercise the experimental NeMo Relay 0.6.0 and 0.7.0 integration with a
+separately running Switchyard Decision API service and the in-process Switchyard translation
+library. They are manual, local validation workflows rather than production startup
+orchestration.
 
 For the canonical architecture, setup, configuration, validation, and troubleshooting workflow,
 refer to the
@@ -21,7 +22,7 @@ refer to the
 
 ## Required Switchyard Revision
 
-The NeMo Relay 0.6.0 scripts require the following public topic branch and commit:
+The scripts for NeMo Relay 0.6.0 and 0.7.0 require the following public topic branch and commit:
 
 ```text
 https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration
