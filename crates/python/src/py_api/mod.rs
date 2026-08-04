@@ -41,6 +41,7 @@ use nemo_relay::api::tool::ToolAttributes;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result as FlowResult};
+use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
@@ -67,6 +68,87 @@ fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
         Err(error) if error.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py) => Ok(false),
         Err(error) => Err(error),
     }
+}
+
+#[pyclass]
+struct SafeFutureCanceller {
+    sender: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+#[pymethods]
+impl SafeFutureCanceller {
+    fn __call__(&mut self, future: &Bound<'_, PyAny>) -> PyResult<()> {
+        if future.call_method0("cancelled")?.is_truthy()?
+            && let Some(sender) = self.sender.take()
+        {
+            let _ = sender.send(());
+        }
+        Ok(())
+    }
+}
+
+#[pyclass]
+struct SafeFutureCompleter {
+    future: Py<PyAny>,
+    result: Option<PyResult<Py<PyAny>>>,
+}
+
+#[pymethods]
+impl SafeFutureCompleter {
+    fn __call__(&mut self, py: Python<'_>) -> PyResult<()> {
+        let future = self.future.bind(py);
+        if future.call_method0("cancelled")?.is_truthy()? {
+            return Ok(());
+        }
+        match self.result.take().expect("future completion result") {
+            Ok(value) => future.call_method1("set_result", (value.bind(py),))?,
+            Err(error) => future.call_method1("set_exception", (error.into_bound_py_any(py)?,))?,
+        };
+        Ok(())
+    }
+}
+
+fn safe_future_into_py<'py, F>(py: Python<'py>, future: F) -> PyResult<Bound<'py, PyAny>>
+where
+    F: Future<Output = PyResult<Py<PyAny>>> + Send + 'static,
+{
+    let locals = pyo3_async_runtimes::tokio::get_current_locals(py)?;
+    let event_loop = locals.event_loop(py).unbind();
+    let python_future = event_loop.bind(py).call_method0("create_future")?.unbind();
+    let (cancel_sender, mut cancel_receiver) = tokio::sync::oneshot::channel();
+    python_future.call_method1(
+        py,
+        "add_done_callback",
+        (SafeFutureCanceller {
+            sender: Some(cancel_sender),
+        },),
+    )?;
+    let completion_future = python_future.clone_ref(py);
+    pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
+        let result = tokio::select! {
+            result = pyo3_async_runtimes::tokio::scope(locals, future) => Some(result),
+            _ = &mut cancel_receiver => None,
+        };
+        let Some(result) = result else { return };
+        Python::attach(|py| {
+            let loop_is_closed = event_loop
+                .bind(py)
+                .call_method0("is_closed")
+                .and_then(|closed| closed.is_truthy())
+                .unwrap_or(true);
+            if loop_is_closed {
+                return;
+            }
+            let _ = event_loop.bind(py).call_method1(
+                "call_soon_threadsafe",
+                (SafeFutureCompleter {
+                    future: completion_future,
+                    result: Some(result),
+                },),
+            );
+        });
+    });
+    Ok(python_future.into_bound(py))
 }
 
 fn with_python_publication_context<T>(f: impl FnOnce() -> T) -> T {
@@ -716,7 +798,7 @@ fn tool_call_execute<'py>(
     let scope_stack = current_scope_stack_handle();
     let publication_context = py_callable::capture_python_publication_context();
     let publication_buffer = capture_nested_publication_buffer();
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+    safe_future_into_py(py, async move {
         with_task_nested_publication_buffer(
             publication_buffer,
             with_task_publication_context(
