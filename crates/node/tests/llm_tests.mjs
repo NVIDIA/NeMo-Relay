@@ -396,9 +396,9 @@ describe('LLM guardrails', () => {
     try {
       const result = await llmCallExecute('contextual_sanitize_llm', makeNative(), () => ({ ok: true }));
       assert.deepEqual(result, { ok: true });
+      await flushSubscribers();
       assert.equal(requestContextChecked, true);
       assert.equal(responseContextChecked, true);
-      await flushSubscribers();
       const start = events.find(
         (event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start',
       );
