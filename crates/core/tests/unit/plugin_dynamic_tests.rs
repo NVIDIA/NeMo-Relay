@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::plugin::PluginError;
+use chrono::Utc;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -152,6 +153,136 @@ fn registry_rejects_duplicate_live_plugin_ids() {
         }
         other => panic!("unexpected duplicate error: {other}"),
     }
+}
+
+#[test]
+fn registry_manifest_refresh_preserves_lifecycle_ownership() {
+    let existing = sample_record();
+    let mut registry = DynamicPluginRegistry::from_records(vec![existing.clone()]).unwrap();
+    let mut refreshed = existing.clone();
+    refreshed.metadata.name = Some("Refreshed PII Guardrails".into());
+    refreshed.metadata.version = Some("0.2.0".into());
+    refreshed.metadata.generation = 0;
+    refreshed.metadata.created_at = Some("replacement-created".into());
+    refreshed.metadata.updated_at = Some("replacement-updated".into());
+    refreshed.source.manifest_ref = Some("/plugins/pii-v2/relay-plugin.toml".into());
+    refreshed.source.artifact_ref = Some("/plugins/pii-v2/dist/pii.whl".into());
+    refreshed.source.environment_ref = Some("/plugins/pii-v2/.venv".into());
+    refreshed.source.artifact_digest = Some("sha256:def456".into());
+    refreshed.spec = DynamicPluginSpec::default();
+    refreshed.compatibility =
+        DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
+            relay: ">=0.7.0,<0.8.0".into(),
+            worker_protocol: "grpc-v2".into(),
+        });
+    refreshed.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        runtime: WorkerRuntime::Command,
+        entrypoint: "/plugins/pii-v2/bin/worker".into(),
+    });
+    refreshed.status.validation.checked_at = Some("2000-01-01T00:00:00Z".into());
+    refreshed.status.validation.message = Some("refreshed validation".into());
+    refreshed.status.runtime = DynamicPluginRuntimeStatus::default();
+    refreshed.status.startup_class = Some(DynamicPluginStartupClass::Required);
+    refreshed.status.attestation_mode = Some(DynamicPluginAttestationMode::SignatureRequired);
+
+    let refresh_started_at = Utc::now();
+    let result = registry
+        .refresh_manifest_record("acme.guardrails.pii", refreshed)
+        .unwrap();
+    let refresh_completed_at = Utc::now();
+
+    assert_eq!(
+        result.metadata.name.as_deref(),
+        Some("Refreshed PII Guardrails")
+    );
+    assert_eq!(result.metadata.version.as_deref(), Some("0.2.0"));
+    assert_eq!(result.metadata.generation, existing.metadata.generation);
+    assert_eq!(result.metadata.created_at, existing.metadata.created_at);
+    assert_eq!(result.metadata.updated_at, existing.metadata.updated_at);
+    assert_eq!(
+        result.source.manifest_ref.as_deref(),
+        Some("/plugins/pii-v2/relay-plugin.toml")
+    );
+    assert_eq!(
+        result.source.artifact_ref.as_deref(),
+        Some("/plugins/pii-v2/dist/pii.whl")
+    );
+    assert_eq!(
+        result.source.artifact_digest.as_deref(),
+        Some("sha256:def456")
+    );
+    assert_eq!(
+        result.source.environment_ref,
+        existing.source.environment_ref
+    );
+    assert_eq!(result.spec, existing.spec);
+    assert_eq!(result.status.runtime, existing.status.runtime);
+    let checked_at = result
+        .status
+        .validation
+        .checked_at
+        .as_deref()
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .expect("manifest refresh should stamp validation checked_at");
+    assert!(checked_at >= refresh_started_at);
+    assert!(checked_at <= refresh_completed_at);
+    assert_eq!(
+        result.status.validation.message.as_deref(),
+        Some("refreshed validation")
+    );
+    assert_eq!(
+        result.status.startup_class,
+        Some(DynamicPluginStartupClass::Required)
+    );
+    assert_eq!(
+        result.status.attestation_mode,
+        Some(DynamicPluginAttestationMode::SignatureRequired)
+    );
+}
+
+#[test]
+fn registry_manifest_refresh_preserves_tombstone_and_generation() {
+    let mut existing = sample_record();
+    existing.metadata.generation = 19;
+    existing.spec.present = false;
+    existing.spec.enabled = false;
+    let mut registry = DynamicPluginRegistry::from_records(vec![existing.clone()]).unwrap();
+    let mut refreshed = sample_record();
+    refreshed.metadata.generation = 0;
+    refreshed.spec.present = true;
+    refreshed.spec.enabled = true;
+
+    let result = registry
+        .refresh_manifest_record("acme.guardrails.pii", refreshed)
+        .unwrap();
+
+    assert!(result.is_tombstoned());
+    assert!(!result.spec.enabled);
+    assert_eq!(result.metadata.generation, 19);
+}
+
+#[test]
+fn registry_manifest_refresh_rejects_invalid_identity_without_mutation() {
+    let existing = sample_record();
+    let mut registry = DynamicPluginRegistry::from_records(vec![existing.clone()]).unwrap();
+    let mut mismatched = sample_record();
+    mismatched.metadata.id = "other.plugin".into();
+    let error = registry
+        .refresh_manifest_record("acme.guardrails.pii", mismatched)
+        .unwrap_err();
+    assert!(error.to_string().contains("does not match lifecycle id"));
+    assert_eq!(registry.get("acme.guardrails.pii"), Some(&existing));
+
+    let mut invalid = sample_record();
+    invalid.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
+        runtime: WorkerRuntime::Python,
+        entrypoint: String::new(),
+    });
+    let error = registry
+        .refresh_manifest_record("acme.guardrails.pii", invalid)
+        .unwrap_err();
+    assert!(error.to_string().contains("load shape"));
+    assert_eq!(registry.get("acme.guardrails.pii"), Some(&existing));
 }
 
 #[test]

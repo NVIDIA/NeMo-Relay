@@ -25,8 +25,9 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
 use nemo_relay::codec::response::AnnotatedLlmResponse;
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec, DynamicPluginKind, NativePluginLoadSpec, PluginHostActivation,
-    load_native_plugins,
+    DynamicPluginActivationResource, DynamicPluginActivationSpec, DynamicPluginKind,
+    NativePluginLoadSpec, PlannedDynamicPluginActivation, PluginHostActivation,
+    PluginHostActivationPlan, load_native_plugins,
 };
 use nemo_relay::plugin::{
     ConfigDiagnostic, Plugin, PluginComponentSpec, PluginConfig, PluginRegistrationContext,
@@ -50,6 +51,24 @@ static STATIC_BASE_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static STATIC_BASE_DEREGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 
 struct StaticBasePlugin;
+
+struct TrackingActivationResource {
+    verify_count: Arc<AtomicUsize>,
+    drop_count: Arc<AtomicUsize>,
+}
+
+impl DynamicPluginActivationResource for TrackingActivationResource {
+    fn verify(&self) -> PluginResult<()> {
+        self.verify_count.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl Drop for TrackingActivationResource {
+    fn drop(&mut self) {
+        self.drop_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 struct BlockingHostBasePlugin {
     started: Arc<Notify>,
@@ -1379,6 +1398,46 @@ async fn native_validate_and_register_callback_errors_are_reported() {
 }
 
 #[tokio::test]
+async fn plugin_host_component_failure_checked_rolls_back_kind_and_owner() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let failing_manifest =
+        write_manifest_with_symbol(&fixture, "nemo_relay_fixture_register_error");
+
+    let error = match PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &failing_manifest)],
+    )
+    .await
+    {
+        Ok((activation, _)) => {
+            activation
+                .clear()
+                .expect("unexpected failing component activation should clear");
+            panic!("native component registration failure should fail the plugin host");
+        }
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("fixture register failed"), "{error}");
+    assert!(
+        !list_plugin_kinds()
+            .iter()
+            .any(|kind| kind == "fixture_native")
+    );
+
+    let healthy_manifest = write_manifest(&fixture);
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [host_spec("fixture_native", &healthy_manifest)],
+    )
+    .await
+    .expect("checked component rollback should release the host owner");
+    activation
+        .clear()
+        .expect("recovered plugin host should clear");
+}
+
+#[tokio::test]
 async fn plugin_host_activation_owns_configuration_until_clear() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
@@ -1526,12 +1585,24 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest(&fixture);
-    let (activation, _) = PluginHostActivation::activate(
-        PluginConfig::default(),
-        [host_spec("fixture_native", &manifest_ref)],
-    )
+    let verify_count = Arc::new(AtomicUsize::new(0));
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let resource = Arc::new(TrackingActivationResource {
+        verify_count: Arc::clone(&verify_count),
+        drop_count: Arc::clone(&drop_count),
+    });
+    let (activation, _) = PluginHostActivation::activate_plan(PluginHostActivationPlan {
+        config: PluginConfig::default(),
+        dynamic_plugins: vec![PlannedDynamicPluginActivation {
+            spec: host_spec("fixture_native", &manifest_ref),
+            resource,
+        }],
+        diagnostics: Vec::new(),
+    })
     .await
     .expect("plugin host should activate");
+    assert_eq!(verify_count.load(Ordering::SeqCst), 1);
+    assert_eq!(drop_count.load(Ordering::SeqCst), 0);
 
     let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
@@ -1574,6 +1645,11 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
     activation
         .clear()
         .expect("host should clear while a callback snapshot remains in flight");
+    assert_eq!(
+        drop_count.load(Ordering::SeqCst),
+        0,
+        "the activation resource must outlive an in-flight native callback"
+    );
     let unchanged = tool_request_intercepts("after-clear", json!({ "input": true }))
         .await
         .expect("new calls should observe the cleared registries");
@@ -1588,6 +1664,14 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
         .expect("in-flight callback should finish after host clear");
     assert_eq!(result["tool_callback"], true);
     assert_eq!(result["native_plugin_tool_execution"], true);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while drop_count.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the activation resource should be released after the callback finishes");
+    assert_eq!(drop_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1604,13 +1688,25 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
         registered: Arc::clone(&registered),
     }))
     .expect("blocking base plugin should register");
+    let verify_count = Arc::new(AtomicUsize::new(0));
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let resource = Arc::new(TrackingActivationResource {
+        verify_count: Arc::clone(&verify_count),
+        drop_count: Arc::clone(&drop_count),
+    });
 
-    let caller = tokio::spawn(PluginHostActivation::activate(
-        PluginConfig {
-            components: vec![PluginComponentSpec::new("fixture_blocking_host_base")],
-            ..PluginConfig::default()
+    let caller = tokio::spawn(PluginHostActivation::activate_plan(
+        PluginHostActivationPlan {
+            config: PluginConfig {
+                components: vec![PluginComponentSpec::new("fixture_blocking_host_base")],
+                ..PluginConfig::default()
+            },
+            dynamic_plugins: vec![PlannedDynamicPluginActivation {
+                spec: host_spec("fixture_native", &manifest_ref),
+                resource,
+            }],
+            diagnostics: Vec::new(),
         },
-        [host_spec("fixture_native", &manifest_ref)],
     ));
     started.notified().await;
     caller.abort();
@@ -1625,6 +1721,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
         loop {
             if nemo_relay::plugin::active_plugin_report().is_none()
                 && lookup_plugin("fixture_native").is_none()
+                && drop_count.load(Ordering::SeqCst) == 1
             {
                 break;
             }
@@ -1633,6 +1730,7 @@ async fn plugin_host_activation_cleans_up_after_caller_cancellation() {
     })
     .await
     .expect("canceled activation should clear its completed host result");
+    assert_eq!(verify_count.load(Ordering::SeqCst), 1);
 
     let (activation, _) = PluginHostActivation::activate(
         PluginConfig::default(),

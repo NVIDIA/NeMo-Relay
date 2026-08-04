@@ -201,6 +201,45 @@ impl DynamicPluginRegistry {
         Ok(())
     }
 
+    /// Replaces manifest-derived fields while retaining lifecycle-owned state.
+    ///
+    /// File-backed hosts use this after reparsing a declaration's current
+    /// manifest. Desired state, lifecycle lineage, the managed worker
+    /// environment, and observed runtime state remain owned by the existing
+    /// lifecycle record.
+    #[doc(hidden)]
+    pub fn refresh_manifest_record(
+        &mut self,
+        plugin_id: &str,
+        mut refreshed: DynamicPluginRecord,
+    ) -> Result<&DynamicPluginRecord> {
+        normalize_record_shape(&mut refreshed);
+        validate_record_shape(&refreshed)?;
+        if refreshed.metadata.id != plugin_id {
+            return Err(PluginError::InvalidConfig(format!(
+                "refreshed dynamic plugin id '{}' does not match lifecycle id '{plugin_id}'",
+                refreshed.metadata.id
+            )));
+        }
+
+        let existing = self.records.get(plugin_id).ok_or_else(|| {
+            PluginError::NotFound(format!("dynamic plugin '{plugin_id}' is not registered"))
+        })?;
+        refreshed.metadata.generation = existing.metadata.generation;
+        refreshed.metadata.created_at = existing.metadata.created_at.clone();
+        refreshed.metadata.updated_at = existing.metadata.updated_at.clone();
+        refreshed.spec = existing.spec.clone();
+        refreshed.source.environment_ref = existing.source.environment_ref.clone();
+        refreshed.status.runtime = existing.status.runtime.clone();
+        refreshed.status.validation.checked_at = Some(super::current_timestamp());
+
+        self.records.insert(plugin_id.to_owned(), refreshed);
+        Ok(self
+            .records
+            .get(plugin_id)
+            .expect("refreshed dynamic plugin record must exist immediately after insert"))
+    }
+
     fn lookup_mut(&mut self, plugin_id: &str) -> Result<&mut DynamicPluginRecord> {
         self.records.get_mut(plugin_id).ok_or_else(|| {
             PluginError::NotFound(format!("dynamic plugin '{plugin_id}' is not registered"))

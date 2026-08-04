@@ -73,8 +73,9 @@ use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
 
 use super::{
-    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
-    DynamicPluginTeardownOutcome, deregister_tracked_registrations_checked,
+    DynamicPluginActivationResource, DynamicPluginKind, DynamicPluginLoadFailure,
+    DynamicPluginManifest, DynamicPluginManifestLoad, DynamicPluginTeardownOutcome,
+    PanicRetentionGuard, deregister_tracked_registrations_checked, finish_partial_load_rollback,
     validate_annotated_request_consumer_compatibility,
 };
 
@@ -95,6 +96,10 @@ pub struct NativePluginLoadSpec {
 pub struct NativePluginActivation {
     plugins: Vec<Arc<NativePluginInstance>>,
     plugin_registrations: Vec<(String, u64)>,
+    #[cfg(test)]
+    _retained_resources_for_test: Vec<Arc<dyn DynamicPluginActivationResource>>,
+    #[cfg(test)]
+    force_unload_panic: bool,
 }
 
 impl NativePluginActivation {
@@ -110,11 +115,57 @@ impl NativePluginActivation {
         deregister_tracked_registrations_checked(&mut self.plugin_registrations, "native")
     }
 
+    pub(crate) fn prepare_unload_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        #[cfg(test)]
+        if self.force_unload_panic {
+            panic!("injected native activation unload panic");
+        }
+
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        for plugin in self.plugins.iter_mut().rev() {
+            let Some(plugin) = Arc::get_mut(plugin) else {
+                // Callback user-data snapshots own the exact instance. Defer
+                // descriptor teardown and library release until the last
+                // in-flight snapshot drops instead of invalidating its plugin
+                // state while native code is still executing.
+                continue;
+            };
+            outcome.merge(plugin.prepare_unload_checked());
+        }
+        outcome
+    }
+
     #[cfg(test)]
     pub(super) fn with_plugin_kind_for_test(plugin_kind: impl Into<String>) -> Self {
         Self {
             plugins: Vec::new(),
             plugin_registrations: vec![(plugin_kind.into(), 0)],
+            _retained_resources_for_test: Vec::new(),
+            force_unload_panic: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_resource_for_test(
+        resource: Arc<dyn DynamicPluginActivationResource>,
+    ) -> Self {
+        Self {
+            plugins: Vec::new(),
+            plugin_registrations: Vec::new(),
+            _retained_resources_for_test: vec![resource],
+            force_unload_panic: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_panicking_unload_resource_for_test(
+        resource: Arc<dyn DynamicPluginActivationResource>,
+    ) -> Self {
+        Self {
+            plugins: Vec::new(),
+            plugin_registrations: Vec::new(),
+            _retained_resources_for_test: vec![resource],
+            force_unload_panic: true,
         }
     }
 }
@@ -135,24 +186,61 @@ pub fn load_native_plugins<I>(specs: I) -> crate::plugin::Result<NativePluginAct
 where
     I: IntoIterator<Item = NativePluginLoadSpec>,
 {
-    let mut activation = NativePluginActivation {
+    load_native_plugins_with_resources(specs.into_iter().map(|spec| (spec, None)))
+        .map_err(DynamicPluginLoadFailure::into_plugin_error)
+}
+
+pub(crate) fn load_native_plugins_with_resources<I>(
+    specs: I,
+) -> std::result::Result<NativePluginActivation, DynamicPluginLoadFailure>
+where
+    I: IntoIterator<
+        Item = (
+            NativePluginLoadSpec,
+            Option<Arc<dyn DynamicPluginActivationResource>>,
+        ),
+    >,
+{
+    let mut activation = PanicRetentionGuard::new(NativePluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
-    };
-    for spec in specs {
-        let instance = load_one_native_plugin(&spec)?;
+        #[cfg(test)]
+        _retained_resources_for_test: Vec::new(),
+        #[cfg(test)]
+        force_unload_panic: false,
+    });
+    for (spec, resource) in specs {
+        let instance = match load_one_native_plugin(&spec, resource) {
+            Ok(instance) => instance,
+            Err(error) => return Err(rollback_failed_native_load(activation, error)),
+        };
         let plugin_kind = instance.plugin_kind.clone();
-        let registration_id = register_plugin_tracked(Arc::new(NativePluginAdapter {
+        let registration_id = match register_plugin_tracked(Arc::new(NativePluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
             instance: instance.clone(),
-        }))?;
-        activation.plugins.push(instance);
+        })) {
+            Ok(registration_id) => registration_id,
+            Err(error) => return Err(rollback_failed_native_load(activation, error)),
+        };
+        activation.get_mut().plugins.push(instance);
         activation
+            .get_mut()
             .plugin_registrations
             .push((plugin_kind, registration_id));
     }
-    Ok(activation)
+    Ok(activation.take())
+}
+
+fn rollback_failed_native_load(
+    mut activation: PanicRetentionGuard<NativePluginActivation>,
+    error: PluginError,
+) -> DynamicPluginLoadFailure {
+    let mut rollback = activation.get_mut().deregister_plugin_kinds_checked();
+    if rollback.safe_to_unload {
+        rollback.merge(activation.get_mut().prepare_unload_checked());
+    }
+    finish_partial_load_rollback(activation.take(), error, rollback)
 }
 
 struct NativePluginAdapter {
@@ -280,6 +368,7 @@ struct NativePluginInstance {
     allows_multiple_components: bool,
     plugin: Mutex<NemoRelayNativePluginV1>,
     _library: Library,
+    _activation_resource: Option<Arc<dyn DynamicPluginActivationResource>>,
 }
 
 unsafe impl Send for NativePluginInstance {}
@@ -290,6 +379,23 @@ impl Drop for NativePluginInstance {
         if let Ok(mut plugin) = self.plugin.lock() {
             drop_native_plugin_descriptor(&mut plugin);
         }
+    }
+}
+
+impl NativePluginInstance {
+    fn prepare_unload_checked(&self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        match self.plugin.lock() {
+            Ok(mut plugin) => drop_native_plugin_descriptor(&mut plugin),
+            Err(error) => outcome.record_error(
+                format!(
+                    "native plugin '{}' descriptor lock poisoned during unload: {error}",
+                    self.plugin_kind
+                ),
+                false,
+            ),
+        }
+        outcome
     }
 }
 
@@ -306,6 +412,7 @@ fn drop_native_plugin_descriptor(plugin: &mut NemoRelayNativePluginV1) {
 
 fn load_one_native_plugin(
     spec: &NativePluginLoadSpec,
+    activation_resource: Option<Arc<dyn DynamicPluginActivationResource>>,
 ) -> crate::plugin::Result<Arc<NativePluginInstance>> {
     let (manifest, manifest_ref) = DynamicPluginManifest::load_from_path(&spec.manifest_ref)?;
     if manifest.plugin.id.trim() != spec.plugin_id {
@@ -365,16 +472,23 @@ fn load_one_native_plugin(
         .as_deref()
         .ok_or_else(|| PluginError::InvalidConfig("load.symbol is required".into()))?;
 
+    if let Some(resource) = &activation_resource {
+        resource.verify()?;
+    }
     let library = unsafe { Library::new(&library_path) }.map_err(|err| {
         PluginError::Internal(format!(
             "failed to load native plugin library '{}': {err}",
             library_path.display()
         ))
     })?;
+    let mut loaded_resource = PanicRetentionGuard::new((library, activation_resource));
     let mut plugin = NemoRelayNativePluginV1::default();
     unsafe {
-        let entry: Symbol<NemoRelayNativePluginEntry> =
-            library.get(symbol.as_bytes()).map_err(|err| {
+        let entry: Symbol<NemoRelayNativePluginEntry> = loaded_resource
+            .get()
+            .0
+            .get(symbol.as_bytes())
+            .map_err(|err| {
                 PluginError::NotFound(format!(
                     "native plugin symbol '{symbol}' not found in '{}': {err}",
                     library_path.display()
@@ -414,12 +528,14 @@ fn load_one_native_plugin(
             spec.plugin_id
         )));
     }
+    let (library, activation_resource) = loaded_resource.take();
     Ok(Arc::new(NativePluginInstance {
         plugin_kind,
         relay_compat,
         allows_multiple_components: plugin.allows_multiple_components,
         plugin: Mutex::new(plugin),
         _library: library,
+        _activation_resource: activation_resource,
     }))
 }
 

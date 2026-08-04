@@ -40,6 +40,7 @@ struct BackgroundTaskPlugin {
 struct PanickingPlugin;
 struct FailingDeregisterPlugin;
 struct PluginMutationOwnerCleanup;
+struct ActivePluginConfigurationPoisonCleanup;
 
 impl Drop for PluginMutationOwnerCleanup {
     fn drop(&mut self) {
@@ -47,6 +48,15 @@ impl Drop for PluginMutationOwnerCleanup {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         *owner = PluginMutationOwner::Idle;
+    }
+}
+
+impl Drop for ActivePluginConfigurationPoisonCleanup {
+    fn drop(&mut self) {
+        ACTIVE_PLUGIN_CONFIGURATION.clear_poison();
+        if let Ok(mut active) = ACTIVE_PLUGIN_CONFIGURATION.lock() {
+            *active = None;
+        }
     }
 }
 
@@ -1478,6 +1488,114 @@ fn test_pending_registration_records_rollback_failures() {
 }
 
 #[test]
+fn test_active_configuration_store_failure_rolls_back_transferred_registrations() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let _poison_cleanup = ActivePluginConfigurationPoisonCleanup;
+    let deregistration_attempts = Arc::new(AtomicUsize::new(0));
+    let captured_attempts = Arc::clone(&deregistration_attempts);
+    let failures = Arc::new(Mutex::new(Vec::new()));
+
+    std::thread::spawn(|| {
+        let _active = ACTIVE_PLUGIN_CONFIGURATION.lock().unwrap();
+        panic!("poison active plugin configuration for store failure");
+    })
+    .join()
+    .expect_err("fixture active configuration writer should panic");
+
+    let error = store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "transferred-callback",
+            Box::new(move || {
+                captured_attempts.fetch_add(1, Ordering::SeqCst);
+                Err(PluginError::RegistrationFailed(
+                    "transferred callback remained registered".into(),
+                ))
+            }),
+        )],
+        Some(&failures),
+    )
+    .expect_err("a poisoned active configuration store should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("active plugin configuration lock poisoned"),
+        "{error}"
+    );
+    assert_eq!(deregistration_attempts.load(Ordering::SeqCst), 1);
+    let failures = failures.lock().unwrap();
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].contains("transferred-callback"));
+    assert!(failures[0].contains("remained registered"));
+}
+
+#[test]
+fn test_active_configuration_store_failure_releases_poisoned_guard_before_rollback() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let _poison_cleanup = ActivePluginConfigurationPoisonCleanup;
+    let rollback_reentered = Arc::new(AtomicUsize::new(0));
+    let captured_reentry = Arc::clone(&rollback_reentered);
+
+    std::thread::spawn(|| {
+        let _active = ACTIVE_PLUGIN_CONFIGURATION.lock().unwrap();
+        panic!("poison active plugin configuration for reentrant rollback test");
+    })
+    .join()
+    .expect_err("fixture active configuration writer should panic");
+
+    let error = store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "reentrant-callback",
+            Box::new(move || {
+                match ACTIVE_PLUGIN_CONFIGURATION.try_lock() {
+                    Err(std::sync::TryLockError::Poisoned(guard)) => {
+                        drop(guard.into_inner());
+                        captured_reentry.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(_) => {
+                        return Err(PluginError::RegistrationFailed(
+                            "active configuration lock unexpectedly lost poison state".into(),
+                        ));
+                    }
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        return Err(PluginError::RegistrationFailed(
+                            "active configuration lock remained held during rollback".into(),
+                        ));
+                    }
+                }
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "fixture.reentrant_rollback".into(),
+                    component: "fixture".into(),
+                    field: None,
+                    message: "rollback re-entered active configuration state".into(),
+                    session_id: None,
+                    count: 1,
+                });
+                Ok(())
+            }),
+        )],
+        None,
+    )
+    .expect_err("a poisoned active configuration store should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("active plugin configuration lock poisoned"),
+        "{error}"
+    );
+    assert_eq!(rollback_reentered.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn test_checked_teardown_reports_unremoved_registrations() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1493,6 +1611,7 @@ fn test_checked_teardown_reports_unremoved_registrations() {
                 ))
             }),
         )],
+        None,
     )
     .unwrap();
 
@@ -1530,6 +1649,7 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
                 )))
             }),
         )],
+        None,
     )
     .unwrap();
 
@@ -1562,6 +1682,7 @@ fn test_legacy_clear_retains_mutation_owner_after_incomplete_teardown() {
             "stale-callback",
             Box::new(|| panic!("fixture deregistration panicked")),
         )],
+        None,
     )
     .unwrap();
 

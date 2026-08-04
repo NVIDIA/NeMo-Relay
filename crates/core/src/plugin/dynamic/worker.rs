@@ -82,8 +82,9 @@ use crate::plugin::{
 };
 
 use super::{
-    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
-    DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
+    DynamicPluginActivationResource, DynamicPluginKind, DynamicPluginLoadFailure,
+    DynamicPluginManifest, DynamicPluginManifestLoad, DynamicPluginTeardownOutcome,
+    PanicRetentionGuard, WorkerRuntime, deregister_tracked_registrations_checked,
     validate_annotated_request_consumer_compatibility,
 };
 
@@ -152,7 +153,27 @@ impl WorkerPluginActivation {
     pub(crate) fn shutdown_plugins_checked(&self) -> DynamicPluginTeardownOutcome {
         let mut outcome = DynamicPluginTeardownOutcome::success();
         for plugin in self.plugins.iter().rev() {
+            if Arc::strong_count(plugin) > 1 {
+                // Callback snapshots own the exact instance. Defer worker
+                // shutdown until the last in-flight snapshot drops rather
+                // than tearing down its process and runtime underneath it.
+                continue;
+            }
             outcome.merge(plugin.shutdown_checked());
+        }
+        outcome
+    }
+
+    pub(crate) fn prepare_unload_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        for plugin in self.plugins.iter_mut().rev() {
+            let Some(plugin) = Arc::get_mut(plugin) else {
+                // A callback snapshot still owns the instance. Dropping the
+                // activation transfers final shutdown and runtime destruction
+                // to that snapshot's eventual last-owner drop.
+                continue;
+            };
+            outcome.merge(plugin.prepare_unload_checked());
         }
         outcome
     }
@@ -174,24 +195,66 @@ pub fn load_worker_plugins<I>(specs: I) -> crate::plugin::Result<WorkerPluginAct
 where
     I: IntoIterator<Item = WorkerPluginLoadSpec>,
 {
-    let mut activation = WorkerPluginActivation {
+    load_worker_plugins_with_resources(specs.into_iter().map(|spec| (spec, None)))
+        .map_err(DynamicPluginLoadFailure::into_plugin_error)
+}
+
+pub(crate) fn load_worker_plugins_with_resources<I>(
+    specs: I,
+) -> std::result::Result<WorkerPluginActivation, DynamicPluginLoadFailure>
+where
+    I: IntoIterator<
+        Item = (
+            WorkerPluginLoadSpec,
+            Option<Arc<dyn DynamicPluginActivationResource>>,
+        ),
+    >,
+{
+    let mut activation = PanicRetentionGuard::new(WorkerPluginActivation {
         plugins: Vec::new(),
         plugin_registrations: Vec::new(),
-    };
-    for spec in specs {
-        let instance = load_one_worker_plugin(&spec)?;
+    });
+    for (spec, resource) in specs {
+        let instance = match load_one_worker_plugin(&spec, resource) {
+            Ok(instance) => instance,
+            Err(failure) => return Err(rollback_failed_worker_load(activation, failure)),
+        };
         let plugin_kind = instance.plugin_kind.clone();
-        let registration_id = register_plugin_tracked(Arc::new(WorkerPluginAdapter {
+        activation.get_mut().plugins.push(Arc::clone(&instance));
+        let registration_id = match register_plugin_tracked(Arc::new(WorkerPluginAdapter {
             plugin_kind: plugin_kind.clone(),
             allows_multiple_components: instance.allows_multiple_components,
-            instance: instance.clone(),
-        }))?;
-        activation.plugins.push(instance);
+            instance,
+        })) {
+            Ok(registration_id) => registration_id,
+            Err(error) => return Err(rollback_failed_worker_load(activation, error.into())),
+        };
         activation
+            .get_mut()
             .plugin_registrations
             .push((plugin_kind, registration_id));
     }
-    Ok(activation)
+    Ok(activation.take())
+}
+
+fn rollback_failed_worker_load(
+    mut activation: PanicRetentionGuard<WorkerPluginActivation>,
+    mut failure: DynamicPluginLoadFailure,
+) -> DynamicPluginLoadFailure {
+    let mut rollback = activation.get_mut().deregister_plugin_kinds_checked();
+    if rollback.safe_to_unload {
+        rollback.merge(activation.get().shutdown_plugins_checked());
+    }
+    if rollback.safe_to_unload {
+        rollback.merge(activation.get_mut().prepare_unload_checked());
+    }
+    let safe_to_unload = rollback.safe_to_unload;
+    failure.merge_rollback(rollback);
+    let activation = activation.take();
+    if !safe_to_unload {
+        std::mem::forget(activation);
+    }
+    failure
 }
 
 struct WorkerPluginAdapter {
@@ -251,11 +314,18 @@ struct WorkerPluginInstance {
     process: Mutex<Option<Child>>,
     activation_dir: PathBuf,
     teardown_started: AtomicBool,
+    _activation_resource: Option<Arc<dyn DynamicPluginActivationResource>>,
 }
 
 impl Drop for WorkerPluginInstance {
     fn drop(&mut self) {
-        let outcome = self.shutdown_checked();
+        let mut outcome = self.shutdown_checked();
+        if outcome.safe_to_unload {
+            outcome.merge(self.runtime.shutdown_checked());
+        }
+        if !outcome.safe_to_unload {
+            self.retain_owned_resources();
+        }
         if !outcome.errors.is_empty() {
             log::error!(
                 target: "nemo_relay.worker",
@@ -270,6 +340,35 @@ impl Drop for WorkerPluginInstance {
 }
 
 impl WorkerPluginInstance {
+    fn retain_owned_resources(&mut self) {
+        self.runtime.retain();
+        if let Some(shutdown) = self
+            .shutdown
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            std::mem::forget(shutdown);
+        }
+        if let Some(process) = self
+            .process
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            std::mem::forget(process);
+        }
+        if let Some(resource) = self._activation_resource.take() {
+            std::mem::forget(resource);
+        }
+        std::mem::forget(self.client.clone());
+        std::mem::forget(Arc::clone(&self.host_state));
+    }
+
+    fn prepare_unload_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        self.runtime.shutdown_checked()
+    }
+
     fn shutdown_checked(&self) -> DynamicPluginTeardownOutcome {
         let mut outcome = DynamicPluginTeardownOutcome::success();
         if self.teardown_started.swap(true, Ordering::AcqRel) {
@@ -374,57 +473,57 @@ impl WorkerPluginInstance {
                 return;
             }
         };
-        let Some(child) = process.as_mut() else {
-            return;
-        };
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                process.take();
-            }
-            Ok(None) => {
-                if let Err(kill_error) = child.kill() {
-                    match child.try_wait() {
-                        Ok(Some(_)) => {
-                            process.take();
-                            outcome.record_error(
-                                format!(
-                                    "worker plugin '{}' process kill failed after exit: {kill_error}",
-                                    self.plugin_kind
-                                ),
-                                true,
-                            );
-                        }
-                        Ok(None) | Err(_) => outcome.record_error(
-                            format!(
-                                "worker plugin '{}' process kill failed: {kill_error}",
-                                self.plugin_kind
-                            ),
-                            false,
-                        ),
-                    }
-                    return;
-                }
-                match child.wait() {
-                    Ok(_) => {
+        stop_worker_process_checked(&self.plugin_kind, &mut process, outcome);
+    }
+}
+
+fn stop_worker_process_checked(
+    plugin_kind: &str,
+    process: &mut Option<Child>,
+    outcome: &mut DynamicPluginTeardownOutcome,
+) {
+    let Some(child) = process.as_mut() else {
+        return;
+    };
+    match child.try_wait() {
+        Ok(Some(_)) => {
+            process.take();
+        }
+        Ok(None) => {
+            if let Err(kill_error) = child.kill() {
+                match child.try_wait() {
+                    Ok(Some(_)) => {
                         process.take();
+                        outcome.record_error(
+                            format!(
+                                "worker plugin '{plugin_kind}' process kill failed after exit: {kill_error}"
+                            ),
+                            true,
+                        );
                     }
-                    Err(error) => outcome.record_error(
-                        format!(
-                            "worker plugin '{}' process wait failed after kill: {error}",
-                            self.plugin_kind
-                        ),
+                    Ok(None) | Err(_) => outcome.record_error(
+                        format!("worker plugin '{plugin_kind}' process kill failed: {kill_error}"),
                         false,
                     ),
                 }
+                return;
             }
-            Err(error) => outcome.record_error(
-                format!(
-                    "worker plugin '{}' process status check failed: {error}",
-                    self.plugin_kind
+            match child.wait() {
+                Ok(_) => {
+                    process.take();
+                }
+                Err(error) => outcome.record_error(
+                    format!(
+                        "worker plugin '{plugin_kind}' process wait failed after kill: {error}"
+                    ),
+                    false,
                 ),
-                false,
-            ),
+            }
         }
+        Err(error) => outcome.record_error(
+            format!("worker plugin '{plugin_kind}' process status check failed: {error}"),
+            false,
+        ),
     }
 }
 
@@ -438,7 +537,8 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
 
 fn load_one_worker_plugin(
     spec: &WorkerPluginLoadSpec,
-) -> crate::plugin::Result<Arc<WorkerPluginInstance>> {
+    activation_resource: Option<Arc<dyn DynamicPluginActivationResource>>,
+) -> std::result::Result<Arc<WorkerPluginInstance>, DynamicPluginLoadFailure> {
     log::info!(
         target: "nemo_relay.worker",
         event = "worker_starting",
@@ -450,13 +550,15 @@ fn load_one_worker_plugin(
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin manifest id '{}' does not match expected id '{}'",
             manifest.plugin.id, spec.plugin_id
-        )));
+        ))
+        .into());
     }
     if manifest.plugin.kind != DynamicPluginKind::Worker {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin '{}' is kind {}; worker loader only supports worker",
             spec.plugin_id, manifest.plugin.kind
-        )));
+        ))
+        .into());
     }
     validate_relay_compatibility(manifest.compat.relay.as_deref())?;
     let relay_compat = manifest
@@ -509,7 +611,10 @@ fn load_one_worker_plugin(
     ));
 
     let manifest_path = PathBuf::from(&manifest_ref);
-    let mut child = ChildGuard::new(spawn_worker_process(WorkerProcessLaunch {
+    if let Some(resource) = &activation_resource {
+        resource.verify()?;
+    }
+    let child = spawn_worker_process(WorkerProcessLaunch {
         runtime,
         manifest_path: &manifest_path,
         environment_ref: spec.environment_ref.as_deref(),
@@ -520,28 +625,72 @@ fn load_one_worker_plugin(
         host_endpoint: &host_advertise,
         worker_endpoint: &worker_advertise,
         worker_endpoint_file: worker_endpoint_file.as_deref(),
-    })?);
+    })?;
+    let pending = PendingWorkerPluginStartup::new(
+        spec.plugin_id.clone(),
+        runtime_handle,
+        host_state,
+        shutdown_tx,
+        child,
+        activation_dir_guard.keep(),
+        activation_resource,
+    );
     log::info!(
         target: "nemo_relay.worker",
         event = "worker_started",
         plugin_id = spec.plugin_id.as_str(),
-        pid = child
-            .child
-            .as_ref()
-            .expect("worker child should remain guarded")
-            .id();
+        pid = pending.process_id();
         "Worker plugin process started"
     );
+
+    let prepared = match prepare_worker_plugin_connection(
+        spec,
+        &relay_compat,
+        &activation_id,
+        &auth_token,
+        &host_advertise,
+        &worker_connect,
+        &pending,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => return Err(pending.fail(error)),
+    };
+
+    log::info!(
+        target: "nemo_relay.worker",
+        event = "worker_connected",
+        plugin_id = spec.plugin_id.as_str();
+        "Worker plugin connected and registered"
+    );
+    Ok(pending.activate(spec, prepared))
+}
+
+struct PreparedWorkerPlugin {
+    client: PluginWorkerClient<Channel>,
+    allows_multiple_components: bool,
+    validation_diagnostics: Vec<ConfigDiagnostic>,
+    registrations: Vec<Registration>,
+}
+
+fn prepare_worker_plugin_connection(
+    spec: &WorkerPluginLoadSpec,
+    relay_compat: &str,
+    activation_id: &str,
+    auth_token: &str,
+    host_advertise: &str,
+    worker_connect: &WorkerConnectEndpoint,
+    pending: &PendingWorkerPluginStartup,
+) -> crate::plugin::Result<PreparedWorkerPlugin> {
     let mut client = block_on_runtime(
-        runtime_handle.runtime(),
-        connect_worker_with_retry(&worker_connect, &spec.plugin_id),
+        pending.runtime(),
+        connect_worker_with_retry(worker_connect, &spec.plugin_id),
     )?;
 
     let health = block_on_runtime(
-        runtime_handle.runtime(),
+        pending.runtime(),
         worker_rpc(client.health(worker_rpc_request(HealthRequest {
-            activation_id: activation_id.clone(),
-            auth_token: auth_token.clone(),
+            activation_id: activation_id.to_owned(),
+            auth_token: auth_token.to_owned(),
         }))),
     )
     .map_err(|err| PluginError::RegistrationFailed(format!("worker health check failed: {err}")))?;
@@ -552,14 +701,14 @@ fn load_one_worker_plugin(
     }
 
     let handshake = block_on_runtime(
-        runtime_handle.runtime(),
+        pending.runtime(),
         worker_rpc(client.handshake(worker_rpc_request(HandshakeRequest {
-            activation_id: activation_id.clone(),
+            activation_id: activation_id.to_owned(),
             plugin_id: spec.plugin_id.clone(),
             relay_version: env!("CARGO_PKG_VERSION").into(),
             worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
-            auth_token: auth_token.clone(),
-            host_endpoint: host_advertise.clone(),
+            auth_token: auth_token.to_owned(),
+            host_endpoint: host_advertise.to_owned(),
         }))),
     )
     .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
@@ -580,11 +729,11 @@ fn load_one_worker_plugin(
 
     let config = Json::Object(spec.config.clone());
     let validate = block_on_runtime(
-        runtime_handle.runtime(),
+        pending.runtime(),
         worker_rpc(client.validate(worker_rpc_request(ValidateRequest {
-            activation_id: activation_id.clone(),
+            activation_id: activation_id.to_owned(),
             plugin_id: spec.plugin_id.clone(),
-            auth_token: auth_token.clone(),
+            auth_token: auth_token.to_owned(),
             config: Some(json_envelope(JSON_SCHEMA, &config)?),
         }))),
     )
@@ -605,11 +754,11 @@ fn load_one_worker_plugin(
         Vec::new()
     } else {
         let register = block_on_runtime(
-            runtime_handle.runtime(),
+            pending.runtime(),
             worker_rpc(client.register(worker_rpc_request(RegisterRequest {
-                activation_id: activation_id.clone(),
+                activation_id: activation_id.to_owned(),
                 plugin_id: spec.plugin_id.clone(),
-                auth_token: auth_token.clone(),
+                auth_token: auth_token.to_owned(),
                 config: Some(json_envelope(JSON_SCHEMA, &config)?),
             }))),
         )
@@ -627,29 +776,14 @@ fn load_one_worker_plugin(
         RegistrationSurface::try_from(registration.surface)
             .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
     }) {
-        validate_annotated_request_consumer_compatibility(&relay_compat, &spec.plugin_id)?;
+        validate_annotated_request_consumer_compatibility(relay_compat, &spec.plugin_id)?;
     }
-
-    log::info!(
-        target: "nemo_relay.worker",
-        event = "worker_connected",
-        plugin_id = spec.plugin_id.as_str();
-        "Worker plugin connected and registered"
-    );
-    Ok(Arc::new(WorkerPluginInstance {
-        plugin_kind: spec.plugin_id.clone(),
+    Ok(PreparedWorkerPlugin {
+        client,
         allows_multiple_components: handshake.allows_multiple_components,
-        config: spec.config.clone(),
         validation_diagnostics,
         registrations,
-        runtime: runtime_handle,
-        client,
-        host_state,
-        shutdown: Mutex::new(Some(shutdown_tx)),
-        process: Mutex::new(Some(child.take())),
-        activation_dir: activation_dir_guard.keep(),
-        teardown_started: AtomicBool::new(false),
-    }))
+    })
 }
 
 enum HostRuntimeServer {
@@ -1056,7 +1190,7 @@ fn clear_host_python_environment(command: &mut Command) {
 
 impl WorkerPluginInstance {
     fn install_registrations(
-        &self,
+        self: &Arc<Self>,
         ctx: &mut PluginRegistrationContext,
     ) -> crate::plugin::Result<()> {
         for registration in &self.registrations {
@@ -1106,7 +1240,7 @@ impl WorkerPluginInstance {
     }
 
     fn install_subscriber_registration(
-        &self,
+        self: &Arc<Self>,
         ctx: &mut PluginRegistrationContext,
         name: &str,
     ) -> crate::plugin::Result<()> {
@@ -1123,7 +1257,7 @@ impl WorkerPluginInstance {
     }
 
     fn install_event_sanitize_registration(
-        &self,
+        self: &Arc<Self>,
         ctx: &mut PluginRegistrationContext,
         name: &str,
         priority: i32,
@@ -1156,7 +1290,7 @@ impl WorkerPluginInstance {
     }
 
     fn install_tool_registration(
-        &self,
+        self: &Arc<Self>,
         ctx: &mut PluginRegistrationContext,
         registration: &Registration,
         surface: RegistrationSurface,
@@ -1245,7 +1379,7 @@ impl WorkerPluginInstance {
     }
 
     fn install_llm_registration(
-        &self,
+        self: &Arc<Self>,
         ctx: &mut PluginRegistrationContext,
         registration: &Registration,
         surface: RegistrationSurface,
@@ -1356,13 +1490,14 @@ impl WorkerPluginInstance {
         }
     }
 
-    fn clone_for_callback(&self) -> WorkerPluginCallback {
+    fn clone_for_callback(self: &Arc<Self>) -> WorkerPluginCallback {
         WorkerPluginCallback {
             plugin_kind: self.plugin_kind.clone(),
             activation_id: self.host_state.activation_id.clone(),
             runtime: self.runtime.handle(),
             client: self.client.clone(),
             host_state: self.host_state.clone(),
+            activation_anchor: WorkerCallbackActivationAnchor::new(Arc::clone(self)),
         }
     }
 }
@@ -1394,6 +1529,31 @@ struct WorkerPluginCallback {
     runtime: tokio::runtime::Handle,
     client: PluginWorkerClient<Channel>,
     host_state: Arc<WorkerHostRuntimeState>,
+    activation_anchor: WorkerCallbackActivationAnchor,
+}
+
+#[derive(Clone)]
+struct WorkerCallbackActivationAnchor {
+    #[cfg(not(test))]
+    _instance: Arc<WorkerPluginInstance>,
+    #[cfg(test)]
+    _instance: Option<Arc<WorkerPluginInstance>>,
+}
+
+impl WorkerCallbackActivationAnchor {
+    fn new(instance: Arc<WorkerPluginInstance>) -> Self {
+        Self {
+            #[cfg(not(test))]
+            _instance: instance,
+            #[cfg(test)]
+            _instance: Some(instance),
+        }
+    }
+
+    #[cfg(test)]
+    fn detached() -> Self {
+        Self { _instance: None }
+    }
 }
 
 impl WorkerPluginCallback {
@@ -1418,6 +1578,7 @@ struct WorkerInvocationGuard {
     invocation_id: String,
     continuation_id: String,
     scope_stack_id: String,
+    _activation_anchor: WorkerCallbackActivationAnchor,
     cancel_on_drop: bool,
     cleaned: bool,
 }
@@ -1437,6 +1598,7 @@ impl WorkerInvocationGuard {
                 .as_ref()
                 .map(|scope| scope.scope_stack_id.clone())
                 .unwrap_or_default(),
+            _activation_anchor: callback.activation_anchor.clone(),
             cancel_on_drop: true,
             cleaned: false,
         }
@@ -1934,12 +2096,16 @@ impl WorkerPluginCallback {
 
 struct OwnedWorkerRuntime {
     runtime: Option<Runtime>,
+    #[cfg(test)]
+    force_drop_thread_panic: bool,
 }
 
 impl OwnedWorkerRuntime {
     fn new(runtime: Runtime) -> Self {
         Self {
             runtime: Some(runtime),
+            #[cfg(test)]
+            force_drop_thread_panic: false,
         }
     }
 
@@ -1952,46 +2118,271 @@ impl OwnedWorkerRuntime {
     fn handle(&self) -> tokio::runtime::Handle {
         self.runtime().handle().clone()
     }
+
+    fn retain(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            std::mem::forget(runtime);
+        }
+    }
+
+    fn shutdown_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        let Some(runtime) = self.runtime.take() else {
+            return outcome;
+        };
+        #[cfg(test)]
+        let force_drop_thread_panic = self.force_drop_thread_panic;
+
+        let drop_result = if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::scope(|scope| {
+                scope
+                    .spawn(move || {
+                        let mut runtime = std::mem::ManuallyDrop::new(runtime);
+                        #[cfg(test)]
+                        if force_drop_thread_panic {
+                            panic!("injected worker runtime drop thread panic");
+                        }
+                        // SAFETY: this is the only explicit destruction of the
+                        // runtime. If destruction panics, the outer host keeps
+                        // its resource anchors and lease fail-closed.
+                        unsafe { std::mem::ManuallyDrop::drop(&mut runtime) };
+                    })
+                    .join()
+            })
+        } else {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                let mut runtime = std::mem::ManuallyDrop::new(runtime);
+                #[cfg(test)]
+                if force_drop_thread_panic {
+                    panic!("injected worker runtime drop panic");
+                }
+                // SAFETY: this is the only explicit destruction of the
+                // runtime; ManuallyDrop prevents a second attempt on unwind.
+                unsafe { std::mem::ManuallyDrop::drop(&mut runtime) };
+            }))
+        };
+        if let Err(payload) = drop_result {
+            outcome.record_error(
+                format!(
+                    "worker runtime destruction panicked: {}",
+                    panic_payload_message(payload.as_ref())
+                ),
+                false,
+            );
+        }
+        outcome
+    }
+
+    #[cfg(test)]
+    fn force_drop_thread_panic_for_test(&mut self) {
+        self.force_drop_thread_panic = true;
+    }
 }
 
 impl Drop for OwnedWorkerRuntime {
     fn drop(&mut self) {
-        let Some(runtime) = self.runtime.take() else {
-            return;
-        };
-        if tokio::runtime::Handle::try_current().is_ok() {
-            std::thread::scope(|scope| {
-                scope
-                    .spawn(move || drop(runtime))
-                    .join()
-                    .expect("worker runtime drop thread panicked");
-            });
-        } else {
-            drop(runtime);
+        let outcome = self.shutdown_checked();
+        if !outcome.errors.is_empty() {
+            log::error!(
+                target: "nemo_relay.worker",
+                event = "worker_runtime_cleanup_failed",
+                failure_count = outcome.errors.len(),
+                safe_to_unload = outcome.safe_to_unload;
+                "Worker runtime cleanup failed during drop"
+            );
         }
     }
 }
 
-struct ChildGuard {
-    child: Option<Child>,
+struct PendingWorkerPluginStartup {
+    plugin_kind: String,
+    runtime: Option<OwnedWorkerRuntime>,
+    host_state: Option<Arc<WorkerHostRuntimeState>>,
+    shutdown: Option<oneshot::Sender<()>>,
+    process: Option<Child>,
+    activation_dir: Option<PathBuf>,
+    activation_resource: Option<Arc<dyn DynamicPluginActivationResource>>,
+    #[cfg(test)]
+    force_unsafe_cleanup: bool,
 }
 
-impl ChildGuard {
-    fn new(child: Child) -> Self {
-        Self { child: Some(child) }
+impl PendingWorkerPluginStartup {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        plugin_kind: String,
+        runtime: OwnedWorkerRuntime,
+        host_state: Arc<WorkerHostRuntimeState>,
+        shutdown: oneshot::Sender<()>,
+        process: Child,
+        activation_dir: PathBuf,
+        activation_resource: Option<Arc<dyn DynamicPluginActivationResource>>,
+    ) -> Self {
+        Self {
+            plugin_kind,
+            runtime: Some(runtime),
+            host_state: Some(host_state),
+            shutdown: Some(shutdown),
+            process: Some(process),
+            activation_dir: Some(activation_dir),
+            activation_resource,
+            #[cfg(test)]
+            force_unsafe_cleanup: false,
+        }
     }
 
-    fn take(&mut self) -> Child {
-        self.child.take().expect("worker child already taken")
+    fn runtime(&self) -> &Runtime {
+        self.runtime
+            .as_ref()
+            .expect("pending worker runtime must remain owned during startup")
+            .runtime()
+    }
+
+    fn process_id(&self) -> u32 {
+        self.process
+            .as_ref()
+            .expect("pending worker process must remain owned during startup")
+            .id()
+    }
+
+    fn activate(
+        mut self,
+        spec: &WorkerPluginLoadSpec,
+        prepared: PreparedWorkerPlugin,
+    ) -> Arc<WorkerPluginInstance> {
+        Arc::new(WorkerPluginInstance {
+            plugin_kind: std::mem::take(&mut self.plugin_kind),
+            allows_multiple_components: prepared.allows_multiple_components,
+            config: spec.config.clone(),
+            validation_diagnostics: prepared.validation_diagnostics,
+            registrations: prepared.registrations,
+            runtime: self
+                .runtime
+                .take()
+                .expect("completed worker startup must retain its runtime"),
+            client: prepared.client,
+            host_state: self
+                .host_state
+                .take()
+                .expect("completed worker startup must retain its host state"),
+            shutdown: Mutex::new(self.shutdown.take()),
+            process: Mutex::new(self.process.take()),
+            activation_dir: self
+                .activation_dir
+                .take()
+                .expect("completed worker startup must retain its activation directory"),
+            teardown_started: AtomicBool::new(false),
+            _activation_resource: self.activation_resource.take(),
+        })
+    }
+
+    fn fail(mut self, error: PluginError) -> DynamicPluginLoadFailure {
+        let outcome = self.cleanup_checked();
+        if !outcome.safe_to_unload {
+            self.retain_owned_resources();
+        }
+        DynamicPluginLoadFailure::new(error, outcome)
+    }
+
+    fn cleanup_checked(&mut self) -> DynamicPluginTeardownOutcome {
+        let mut outcome = DynamicPluginTeardownOutcome::success();
+        #[cfg(test)]
+        if self.force_unsafe_cleanup {
+            outcome.record_error("injected pending worker cleanup failure", false);
+            return outcome;
+        }
+
+        if let Some(shutdown) = self.shutdown.take()
+            && shutdown.send(()).is_err()
+        {
+            outcome.record_error(
+                format!(
+                    "worker plugin '{}' pending host runtime shutdown channel was closed",
+                    self.plugin_kind
+                ),
+                true,
+            );
+        }
+        stop_worker_process_checked(&self.plugin_kind, &mut self.process, &mut outcome);
+        if !outcome.safe_to_unload {
+            return outcome;
+        }
+
+        if let Some(activation_dir) = self.activation_dir.take()
+            && let Err(error) = std::fs::remove_dir_all(&activation_dir)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            outcome.record_error(
+                format!(
+                    "worker plugin '{}' pending activation directory cleanup failed for '{}': {error}",
+                    self.plugin_kind,
+                    activation_dir.display()
+                ),
+                true,
+            );
+        }
+        if let Some(runtime) = self.runtime.as_mut() {
+            outcome.merge(runtime.shutdown_checked());
+        }
+        if !outcome.safe_to_unload {
+            return outcome;
+        }
+        // `shutdown_checked` has consumed the Tokio runtime. Dropping the
+        // inert owner is now infallible and cannot release the activation
+        // resource before runtime destruction has been proven safe.
+        self.runtime.take();
+        self.host_state.take();
+        self.activation_resource.take();
+        outcome
+    }
+
+    fn retain_owned_resources(&mut self) {
+        retain_option(&mut self.runtime);
+        retain_option(&mut self.host_state);
+        retain_option(&mut self.shutdown);
+        retain_option(&mut self.process);
+        retain_option(&mut self.activation_resource);
+        self.activation_dir.take();
+    }
+
+    fn owns_resources(&self) -> bool {
+        self.runtime.is_some()
+            || self.host_state.is_some()
+            || self.shutdown.is_some()
+            || self.process.is_some()
+            || self.activation_dir.is_some()
+            || self.activation_resource.is_some()
     }
 }
 
-impl Drop for ChildGuard {
+impl Drop for PendingWorkerPluginStartup {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if !self.owns_resources() {
+            return;
         }
+        if std::thread::panicking() {
+            self.retain_owned_resources();
+            return;
+        }
+        let outcome = self.cleanup_checked();
+        if !outcome.safe_to_unload {
+            self.retain_owned_resources();
+        }
+        if !outcome.errors.is_empty() {
+            log::error!(
+                target: "nemo_relay.worker",
+                event = "worker_startup_cleanup_failed",
+                plugin_id = self.plugin_kind.as_str(),
+                failure_count = outcome.errors.len(),
+                safe_to_unload = outcome.safe_to_unload;
+                "Pending worker plugin cleanup failed"
+            );
+        }
+    }
+}
+
+fn retain_option<T>(value: &mut Option<T>) {
+    if let Some(value) = value.take() {
+        std::mem::forget(value);
     }
 }
 

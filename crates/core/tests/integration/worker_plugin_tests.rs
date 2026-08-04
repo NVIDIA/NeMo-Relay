@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use futures::StreamExt;
@@ -23,12 +24,13 @@ use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_worker_plugins,
+    DynamicPluginActivationResource, DynamicPluginActivationSpec, DynamicPluginKind,
+    PlannedDynamicPluginActivation, PluginHostActivation, PluginHostActivationPlan,
+    WorkerPluginActivation, WorkerPluginLoadSpec, load_worker_plugins,
 };
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-    list_plugin_kinds,
+    PluginComponentSpec, PluginConfig, Result as PluginResult, clear_plugin_configuration,
+    initialize_plugins_exact, list_plugin_kinds,
 };
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -36,6 +38,24 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct TrackingActivationResource {
+    verify_count: Arc<AtomicUsize>,
+    drop_count: Arc<AtomicUsize>,
+}
+
+impl DynamicPluginActivationResource for TrackingActivationResource {
+    fn verify(&self) -> PluginResult<()> {
+        self.verify_count.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+impl Drop for TrackingActivationResource {
+    fn drop(&mut self) {
+        self.drop_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
@@ -55,21 +75,33 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
-    let (activation, report) = PluginHostActivation::activate(
-        PluginConfig::default(),
-        [DynamicPluginActivationSpec {
-            plugin_id: "fixture_worker".into(),
-            kind: DynamicPluginKind::Worker,
-            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
-            environment_ref: None,
-            config: Map::new(),
+    let verify_count = Arc::new(AtomicUsize::new(0));
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let resource = Arc::new(TrackingActivationResource {
+        verify_count: Arc::clone(&verify_count),
+        drop_count: Arc::clone(&drop_count),
+    });
+    let (activation, report) = PluginHostActivation::activate_plan(PluginHostActivationPlan {
+        config: PluginConfig::default(),
+        dynamic_plugins: vec![PlannedDynamicPluginActivation {
+            spec: DynamicPluginActivationSpec {
+                plugin_id: "fixture_worker".into(),
+                kind: DynamicPluginKind::Worker,
+                manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+                environment_ref: None,
+                config: Map::new(),
+            },
+            resource,
         }],
-    )
+        diagnostics: Vec::new(),
+    })
     .await
     .expect("worker plugin host should activate");
 
     assert!(activation.is_active());
     assert!(!report.has_errors());
+    assert_eq!(verify_count.load(Ordering::SeqCst), 1);
+    assert_eq!(drop_count.load(Ordering::SeqCst), 0);
     assert!(
         list_plugin_kinds()
             .iter()
@@ -81,6 +113,7 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
     assert_eq!(rewritten["worker_plugin"], true);
 
     activation.clear().expect("worker plugin host should clear");
+    assert_eq!(drop_count.load(Ordering::SeqCst), 1);
     assert!(
         !list_plugin_kinds()
             .iter()
@@ -90,6 +123,106 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
         .await
         .expect("cleared worker intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
+}
+
+#[tokio::test]
+async fn plugin_host_clear_allows_an_in_flight_worker_callback_to_finish() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let verify_count = Arc::new(AtomicUsize::new(0));
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let resource = Arc::new(TrackingActivationResource {
+        verify_count: Arc::clone(&verify_count),
+        drop_count: Arc::clone(&drop_count),
+    });
+    let (activation, _) = PluginHostActivation::activate_plan(PluginHostActivationPlan {
+        config: PluginConfig::default(),
+        dynamic_plugins: vec![PlannedDynamicPluginActivation {
+            spec: DynamicPluginActivationSpec {
+                plugin_id: "fixture_worker".into(),
+                kind: DynamicPluginKind::Worker,
+                manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+                environment_ref: None,
+                config: Map::new(),
+            },
+            resource,
+        }],
+        diagnostics: Vec::new(),
+    })
+    .await
+    .expect("worker plugin host should activate");
+    assert_eq!(verify_count.load(Ordering::SeqCst), 1);
+    assert_eq!(drop_count.load(Ordering::SeqCst), 0);
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let call_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("in-flight worker callback runtime should build");
+        runtime.block_on(tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("worker-fixture-in-flight")
+                .args(json!({ "input": "in-flight" }))
+                .func(Arc::new(move |args| {
+                    let entered_tx = entered_tx.clone();
+                    let release_rx = Arc::clone(&release_rx);
+                    Box::pin(async move {
+                        entered_tx.send(()).map_err(|error| {
+                            nemo_relay::error::FlowError::Internal(error.to_string())
+                        })?;
+                        release_rx
+                            .lock()
+                            .map_err(|error| {
+                                nemo_relay::error::FlowError::Internal(error.to_string())
+                            })?
+                            .recv()
+                            .map_err(|error| {
+                                nemo_relay::error::FlowError::Internal(error.to_string())
+                            })?;
+                        Ok(json!({ "tool_callback": true, "args": args }))
+                    })
+                }))
+                .build(),
+        ))
+    });
+
+    entered_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("worker callback should enter its continuation");
+    activation
+        .clear()
+        .expect("host should clear while a worker callback snapshot remains in flight");
+    assert_eq!(
+        drop_count.load(Ordering::SeqCst),
+        0,
+        "the activation resource must outlive an in-flight worker callback"
+    );
+    let unchanged = tool_request_intercepts("after-clear", json!({ "input": true }))
+        .await
+        .expect("new calls should observe the cleared registries");
+    assert_eq!(unchanged, json!({ "input": true }));
+
+    release_tx
+        .send(())
+        .expect("in-flight worker continuation should still be reachable");
+    let result = call_thread
+        .join()
+        .expect("in-flight worker callback thread should not panic")
+        .expect("in-flight worker callback should finish after host clear");
+    assert_eq!(result["tool_callback"], true);
+    assert_eq!(result["args"]["worker_plugin_tool_execution_request"], true);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while drop_count.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the activation resource should be released after the worker callback finishes");
+    assert_eq!(drop_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

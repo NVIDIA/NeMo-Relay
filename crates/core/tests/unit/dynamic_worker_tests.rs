@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
@@ -39,6 +40,91 @@ use super::*;
 
 const ACTIVATION_ID: &str = "activation-test";
 const AUTH_TOKEN: &str = "auth-test";
+
+struct TrackingStartupResource {
+    drop_count: Arc<AtomicUsize>,
+}
+
+impl DynamicPluginActivationResource for TrackingStartupResource {
+    fn verify(&self) -> crate::plugin::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for TrackingStartupResource {
+    fn drop(&mut self) {
+        self.drop_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn unsafe_pending_worker_cleanup_retains_startup_resources() {
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let pending = PendingWorkerPluginStartup {
+        plugin_kind: "fixture.pending-worker".into(),
+        runtime: None,
+        host_state: None,
+        shutdown: None,
+        process: None,
+        activation_dir: None,
+        activation_resource: Some(Arc::new(TrackingStartupResource {
+            drop_count: Arc::clone(&drop_count),
+        })),
+        force_unsafe_cleanup: true,
+    };
+
+    let failure = pending.fail(PluginError::RegistrationFailed(
+        "injected worker handshake failure".into(),
+    ));
+
+    assert!(!failure.safe_to_unload());
+    let error = failure.into_plugin_error().to_string();
+    assert!(
+        error.contains("injected worker handshake failure"),
+        "{error}"
+    );
+    assert!(
+        error.contains("partially loaded runtime was retained"),
+        "{error}"
+    );
+    assert_eq!(drop_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pending_worker_runtime_drop_failure_retains_startup_resource() {
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let mut runtime = OwnedWorkerRuntime::new(
+        RuntimeBuilder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("worker runtime should build"),
+    );
+    runtime.force_drop_thread_panic_for_test();
+    let pending = PendingWorkerPluginStartup {
+        plugin_kind: "fixture.pending-worker".into(),
+        runtime: Some(runtime),
+        host_state: None,
+        shutdown: None,
+        process: None,
+        activation_dir: None,
+        activation_resource: Some(Arc::new(TrackingStartupResource {
+            drop_count: Arc::clone(&drop_count),
+        })),
+        force_unsafe_cleanup: false,
+    };
+
+    let failure = pending.fail(PluginError::RegistrationFailed(
+        "injected worker startup failure".into(),
+    ));
+
+    assert!(!failure.safe_to_unload());
+    let error = failure.into_plugin_error().to_string();
+    assert!(
+        error.contains("worker runtime destruction panicked"),
+        "{error}"
+    );
+    assert_eq!(drop_count.load(Ordering::SeqCst), 0);
+}
 
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
@@ -1570,6 +1656,7 @@ async fn install_registrations_covers_registry_error_edges() {
             registration(surface, &duplicate_name),
         ])
         .await;
+        let instance = Arc::new(instance);
         let mut ctx = PluginRegistrationContext::new();
         let error = match instance.install_registrations(&mut ctx) {
             Err(error) => error,
@@ -1589,6 +1676,7 @@ async fn install_registrations_covers_registry_error_edges() {
         ..registration(RegistrationSurface::Subscriber, "bad")
     }])
     .await;
+    let instance = Arc::new(instance);
     let mut ctx = PluginRegistrationContext::new();
     assert!(
         instance
@@ -1600,6 +1688,7 @@ async fn install_registrations_covers_registry_error_edges() {
 
     let (instance, _shutdown) =
         fake_worker_instance(vec![registration(RegistrationSurface::Unspecified, "bad")]).await;
+    let instance = Arc::new(instance);
     let mut ctx = PluginRegistrationContext::new();
     assert!(
         instance
@@ -1669,6 +1758,7 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
     })
     .await;
     instance.client = error_client;
+    let instance = Arc::new(instance);
 
     let _runtime_guard = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
@@ -2175,7 +2265,81 @@ async fn host_runtime_service_reports_poisoned_internal_locks() {
 #[test]
 fn owned_worker_runtime_drop_is_idempotent_when_runtime_already_taken() {
     enable_operational_logs();
-    drop(OwnedWorkerRuntime { runtime: None });
+    drop(OwnedWorkerRuntime {
+        runtime: None,
+        force_drop_thread_panic: false,
+    });
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn owned_worker_runtime_drop_thread_panic_is_reported_without_unwinding() {
+    let mut runtime = OwnedWorkerRuntime::new(
+        RuntimeBuilder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("worker runtime should build"),
+    );
+    runtime.force_drop_thread_panic_for_test();
+    let leaked_runtime_handle = runtime.handle();
+
+    let outcome = runtime.shutdown_checked();
+
+    assert!(!outcome.safe_to_unload);
+    assert_eq!(outcome.errors.len(), 1);
+    assert!(
+        outcome.errors[0].contains("worker runtime destruction panicked"),
+        "{}",
+        outcome.errors[0]
+    );
+    assert!(runtime.runtime.is_none());
+
+    let (alive_tx, alive_rx) = std::sync::mpsc::sync_channel(1);
+    leaked_runtime_handle.spawn(async move {
+        let _ = alive_tx.send(());
+    });
+    alive_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("a fail-closed runtime must remain alive after drop-thread panic");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn worker_instance_runtime_drop_failure_retains_activation_resource() {
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let mut runtime = OwnedWorkerRuntime::new(
+        RuntimeBuilder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("worker runtime should build"),
+    );
+    runtime.force_drop_thread_panic_for_test();
+    let instance = WorkerPluginInstance {
+        plugin_kind: "fixture_worker".into(),
+        allows_multiple_components: false,
+        config: Map::new(),
+        validation_diagnostics: Vec::new(),
+        registrations: Vec::new(),
+        runtime,
+        client: PluginWorkerClient::new(Endpoint::from_static("http://127.0.0.1:1").connect_lazy()),
+        host_state: Arc::new(WorkerHostRuntimeState::new(
+            ACTIVATION_ID.into(),
+            AUTH_TOKEN.into(),
+        )),
+        shutdown: Mutex::new(None),
+        process: Mutex::new(None),
+        activation_dir: std::env::temp_dir().join("nmrw-final-drop-failure-test"),
+        teardown_started: AtomicBool::new(true),
+        _activation_resource: Some(Arc::new(TrackingStartupResource {
+            drop_count: Arc::clone(&drop_count),
+        })),
+    };
+
+    drop(instance);
+
+    assert_eq!(
+        drop_count.load(Ordering::SeqCst),
+        0,
+        "an unsafe final runtime drop must retain the activation resource fail-closed"
+    );
 }
 
 #[tokio::test]
@@ -2588,6 +2752,7 @@ fn callback_for_client(
             runtime: tokio::runtime::Handle::current(),
             client,
             host_state: state,
+            activation_anchor: WorkerCallbackActivationAnchor::detached(),
         },
         shutdown_tx,
     )
@@ -2625,6 +2790,7 @@ async fn fake_worker_instance(
             process: Mutex::new(None),
             activation_dir,
             teardown_started: AtomicBool::new(false),
+            _activation_resource: None,
         },
         shutdown_tx,
     )

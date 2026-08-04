@@ -43,6 +43,102 @@ pub(crate) struct DynamicPluginTeardownOutcome {
     pub(crate) safe_to_unload: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct DynamicPluginLoadFailure {
+    error: PluginError,
+    rollback: DynamicPluginTeardownOutcome,
+}
+
+/// Retains partially constructed runtime state when control leaves through an
+/// unwind. Normal error paths take the value and run the checked rollback
+/// machinery instead.
+pub(super) struct PanicRetentionGuard<T> {
+    value: Option<T>,
+}
+
+impl<T> PanicRetentionGuard<T> {
+    pub(super) fn new(value: T) -> Self {
+        Self { value: Some(value) }
+    }
+
+    pub(super) fn get(&self) -> &T {
+        self.value
+            .as_ref()
+            .expect("panic retention value accessed after transfer")
+    }
+
+    pub(super) fn get_mut(&mut self) -> &mut T {
+        self.value
+            .as_mut()
+            .expect("panic retention value accessed after transfer")
+    }
+
+    pub(super) fn take(&mut self) -> T {
+        self.value
+            .take()
+            .expect("panic retention value transferred more than once")
+    }
+}
+
+impl<T> Drop for PanicRetentionGuard<T> {
+    fn drop(&mut self) {
+        if std::thread::panicking()
+            && let Some(value) = self.value.take()
+        {
+            std::mem::forget(value);
+        }
+    }
+}
+
+impl DynamicPluginLoadFailure {
+    pub(crate) fn new(error: PluginError, rollback: DynamicPluginTeardownOutcome) -> Self {
+        Self { error, rollback }
+    }
+
+    #[cfg(feature = "worker-grpc")]
+    pub(crate) fn merge_rollback(&mut self, rollback: DynamicPluginTeardownOutcome) {
+        self.rollback.merge(rollback);
+    }
+
+    pub(crate) fn safe_to_unload(&self) -> bool {
+        self.rollback.safe_to_unload
+    }
+
+    pub(crate) fn into_plugin_error(self) -> PluginError {
+        if self.rollback.errors.is_empty() {
+            return self.error;
+        }
+
+        let retention = if self.rollback.safe_to_unload {
+            "all partially loaded runtimes were removed"
+        } else {
+            "a partially loaded runtime was retained because safe unloading could not be proven"
+        };
+        PluginError::RegistrationFailed(format!(
+            "{}; activation rollback reported: {}; {retention}",
+            self.error,
+            self.rollback.errors.join("; ")
+        ))
+    }
+}
+
+impl From<PluginError> for DynamicPluginLoadFailure {
+    fn from(error: PluginError) -> Self {
+        Self::new(error, DynamicPluginTeardownOutcome::success())
+    }
+}
+
+pub(crate) fn finish_partial_load_rollback<T>(
+    activation: T,
+    error: PluginError,
+    rollback: DynamicPluginTeardownOutcome,
+) -> DynamicPluginLoadFailure {
+    if !rollback.safe_to_unload {
+        std::mem::forget(activation);
+    }
+    DynamicPluginLoadFailure::new(error, rollback)
+}
+
 impl DynamicPluginTeardownOutcome {
     pub(crate) fn success() -> Self {
         Self {

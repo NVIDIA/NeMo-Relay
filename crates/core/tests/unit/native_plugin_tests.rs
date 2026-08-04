@@ -310,8 +310,146 @@ fn native_test_adapter(
             allows_multiple_components: false,
             plugin: Mutex::new(plugin),
             _library: libloading::os::unix::Library::this().into(),
+            _activation_resource: None,
         }),
     }
+}
+
+#[cfg(unix)]
+struct BlockingNativeToolCallbackState {
+    entered: std::sync::mpsc::SyncSender<()>,
+    release: Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn blocking_native_tool_callback(
+    user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    payload_json: *const NemoRelayNativeString,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let Some(state) = (unsafe { (user_data as *const BlockingNativeToolCallbackState).as_ref() })
+    else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if out_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    if state.entered.send(()).is_err() {
+        return NemoRelayStatus::Internal;
+    }
+    if state
+        .release
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .recv()
+        .is_err()
+    {
+        return NemoRelayStatus::Internal;
+    }
+    let Ok(payload) = read_native_string(payload_json) else {
+        return NemoRelayStatus::InvalidUtf8;
+    };
+    unsafe { *out_json = native_string(&payload) };
+    NemoRelayStatus::Ok
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn drop_blocking_native_tool_callback(user_data: *mut c_void) {
+    if !user_data.is_null() {
+        unsafe {
+            drop(Box::from_raw(
+                user_data as *mut BlockingNativeToolCallbackState,
+            ))
+        };
+    }
+}
+
+#[cfg(unix)]
+struct NativeDescriptorDropState {
+    drop_count: Arc<AtomicUsize>,
+}
+
+#[cfg(unix)]
+unsafe extern "C" fn count_native_descriptor_drop(user_data: *mut c_void) {
+    if !user_data.is_null() {
+        let state = unsafe { Box::from_raw(user_data as *mut NativeDescriptorDropState) };
+        state.drop_count.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn native_descriptor_drop_waits_for_in_flight_callback() {
+    let descriptor_drop_count = Arc::new(AtomicUsize::new(0));
+    let descriptor_state = Box::new(NativeDescriptorDropState {
+        drop_count: Arc::clone(&descriptor_drop_count),
+    });
+    let plugin = NemoRelayNativePluginV1 {
+        user_data: Box::into_raw(descriptor_state).cast(),
+        drop: Some(count_native_descriptor_drop),
+        ..Default::default()
+    };
+    let instance = Arc::new(NativePluginInstance {
+        plugin_kind: "test.native.in-flight".into(),
+        relay_compat: "^0.7".into(),
+        allows_multiple_components: false,
+        plugin: Mutex::new(plugin),
+        _library: libloading::os::unix::Library::this().into(),
+        _activation_resource: None,
+    });
+
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let callback_state = Box::new(BlockingNativeToolCallbackState {
+        entered: entered_tx,
+        release: Mutex::new(release_rx),
+    });
+    let callback = wrap_tool_json_fn(
+        Arc::clone(&instance),
+        blocking_native_tool_callback,
+        Box::into_raw(callback_state).cast(),
+        Some(drop_blocking_native_tool_callback),
+    );
+    let callback_future = callback("in-flight".into(), json!({"value": true}));
+    drop(callback);
+
+    let mut activation = NativePluginActivation {
+        plugins: vec![instance],
+        plugin_registrations: Vec::new(),
+        _retained_resources_for_test: Vec::new(),
+        force_unload_panic: false,
+    };
+    let callback_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("native callback runtime should build");
+        runtime.block_on(callback_future)
+    });
+
+    entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("native callback should enter before activation teardown");
+    let outcome = activation.prepare_unload_checked();
+    assert!(outcome.safe_to_unload);
+    assert!(outcome.errors.is_empty());
+    activation.clear();
+    let drop_count_while_callback_is_blocked = descriptor_drop_count.load(Ordering::SeqCst);
+
+    release_tx
+        .send(())
+        .expect("in-flight native callback should be released");
+    let result = callback_thread
+        .join()
+        .expect("in-flight native callback thread should not panic")
+        .expect("in-flight native callback should complete");
+    assert_eq!(result, json!({"value": true}));
+    assert_eq!(
+        drop_count_while_callback_is_blocked, 0,
+        "descriptor state must remain live while native callback code is executing"
+    );
+    assert_eq!(descriptor_drop_count.load(Ordering::SeqCst), 1);
 }
 
 #[cfg(unix)]
@@ -3925,6 +4063,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _activation_resource: None,
     });
     let mut invalid_host = NativeHostPluginContext {
         ctx: ptr::null_mut(),
@@ -4382,6 +4521,7 @@ fn assert_async_request_registration_rejects_legacy_relay_contract() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _activation_resource: None,
     });
     let mut registration = PluginRegistrationContext::new();
     let mut host = NativeHostPluginContext {
@@ -4431,6 +4571,7 @@ async fn native_async_wrappers_validate_callback_result_shapes() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _activation_resource: None,
     });
     let result = native_string("true");
     let user_data = result.cast();
@@ -5201,6 +5342,7 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
+        _activation_resource: None,
     });
     let request = LlmRequest {
         headers: Map::new(),

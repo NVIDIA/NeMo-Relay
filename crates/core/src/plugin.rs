@@ -1568,7 +1568,12 @@ async fn initialize_plugins_exact_inner(
         .await
         {
             Ok(registrations) => {
-                store_active_plugin_configuration(config, report.clone(), registrations)?;
+                store_active_plugin_configuration(
+                    config,
+                    report.clone(),
+                    registrations,
+                    rollback_failures.as_ref(),
+                )?;
                 log::info!(
                     target: "nemo_relay.plugin",
                     event = "plugin_configuration_replaced",
@@ -1588,6 +1593,7 @@ async fn initialize_plugins_exact_inner(
                         previous_state.config,
                         previous_state.report,
                         registrations,
+                        rollback_failures.as_ref(),
                     )?;
                     log::warn!(
                         target: "nemo_relay.plugin",
@@ -1612,8 +1618,14 @@ async fn initialize_plugins_exact_inner(
         }
     } else {
         let registrations =
-            initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
-        store_active_plugin_configuration(config, report.clone(), registrations)?;
+            initialize_plugin_components_catching_panics(config.clone(), rollback_failures.clone())
+                .await?;
+        store_active_plugin_configuration(
+            config,
+            report.clone(),
+            registrations,
+            rollback_failures.as_ref(),
+        )?;
         log::info!(
             target: "nemo_relay.plugin",
             event = "plugin_configuration_activated",
@@ -2477,11 +2489,19 @@ fn record_rollback_failures(
 fn store_active_plugin_configuration(
     config: PluginConfig,
     report: ConfigReport,
-    registrations: Vec<PluginRegistration>,
+    mut registrations: Vec<PluginRegistration>,
+    rollback_failures: Option<&Arc<Mutex<Vec<String>>>>,
 ) -> Result<()> {
-    let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
-        PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
-    })?;
+    let mut guard = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
+        Ok(guard) => guard,
+        Err(err) => {
+            let error = format!("active plugin configuration lock poisoned: {err}");
+            drop(err.into_inner());
+            let errors = rollback_registrations_checked(&mut registrations);
+            record_rollback_failures(rollback_failures, errors);
+            return Err(PluginError::Internal(error));
+        }
+    };
     *guard = Some(ActivePluginConfiguration {
         config,
         report,
