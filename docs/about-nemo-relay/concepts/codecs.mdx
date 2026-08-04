@@ -1,8 +1,10 @@
 ---
-title: "Codecs"
-description: ""
+title: "Provider Codecs"
+description: "Understand provider request and response normalization, lossless patching, and semantic support boundaries."
 position: 7
 ---
+import { MermaidStyles } from "@/components/MermaidStyles";
+
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
@@ -11,48 +13,37 @@ This page explains how codecs fit into the shared NeMo Relay runtime contract.
 ## Overview
 
 A codec is a boundary translator. It converts one runtime-facing data shape into
-another without changing who owns execution.
+another without changing who owns execution. In the runtime model, the primary
+role is [provider payload normalization](/integrate-into-frameworks/provider-codecs):
+translating provider-native LLM requests and responses into stable annotations
+that middleware and observability can use.
 
 NeMo Relay uses codecs when runtime behavior needs stable, JSON-compatible, or
 annotated data but the application or provider surface starts from a different
-shape.
+shape. A secondary [typed value codec](/integrate-into-frameworks/using-codecs)
+path translates application objects at a public wrapper boundary.
 
 ## Key Features
 
-Codecs let NeMo Relay preserve one execution model across different boundaries:
+Provider codecs let NeMo Relay preserve one execution model across different
+provider APIs:
 
-- Application-owned typed values
-- Framework-owned callback payloads
 - Provider-native LLM request and response shapes
-- Exporter or subscriber consumers that need normalized data
+- Request middleware that needs normalized instructions, messages, tools, or
+  generation controls
+- Events, subscribers, and exporters that need normalized response facts
 
-Without codecs, request-side middleware and observability would need to reason
-about every framework or provider shape directly.
+Without provider codecs, request middleware and observability would need to
+reason about every provider shape directly.
 
-## Two Main Codec Roles
-
-NeMo Relay documentation uses the word `codec` in two ways: typed value codecs
-and provider codecs. They are related, but they differ in the ways described
-below.
-
-### Typed Value Codecs
-
-Typed value codecs translate application-facing values to and from JSON-friendly
-shapes at the public wrapper boundary.
-
-Typed value codecs are suitable for:
-
-- Application code wants native objects
-- Framework callbacks expect typed values
-- Runtime events and JSON-based middleware still need stable serialized payloads
-
-### Provider Codecs
+## Provider Request and Response Codecs
 
 Provider codecs translate provider-native LLM payloads in the request and
 response halves of a provider call. First, request codecs decode provider
 requests into annotated request data for request intercepts and request-side
 middleware, then encode edits back into the provider shape when execution
-continues. Later, after the provider returns, response codecs decode provider
+continues. Later, after the provider returns,
+[response codecs](/integrate-into-frameworks/provider-response-codecs) decode provider
 responses into annotated response data for LLM end events, subscribers,
 exporters, and diagnostics.
 
@@ -62,6 +53,29 @@ Provider codecs are suitable for:
 - Request intercepts need normalized request meaning
 - Response annotations such as usage, model names, or tool calls should be
   exposed in one stable shape for downstream consumers
+
+<MermaidStyles />
+
+### Request Path
+
+```mermaid
+flowchart LR
+  native["Provider-native request"] --> decode["Request codec decodes"]
+  decode --> annotated["Annotated request"]
+  annotated --> middleware["Request middleware reads or edits"]
+  middleware --> encode["Request codec patches original"]
+  encode --> provider["Provider call"]
+```
+
+### Response Path
+
+```mermaid
+flowchart LR
+  provider["Provider response"] --> decode["Response codec decodes"]
+  decode --> annotated["Annotated response"]
+  annotated --> event["LLM end event"]
+  event --> consumers["Subscribers and exporters"]
+```
 
 Response decoding improves observability and downstream consistency. It does not
 automatically change the value returned to the application unless a separate
@@ -96,6 +110,27 @@ changing a key overlays it.
 A provider-native component can only be encoded by the provider surface named
 in its `provider` field. Provider mismatches and portable edits that the target
 API cannot represent fail before the provider callback.
+
+### Preservation Is Not Semantic Support
+
+Provider APIs can add fields or change semantics before Relay's built-in codecs
+are updated. The lossless patch contract preserves unknown fields and
+provider-native components when they are unchanged, which keeps newer payloads
+from being discarded. That pass-through behavior does not mean Relay
+understands, validates, or can portably edit those fields.
+
+Semantic support is limited to the provider fields modeled by the current codec
+implementation. New provider behavior requires a codec and test update before
+middleware or exporters should rely on its normalized meaning.
+
+## Typed Value Codecs
+
+Typed value codecs are a separate wrapper concern. They translate
+application-facing objects to and from JSON-compatible values when application
+code or framework callbacks need native types but Relay events and middleware
+need a stable serialized payload. Refer to
+[Using Codecs](/integrate-into-frameworks/using-codecs) for implementation
+guidance.
 
 ## Normalized Data Consumption
 
@@ -206,15 +241,3 @@ Codecs do not decide:
 
 Those responsibilities belong to scopes, middleware, plugins, and exporter or
 subscriber registration.
-
-## Read Next
-
-- Use [Using Codecs](/integrate-into-frameworks/using-codecs) for typed value
-  codecs at framework-facing boundaries.
-- Use [Provider Codecs](/integrate-into-frameworks/provider-codecs) for
-  provider-native request and response normalization.
-- Use [Provider Response
-  Codecs](/integrate-into-frameworks/provider-response-codecs) when the main
-  need is response-side annotations for subscribers or exporters.
-- Refer to the [Glossary](/resources/glossary) for the stable terminology used
-  across codecs, providers, and observability surfaces.
