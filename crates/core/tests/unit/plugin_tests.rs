@@ -1526,7 +1526,7 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
                 });
                 Err(PluginError::RegistrationFailed(format!(
                     "{}: atif.remote_delivery_failed (1)",
-                    crate::observability::plugin_component::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
                 )))
             }),
         )],

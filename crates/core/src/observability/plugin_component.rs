@@ -60,17 +60,15 @@ use crate::observability::{
     validate_attribute_mappings,
 };
 use crate::plugin::{
-    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    apply_global_config_policy, deregister_plugin, register_builtin_plugin,
+    ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin,
+    PluginComponentSpec, PluginError, PluginRegistration, PluginRegistrationContext,
+    Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
+    register_builtin_plugin,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
-/// Identifies teardown errors caused by recoverable ATIF delivery failures.
-pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime delivery failures";
-
 /// Top-level observability component wrapper.
 ///
 /// Use this wrapper when constructing a [`PluginComponentSpec`] from Rust
@@ -1036,7 +1034,7 @@ fn build_opentelemetry_subscribers(
     let mut subscribers = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.into_iter().enumerate() {
         let subscriber = build_otel_config(index, endpoint).and_then(|config| {
-            OpenTelemetrySubscriber::new(config)
+            OpenTelemetrySubscriber::new_for_plugin(config, index)
                 .map(Arc::new)
                 .map_err(observability_registration_error)
         });
