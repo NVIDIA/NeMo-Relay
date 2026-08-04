@@ -381,6 +381,7 @@ fn source_selection_covers_ambient_user_and_environment_construction() {
     );
 }
 
+#[cfg(not(windows))]
 #[test]
 fn source_normalization_errors_are_contextualized() {
     let temp = tempdir().unwrap();

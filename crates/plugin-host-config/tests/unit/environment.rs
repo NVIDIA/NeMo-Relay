@@ -296,7 +296,6 @@ fn environment_digest_rejects_cycles_depth_overflow_entry_overflow_and_special_f
     }
 }
 
-#[cfg(not(windows))]
 #[test]
 fn bootstrap_hmac_key_is_created_reused_and_invalid_lengths_are_rejected() {
     let temp = tempdir().unwrap();
@@ -305,6 +304,11 @@ fn bootstrap_hmac_key_is_created_reused_and_invalid_lengths_are_rejected() {
     let created = load_or_create_hmac_key_at(&key_path).unwrap();
     assert_eq!(created.len(), HMAC_KEY_BYTES);
     assert_eq!(load_or_create_hmac_key_at(&key_path).unwrap(), created);
+    #[cfg(windows)]
+    {
+        assert!(windows_path_is_private(key_path.parent().unwrap()).unwrap());
+        assert!(windows_path_is_private(&key_path).unwrap());
+    }
 
     fs::write(&key_path, b"short").unwrap();
     let error = load_or_create_hmac_key_at(&key_path).unwrap_err();
@@ -318,4 +322,21 @@ fn bootstrap_hmac_key_is_created_reused_and_invalid_lengths_are_rejected() {
             .to_string()
             .contains("create bootstrap state directory")
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_environment_helpers_use_native_launcher_and_path_encoding() {
+    let environment = Path::new(r"C:\relay\environment");
+    assert_eq!(
+        environment_python_path(environment),
+        environment.join("Scripts").join("python.exe")
+    );
+
+    let path = r"C:\relay\plugin";
+    let expected = path
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(raw_path_bytes(Path::new(path)), expected);
 }
