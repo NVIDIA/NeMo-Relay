@@ -1606,7 +1606,9 @@ async fn initialize_plugins_exact_inner(
             {
                 *guard = Some(report);
             }
-            record_rollback_failures(rollback_failures.as_ref(), teardown.errors.clone());
+            if !teardown.callbacks_cleared {
+                record_rollback_failures(rollback_failures.as_ref(), teardown.errors.clone());
+            }
             return Err(PluginError::RegistrationFailed(format!(
                 "previous plugin configuration could not be cleared: {}",
                 teardown.errors.join("; ")

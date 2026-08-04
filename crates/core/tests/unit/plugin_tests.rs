@@ -1641,7 +1641,6 @@ fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
 fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
     let _guard = lock_runtime_owner();
     reset_global();
-    let owner_cleanup = PluginMutationOwnerCleanup;
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
@@ -1688,8 +1687,9 @@ fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
     );
     assert_eq!(report.runtime_diagnostics[0].count, 1);
 
-    clear_plugin_configuration_inner();
-    drop(owner_cleanup);
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .expect("delivery-only teardown errors must not block a later initialization");
     reset_global();
 }
 

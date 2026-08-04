@@ -897,16 +897,23 @@ fn register_atif_dispatcher(
         "observability",
         ctx.qualify_name("atif.shutdown"),
         Box::new(move || {
-            let cleanup = (|| -> PluginResult<()> {
+            let work = match (|| -> PluginResult<_> {
                 let work = {
                     let mut guard = manager.lock().map_err(|err| {
                         PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
                     })?;
                     guard.flush_open_agents()
                 };
-                for (scope_uuid, name) in work.scope_subscribers {
+                for (scope_uuid, name) in &work.scope_subscribers {
                     deregister_atif_shutdown_subscriber(&scope_uuid, &name)?;
                 }
+                Ok(work)
+            })() {
+                Ok(work) => work,
+                Err(error) => return PluginRegistrationCleanupOutcome::NotRemoved(error),
+            };
+
+            let delivery = (|| -> PluginResult<()> {
                 for export in work.exports {
                     let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
                         .map_err(observability_registration_error)?;
@@ -925,15 +932,15 @@ fn register_atif_dispatcher(
                 }
                 Ok(())
             })();
-            if let Err(error) = cleanup {
-                return PluginRegistrationCleanupOutcome::NotRemoved(error);
+            if let Err(error) = delivery {
+                return PluginRegistrationCleanupOutcome::RemovedWithError(error);
             }
             let guard = match manager.lock() {
                 Ok(guard) => guard,
                 Err(error) => {
-                    return PluginRegistrationCleanupOutcome::NotRemoved(PluginError::Internal(
-                        format!("ATIF dispatcher lock poisoned: {error}"),
-                    ));
+                    return PluginRegistrationCleanupOutcome::RemovedWithError(
+                        PluginError::Internal(format!("ATIF dispatcher lock poisoned: {error}")),
+                    );
                 }
             };
             match guard.last_error_result() {
@@ -1020,14 +1027,12 @@ fn register_opentelemetry(
         Box::new(
             move || match shutdown_opentelemetry_subscribers(&subscribers) {
                 None => PluginRegistrationCleanupOutcome::Removed,
-                Some(error)
-                    if error
-                        .to_string()
-                        .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER) =>
-                {
+                Some(OpenTelemetryShutdownFailure::Delivery(error)) => {
                     PluginRegistrationCleanupOutcome::RemovedWithError(error)
                 }
-                Some(error) => PluginRegistrationCleanupOutcome::NotRemoved(error),
+                Some(OpenTelemetryShutdownFailure::Other(error)) => {
+                    PluginRegistrationCleanupOutcome::NotRemoved(error)
+                }
             },
         ),
     ));
@@ -1086,9 +1091,14 @@ fn build_opentelemetry_subscribers(
     Ok(subscribers)
 }
 
+enum OpenTelemetryShutdownFailure {
+    Delivery(PluginError),
+    Other(PluginError),
+}
+
 fn shutdown_opentelemetry_subscribers(
     subscribers: &[Arc<OpenTelemetrySubscriber>],
-) -> Option<PluginError> {
+) -> Option<OpenTelemetryShutdownFailure> {
     let mut errors = Vec::new();
     if let Err(error) = flush_subscribers() {
         errors.push(crate::observability::otel::OpenTelemetryError::Core(error));
@@ -1113,7 +1123,12 @@ fn shutdown_opentelemetry_subscribers(
     } else {
         format!("OpenTelemetry shutdown failures: {summary}")
     };
-    Some(PluginError::RegistrationFailed(message))
+    let error = PluginError::RegistrationFailed(message);
+    Some(if all_delivery_failures {
+        OpenTelemetryShutdownFailure::Delivery(error)
+    } else {
+        OpenTelemetryShutdownFailure::Other(error)
+    })
 }
 
 fn shutdown_opentelemetry_providers(

@@ -251,9 +251,11 @@ The diagnostic becomes visible in `plugin.report()` after subscriber delivery
 is flushed and is retained there after a failed teardown. Teardown also reports
 the degraded delivery, even when the local recovery write succeeds. This error
 reports delivery degradation, not a registration leak; callbacks have already
-been removed, and a later clear or initialization is safe. Fatal dispatcher
-failures, such as trajectory serialization failures, are also reported during
-teardown.
+been removed. If the failure is still pending when initialization replaces the
+configuration, that replacement returns the delivery error and leaves no
+configuration active; a subsequent clear or initialization is safe. Fatal
+dispatcher failures, such as trajectory serialization failures, are also
+reported during teardown.
 
 ## Expected Output
 

@@ -472,7 +472,11 @@ class TestObservabilityConfigHelpers:
             with pytest.raises(RuntimeError, match=r"atif\.destination_render_failed") as teardown:
                 await plugin.clear_async()
             assert "could not be removed" not in str(teardown.value)
-            assert plugin.report() is not None
+            retained = plugin.report()
+            assert retained is not None
+            assert any(
+                diagnostic["code"] == "atif.destination_render_failed" for diagnostic in retained["runtime_diagnostics"]
+            )
         finally:
             try:
                 await plugin.clear_async()

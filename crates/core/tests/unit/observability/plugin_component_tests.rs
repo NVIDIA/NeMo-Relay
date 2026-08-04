@@ -3061,9 +3061,13 @@ fn opentelemetry_shutdown_helper_retains_every_endpoint_failure() {
     })
     .collect::<Vec<_>>();
 
-    let error = shutdown_opentelemetry_subscribers(&subscribers)
-        .expect("mixed endpoint shutdown failures should be reported")
-        .to_string();
+    let OpenTelemetryShutdownFailure::Other(error) =
+        shutdown_opentelemetry_subscribers(&subscribers)
+            .expect("mixed endpoint shutdown failures should be reported")
+    else {
+        panic!("mixed endpoint shutdown failures must retain the registration failure outcome");
+    };
+    let error = error.to_string();
 
     assert_eq!(dropped_calls.load(Ordering::SeqCst), 1);
     assert_eq!(timeout_calls.load(Ordering::SeqCst), 1);
