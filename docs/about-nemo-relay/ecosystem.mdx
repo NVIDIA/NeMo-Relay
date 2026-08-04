@@ -8,7 +8,6 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-
 NeMo Relay is the agent execution runtime layer in the NVIDIA NeMo ecosystem. It
 does not replace an agent framework, model provider, guardrail authoring system,
 or deployment platform. Instead, it gives those systems one shared way to model
@@ -19,24 +18,24 @@ Use this page to understand where NeMo Relay fits:
 
 - Inside the NVIDIA NeMo software stack
 - Inside agent frameworks, harnesses, and provider adapters
-- Across the Rust, Python, Node.js, Go, and C FFI surfaces in this
+- Across the Rust, Python, Node.js, Go, and C FFI bindings in this
   repository
 
 ## How NeMo Relay Fits in the NVIDIA NeMo Ecosystem
 
 The NVIDIA NeMo ecosystem spans model development, agent construction,
 guardrailing, inference, optimization, and runtime operations. NeMo Relay has a
-narrower responsibility: it is a shared execution runtime for scope, tool, and
-model boundaries.
+narrower responsibility: it tracks and controls work across scopes, tools, and
+models.
 
 | System | Role | How It Connects to NeMo Relay |
 |---|---|---|
 | [NVIDIA NeMo Framework](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/index.html) | Build and customize generative AI models. | Applications can instrument calls to models produced with NeMo Framework. Relay does not train or customize the model. |
-| [NVIDIA NIM for Large Language Models](https://docs.nvidia.com/nim/large-language-models/latest/introduction.html) | Serve LLM inference through production endpoints. | Relay can observe or control the client-side LLM call boundary that sends requests to a NIM endpoint. Relay does not host the endpoint. |
+| [NVIDIA NIM for Large Language Models](https://docs.nvidia.com/nim/large-language-models/latest/introduction.html) | Serve LLM inference through production endpoints. | Relay can observe or control client requests to a NIM endpoint. Relay does not host the endpoint. |
 | [NVIDIA Dynamo](https://docs.nvidia.com/dynamo) | Deploy and scale distributed inference services. | Applications can send Relay-managed model calls to a Dynamo-served endpoint. Relay does not schedule or operate the inference workers. |
-| [NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and agent application frameworks | Build, run, profile, and optimize agent workflows across tools, data sources, and framework choices. | A framework integration can hand managed tool or LLM callbacks to Relay, or replay lifecycle hooks when the framework retains execution ownership. |
+| [NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and agent application frameworks | Build, run, profile, and optimize agent workflows across tools, data sources, and framework choices. | A framework integration can give Relay tool or LLM callbacks to manage, or emit lifecycle events when the framework invokes the callbacks itself. |
 | [NeMo Guardrails](https://docs.nvidia.com/nemo-guardrails/index.html) and policy systems | Define safety, control, and compliance behavior for LLM applications. | Relay can run configured guardrails and intercepts around managed tool and LLM calls while the policy system owns policy authoring. |
-| Application harnesses and workflow code | Decide the agent pattern, planner, memory, retries, scheduling, and user-facing behavior. | NeMo Relay instruments the execution boundaries that the harness already owns. |
+| Application harnesses and workflow code | Decide the agent pattern, planner, memory, retries, scheduling, and user-facing behavior. | NeMo Relay instruments the tool and model calls that the harness already invokes. |
 | Observability backends | Store and query traces, logs, and metrics. | Relay exporters can project lifecycle events into OpenTelemetry or OpenInference-compatible traces and send them through an OTLP pipeline. |
 | Trajectory and evaluation systems | Replay or evaluate completed agent runs. | Relay can project lifecycle events into Agent Trajectory Interchange Format (ATIF) artifacts for offline analysis, replay, or evaluation. |
 
@@ -47,15 +46,15 @@ what events are emitted, and which subscribers can consume the result?"
 
 ## How NeMo Relay Relates to Other Tooling
 
-NeMo Relay is an execution-time runtime contract. It captures work at the
-scope, tool, and LLM boundaries, and can apply middleware before or around that
-work. Telemetry conventions and observability or evaluation products serve
+NeMo Relay runs alongside application code while the agent is executing. It
+captures scope, tool, and LLM activity and can apply middleware before or around
+that work. Telemetry conventions and observability or evaluation products serve
 different roles and can be used alongside Relay.
 
 | Tooling | Primary Role | Relationship to NeMo Relay |
 |---|---|---|
-| [OpenTelemetry GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) | Define common attributes and span conventions for AI telemetry. | Relay owns runtime capture and control, then can export lifecycle events through its typed OpenTelemetry projections. |
-| Langfuse, LangSmith, Arize Phoenix, and other observability products | Store and explore traces or agent runs. | These products stay outside Relay's execution control loop and consume data from a configured export path. |
+| [OpenTelemetry GenAI conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) | Define common attributes and span conventions for AI telemetry. | Relay captures and controls runtime activity, then can export lifecycle events through its typed OpenTelemetry projections. |
+| Langfuse, LangSmith, Arize Phoenix, and other observability products | Store and explore traces or agent runs. | These products do not run the agent's tool or model calls. They consume data from a configured export path. |
 
 Relay is not a replacement for a telemetry standard or an observability backend.
 Its role is to make the real execution path observable and controllable before
@@ -111,36 +110,33 @@ flow, Relay writes ATIF artifacts for replay or evaluation.
 The agent framework and harness landscape is intentionally mixed. A team might
 use NeMo Agent Toolkit, LangChain, LangGraph, an internal orchestration layer, a
 provider SDK, or direct application code. NeMo Relay is designed to meet those
-systems at stable execution boundaries instead of requiring one framework shape.
+systems at tool, model, and lifecycle hooks, so they do not need to use one
+common API.
 
-The framework or harness keeps ownership of:
+The framework or harness continues to manage:
 
 - Agent orchestration, planning, memory, retries, and scheduling.
 - Tool discovery, schemas, and application-visible results.
 - Provider clients, authentication, transport, and provider-native objects.
 - Public callback signatures and framework-specific behavior.
 
-Relay receives:
+Relay can receive:
 
-- Scope boundaries and parentage for work that should be observed.
-- A real tool or LLM callback when Relay can own managed execution.
-- Start and end lifecycle notifications when the framework must retain control.
+- The scope and parent for work that should be observed.
+- A tool or LLM function when Relay can invoke it through managed execution.
+- Start and end lifecycle notifications when the framework invokes the function.
 - JSON-compatible observability payloads and metadata for events and middleware.
 
-Prefer a managed execution wrapper when a framework exposes a stable callback
-that NeMo Relay can own. Use explicit lifecycle calls or standalone helpers when
-the framework owns the callback internally but exposes reliable start, finish, or
+Prefer a managed execution wrapper when a framework lets NeMo Relay invoke the
+tool or LLM function. Use explicit lifecycle calls or standalone helpers when
+the framework invokes the function but exposes reliable start, finish, or
 request transformation hooks.
 
-This boundary lets subscribers see a consistent scope, tool, and LLM event
+This arrangement lets subscribers see a consistent scope, tool, and LLM event
 stream without changing the framework's public behavior.
 
-## Related Topics
-
-Use these links to continue into adjacent concepts and workflows.
-
-- [Integrate into Frameworks](/integrate-into-frameworks/about)
-- [Adding Framework Scopes](/integrate-into-frameworks/adding-scopes)
-- [Wrapping Tool Calls](/integrate-into-frameworks/wrap-tool-calls)
-- [Wrapping LLM Calls](/integrate-into-frameworks/wrap-llm-calls)
-- [Language Binding Plugins](/build-plugins/language-binding/about)
+Refer to [Integrate into Frameworks](/integrate-into-frameworks/about) to choose
+an integration method. Use [Adding Framework Scopes](/integrate-into-frameworks/adding-scopes)
+for lifecycle hooks, or [Wrapping Tool Calls](/integrate-into-frameworks/wrap-tool-calls)
+and [Wrapping LLM Calls](/integrate-into-frameworks/wrap-llm-calls) when Relay
+can invoke the function.
