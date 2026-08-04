@@ -165,6 +165,7 @@ fn async_clear_binding_completes_on_python_event_loop() {
     let _python = crate::test_support::init_python_test();
     let _plugin_test_state = lock_plugin_test_state_for_tests();
     Python::attach(|py| {
+        let first_clear_state = plugin_configuration_clear_state();
         let module = PyModule::new(py, "_plugin_async_clear").unwrap();
         register(&module).unwrap();
         let helpers = load_module(
@@ -174,6 +175,19 @@ async def clear(module):
     await module.clear_plugin_configuration_async()
 "#,
         );
+        with_event_loop(py, |event_loop| {
+            let clear = helpers
+                .getattr("clear")
+                .unwrap()
+                .call1((module.clone(),))
+                .unwrap();
+            event_loop
+                .call_method1("run_until_complete", (clear,))
+                .unwrap();
+        });
+        let second_clear_state = plugin_configuration_clear_state();
+        assert!(!Arc::ptr_eq(&first_clear_state, &second_clear_state));
+
         with_event_loop(py, |event_loop| {
             let clear = helpers.getattr("clear").unwrap().call1((module,)).unwrap();
             event_loop

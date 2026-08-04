@@ -2354,10 +2354,14 @@ fn rollback_registrations_checked(registrations: &mut Vec<PluginRegistration>) -
             )),
         };
         if let Some(error) = failure {
-            errors.push(format!(
-                "{} registration '{}' could not be removed: {error}",
-                registration.kind, registration.name
-            ));
+            if error.contains(ATIF_RUNTIME_DELIVERY_FAILURE_MARKER) {
+                errors.push(error);
+            } else {
+                errors.push(format!(
+                    "{} registration '{}' could not be removed: {error}",
+                    registration.kind, registration.name
+                ));
+            }
         }
     }
     registrations.clear();

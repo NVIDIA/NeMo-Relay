@@ -1535,7 +1535,9 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
 
     let outcome = clear_plugin_configuration_inner();
     assert!(outcome.callbacks_cleared);
-    assert!(outcome.result.is_err());
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("atif.remote_delivery_failed"), "{error}");
+    assert!(!error.contains("could not be removed"), "{error}");
     let report = active_plugin_report().expect("failed teardown should retain its report");
     assert_eq!(report.runtime_diagnostics.len(), 1);
     let diagnostic = &report.runtime_diagnostics[0];

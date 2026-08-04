@@ -1624,16 +1624,22 @@ fn render_atif_filename(
             })?;
         let expression = rendered[selector_start..end].to_string();
         let (selector, fallback) = parse_atif_metadata_expression(&expression)?;
-        let value = selector
+        let resolved = selector
             .split('.')
-            .fold(metadata, |value, segment| value?.get(segment))
-            .and_then(Json::as_str)
-            .or(fallback)
-            .ok_or_else(|| {
+            .fold(metadata, |value, segment| value?.get(segment));
+        let value = match resolved {
+            Some(Json::String(value)) => value.as_str(),
+            None | Some(Json::Null) => fallback.ok_or_else(|| {
                 format!(
                     "filename_template placeholder '{{metadata.{selector}}}' must resolve to a string"
                 )
-            })?;
+            })?,
+            Some(_) => {
+                return Err(format!(
+                    "filename_template placeholder '{{metadata.{selector}}}' resolved to a non-string value"
+                ));
+            }
+        };
         if !is_safe_atif_metadata_path(value) {
             return Err(format!(
                 "metadata path '{selector}' must be a path-safe relative fragment"

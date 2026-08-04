@@ -933,14 +933,18 @@ impl PluginConfigurationClearState {
                 let result = std::panic::catch_unwind(clear_plugin_configuration)
                     .map_err(|_| PluginTeardownError::runtime("plugin teardown task panicked"))
                     .and_then(|result| result.map_err(PluginTeardownError::from_plugin_error));
-                clear_state.completion.finish(result);
+                clear_state.finish(result);
             });
         if let Err(error) = spawn {
-            self.completion
-                .finish(Err(PluginTeardownError::runtime(format!(
-                    "failed to start plugin teardown task: {error}"
-                ))));
+            self.finish(Err(PluginTeardownError::runtime(format!(
+                "failed to start plugin teardown task: {error}"
+            ))));
         }
+    }
+
+    fn finish(self: &Arc<Self>, result: PluginTeardownResult) {
+        reset_plugin_configuration_clear_state_if(self);
+        self.completion.finish(result);
     }
 
     async fn wait_for_clear(&self) -> PluginTeardownResult {
@@ -963,6 +967,15 @@ fn reset_plugin_configuration_clear_state() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) =
         Arc::new(PluginConfigurationClearState::new());
+}
+
+fn reset_plugin_configuration_clear_state_if(completed: &Arc<PluginConfigurationClearState>) {
+    let mut current = PLUGIN_CONFIGURATION_CLEAR_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if Arc::ptr_eq(&current, completed) {
+        *current = Arc::new(PluginConfigurationClearState::new());
+    }
 }
 
 #[pymethods]
