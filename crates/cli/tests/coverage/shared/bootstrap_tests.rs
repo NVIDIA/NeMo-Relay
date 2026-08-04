@@ -88,17 +88,21 @@ fn compatible_gateway_is_reused_without_starting_another_process() {
 #[test]
 fn foreign_and_incompatible_listeners_are_never_adopted() {
     crate::test_support::enable_operational_logs();
+    let incompatible = format!(
+        "{{\"status\":\"incompatible\",\"service\":\"nemo-relay\",\"version\":\"other\",\"bootstrap_protocol\":{BOOTSTRAP_PROTOCOL_VERSION},\"instance_id\":\"other\"}}"
+    );
+    let previous_protocol = format!(
+        "{{\"status\":\"ok\",\"service\":\"nemo-relay\",\"version\":\"{}\",\"bootstrap_protocol\":{},\"instance_id\":\"previous\"}}",
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION - 1,
+    );
     for (status, body, expected) in [
-        ("200 OK", "{}", "not a compatible"),
-        (
-            "409 Conflict",
-            "{\"status\":\"incompatible\",\"service\":\"nemo-relay\",\"version\":\"other\",\"bootstrap_protocol\":2,\"instance_id\":\"other\"}",
-            "different version",
-        ),
+        ("200 OK", "{}".to_string(), "not a compatible"),
+        ("409 Conflict", incompatible, "different version"),
+        ("200 OK", previous_protocol, "not a compatible"),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
-        let body = body.to_string();
         listener.set_nonblocking(true).unwrap();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {

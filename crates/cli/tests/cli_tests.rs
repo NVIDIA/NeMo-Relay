@@ -24,6 +24,7 @@ fn gateway_bin() -> &'static str {
 }
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
+const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
 const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
@@ -639,8 +640,9 @@ fn cli_mcp_starts_gateway_even_when_stdio_closes_before_request() {
 fn cli_mcp_rejects_an_unauthenticated_transparent_gateway() {
     let temp = tempfile::tempdir().unwrap();
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"transparent"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"transparent"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     let (gateway_url, received) = spawn_single_request_server(200, &body);
     let mut child = Command::new(gateway_bin())
@@ -1127,8 +1129,9 @@ fn write_fake_bootstrap_health(
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce").unwrap();
     let proof_header = fake_bootstrap_proof_header(proof, key_path, fingerprint, nonce);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
@@ -1171,8 +1174,9 @@ fn handle_fake_bootstrap_tunnel(
     let health = read_http_request(&mut stream);
     requests.lock().unwrap().push(health);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
@@ -1635,7 +1639,7 @@ fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
     let health = relay_health(address);
     assert_eq!(health["service"], "nemo-relay");
     assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(health["bootstrap_protocol"], 2);
+    assert_eq!(health["bootstrap_protocol"], BOOTSTRAP_PROTOCOL_VERSION);
     assert!(
         health["instance_id"]
             .as_str()
@@ -4500,8 +4504,9 @@ fn write_phase_health_response(
         .ok_or_else(|| "health probe omitted its nonce".to_string())?;
     let proof = fake_bootstrap_proof(key, fingerprint, nonce);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"phase-health"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"phase-health"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(

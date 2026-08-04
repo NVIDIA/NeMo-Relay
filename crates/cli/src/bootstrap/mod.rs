@@ -38,7 +38,7 @@ use state::{BOOTSTRAP_STATE_DIR_ENV, state_dir as bootstrap_state_dir};
 pub(crate) const DEFAULT_BIND: &str = "127.0.0.1:47632";
 pub(crate) const DEFAULT_URL: &str = "http://127.0.0.1:47632";
 pub(crate) const HEALTHZ_TIMEOUT: Duration = Duration::from_millis(500);
-pub(crate) const BOOTSTRAP_PROTOCOL_VERSION: u64 = 2;
+pub(crate) const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
 
 pub(super) const BOOTSTRAP_LOCK_TIMEOUT: Duration = Duration::from_secs(20);
 const BOOTSTRAP_START_TIMEOUT: Duration = Duration::from_secs(10);
