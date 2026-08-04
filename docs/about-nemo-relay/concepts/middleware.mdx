@@ -1,6 +1,6 @@
 ---
 title: "Middleware"
-description: ""
+description: "Choose and configure middleware for managed tool and LLM calls."
 position: 2
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
@@ -14,7 +14,7 @@ calls and sanitizes emitted mark and scope events.
 ## What Middleware Is
 
 Middleware controls or transforms tool and LLM execution and sanitizes emitted
-events. NeMo Relay applies each surface at a specific lifecycle point.
+events. NeMo Relay applies each middleware type at a specific lifecycle point.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
@@ -106,16 +106,14 @@ NeMo Relay has two major middleware families with three distinct purposes:
 - **Sanitize guardrails** change emitted observability without changing the real
   request or result.
 
-## Choosing the Right Surface
+## Choose a Middleware Type
 
-Use these comparisons to pick the middleware surface that matches the behavior
-you need:
+Choose the middleware type that matches the behavior you need:
 
 - Use a **conditional-execution guardrail** when the work should be allowed or
   rejected.
 - Use a **request intercept** when the real request must change before the call.
-- Use an **execution intercept** when behavior belongs around the invocation
-  boundary.
+- Use an **execution intercept** when code must run before or after the callback.
 - Use a **sanitize guardrail** when only subscribers and exporters should see
   rewritten data.
 - Use a **mark or scope event sanitizer** when the sensitive fields are in
@@ -157,7 +155,7 @@ Use them when the next stage of execution should receive changed input, such as:
 
 Execution intercepts wrap or replace the real callback.
 
-Use them when behavior belongs around the invocation boundary itself, such as:
+Use them when code must run before or after the callback, such as:
 
 - Retries
 - Timing
@@ -277,7 +275,7 @@ The start event is enqueued before execution begins. The async subscriber
 dispatcher delivers start and end snapshots later in FIFO order; managed
 execution does not wait for subscriber or exporter callbacks.
 
-This ordering preserves the semantic split between the families:
+This ordering preserves the distinction between the families:
 
 - Use an intercept to change real execution.
 - Use a sanitize guardrail to change only emitted observability.
