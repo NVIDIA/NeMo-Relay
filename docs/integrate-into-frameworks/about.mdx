@@ -22,10 +22,11 @@ intercept helpers, or mark events.
 
 ## Choose How Relay Connects
 
-Prefer these options in order. Move down the table only when the framework does
-not support the option above it.
+Prefer these options in order when they represent the lifecycle boundary you
+need. Move down the table when the option above cannot capture that boundary or
+the framework does not support it.
 
-| Method | Use when | What Relay handles |
+| Method | Use When | What Relay Handles |
 | --- | --- | --- |
 | Managed execution wrapper | Relay can wrap the real tool or LLM callback. | Lifecycle pairing, the complete middleware pipeline, timing, and event parentage. |
 | Explicit start and end calls | The framework exposes reliable lifecycle hooks but owns callback execution. | Event construction and parentage; the integration must pair the calls. |
