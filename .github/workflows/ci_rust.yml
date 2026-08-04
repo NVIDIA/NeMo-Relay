@@ -322,6 +322,7 @@ jobs:
           docker run --rm \
             --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
             --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env NEMO_RELAY_CI_WORKSPACE \
             --env NEMO_RELAY_CLI_PACKAGE_VERSION \
             "${{ matrix.runtime_image }}" \
             /bin/sh -ec '
