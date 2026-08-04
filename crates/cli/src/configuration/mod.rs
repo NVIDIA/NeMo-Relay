@@ -259,6 +259,7 @@ fn persistent_bootstrap_fingerprint(
         "max_hook_payload_bytes": gateway.max_hook_payload_bytes,
         "max_passthrough_body_bytes": gateway.max_passthrough_body_bytes,
         "plugin_idle_timeout_secs": idle_timeout_secs,
+        "plugin_had_input": resolved.plugin_had_input,
         "dynamic_plugins": dynamic_plugins,
         "dynamic_plugin_policy": format!("{:?}", resolved.dynamic_plugin_policy),
     });
@@ -1300,6 +1301,8 @@ struct PluginTomlConfig {
     dynamic_plugin_policy: DynamicPluginHostPolicy,
     contributing_sources: Vec<PathBuf>,
     selected_sources: Vec<PathBuf>,
+    had_input: bool,
+    diagnostics: Vec<nemo_relay::plugin::ConfigDiagnostic>,
 }
 
 #[cfg(test)]
@@ -1396,6 +1399,8 @@ where
         dynamic_plugin_policy: resolved.dynamic_plugin_policy,
         contributing_sources,
         selected_sources: resolved.selected_sources,
+        had_input: resolved.had_input,
+        diagnostics: resolved.diagnostics,
     }))
 }
 
@@ -1409,6 +1414,8 @@ fn apply_plugin_toml_config(resolved: &mut ResolvedConfig, plugin_toml: Option<P
     resolved.dynamic_plugins = plugin_toml.dynamic_plugins;
     resolved.dynamic_plugin_policy = plugin_toml.dynamic_plugin_policy;
     resolved.plugin_selected_sources = plugin_toml.selected_sources;
+    resolved.plugin_had_input = plugin_toml.had_input;
+    resolved.plugin_diagnostics = plugin_toml.diagnostics;
 }
 
 #[cfg(test)]

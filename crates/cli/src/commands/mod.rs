@@ -225,6 +225,8 @@ async fn run_default(
         )?;
         server::serve_with_dynamic(
             resolved.gateway,
+            resolved.plugin_had_input,
+            resolved.plugin_diagnostics,
             dynamic_plugins,
             managed_bootstrap,
             runtime_args.ready_file.as_deref(),

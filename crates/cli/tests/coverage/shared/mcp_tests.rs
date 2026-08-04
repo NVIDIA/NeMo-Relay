@@ -421,6 +421,8 @@ async fn borrowed_transparent_gateway_is_authenticated_and_monitored() {
     let gateway = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
         listener,
         config,
+        false,
+        Vec::new(),
         Vec::new(),
         fingerprint.clone(),
         crate::provider_auth::TransparentProxyCredential::generate().unwrap(),

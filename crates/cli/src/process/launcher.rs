@@ -9,7 +9,7 @@ use nemo_relay::observability::OpenTelemetryType;
 use nemo_relay::observability::plugin_component::{
     AtifStorageConfig, AtofSinkSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
-use nemo_relay::plugin::PluginConfig;
+use nemo_relay::plugin::{ConfigDiagnostic, PluginConfig};
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
@@ -137,6 +137,8 @@ impl TransparentRun {
         let result = execute_live_run_with_dynamic(
             self.listener,
             self.resolved.gateway,
+            self.resolved.plugin_had_input,
+            self.resolved.plugin_diagnostics,
             self.dynamic_plugins,
             &self.gateway_url,
             self.prepared,
@@ -178,12 +180,23 @@ async fn execute_live_run(
     gateway_url: &str,
     prepared: PreparedAgentLaunch,
 ) -> Result<ExitCode, CliError> {
-    execute_live_run_with_dynamic(listener, gateway_config, Vec::new(), gateway_url, prepared).await
+    execute_live_run_with_dynamic(
+        listener,
+        gateway_config,
+        false,
+        Vec::new(),
+        Vec::new(),
+        gateway_url,
+        prepared,
+    )
+    .await
 }
 
 async fn execute_live_run_with_dynamic(
     listener: TcpListener,
     gateway_config: GatewayConfig,
+    plugin_had_input: bool,
+    plugin_diagnostics: Vec<ConfigDiagnostic>,
     dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
     gateway_url: &str,
     prepared: PreparedAgentLaunch,
@@ -193,6 +206,8 @@ async fn execute_live_run_with_dynamic(
     let running_server = RunningGateway::start(
         listener,
         gateway_config,
+        plugin_had_input,
+        plugin_diagnostics,
         dynamic_plugins,
         bootstrap_fingerprint.clone(),
         proxy_credential,
@@ -365,6 +380,8 @@ impl RunningGateway {
     fn start(
         listener: TcpListener,
         config: crate::configuration::GatewayConfig,
+        plugin_had_input: bool,
+        plugin_diagnostics: Vec<ConfigDiagnostic>,
         dynamic_plugins: Vec<ActiveDynamicPluginComponent>,
         bootstrap_fingerprint: String,
         proxy_credential: crate::provider_auth::TransparentProxyCredential,
@@ -374,6 +391,8 @@ impl RunningGateway {
             server::serve_transparent_listener_with_dynamic(
                 listener,
                 config,
+                plugin_had_input,
+                plugin_diagnostics,
                 dynamic_plugins,
                 bootstrap_fingerprint,
                 proxy_credential,

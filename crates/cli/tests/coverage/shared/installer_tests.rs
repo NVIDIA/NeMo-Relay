@@ -60,6 +60,8 @@ async fn transparent_hook_delivery_authenticates_the_wrapper_gateway() {
     let server = tokio::spawn(crate::server::serve_transparent_listener_with_dynamic(
         listener,
         config,
+        false,
+        Vec::new(),
         Vec::new(),
         fingerprint.clone(),
         crate::provider_auth::TransparentProxyCredential::generate().unwrap(),
