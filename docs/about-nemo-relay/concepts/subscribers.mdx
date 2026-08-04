@@ -67,6 +67,22 @@ model. They react to it.
 This lets plain subscribers, exporters, and tracing adapters share one runtime
 source of truth.
 
+### ATOF Events and ATIF Trajectories
+
+ATOF and ATIF describe different stages of the observability path:
+
+| Format | What it represents | What subscribers or exporters do with it |
+| --- | --- | --- |
+| ATOF | The canonical record for each Relay scope lifecycle event or mark | Subscribers receive these events directly. The ATOF JSONL exporter writes one raw event per line. |
+| ATIF | A trajectory projection assembled from related ATOF events | The ATIF exporter maps model and tool activity into trajectory steps for analysis, replay, or evaluation. |
+
+Marks are point-in-time ATOF events, not ATIF trajectory steps, so they do not
+appear in ATIF `steps`. Plugin-managed ATIF files preserve the raw events
+associated with the trajectory under `extra.observed_events`; this retains the
+observed marks without changing the ATIF step model. Refer to
+[Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif)
+for the complete projection and file contract.
+
 ## Common Subscriber Roles
 
 Subscribers are commonly used for in-process observation, counters, debugging, and
