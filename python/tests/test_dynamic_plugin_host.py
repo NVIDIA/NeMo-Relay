@@ -261,6 +261,15 @@ def test_load_dynamic_plugin_activation_specs_resolves_standard_toml(tmp_path: P
     ]
 
 
+def test_load_dynamic_plugin_activation_specs_rejects_unsupported_version(tmp_path: Path):
+    plugins_toml = tmp_path / "plugins.toml"
+    plugins_toml.write_text("version = 2\n")
+
+    with pytest.raises(ValueError) as error:
+        plugin.load_dynamic_plugin_activation_specs(plugins_toml)
+    assert str(error.value) == f"plugin config version 2 in {plugins_toml.resolve()} is unsupported; expected 1"
+
+
 def test_load_dynamic_plugin_activation_specs_rejects_duplicate_ids(tmp_path: Path):
     manifest = tmp_path / "relay-plugin.toml"
     manifest.write_text("[plugin]\nid = 'duplicate'\nkind = 'rust_dynamic'\n")

@@ -445,6 +445,9 @@ def load_dynamic_plugin_activation_specs(
     """
     source = Path(os.fspath(plugin_config_path)).resolve()
     document = _load_plugin_toml(source, "plugin TOML")
+    version = document.get("version", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
+        raise ValueError(f"plugin config version {version!r} in {source} is unsupported; expected 1")
     plugins = document.get("plugins", {})
     if not isinstance(plugins, dict):
         raise ValueError(f"invalid dynamic plugin config in {source}: 'plugins' must be a table")
