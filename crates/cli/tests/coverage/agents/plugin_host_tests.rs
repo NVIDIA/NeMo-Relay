@@ -1025,6 +1025,33 @@ fn codex_hook_trust_report_distinguishes_modified_disabled_and_missing_hooks() {
 }
 
 #[test]
+fn codex_hook_trust_report_recognizes_legacy_generated_hooks_as_stale() {
+    let dir = tempdir().unwrap();
+    let hooks_path = dir.path().join(".codex").join("hooks.json");
+    let expected = expected_plugin_command();
+    let legacy = expected.legacy().unwrap().to_owned();
+    let mut hooks = required_codex_hook_metadata(&hooks_path, "trusted", true);
+    for hook in &mut hooks {
+        hook.command = Some(legacy.clone());
+    }
+    fs::write(
+        &hooks_path,
+        serde_json::to_vec_pretty(&generated_hooks(CodingAgent::Codex, &legacy)).unwrap(),
+    )
+    .unwrap();
+    let mut client = FakeCodexHooksClient {
+        hook_lists: VecDeque::from([Ok(hooks)]),
+        ..FakeCodexHooksClient::default()
+    };
+
+    let error = codex_hook_trust_report_with_client(&mut client, dir.path(), &expected)
+        .expect_err("legacy generated hooks must require reinstall");
+
+    assert!(error.contains("loaded modified Relay hooks"), "{error}");
+    assert!(error.contains("install codex --force"), "{error}");
+}
+
+#[test]
 fn codex_hook_state_key_path_quotes_arbitrary_hook_identity() {
     assert_eq!(
         hook_state_key_path("path:hook.\"quoted\""),

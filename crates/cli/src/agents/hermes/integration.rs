@@ -481,9 +481,10 @@ where
                         .get("command")
                         .and_then(Value::as_str)
                         .is_none_or(|command| {
-                            owned
-                                .as_ref()
-                                .is_none_or(|commands| !commands.contains(command))
+                            owned.as_ref().map_or_else(
+                                || !is_persistent_relay_hook_command(command),
+                                |commands| !commands.contains(command),
+                            )
                         })
                 });
                 if approvals.is_empty() {

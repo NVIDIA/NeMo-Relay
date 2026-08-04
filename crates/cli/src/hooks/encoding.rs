@@ -52,7 +52,6 @@ impl GeneratedHookCommands {
             || self.legacy.as_deref() == Some(command)
     }
 
-    #[cfg(test)]
     pub(crate) fn legacy(&self) -> Option<&str> {
         self.legacy.as_deref()
     }

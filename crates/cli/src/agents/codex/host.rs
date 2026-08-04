@@ -326,8 +326,12 @@ fn relay_codex_hooks(
     let hooks = relay_codex_plugin_hooks(client, cwd)?
         .into_iter()
         .filter(|hook| {
-            hook.command.as_deref()
-                == expected_codex_hook_command(expected_commands, &hook.event_name)
+            expected_codex_hook_command(expected_commands, &hook.event_name).is_some_and(
+                |expected| {
+                    hook.command.as_deref() == Some(expected)
+                        || hook.command.as_deref() == expected_commands.legacy()
+                },
+            )
         })
         .collect::<Vec<_>>();
     validate_loaded_hook_sources(&hooks, expected_commands)?;

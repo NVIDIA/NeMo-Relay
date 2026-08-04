@@ -97,7 +97,9 @@ pub(super) fn verify_trust(
             .get("event")
             .and_then(Value::as_str)
             .ok_or_else(|| "Hermes Relay hook approval is missing its event".to_string())?;
-        if !CodingAgent::Hermes.hook_events().contains(&event) {
+        if !CodingAgent::Hermes.hook_events().contains(&event)
+            || command != commands.for_event(event)
+        {
             return Err("Hermes allowlist contains an unexpected Relay hook approval".into());
         }
     }

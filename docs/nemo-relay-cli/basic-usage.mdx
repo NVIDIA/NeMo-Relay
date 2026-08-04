@@ -539,7 +539,8 @@ These flags control delivery and metadata:
 - `--profile` sets `x-nemo-relay-config-profile`.
 - `--gateway-mode` sets `x-nemo-relay-gateway-mode`.
 - `--fail-open` allows the agent to continue after a delivery failure, even
-  when `NEMO_RELAY_FAIL_CLOSED=1` is set.
+  when `NEMO_RELAY_FAIL_CLOSED=1` is set. Structured guardrail rejections still
+  return a failure.
 - `--fail-closed` returns a failure when delivery fails or Relay rejects the
   hook.
 

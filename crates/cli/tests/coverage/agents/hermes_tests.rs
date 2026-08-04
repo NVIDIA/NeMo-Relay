@@ -566,6 +566,19 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
     std::fs::write(&path, serde_json::to_vec(&missing_event).unwrap()).unwrap();
     let error = verify_trust(&path, &command).unwrap_err();
     assert!(error.contains("missing its event"));
+
+    let mut wrong_policy = trusted_hooks(None, None, &command, &relay, UNIX_EPOCH).unwrap();
+    wrong_policy["approvals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "event": "pre_tool_call",
+            "command": command.for_event("on_session_start"),
+            "approved_at": "1970-01-01T00:00:00.000000Z"
+        }));
+    std::fs::write(&path, serde_json::to_vec(&wrong_policy).unwrap()).unwrap();
+    let error = verify_trust(&path, &command).unwrap_err();
+    assert!(error.contains("unexpected Relay hook approval"));
 }
 
 #[test]
@@ -1001,6 +1014,41 @@ fn uninstall_removes_only_relay_owned_hermes_state() {
     assert_eq!(allowlist["owner"], json!("user"));
     assert_eq!(allowlist["approvals"].as_array().unwrap().len(), 1);
     assert_eq!(allowlist["approvals"][0]["command"], json!("custom-hook"));
+}
+
+#[test]
+fn uninstall_removes_orphaned_generated_approval_without_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    let commands =
+        persistent_hook_commands(&relay, &paths.generation, TEST_GENERATION_TOKEN).unwrap();
+    std::fs::create_dir_all(paths.allowlist.parent().unwrap()).unwrap();
+    std::fs::write(
+        &paths.allowlist,
+        serde_json::to_vec(&json!({
+            "approvals": [
+                {
+                    "event": "pre_tool_call",
+                    "command": commands.for_event("pre_tool_call")
+                },
+                {
+                    "event": "custom_event",
+                    "command": "custom-hook"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let removed = uninstall_persistent_with(paths.clone(), atomic_write).unwrap();
+
+    assert_eq!(removed, vec![paths.allowlist.clone()]);
+    assert_eq!(
+        json_file(&paths.allowlist)["approvals"],
+        json!([{"event": "custom_event", "command": "custom-hook"}])
+    );
 }
 
 #[test]
