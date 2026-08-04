@@ -40,6 +40,18 @@ declares what it is and which config it should use.
 Policy controls how strictly the plugin system interprets unknown fields,
 unsupported values, or compatibility issues.
 
+Two similarly named files serve different purposes:
+
+| File | Owner | Purpose |
+| --- | --- | --- |
+| `plugins.toml` | Relay operator or application | Configures built-in components and records references to discoverable plugins. Relay discovers and layers this file. |
+| `relay-plugin.toml` | Discoverable plugin author | Describes one packaged native library or worker, including compatibility, capabilities, loading, and integrity. Relay reads it through a reference in `plugins.toml`. |
+
+Refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)
+for runtime configuration and
+[Discoverable Plugins](/build-plugins/dynamic-plugins/about) for the package
+manifest.
+
 ## Component Lifecycle
 
 Plugins follow a small lifecycle rather than registering everything blindly.
@@ -58,6 +70,16 @@ behavior.
 
 Reporting provides structured diagnostics about what activated successfully and
 what did not.
+
+### Deactivation and Cleanup
+
+Plugin initialization owns the registrations it installs. Clearing active
+plugin configuration removes those registrations and runs component cleanup.
+Dynamic plugin teardown also stops managed workers and releases native
+activations after their callbacks are no longer registered. Applications should
+clear plugin configuration during graceful shutdown and test teardown. Refer to
+[Register Plugin Behavior](/build-plugins/language-binding/register-behavior)
+for the binding lifecycle.
 
 ### Failure Boundary
 
@@ -138,7 +160,9 @@ them.
 ## Ownership and Scope
 
 Plugin initialization is process-level. It is intended for runtime components
-that should activate once for the running process rather than once per request.
+that should remain active across requests in one process. It is not permanent:
+clearing or replacing the active plugin configuration removes plugin-owned
+runtime behavior.
 
 Scope-local behavior still matters after plugin installation, but the plugin
 system itself is a global activation layer.
@@ -146,6 +170,17 @@ system itself is a global activation layer.
 Plugins install runtime behavior; they do not create a separate execution
 model. Scopes still own parentage and cleanup, middleware still owns execution
 ordering, and events still own the canonical runtime record.
+
+## Plugin Delivery Models
+
+All plugin components use the same validation and activation model. They differ
+in how their component kind becomes available to the host:
+
+| Delivery model | How it becomes available | Use when |
+| --- | --- | --- |
+| Built-in | The Relay host registers a linked first-party component automatically. | The component ships as part of that host. |
+| Host-registered | An embedding application links a component crate and registers its kind before validation. | A direct host controls its linked feature set. |
+| Discoverable | The CLI loads a manifest-backed native library or worker at startup. | A separately packaged extension should be installed without rebuilding Relay. |
 
 ## Built-In Plugin Components
 
@@ -220,6 +255,16 @@ The core crate ships a built-in `pricing` component. It loads catalog sources
 that response codecs can use to annotate managed LLM responses with cost
 estimates. Configure catalog sources through [Model Pricing](/configure-plugins/model-pricing).
 
+### Switchyard (Experimental)
+
+The experimental `switchyard` component asks a separately running Switchyard
+Decision API to select a configured model backend. It is excluded from default
+CLI builds and is registered only when the CLI is built with the optional
+`switchyard` feature. Direct Rust, Python, and Node.js hosts do not register it
+automatically. Refer to
+[Switchyard (Experimental)](/configure-plugins/switchyard/about) for the pinned
+compatibility and deployment requirements.
+
 For `plugins.toml` discovery, precedence, merge, and gateway editing rules,
 refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 
@@ -239,6 +284,21 @@ loads the enabled adapter and then validates the synthesized component. Refer
 to [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins)
 for the operator workflow and [Discoverable Plugins](/build-plugins/dynamic-plugins/about)
 for the authoring model.
+
+The operator lifecycle is explicit:
+
+1. `plugins add` records the manifest and prepares managed worker resources when
+   required.
+2. `plugins validate` checks compatibility, schema, policy, and trust evidence.
+3. `plugins enable` changes desired state; the plugin loads during the next host
+   startup.
+4. `plugins disable` keeps the registration but prevents it from loading on the
+   next startup.
+5. `plugins remove` deletes the registration and any Relay-managed worker
+   environment after the running host has stopped.
+
+These commands manage future host activation. Teardown of an already running
+host remains part of that host's owned plugin cleanup.
 
 ## Practical Guidance
 
