@@ -359,9 +359,11 @@ def test_load_dynamic_plugin_activation_specs_rejects_invalid_toml(tmp_path: Pat
 def test_load_dynamic_plugin_activation_specs_reports_missing_manifest(tmp_path: Path):
     plugins_toml = tmp_path / "plugins.toml"
     plugins_toml.write_text("[[plugins.dynamic]]\nmanifest = 'missing/relay-plugin.toml'\n")
+    missing_manifest = (tmp_path / "missing" / "relay-plugin.toml").resolve()
 
-    with pytest.raises(FileNotFoundError, match="missing/relay-plugin.toml"):
+    with pytest.raises(FileNotFoundError) as error:
         plugin.load_dynamic_plugin_activation_specs(plugins_toml)
+    assert Path(error.value.filename) == missing_manifest
 
 
 def test_validate_omits_raw_plugin_config_nulls_but_preserves_component_config_nulls(
