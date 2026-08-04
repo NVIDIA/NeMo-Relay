@@ -193,7 +193,7 @@ where
             &mut runtime_value,
             plugin_config_overlay_value(caller_config)?,
         );
-        let mut inherited = inherited_source_diagnostics(&contributing_sources);
+        let mut inherited = inherited_source_diagnostics(&contributing_selected_sources);
         inherited.extend(diagnostics);
         return finish_resolution(
             runtime_value,
@@ -209,7 +209,7 @@ where
         );
     }
 
-    let diagnostics = inherited_source_diagnostics(&contributing_sources);
+    let diagnostics = inherited_source_diagnostics(&contributing_selected_sources);
     finish_resolution(
         runtime_value,
         dynamic_plugins,

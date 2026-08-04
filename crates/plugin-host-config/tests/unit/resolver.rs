@@ -311,6 +311,34 @@ fn physical_source_aliases_are_deduplicated_after_pinning() {
 }
 
 #[test]
+fn inherited_diagnostics_preserve_the_selected_source_spelling() {
+    let temp = tempdir().unwrap();
+    let config = temp.path().join("plugins.toml");
+    fs::write(&config, "").unwrap();
+    let detour = temp.path().join("detour");
+    fs::create_dir(&detour).unwrap();
+    let selected = detour.join("..").join("plugins.toml");
+
+    let resolved = resolve_plugin_files_from_paths([selected.clone()], None).unwrap();
+
+    assert_eq!(
+        resolved.contributing_sources,
+        vec![pin_plugin_config_path(&config).unwrap()]
+    );
+    assert_eq!(
+        resolved.contributing_selected_sources,
+        vec![selected.clone()]
+    );
+    assert_eq!(
+        resolved.diagnostics[0].message,
+        format!(
+            "inherited plugin configuration from discovered file: {}",
+            selected.display()
+        )
+    );
+}
+
+#[test]
 fn malformed_toml_errors_do_not_disclose_configuration_values() {
     let temp = tempdir().unwrap();
     let config = temp.path().join("plugins.toml");
