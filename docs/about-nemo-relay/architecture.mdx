@@ -97,14 +97,15 @@ as observability or PII redaction. It is not a separate runtime layer.
 
 ## Runtime Model
 
-NeMo Relay combines a small number of runtime pieces into one shared execution model:
+NeMo Relay combines a small number of runtime pieces into one shared execution
+model:
 
 - The **scope stack** answers where work currently belongs.
 - The **middleware registries** answer what should happen around that work.
 - The **plugin system** installs reusable runtime behavior from configuration.
 - The **event records** preserve what happened and how work was related.
-- The **async subscriber dispatcher** delivers event snapshots after emission
-- **subscribers and exporters** consume those snapshots.
+- The **async subscriber dispatcher** delivers event snapshots after emission.
+- **Subscribers and exporters** consume those snapshots.
 
 Every managed tool or LLM call resolves the middleware visible from the active
 scope before it executes. When the runtime emits an event, it records the active
@@ -117,7 +118,7 @@ These components are the primary building blocks that make up the runtime model.
 
 ### Scope Stack
 
-The active scope stack defines the current ownership context for runtime work.
+The active scope stack defines the current context for runtime work.
 It establishes:
 
 - Parent-child relationships between events
@@ -134,12 +135,14 @@ observability payloads. Managed helpers read those registries before invoking
 the real callback.
 
 Async middleware callbacks are awaited as part of managed execution. The
-managed call does not advance past that middleware checkpoint until the callback
+managed call does not advance past that middleware callback until the callback
 returns.
 
 ### Plugin System
 
-The plugin system installs reusable runtime components from configuration. A plugin can register middleware, subscribers, or related behavior without requiring each application call site to do the work manually.
+The plugin system installs reusable runtime components from configuration. A
+plugin can register middleware, subscribers, or related behavior without
+requiring each application call site to repeat the setup.
 
 ### Event Emission
 
@@ -199,4 +202,6 @@ Two distinctions matter:
 - Intercepts affect the real execution path
 - Sanitize guardrails affect the emitted observability payload
 
-For the expanded request-to-response runtime path, including streaming and subscriber handoff, refer to [Middleware](/about-nemo-relay/concepts/middleware#detailed-execution-flow).
+For the expanded request-to-response runtime path, including streaming and
+subscriber handoff, refer to
+[Managed Execution Order](/about-nemo-relay/concepts/middleware#managed-execution-order).
