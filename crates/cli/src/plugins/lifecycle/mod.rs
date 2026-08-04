@@ -1053,7 +1053,7 @@ fn active_dynamic_plugin_components_from_shared_host_config(
         .map_err(|error| CliError::Config(format!("invalid resolved plugin config: {error}")))?
         .unwrap_or_default();
     let selected_sources = resolved.plugin_selected_sources.clone();
-    let contributing_sources = resolved
+    let contributing_sources: Vec<PathBuf> = resolved
         .dynamic_plugins
         .iter()
         .map(|plugin| plugin.source.clone())
@@ -1078,6 +1078,7 @@ fn active_dynamic_plugin_components_from_shared_host_config(
             .collect(),
         dynamic_plugin_policy: resolved.dynamic_plugin_policy.clone(),
         diagnostics: Vec::new(),
+        contributing_selected_sources: contributing_sources.clone(),
         contributing_sources,
         selected_sources,
         had_input: true,

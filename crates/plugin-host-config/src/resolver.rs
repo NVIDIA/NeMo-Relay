@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use nemo_relay::plugin::{
-    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, PluginConfig, deduplicate_plugin_config_paths,
-    default_plugin_config_paths, merge_plugin_config_documents, user_config_dir,
+    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, PluginConfig, default_plugin_config_paths,
+    merge_plugin_config_documents, user_config_dir,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -45,7 +45,7 @@ impl PluginFileResolveOptions {
         }
     }
 
-    /// Returns selected physical paths in increasing precedence order.
+    /// Returns selected source paths in increasing precedence order.
     pub fn selected_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         if let Some(selected) = &self.plugin_config_path {
@@ -59,7 +59,7 @@ impl PluginFileResolveOptions {
             paths.extend(implicit);
         }
         paths.push(self.system_config_path.clone());
-        deduplicate_plugin_config_paths(paths)
+        paths
     }
 }
 
@@ -93,6 +93,12 @@ pub struct ResolvedPluginFileConfiguration {
     pub diagnostics: Vec<ConfigDiagnostic>,
     /// Existing physical sources that contributed static, dynamic, or policy configuration.
     pub contributing_sources: Vec<PathBuf>,
+    /// Selected source spellings corresponding to [`Self::contributing_sources`].
+    ///
+    /// These are captured during the same physical-path resolution pass so presentation adapters
+    /// do not need to re-resolve aliases after configuration has been consumed.
+    #[doc(hidden)]
+    pub contributing_selected_sources: Vec<PathBuf>,
     /// Selected source paths, including absent files whose sibling lifecycle state may remain.
     #[doc(hidden)]
     pub selected_sources: Vec<PathBuf>,
@@ -117,33 +123,39 @@ pub fn resolve_plugin_files_from_paths<I>(
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let paths = deduplicate_plugin_config_paths(paths);
+    let paths = paths.into_iter().collect::<Vec<_>>();
     let mut seen_selected_sources = HashSet::new();
-    let mut selected_sources = Vec::with_capacity(paths.len());
-    for path in paths {
-        let path = pin_plugin_config_path(&path)?;
-        if seen_selected_sources.insert(path.clone()) {
-            selected_sources.push(path);
+    let mut selected_source_mappings = Vec::with_capacity(paths.len());
+    for selected_path in paths.into_iter().rev() {
+        let physical_path = pin_plugin_config_path(&selected_path)?;
+        if seen_selected_sources.insert(physical_path.clone()) {
+            selected_source_mappings.push((selected_path, physical_path));
         }
     }
+    selected_source_mappings.reverse();
+    let selected_sources = selected_source_mappings
+        .iter()
+        .map(|(_, physical_path)| physical_path.clone())
+        .collect::<Vec<_>>();
     let mut dynamic_plugins = Vec::new();
     let mut dynamic_plugin_policy = DynamicPluginHostPolicy::default();
     let mut seen_plugin_ids = HashSet::new();
     let mut contributing_sources = Vec::new();
+    let mut contributing_selected_sources = Vec::new();
     let mut runtime_documents = Vec::new();
     let mut enabled_sources = HashMap::new();
     let mut seen_physical_sources = HashSet::new();
 
-    for selected_path in &selected_sources {
-        if !selected_path.try_exists().map_err(|error| {
+    for (selected_path, physical_path) in &selected_source_mappings {
+        if !physical_path.try_exists().map_err(|error| {
             PluginHostConfigError::InvalidConfig(format!(
                 "failed to inspect plugin configuration file {}: {error}",
-                selected_path.display()
+                physical_path.display()
             ))
         })? {
             continue;
         }
-        let path = selected_path.clone();
+        let path = physical_path.clone();
         if !seen_physical_sources.insert(path.clone()) {
             continue;
         }
@@ -153,6 +165,7 @@ where
             .map(toml::Value::Table)
             .map_err(|error| PluginHostConfigError::toml_parse("plugin TOML", &path, &error))?;
         contributing_sources.push(path.clone());
+        contributing_selected_sources.push(selected_path.clone());
         let resolved = resolve_dynamic_plugin_refs(&path, &mut parsed, &mut seen_plugin_ids)?;
         dynamic_plugins.extend(resolved.dynamic_plugins);
         dynamic_plugin_policy.merge_from(resolved.dynamic_plugin_policy);
@@ -187,8 +200,11 @@ where
             dynamic_plugins,
             dynamic_plugin_policy,
             inherited,
-            contributing_sources,
-            selected_sources,
+            ResolvedPluginFileSourcePaths {
+                contributing_sources,
+                contributing_selected_sources,
+                selected_sources,
+            },
             had_caller_config,
         );
     }
@@ -199,10 +215,19 @@ where
         dynamic_plugins,
         dynamic_plugin_policy,
         diagnostics,
-        contributing_sources,
-        selected_sources,
+        ResolvedPluginFileSourcePaths {
+            contributing_sources,
+            contributing_selected_sources,
+            selected_sources,
+        },
         had_caller_config,
     )
+}
+
+struct ResolvedPluginFileSourcePaths {
+    contributing_sources: Vec<PathBuf>,
+    contributing_selected_sources: Vec<PathBuf>,
+    selected_sources: Vec<PathBuf>,
 }
 
 fn finish_resolution(
@@ -210,10 +235,14 @@ fn finish_resolution(
     dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     dynamic_plugin_policy: DynamicPluginHostPolicy,
     diagnostics: Vec<ConfigDiagnostic>,
-    contributing_sources: Vec<PathBuf>,
-    selected_sources: Vec<PathBuf>,
+    source_paths: ResolvedPluginFileSourcePaths,
     had_caller_config: bool,
 ) -> Result<ResolvedPluginFileConfiguration> {
+    let ResolvedPluginFileSourcePaths {
+        contributing_sources,
+        contributing_selected_sources,
+        selected_sources,
+    } = source_paths;
     let had_input = had_caller_config || !contributing_sources.is_empty();
     let serialized_value = match &runtime_value {
         Value::Object(object) if object.is_empty() => None,
@@ -232,6 +261,7 @@ fn finish_resolution(
         dynamic_plugin_policy,
         diagnostics,
         contributing_sources,
+        contributing_selected_sources,
         selected_sources,
         had_input,
     })

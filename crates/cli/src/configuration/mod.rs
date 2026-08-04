@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 use axum::http::{HeaderMap, HeaderValue};
 use nemo_relay::logging::LoggingConfig;
-use nemo_relay::plugin::deduplicate_plugin_config_paths;
 use nemo_relay::plugin::dynamic::{
     DYNAMIC_PLUGIN_MANIFEST_FILENAME, DynamicPluginManifest, DynamicPluginManifestLoad,
 };
@@ -1370,29 +1369,15 @@ fn load_plugin_toml_config_from_paths<I>(paths: I) -> Result<Option<PluginTomlCo
 where
     I: IntoIterator<Item = PathBuf>,
 {
-    let selected_paths = deduplicate_plugin_config_paths(paths);
-    let resolved = nemo_relay_plugin_host_config::resolve_plugin_files_from_paths(
-        selected_paths.clone(),
-        None,
-    )
-    .map_err(|error| CliError::Config(error.to_string()))?;
+    let resolved = nemo_relay_plugin_host_config::resolve_plugin_files_from_paths(paths, None)
+        .map_err(|error| CliError::Config(error.to_string()))?;
     if !resolved.had_input {
         return Ok(None);
     }
     // The shared resolver pins sources to their physical paths so lifecycle state and snapshots
     // cannot be split across aliases. Keep the CLI's established presentation contract, however:
     // contributing sources use the selected spelling and are sorted independently of precedence.
-    let mut contributing_sources = selected_paths
-        .into_iter()
-        .filter(|selected| {
-            let physical = nemo_relay_plugin_host_config::pin_plugin_config_path(selected)
-                .unwrap_or_else(|_| selected.clone());
-            resolved
-                .contributing_sources
-                .iter()
-                .any(|source| source == &physical)
-        })
-        .collect::<Vec<_>>();
+    let mut contributing_sources = resolved.contributing_selected_sources;
     contributing_sources.sort();
     contributing_sources.dedup();
     Ok(Some(PluginTomlConfig {

@@ -346,6 +346,7 @@ fn no_dynamic_declarations_produce_static_plan() {
         dynamic_plugin_policy: Default::default(),
         diagnostics: Vec::new(),
         contributing_sources: Vec::new(),
+        contributing_selected_sources: Vec::new(),
         selected_sources: Vec::new(),
         had_input: true,
     };

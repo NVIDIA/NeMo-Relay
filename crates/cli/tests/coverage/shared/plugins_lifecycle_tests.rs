@@ -1506,8 +1506,8 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
         .declaration_source("acme.guardrail")
         .expect("the declaration source should be persisted");
     assert_eq!(
-        Path::new(declaration_source).canonicalize().unwrap(),
-        plugins_toml.canonicalize().unwrap()
+        PathBuf::from(declaration_source),
+        nemo_relay_plugin_host_config::pin_plugin_config_path(&plugins_toml).unwrap()
     );
 
     let resolved = resolve_plugins_config(None).unwrap();
@@ -2955,16 +2955,12 @@ fn explicit_plugin_path_drives_plugin_command_lifecycle_scope() {
         .unwrap()
         .expect("explicit plugin-path record");
     assert_eq!(entry.scope, RegistryScope::Explicit);
+    let expected_plugins_toml =
+        nemo_relay_plugin_host_config::pin_plugin_config_path(&plugin_config_path).unwrap();
+    assert_eq!(entry.plugins_toml_path, expected_plugins_toml);
     assert_eq!(
-        entry.plugins_toml_path.canonicalize().unwrap(),
-        plugin_config_path.canonicalize().unwrap()
-    );
-    assert_eq!(
-        entry.state_path.canonicalize().unwrap(),
-        config_dir
-            .join(".dynamic-plugins.json")
-            .canonicalize()
-            .unwrap()
+        entry.state_path,
+        nemo_relay_plugin_host_config::sibling_lifecycle_state_path(&expected_plugins_toml)
     );
     assert!(entry.state_path.exists());
 }
@@ -3328,8 +3324,8 @@ fn hydrate_ignores_a_foreign_tombstone_and_creates_a_fresh_disabled_record() {
         .declaration_source("acme.moved-scope")
         .expect("the project declaration source should be persisted");
     assert_eq!(
-        Path::new(declaration_source).canonicalize().unwrap(),
-        project_plugins_toml.canonicalize().unwrap()
+        PathBuf::from(declaration_source),
+        nemo_relay_plugin_host_config::pin_plugin_config_path(&project_plugins_toml).unwrap()
     );
 }
 

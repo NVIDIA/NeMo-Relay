@@ -298,12 +298,16 @@ fn physical_source_aliases_are_deduplicated_after_pinning() {
     let alias = temp.path().join("plugins-alias.toml");
     symlink(&config, &alias).unwrap();
 
-    let resolved = resolve_plugin_files_from_paths([alias, config.clone()], None).unwrap();
+    let resolved = resolve_plugin_files_from_paths([alias.clone(), config.clone()], None).unwrap();
     assert_eq!(
         resolved.contributing_sources,
         vec![dunce::canonicalize(&config).unwrap()]
     );
+    assert_eq!(resolved.contributing_selected_sources, vec![config.clone()]);
     assert_eq!(resolved.dynamic_plugins.len(), 1);
+
+    let aliased = resolve_plugin_files_from_paths([config, alias.clone()], None).unwrap();
+    assert_eq!(aliased.contributing_selected_sources, vec![alias]);
 }
 
 #[test]
