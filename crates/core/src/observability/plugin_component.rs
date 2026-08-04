@@ -905,7 +905,7 @@ fn register_atif_dispatcher(
                     guard.flush_open_agents()
                 };
                 for (scope_uuid, name) in &work.scope_subscribers {
-                    deregister_atif_shutdown_subscriber(&scope_uuid, &name)?;
+                    deregister_atif_shutdown_subscriber(scope_uuid, name)?;
                 }
                 Ok(work)
             })() {
