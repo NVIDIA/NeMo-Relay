@@ -191,9 +191,17 @@ asyncio.run(main())
 The helper resolves each manifest relative to `plugins.toml` and reads the
 plugin ID and execution lane from the manifest. It does not perform discovery,
 consult CLI lifecycle state, provision a Python worker environment, or change
-enablement. Every `[[plugins.dynamic]]` declaration in the selected file is
-returned, so passing the result to `initialize_with_dynamic_plugins()` is
-explicit consent to load those trusted native libraries or worker processes.
+enablement.
+
+On success, the helper returns every `[[plugins.dynamic]]` declaration in file
+order; it does not skip invalid entries. A missing `plugins.toml` or referenced
+manifest raises `FileNotFoundError`. Malformed TOML, invalid records or required
+manifest fields, duplicate plugin IDs, and non-JSON configuration raise
+`ValueError`. The helper does not apply an optional manifest-declared static
+JSON Schema.
+
+Passing the result to `initialize_with_dynamic_plugins()` is explicit consent
+to load those trusted native libraries or worker processes.
 
 This helper is a 0.7 compatibility surface for embedded integrations and is
 planned for deprecation after Relay provides a unified file-backed
