@@ -2343,6 +2343,23 @@ class _PluginHostActivation:
         """Clear and unload this activation; repeated calls are safe."""
         ...
 
+class _PluginFileActivation:
+    """Native owner for one file-backed plugin configuration."""
+
+    @property
+    def report(self) -> _JsonObject:
+        """Return the validation report captured during activation."""
+        ...
+
+    @property
+    def is_active(self) -> bool:
+        """Return whether this handle owns an active configuration."""
+        ...
+
+    def close(self) -> Awaitable[None]:
+        """Clear this activation; repeated calls are safe."""
+        ...
+
 def initialize_with_dynamic_plugins(config: object, dynamic_plugins: object) -> Awaitable[_PluginHostActivation]:
     """Initialize registered components with dynamic plugins as one owned host.
 
@@ -2355,6 +2372,26 @@ def initialize_with_dynamic_plugins(config: object, dynamic_plugins: object) -> 
 
     Exceptional flow:
         Invalid configuration, load, ownership, and registration errors are
+        raised through the awaitable.
+    """
+    ...
+
+def initialize_from_plugins_toml(
+    config: object | None = None,
+    *,
+    plugin_config_path: str | None = None,
+) -> Awaitable[_PluginFileActivation]:
+    """Initialize an owned configuration from selected ``plugins.toml`` sources.
+
+    Args:
+        config: Optional programmatic static configuration overlay.
+        plugin_config_path: Optional low-precedence plugin configuration path.
+
+    Returns:
+        Awaitable resolving to the native file activation owner.
+
+    Exceptional flow:
+        Resolution, lifecycle, ownership, load, and registration errors are
         raised through the awaitable.
     """
     ...

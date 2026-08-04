@@ -14,10 +14,10 @@ their `relay-plugin.toml` manifest describes a native shared library or a
 stores its component configuration.
 
 <Warning>
-Discoverable plugins are trusted extensions. Native plugins run in the gateway
-process. Worker plugins run in a separate process, but process isolation is not
-a security sandbox. Install manifests and artifacts only from sources you
-trust.
+Discoverable plugins are trusted extensions. Native plugins run in the host
+process without a sandbox. Worker plugins run in a separate process, but
+process isolation is not a security sandbox. Install manifests and artifacts
+only from sources you trust.
 </Warning>
 
 ## Add and Enable a Plugin
@@ -33,11 +33,12 @@ nemo-relay plugins validate acme.plugin
 ```
 
 `add` writes a `[[plugins.dynamic]]` reference to the selected `plugins.toml`
-scope and stores CLI lifecycle state next to it. `enable` changes that
+scope and stores Relay lifecycle state next to it. `enable` changes that
 lifecycle state; it does not load code immediately. Relay validates and loads
-enabled plugins when the gateway starts. Use `plugins list`, `plugins inspect`,
-and `plugins validate` to review current state and diagnostics. Use `disable`
-or `remove` to stop loading a registered plugin.
+enabled plugins when the gateway or an owned embedded host starts. Use
+`plugins list`, `plugins inspect`, and `plugins validate` to review current
+state and diagnostics. Use `disable` or `remove` to stop loading a registered
+plugin.
 
 You can also add the reference directly when configuration is provisioned by
 automation:
@@ -61,6 +62,35 @@ Do not add a Python worker only with this TOML record. Run
 `nemo-relay plugins add <path>` to register a Python worker because Relay must
 create and retain its managed Python environment before it can activate the
 worker.
+
+## Initialize Discoverable Plugins From Python
+
+Call the owned file initializer when an embedded Python host must activate
+static components and enabled discoverable plugins from the same configuration:
+
+```python
+from nemo_relay import plugin
+
+activation = await plugin.initialize_from_plugins_toml()
+async with activation:
+    print(activation.report)
+```
+
+Pass `plugin_config_path=path` to replace the ambient user file. The nearest
+project and system files remain eligible, matching CLI source selection. Set
+`NEMO_RELAY_CONFIG_SCOPE=user` to suppress project discovery while retaining
+the user-or-selected and system layers.
+
+Calling `initialize_from_plugins_toml` is explicit consent to load enabled
+native libraries or start enabled worker processes from the selected sources.
+The returned `PluginFileActivation` owns static registrations, plugin runtimes,
+and activation snapshots until `close()` or async context-manager exit.
+
+The initializer reconciles lifecycle state before activation. It can create or
+refresh each source's sibling `.dynamic-plugins.json`, but a newly discovered
+record remains disabled. It does not edit `plugins.toml`, enable plugins,
+install packages, or create Python environments. Continue to use
+`nemo-relay plugins add` and `nemo-relay plugins enable` for those operations.
 
 ## Validate Before Loading Code
 

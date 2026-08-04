@@ -225,11 +225,12 @@ refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-fi
 
 ## Discoverable Plugins
 
-Discoverable plugins use the same component lifecycle, but the CLI reads a
-`relay-plugin.toml` manifest before it creates an internal component. The
-manifest identifies a Rust native shared library or a local `grpc-v1` worker,
-declares compatibility and capabilities, and supplies integrity evidence for
-the artifact.
+Discoverable plugins use the same component lifecycle, but Relay reads a
+`relay-plugin.toml` manifest before it creates an internal component. The CLI
+gateway and Python owned file initializer can host these plugins. The manifest
+identifies a Rust native shared library or a local `grpc-v1` worker, declares
+compatibility and capabilities, and supplies integrity evidence for the
+artifact.
 
 The operator keeps the manifest reference and component configuration in
 `plugins.toml`. Use `nemo-relay plugins validate <plugin-id>` to check the

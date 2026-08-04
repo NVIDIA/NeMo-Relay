@@ -11,6 +11,7 @@ per component by the runtime, so end users do not provide instance ids.
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
@@ -32,6 +33,7 @@ from nemo_relay import (
     UnsupportedBehavior,
     subscribers,
 )
+from nemo_relay._native import _PluginFileActivation as _NativePluginFileActivation
 from nemo_relay._native import _PluginHostActivation as _NativePluginHostActivation
 from nemo_relay._native import (
     active_plugin_report as _active_plugin_report,
@@ -44,6 +46,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     deregister_plugin as _deregister_plugin,
+)
+from nemo_relay._native import (
+    initialize_from_plugins_toml as _initialize_from_plugins_toml,
 )
 from nemo_relay._native import (
     initialize_plugins as _initialize_plugins,
@@ -394,7 +399,7 @@ class PluginHostActivation:
         """Return whether this activation handle has not begun teardown.
 
         ``False`` does not guarantee another process-wide activation can start;
-        failed teardown may intentionally retain the activation owner.
+        failed cleanup may intentionally retain the activation owner.
         """
         return self._native.is_active
 
@@ -413,6 +418,54 @@ class PluginHostActivation:
         traceback: TracebackType | None,
     ) -> None:
         """Close the host when leaving an async context."""
+        del exc_type, exc_value, traceback
+        await self.close()
+
+
+class PluginFileActivation:
+    """Owned lifetime for one file-backed plugin configuration.
+
+    The activation may own static components, enabled dynamic plugins, or no
+    runtime state when discovery found no input. Keep an active object alive
+    until agent work completes and prefer ``async with`` or :meth:`close` for
+    deterministic teardown.
+    """
+
+    __slots__ = ("_native",)
+
+    def __init__(self, native: _NativePluginFileActivation) -> None:
+        self._native = native
+
+    @property
+    def report(self) -> ConfigReport:
+        """Return the validation report captured during activation."""
+        return cast(ConfigReport, self._native.report)
+
+    @property
+    def is_active(self) -> bool:
+        """Return whether this handle currently owns an active plugin host.
+
+        ``False`` also represents a no-input inactive handle. After teardown
+        begins, it does not guarantee another process-wide activation can start;
+        failed cleanup may intentionally retain the activation owner.
+        """
+        return self._native.is_active
+
+    async def close(self) -> None:
+        """Clear the owned configuration; repeated calls are safe."""
+        await self._native.close()
+
+    async def __aenter__(self) -> Self:
+        """Return this activation when entering an async context."""
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Close the activation when leaving an async context."""
         del exc_type, exc_value, traceback
         await self.close()
 
@@ -475,6 +528,41 @@ async def initialize_with_dynamic_plugins(
     normalized_plugins = [_normalize_object(spec) for spec in dynamic_plugins]
     native = await _initialize_with_dynamic_plugins(_normalize_object(config), normalized_plugins)
     return PluginHostActivation(native)
+
+
+async def initialize_from_plugins_toml(
+    config: PluginConfig | JsonObject | None = None,
+    *,
+    plugin_config_path: str | os.PathLike[str] | None = None,
+) -> PluginFileActivation:
+    """Initialize one owned configuration from Relay's ``plugins.toml`` sources.
+
+    Args:
+        config: Optional static component configuration applied after file
+            discovery. Supplying an empty configuration still creates an owned
+            static activation.
+        plugin_config_path: Optional low-precedence ``plugins.toml`` source.
+            It replaces the ambient user file while project and system sources
+            remain eligible.
+
+    Returns:
+        An owned activation. With no files and no supplied configuration, the
+        returned handle is inactive and :meth:`PluginFileActivation.close` is
+        a no-op.
+
+    Behavior:
+        Calling this function explicitly permits Relay to load enabled native
+        libraries and worker processes declared by the selected files. Dynamic
+        declarations are joined to sibling Relay lifecycle state and are never
+        enabled or installed by this function.
+    """
+    normalized_config = None if config is None else _normalize_object(config)
+    normalized_path = None if plugin_config_path is None else os.fspath(plugin_config_path)
+    native = await _initialize_from_plugins_toml(
+        normalized_config,
+        plugin_config_path=normalized_path,
+    )
+    return PluginFileActivation(native)
 
 
 def clear() -> None:
@@ -605,9 +693,11 @@ __all__ = [
     "DynamicPluginKind",
     "PluginConfig",
     "PluginContext",
+    "PluginFileActivation",
     "PluginHostActivation",
     "Plugin",
     "initialize_with_dynamic_plugins",
+    "initialize_from_plugins_toml",
     "clear",
     "clear_async",
     "initialize",

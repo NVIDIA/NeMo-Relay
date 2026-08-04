@@ -98,6 +98,12 @@ their values cannot be isolated between endpoints.
 
 ### Fixed Known Issues in 0.7
 
+- Python applications can now use
+  `plugin.initialize_from_plugins_toml()` to own static components and enabled
+  discoverable plugins resolved from the same layered `plugins.toml` sources.
+  The initializer preserves CLI lifecycle, trust, managed-environment, and
+  activation-snapshot behavior without requiring callers to construct dynamic
+  activation specifications.
 - Programmatically declared plugin components now apply their `enabled` value
   over discovered file configuration. When code re-enables a component that a
   discovered file disabled, initialization reports a warning that names the

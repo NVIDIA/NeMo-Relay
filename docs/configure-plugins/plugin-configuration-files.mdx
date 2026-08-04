@@ -133,12 +133,12 @@ Each built-in component has:
 | `enabled` | `true` | Relay validates disabled components but does not initialize them. |
 | `config` | `{}` | Component-local configuration object. The shape depends on `kind`. |
 
-## Gateway Discoverable Plugin Records
+## Discoverable Plugin Records
 
-Use `[[plugins.dynamic]]` only for a gateway-managed manifest-backed native or
-worker plugin. These records remain separate from `[[components]]`. During
-gateway activation, Relay loads each enabled dynamic adapter, synthesizes its
-internal component, and validates the component configuration.
+Use `[[plugins.dynamic]]` for a Relay-managed manifest-backed native or worker
+plugin. These records remain separate from `[[components]]`. During gateway or
+owned embedded-host activation, Relay loads each enabled dynamic adapter,
+synthesizes its internal component, and validates the component configuration.
 
 The following record configures a dynamic plugin:
 
@@ -164,6 +164,39 @@ dynamic-plugin lifecycle. Refer to [Configure Discoverable Plugins](/configure-p
 for manifest, trust, and policy requirements.
 
 The runtime reads only files named `plugins.toml` during default discovery.
+
+### Python Owned Initialization
+
+Use the Python file initializer when one embedded host must own the static and
+dynamic configuration selected by these discovery rules:
+
+```python
+from nemo_relay import plugin
+
+activation = await plugin.initialize_from_plugins_toml(
+    plugin_config_path="path/to/plugins.toml",
+)
+try:
+    print(activation.report)
+finally:
+    await activation.close()
+```
+
+The selected path replaces the ambient user layer. Project and system layers
+still participate, and an optional `config` argument supplies the
+highest-precedence static-component overlay. The function does not accept
+launch-time overrides for `[[plugins.dynamic]].config`.
+
+The returned `PluginFileActivation` must remain alive while plugin callbacks
+can run. A second owned activation and the legacy initialization and clear APIs
+report an ownership conflict until this handle closes. With no discovered file
+and no `config` argument, the function returns an inactive no-op handle.
+
+Dynamic declarations do not enable code. Relay joins each declaration to its
+source file's sibling `.dynamic-plugins.json` and loads it only when the record
+is live and enabled. Initialization can create or refresh that lifecycle file,
+but newly hydrated records remain disabled. Use the Relay CLI to install and
+enable discoverable plugins.
 
 ## Runtime Discovery
 
@@ -357,9 +390,10 @@ follows:
 1. Discover and merge the `plugins.toml` files from lowest to highest precedence
    (explicit-or-user → project → system), using the
    [Precedence And Merge Behavior](#precedence-and-merge-behavior) rules above.
-2. Layer the config object you pass to `initialize` over that merged base. Any
-   setting it specifies overrides the file value, and the result is the
-   effective config that Relay validates and activates.
+2. Layer the config object you pass to `initialize` or
+   `initialize_from_plugins_toml` over that merged base. Any setting it
+   specifies overrides the file value, and the result is the effective config
+   that Relay validates and activates.
 
 Programmatic lists participate in the same concatenation rules. For example, a
 programmatic `config.opentelemetry.endpoints` list appears before endpoints

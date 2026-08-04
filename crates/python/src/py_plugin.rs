@@ -36,6 +36,7 @@ use nemo_relay::plugin::{
     active_plugin_report, clear_plugin_configuration, deregister_plugin, initialize_plugins,
     list_plugin_kinds, register_plugin, rollback_registrations, validate_plugin_config,
 };
+use nemo_relay_plugin_host_config::{PluginFileActivation, initialize_from_plugins_toml};
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_callable::{
@@ -705,6 +706,17 @@ struct PyPluginHostActivation {
     report: nemo_relay::plugin::ConfigReport,
 }
 
+/// Owned file-backed plugin activation.
+///
+/// The public Python wrapper retains this object until ``close()`` or context
+/// manager exit. Dropping it without an explicit close still clears callbacks
+/// before unloading plugin code.
+#[pyclass(name = "_PluginFileActivation")]
+struct PyPluginFileActivation {
+    close_state: Arc<PluginHostCloseState>,
+    report: nemo_relay::plugin::ConfigReport,
+}
+
 #[derive(Clone, Copy)]
 enum PluginTeardownErrorKind {
     Value,
@@ -786,8 +798,31 @@ impl PluginTeardownCompletion {
     }
 }
 
+enum OwnedPluginActivation {
+    Dynamic(PluginHostActivation),
+    File(PluginFileActivation),
+}
+
+impl OwnedPluginActivation {
+    fn is_active(&self) -> bool {
+        match self {
+            Self::Dynamic(activation) => activation.is_active(),
+            Self::File(activation) => activation.is_active(),
+        }
+    }
+
+    fn clear(self) -> std::result::Result<(), PluginError> {
+        match self {
+            Self::Dynamic(activation) => activation.clear(),
+            Self::File(activation) => activation
+                .clear()
+                .map_err(|error| error.into_plugin_error()),
+        }
+    }
+}
+
 enum PluginHostCloseStatus {
-    Active(Option<PluginHostActivation>),
+    Active(Option<OwnedPluginActivation>),
     Closing,
     Closed,
 }
@@ -795,13 +830,16 @@ enum PluginHostCloseStatus {
 struct PluginHostCloseState {
     status: Mutex<PluginHostCloseStatus>,
     completion: PluginTeardownCompletion,
+    owns_plugin_configuration: bool,
 }
 
 impl PluginHostCloseState {
-    fn new(activation: PluginHostActivation) -> Self {
+    fn new(activation: OwnedPluginActivation) -> Self {
+        let owns_plugin_configuration = activation.is_active();
         Self {
             status: Mutex::new(PluginHostCloseStatus::Active(Some(activation))),
             completion: PluginTeardownCompletion::new(),
+            owns_plugin_configuration,
         }
     }
 
@@ -813,7 +851,7 @@ impl PluginHostCloseState {
         match &*status {
             PluginHostCloseStatus::Active(activation) => activation
                 .as_ref()
-                .is_some_and(PluginHostActivation::is_active),
+                .is_some_and(OwnedPluginActivation::is_active),
             PluginHostCloseStatus::Closing | PluginHostCloseStatus::Closed => false,
         }
     }
@@ -836,6 +874,10 @@ impl PluginHostCloseState {
         let Some(activation) = activation else {
             return;
         };
+        if !activation.is_active() {
+            self.finish(Ok(()));
+            return;
+        }
 
         // Keep the activation outside the spawned closure so a thread-spawn
         // failure cannot drop it and synchronously run teardown on the caller.
@@ -855,12 +897,12 @@ impl PluginHostCloseState {
                             activation.clear()
                         }))
                         .map_err(|_| {
-                            PluginTeardownError::runtime("dynamic plugin teardown task panicked")
+                            PluginTeardownError::runtime("plugin host teardown task panicked")
                         })
                         .and_then(|result| result.map_err(PluginTeardownError::from_plugin_error))
                     }
                     None => Err(PluginTeardownError::runtime(
-                        "dynamic plugin teardown task lost its activation",
+                        "plugin host teardown task lost its activation",
                     )),
                 };
                 close_state.finish(result);
@@ -877,7 +919,7 @@ impl PluginHostCloseState {
                 std::mem::forget(activation);
             }
             self.finish(Err(PluginTeardownError::runtime(format!(
-                "failed to start dynamic plugin teardown task: {error}"
+                "failed to start plugin host teardown task: {error}"
             ))));
         }
     }
@@ -887,12 +929,14 @@ impl PluginHostCloseState {
             .status
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = PluginHostCloseStatus::Closed;
-        reset_plugin_configuration_clear_state();
+        if self.owns_plugin_configuration {
+            reset_plugin_configuration_clear_state();
+        }
         self.completion.finish(result);
     }
 
     async fn wait_for_close(&self) -> PluginTeardownResult {
-        self.completion.wait("dynamic plugin teardown").await
+        self.completion.wait("plugin host teardown").await
     }
 }
 
@@ -978,7 +1022,7 @@ impl PyPluginHostActivation {
     /// Return whether this activation handle has not begun teardown.
     ///
     /// `False` does not guarantee another process-wide activation can start;
-    /// failed teardown may intentionally retain the activation owner.
+    /// failed cleanup may intentionally retain the activation owner.
     #[getter]
     fn is_active(&self) -> PyResult<bool> {
         Ok(self.close_state.is_active())
@@ -1029,7 +1073,90 @@ fn initialize_with_dynamic_plugins_py<'py>(
             Py::new(
                 py,
                 PyPluginHostActivation {
-                    close_state: Arc::new(PluginHostCloseState::new(activation)),
+                    close_state: Arc::new(PluginHostCloseState::new(
+                        OwnedPluginActivation::Dynamic(activation),
+                    )),
+                    report,
+                },
+            )
+        })
+    })
+}
+
+#[pymethods]
+impl PyPluginFileActivation {
+    /// Return the activation report captured during initialization.
+    #[getter]
+    fn report(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let report = serde_json::to_value(&self.report)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        json_to_py(py, &report)
+    }
+
+    /// Return whether this handle currently owns an active plugin host.
+    ///
+    /// `False` also represents a no-input inactive handle. After teardown
+    /// begins, it does not guarantee another process-wide activation can start;
+    /// failed cleanup may intentionally retain the activation owner.
+    #[getter]
+    fn is_active(&self) -> PyResult<bool> {
+        Ok(self.close_state.is_active())
+    }
+
+    /// Clear callbacks and unload the file-backed plugin host.
+    #[pyo3(signature = () -> "None", text_signature = "($self) -> None")]
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let close_state = Arc::clone(&self.close_state);
+        close_state.begin_close();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            close_state
+                .wait_for_close()
+                .await
+                .map_err(|error| error.to_py_err())
+        })
+    }
+}
+
+impl Drop for PyPluginFileActivation {
+    fn drop(&mut self) {
+        self.close_state.begin_close();
+    }
+}
+
+/// Initialize an owned plugin host from standard `plugins.toml` sources.
+#[pyfunction(name = "initialize_from_plugins_toml")]
+#[pyo3(
+    signature = (config = None, *, plugin_config_path = None),
+    text_signature = "(config: object | None = None, *, plugin_config_path: str | None = None) -> object"
+)]
+fn initialize_from_plugins_toml_py<'py>(
+    py: Python<'py>,
+    config: Option<&Bound<'_, PyAny>>,
+    plugin_config_path: Option<String>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let config = config
+        .map(|config| {
+            let config_json = py_to_json(config)?;
+            serde_json::from_value::<PluginConfig>(config_json)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+        })
+        .transpose()?;
+    let plugin_config_path = plugin_config_path.map(std::path::PathBuf::from);
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let activation = initialize_from_plugins_toml(config, plugin_config_path)
+            .await
+            .map_err(|error| plugin_error_to_py_err(error.into_plugin_error()))?;
+        let report = activation.report().clone();
+        if activation.is_active() {
+            reset_plugin_configuration_clear_state();
+        }
+        Python::attach(|py| {
+            Py::new(
+                py,
+                PyPluginFileActivation {
+                    close_state: Arc::new(PluginHostCloseState::new(OwnedPluginActivation::File(
+                        activation,
+                    ))),
                     report,
                 },
             )
@@ -1096,9 +1223,11 @@ fn deregister_plugin_py(plugin_kind: &str) -> bool {
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPluginContext>()?;
     m.add_class::<PyPluginHostActivation>()?;
+    m.add_class::<PyPluginFileActivation>()?;
     m.add_function(wrap_pyfunction!(validate_plugin_config_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_plugins_py, m)?)?;
     m.add_function(wrap_pyfunction!(initialize_with_dynamic_plugins_py, m)?)?;
+    m.add_function(wrap_pyfunction!(initialize_from_plugins_toml_py, m)?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_py, m)?)?;
     m.add_function(wrap_pyfunction!(clear_plugin_configuration_async_py, m)?)?;
     m.add_function(wrap_pyfunction!(active_plugin_report_py, m)?)?;

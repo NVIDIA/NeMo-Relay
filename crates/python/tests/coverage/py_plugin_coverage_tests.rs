@@ -108,9 +108,11 @@ fn register_adds_plugin_management_bindings() {
         for name in [
             "PluginContext",
             "_PluginHostActivation",
+            "_PluginFileActivation",
             "validate_plugin_config",
             "initialize_plugins",
             "initialize_with_dynamic_plugins",
+            "initialize_from_plugins_toml",
             "clear_plugin_configuration",
             "clear_plugin_configuration_async",
             "active_plugin_report",
@@ -182,6 +184,34 @@ async def clear(module):
         });
         assert!(active_plugin_report_py(py).unwrap().bind(py).is_none());
     });
+}
+
+#[test]
+fn inactive_close_completion_does_not_rotate_global_clear_state() {
+    let _plugin_test_state = lock_plugin_test_state_for_tests();
+    reset_plugin_configuration_clear_state();
+    let before = plugin_configuration_clear_state();
+    let inactive = PluginHostCloseState {
+        status: Mutex::new(PluginHostCloseStatus::Closing),
+        completion: PluginTeardownCompletion::new(),
+        owns_plugin_configuration: false,
+    };
+
+    inactive.finish(Ok(()));
+
+    let after_inactive = plugin_configuration_clear_state();
+    assert!(Arc::ptr_eq(&before, &after_inactive));
+
+    let active = PluginHostCloseState {
+        status: Mutex::new(PluginHostCloseStatus::Closing),
+        completion: PluginTeardownCompletion::new(),
+        owns_plugin_configuration: true,
+    };
+    active.finish(Ok(()));
+    assert!(!Arc::ptr_eq(
+        &after_inactive,
+        &plugin_configuration_clear_state()
+    ));
 }
 
 #[test]

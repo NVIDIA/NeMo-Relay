@@ -467,6 +467,7 @@ local_dependencies = (
     "nemo-relay-worker-proto",
     "nemo-relay-worker",
     "nemo-relay",
+    "nemo-relay-plugin-host-config",
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
@@ -759,6 +760,7 @@ published_cargo_packages() {
         nemo-relay-worker-proto \
         nemo-relay-worker \
         nemo-relay \
+        nemo-relay-plugin-host-config \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
         nemo-relay-switchyard \
@@ -1281,10 +1283,17 @@ test-python-plugin-e2e:
     PIP_FIND_LINKS="$tmp/wheels" NEMO_RELAY_PYTHON="$python_executable" \
         "$cli" --config "$config" plugins add "$manifest"
     "$cli" --config "$config" plugins enable examples.python_grpc_worker
+    plugin_config="$tmp/plugins.toml"
+    test -f "$plugin_config"
     environment_ref="$("$python_executable" -c \
         'import json, sys; print(json.load(open(sys.argv[1]))["records"][0]["source"]["environment_ref"])' \
         "$tmp/.dynamic-plugins.json")"
     test -x "$environment_ref/bin/python" || test -x "$environment_ref/Scripts/python.exe"
+
+    use_project_python_source "$python_executable"
+    "$python_executable" -m maturin develop --skip-install
+    NEMO_RELAY_CONFIG_SCOPE=user \
+        "$python_executable" python/tests/plugin/file_activation_e2e.py "$plugin_config"
 
     port="$("$python_executable" -c \
         'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
@@ -1512,6 +1521,12 @@ package-rust:
             nemo-relay)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-worker-proto.path="crates/worker-proto"')
+                ;;
+            nemo-relay-plugin-host-config)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
             nemo-relay-adaptive)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
@@ -1535,12 +1550,21 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-ffi|nemo-relay-cli)
+            nemo-relay-ffi)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
+                ;;
+            nemo-relay-cli)
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-adaptive.path="crates/adaptive"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-pii-redaction.path="crates/pii-redaction"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin-host-config.path="crates/plugin-host-config"')
+                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-switchyard.path="crates/switchyard"')
                 ;;
         esac
         if ((${#cargo_package_config[@]} == 0)); then
