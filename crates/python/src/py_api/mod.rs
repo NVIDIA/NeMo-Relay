@@ -135,8 +135,9 @@ where
     )?;
     let completion_future = python_future.clone_ref(py);
     pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
+        let mut task = tokio::spawn(pyo3_async_runtimes::tokio::scope(locals, future));
         let result = tokio::select! {
-            result = tokio::spawn(pyo3_async_runtimes::tokio::scope(locals, future)) => Some(
+            result = &mut task => Some(
                 match result {
                     Ok(result) => result,
                     Err(error) if error.is_panic() => Err(pyo3_async_runtimes::err::RustPanic::new_err(
@@ -145,7 +146,11 @@ where
                     Err(error) => Err(pyo3::exceptions::PyRuntimeError::new_err(error.to_string())),
                 },
             ),
-            _ = &mut cancel_receiver => None,
+            _ = &mut cancel_receiver => {
+                task.abort();
+                let _ = task.await;
+                None
+            },
         };
         let Some(result) = result else { return };
         Python::attach(|py| {
