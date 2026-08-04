@@ -283,27 +283,32 @@ This ordering preserves the distinction between the families:
 ### Rejection Path
 
 A conditional-execution guardrail can reject the call during the request phase.
-Relay does not run request intercepts, execution intercepts, or the real
-callback. It sanitizes and enqueues the rejection mark, then returns the
-rejection to the managed caller.
+Relay emits a guardrail scope start/end pair for each conditional guardrail it
+evaluates. If a guardrail rejects the call, Relay skips the managed call start
+and end events and does not run request intercepts, execution intercepts, or the
+real callback. It then sanitizes and enqueues the rejection mark before
+returning the rejection to the managed caller.
 
 ```mermaid
 flowchart LR
     Request[Managed Request]
+    GuardrailStart[Guardrail Scope Start]
     Conditional{Conditional Guardrail}
+    GuardrailEnd[Guardrail Scope End]
     Mark[Sanitize and Enqueue Rejection Mark]
     Rejected[Return Rejection]
 
-    Request --> Conditional -->|rejected| Mark --> Rejected
+    Request --> GuardrailStart --> Conditional --> GuardrailEnd
+    GuardrailEnd -->|rejected| Mark --> Rejected
 ```
 
 ### Streaming LLM Path
 
 For streaming LLM flows, the same pre-execution order applies: the runtime
-applies `sanitize-request` guardrails and emits the LLM start event before the
+applies request sanitizers and emits the LLM start event before the
 stream execution intercept chain runs. Stream execution intercepts are the
 execution family for streaming provider callbacks. The runtime then collects
-chunks and finalizes the stream before `sanitize-response` guardrails rewrite
+chunks and finalizes the stream before response sanitizers rewrite
 the emitted end-event payload and scope-end event sanitizers run.
 
 ```mermaid
