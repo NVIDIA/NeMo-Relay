@@ -45,6 +45,14 @@ fn log_crate_proxy_is_installed() -> bool {
     std::ptr::addr_eq(log::logger(), spdlog::log_crate_proxy() as &dyn log::Log)
 }
 
+fn log_crate_proxy_has_receiver() -> bool {
+    let _lifecycle = lock_logger_lifecycle();
+    let receiver = spdlog::log_crate_proxy().swap_logger(None);
+    let has_receiver = receiver.is_some();
+    spdlog::log_crate_proxy().set_logger(receiver);
+    has_receiver
+}
+
 fn install_log_crate_proxy() -> Result<()> {
     match spdlog::init_log_crate_proxy() {
         Ok(()) => Ok(()),
@@ -183,6 +191,9 @@ pub fn initialize_default_logging() -> Result<()> {
     if runtime.is_none() {
         let config = LoggingConfig::from_environment()?;
         let uses_default_config = config.is_none();
+        if uses_default_config && log_crate_proxy_is_installed() && log_crate_proxy_has_receiver() {
+            return Ok(());
+        }
         match LoggingRuntime::configure(config.unwrap_or_default()) {
             Ok(configured) => *runtime = Some(configured),
             // Language bindings initialize logging automatically. When Relay was not explicitly

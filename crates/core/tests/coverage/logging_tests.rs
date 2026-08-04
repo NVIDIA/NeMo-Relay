@@ -228,17 +228,49 @@ queue_capacity = 16
     shutdown_default_logging().unwrap();
     shutdown_default_logging().unwrap();
 
-    let records = std::fs::read_to_string(log_path).unwrap();
+    let records = std::fs::read_to_string(log_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("valid JSONL lifecycle record"))
+        .collect::<Vec<_>>();
     assert_eq!(
-        records.matches(r#""event":"logging_initialized""#).count(),
+        records
+            .iter()
+            .filter(|record| record["event"] == "logging_initialized")
+            .count(),
         1
     );
     assert_eq!(
         records
-            .matches(r#""event":"logging_shutdown_started""#)
+            .iter()
+            .filter(|record| record["event"] == "logging_shutdown_started")
             .count(),
         1
     );
+}
+
+#[test]
+fn implicit_default_logging_preserves_an_existing_relay_logger() {
+    let _environment = LoggingEnvScope::set(&[
+        ("NEMO_RELAY_LOG", None),
+        ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
+        ("NEMO_RELAY_LOG_CONFIG_PATH", None),
+    ]);
+    shutdown_default_logging().unwrap();
+    let host_runtime = init_logging(&default_config()).unwrap();
+
+    initialize_default_logging().unwrap();
+    shutdown_default_logging().unwrap();
+
+    let receiver = spdlog::log_crate_proxy().swap_logger(None);
+    assert!(
+        receiver
+            .as_ref()
+            .is_some_and(|receiver| Arc::ptr_eq(receiver, &host_runtime.logger)),
+        "implicit binding startup must preserve the host Relay logger"
+    );
+    spdlog::log_crate_proxy().set_logger(receiver);
+    drop(host_runtime);
 }
 
 #[test]
