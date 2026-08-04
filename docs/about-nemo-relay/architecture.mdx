@@ -122,7 +122,7 @@ The plugin system installs reusable runtime components from configuration. A plu
 
 ### Event Emission
 
-The runtime emits structured events for scopes, tools, LLMs, and named marks. Those events are the canonical record of runtime behavior. Native Rust, Python, Node.js, and FFI event-producing APIs enqueue subscriber work and return without waiting for subscriber callbacks or exporter work.
+The runtime emits structured events for scopes, tools, LLMs, and named marks. Those events are the canonical record of runtime behavior. Native Rust, Python, Node.js, and FFI event-producing APIs enqueue payload sanitization, event sanitization, and subscriber work, then return without waiting for that observability work.
 
 ### Subscribers and Exporters
 

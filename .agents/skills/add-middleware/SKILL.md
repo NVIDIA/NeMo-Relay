@@ -41,11 +41,13 @@ Decide these before editing code:
 Refer to `docs/about-nemo-relay/concepts/middleware.mdx` for the full diagrams.
 
 - **Tool execute**:
-  conditional guardrails -> request intercepts -> sanitize request (for events)
-  | execution intercept chain(callable) -> sanitize response
+  conditional guardrails -> request intercepts -> queue sanitize request (for events)
+  -> execution intercept chain(callable) -> queue sanitize response
 - **LLM execute**:
-  conditional guardrails -> request intercepts -> sanitize request (for events)
-  | execution intercept chain(callable) -> sanitize response
+  conditional guardrails -> request intercepts -> queue sanitize request (for events)
+  -> execution intercept chain(callable) -> queue sanitize response
+- **Queued publication**:
+  sanitize payload -> sanitize event fields -> subscriber/exporter delivery
 - **Mark and scope events**:
   specialized tool or LLM sanitizer (when applicable) -> mark or scope event
   sanitizer -> subscriber and exporter dispatch

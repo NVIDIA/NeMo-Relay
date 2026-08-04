@@ -25,9 +25,10 @@ All middleware families are asynchronous in the Rust runtime. Rust callbacks
 return a future, and Node callbacks may return a value or a Promise. Python
 registrations accept callbacks that return a value or an awaitable when invoked
 through an asynchronous Relay API or queued event publication. Worker and
-native-plugin middleware can also complete asynchronously. Relay awaits entries
-sequentially in priority order, so later callbacks observe earlier middleware
-output.
+native-plugin middleware can also complete asynchronously. Within each
+middleware chain, Relay awaits entries sequentially in priority order so later
+callbacks observe earlier middleware output. Payload and event sanitizer chains
+run on the queued publication path and do not delay managed execution.
 
 The experimental raw C FFI and Go binding retain synchronous middleware
 callbacks. Relay invokes each callback on a native thread and waits for it to
@@ -39,12 +40,13 @@ Synchronous standalone Python calls cannot drive an awaitable callback. Call
 the same standalone helper from a running event loop and await the returned
 value instead.
 
-Managed execution is asynchronous because its result depends on middleware
-completion. Python standalone conditional and request-intercept helpers return
-a direct value outside an event loop and an awaitable inside one. Manual lifecycle
-APIs (`tool_call`, `tool_call_end`, `llm_call`, and `llm_call_end`) remain
-synchronous: they create or close their handle immediately and queue observability
-work rather than awaiting it.
+Managed execution is asynchronous because its result depends on conditional
+guardrails and intercept completion. Python standalone conditional and
+request-intercept helpers return a direct value outside an event loop and an
+awaitable inside one. Managed and manual lifecycle APIs queue observability
+sanitization and publication rather than awaiting it. Manual lifecycle APIs
+(`tool_call`, `tool_call_end`, `llm_call`, and `llm_call_end`) remain
+synchronous and create or close their handle immediately.
 
 <Warning>
 Event sanitizers, conditional-execution guardrails, request intercepts,
@@ -155,9 +157,11 @@ object.
 
 Guardrails are middleware that block execution or sanitize observability payloads.
 
-Sanitizers are pure transformations. Do not use a sanitizer callback for
-stateful side effects, such as metrics, logging, mutation, or I/O; Relay only
-guarantees the transformed observability payload.
+Sanitizers are transformations. Do not use a sanitizer callback for stateful
+side effects such as metrics, logging, or application mutation; Relay only
+guarantees the transformed observability payload. A sanitizer may await an
+external transformation service, but slow calls delay queued observability and
+subscriber flushes even though they do not delay managed execution.
 
 ### Conditional Execution
 
@@ -199,11 +203,12 @@ arguments passed to the callback or the real value returned to the caller.
 
 ## Queued Event Publication
 
-Scope operations, marks, and manual tool/LLM lifecycle calls never become
-awaitable because an event sanitizer is asynchronous. At emission time Relay
-snapshots the event, visible sanitizer chain, and subscribers, then places the
-work on a serial dispatcher. The dispatcher awaits sanitizers and publishes the
-event later in FIFO order.
+Scope operations, marks, and manual or managed tool/LLM lifecycle calls do not
+await observability sanitizers. At emission time Relay snapshots the event-only
+payload, visible sanitizer chains, and subscribers, then places the work on a
+serial dispatcher. The dispatcher awaits the specialized tool or LLM payload
+sanitizers, then the event sanitizers, and publishes the event later in FIFO
+order.
 
 Subscriber and exporter delivery is therefore delayed, while start/end/mark
 order is preserved. Closing a scope or deregistering middleware after emission
@@ -237,38 +242,37 @@ sequenceDiagram
         Cond-->>Caller: reject execution
     else allowed
         Runtime->>Req: rewrite the real request
-        Runtime->>San: sanitize emitted start payload
-        Runtime->>EventSan: sanitize start event fields
-        Runtime->>Dispatch: enqueue start event before execution
-        Dispatch-->>Consumers: deliver start event later
+        Runtime->>Dispatch: enqueue start-event copy before execution
         Runtime->>Exec: wrap execution
         Exec->>Callback: invoke callback
         Callback-->>Exec: return real result
         Exec-->>Runtime: continue
-        Runtime->>San: sanitize emitted end payload
-        Runtime->>EventSan: sanitize end event fields
-        Runtime->>Dispatch: enqueue end event
-        Dispatch-->>Consumers: deliver end event later
+        Runtime->>Dispatch: enqueue end-event copy
         Runtime-->>Caller: return real result
+        Dispatch->>San: sanitize start and end payloads in FIFO order
+        Dispatch->>EventSan: sanitize event fields
+        Dispatch-->>Consumers: deliver events later
     end
 ```
 
 1. Conditional-execution guardrails
 2. Request intercepts
-3. Tool or LLM sanitize-request guardrails
-4. Scope-start event sanitizers and start-event emission
-5. Execution intercepts
-6. The real callback, unless an execution intercept replaces it
-7. Tool or LLM sanitize-response guardrails
-8. Scope-end event sanitizers and end-event emission
+3. Queue the start-event copy and its sanitize-request chain
+4. Execution intercepts
+5. The real callback, unless an execution intercept replaces it
+6. Queue the end-event copy and its sanitize-response chain
+7. Return the real result without waiting for either sanitizer chain
 
-For streaming LLM flows, the same pre-execution order applies: the runtime
-applies `sanitize-request` guardrails and emits the LLM start event before the
+On the publication path, the dispatcher preserves start/end ordering. It runs
+the tool or LLM payload sanitizer first, then the matching scope-event
+sanitizer, and finally delivers the event to subscribers and exporters.
+
+For streaming LLM flows, the runtime queues the LLM start-event copy before the
 stream execution intercept chain runs. Stream execution intercepts are the
-execution family for streaming provider callbacks. The runtime then collects
-chunks and finalizes the stream before `sanitize-response` guardrails rewrite
-the emitted end-event payload and scope-end event sanitizers run at items 7 and
-8.
+execution family for streaming provider callbacks. The runtime collects chunks
+and invokes the finalizer, then queues response and event sanitization without
+delaying observable stream termination. A subscriber flush waits for that
+queued end-event work.
 
 This ordering is what makes the semantic split between intercepts and
 guardrails important:

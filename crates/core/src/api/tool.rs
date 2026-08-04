@@ -356,12 +356,7 @@ async fn tool_call_with_subscriber_snapshot(
         (entries, subscribers)
     };
     let skill_loads = resolve_skill_loads(params.name, &params.args, params.metadata.as_ref());
-    let sanitized_args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
-        params.name,
-        params.args,
-        &entries,
-    )
-    .await;
+    let raw_args = params.args;
     let (handle, event, marks) = {
         let context = global_context();
         let state = context
@@ -377,7 +372,7 @@ async fn tool_call_with_subscriber_snapshot(
             .timestamp_opt(params.timestamp)
             .build();
         let handle = state.create_tool_handle(handle_params);
-        let event = state.build_tool_start_event(&handle, sanitized_args);
+        let event = state.build_tool_start_event(&handle, None);
         let marks = skill_loads
             .into_iter()
             .map(|skill_load| {
@@ -399,7 +394,27 @@ async fn tool_call_with_subscriber_snapshot(
             .collect::<Vec<_>>();
         (handle, event, marks)
     };
-    queue_sanitized_event(event, &subscribers);
+    let scope_stack = current_scope_stack();
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    let tool_name = handle.name.clone();
+    dispatch_transformed_event(
+        event,
+        Box::new(move |mut event| {
+            Box::pin(async move {
+                let sanitized = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                    &tool_name, raw_args, &entries,
+                )
+                .await;
+                let mut fields = event.sanitize_fields();
+                fields.data = sanitized;
+                event.apply_sanitize_fields(fields);
+                event
+            })
+        }),
+        event_sanitizers,
+        &subscribers,
+        scope_stack,
+    );
     for mark in marks {
         queue_sanitized_event(mark, &subscribers);
     }
@@ -526,19 +541,6 @@ async fn tool_call_end_with_pending_marks(
         (entries, subscribers)
     };
     let subscribers = lifecycle_subscribers.unwrap_or(&subscribers);
-    let sanitized_result = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
-        &params.handle.name,
-        params.result,
-        &entries,
-    )
-    .await;
-    let data = sanitized_result.and_then(|value| {
-        if value.is_null() {
-            params.data
-        } else {
-            Some(value)
-        }
-    });
     let event = {
         let context = global_context();
         let state = context
@@ -547,7 +549,7 @@ async fn tool_call_end_with_pending_marks(
         state.build_tool_end_event(
             EndToolHandleParams::builder()
                 .handle(params.handle)
-                .data_opt(data)
+                .data(Json::Null)
                 .metadata_opt(params.metadata)
                 .timestamp_opt(params.timestamp)
                 .build(),
@@ -572,7 +574,35 @@ async fn tool_call_end_with_pending_marks(
             ))
         })
         .collect::<Vec<_>>();
-    queue_sanitized_event(event, subscribers);
+    let scope_stack = current_scope_stack();
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    let tool_name = params.handle.name.clone();
+    let result = params.result;
+    let fallback = params.data;
+    dispatch_transformed_event(
+        event,
+        Box::new(move |mut event| {
+            Box::pin(async move {
+                let sanitized = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+                    &tool_name, result, &entries,
+                )
+                .await;
+                let mut fields = event.sanitize_fields();
+                fields.data = sanitized.and_then(|value| {
+                    if value.is_null() {
+                        fallback
+                    } else {
+                        Some(value)
+                    }
+                });
+                event.apply_sanitize_fields(fields);
+                event
+            })
+        }),
+        event_sanitizers,
+        subscribers,
+        scope_stack,
+    );
     for mark in marks {
         queue_sanitized_event(mark, subscribers);
     }
@@ -652,9 +682,10 @@ impl Drop for ManagedToolCompletion {
 
 /// Execute a tool call through the managed middleware pipeline.
 ///
-/// This runs conditional-execution guardrails, request intercepts,
-/// sanitize-request guardrails, execution intercepts, the tool callback, and
-/// sanitize-response guardrails in the runtime-defined order.
+/// This runs conditional-execution guardrails and request intercepts, queues
+/// sanitize-request guardrails for observability, then runs execution
+/// intercepts and the tool callback. Sanitize-response guardrails are queued
+/// before the real result is returned.
 ///
 /// # Parameters
 /// - `name`: Tool name recorded on emitted lifecycle events.

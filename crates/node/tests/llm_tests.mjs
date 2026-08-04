@@ -501,6 +501,7 @@ describe('LLM guardrails', () => {
         ({ annotated, original }) => codec.encode(annotated, original),
         codec.decodeResponse.bind(codec),
       );
+      await flushSubscribers();
       assert.deepEqual(result, response);
       assert.equal(requestDecoded, true);
       assert.equal(responseDecoded, true);
@@ -611,6 +612,7 @@ describe('LLM guardrails', () => {
       const stream = await execution;
       assert.deepEqual(await stream.next(), { token: 'done' });
       assert.equal(await stream.next(), null);
+      await flushSubscribers();
       assert.deepEqual(observed, [invocationScope.uuid, invocationScope.uuid]);
     } finally {
       lib.withScopeStack(invocationStack, () => lib.popScope(invocationScope));

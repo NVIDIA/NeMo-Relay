@@ -13,8 +13,8 @@
 //! ```text
 //! raw chunk (Json) -> collector(chunk) -> Ok(()) -> yield chunk
 //!                                      -> Err(e) -> terminate stream with error
-//! upstream error -> terminate stream with error -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
-//! stream ends -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
+//! upstream error -> terminate stream with error -> finalizer() -> queue END sanitization
+//! stream ends -> finalizer() -> queue END sanitization
 //! ```
 //!
 //! The **collector** receives each chunk (Json) and can accumulate state
@@ -22,19 +22,21 @@
 //! terminates immediately with that error. Upstream stream errors also
 //! terminate the stream immediately. The **finalizer** is called once when the
 //! stream terminates and returns the aggregated response as [`Json`]. That
-//! aggregated response then flows through sanitize response guardrails before
-//! being included in the END event.
+//! aggregated response is queued for sanitize response guardrails before being
+//! included in the END event. Stream termination does not await that queued
+//! observability work.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use chrono::Utc;
 use tokio_stream::Stream;
 
 use crate::api::event::{BaseEvent, MarkEvent};
-use crate::api::llm::LlmHandle;
 use crate::api::llm::emit_reserved_optimization_marks;
+use crate::api::llm::{EndLlmHandleParams, LlmHandle};
 use crate::api::optimization::finalize_optimization_summary;
 use crate::api::registry::Guardrail;
 use crate::api::runtime::NemoRelayContextState;
@@ -59,9 +61,9 @@ use serde_json::Map;
 /// 1. Passes each chunk to the user-supplied **collector** closure.
 ///    If the collector returns `Err`, the stream terminates with that error.
 /// 2. On stream exhaustion or explicit close, calls the **finalizer** to
-///    produce an aggregated [`Json`] response, runs sanitize response
-///    guardrails on it, then emits the LLM END event. Explicit close marks the
-///    end event as interrupted and waits for producer cleanup.
+///    produce an aggregated [`Json`] response, then queues sanitize response
+///    guardrails and LLM END event publication. Explicit close marks the end
+///    event as interrupted and waits for producer cleanup.
 ///
 /// This type is returned by [`crate::api::llm::llm_stream_call_execute`] and
 /// is usually consumed as an ordinary async stream. Consumers that stop early
@@ -212,6 +214,9 @@ impl LlmStreamWrapper {
         self.inner.terminalize();
         let metadata =
             metadata_with_otel_status(self.metadata.clone(), status_code, status_message);
+        self.handle
+            .optimization_recorder
+            .close_for_finalization(None);
         self.finalization = self.emit_end_event(metadata, interrupted, false);
     }
 
@@ -222,6 +227,9 @@ impl LlmStreamWrapper {
         self.ended = true;
         self.inner.terminalize();
         let metadata = metadata_with_otel_error(self.metadata.clone(), error);
+        self.handle
+            .optimization_recorder
+            .close_for_finalization(None);
         self.finalization = self.emit_end_event(metadata, interrupted, false);
     }
 
@@ -233,12 +241,13 @@ impl LlmStreamWrapper {
         &mut self,
         metadata: Option<Json>,
         interrupted: bool,
-        background_thread: bool,
+        _background_thread: bool,
     ) -> Option<tokio::task::JoinHandle<()>> {
         // The finalizer below runs on the caller's Tokio runtime. Register a
         // dispatcher barrier before spawning it so a synchronous subscriber
         // flush after this stream is dropped cannot overtake the END event.
         let publication_barrier = subscriber_dispatcher::register_async_publication();
+        let timestamp = Utc::now();
         let aggregated = match self.finalizer.take() {
             Some(finalizer) => finalizer(),
             None => Json::Null,
@@ -314,9 +323,17 @@ impl LlmStreamWrapper {
                 let ctx = global_context();
                 let state = ctx.read();
                 match state {
-                    Ok(state) => {
-                        Some(state.end_llm_handle(&handle, data, metadata, annotated_response))
-                    }
+                    Ok(state) => Some(
+                        state.build_llm_end_event(
+                            EndLlmHandleParams::builder()
+                                .handle(&handle)
+                                .data_opt(data)
+                                .metadata_opt(metadata)
+                                .annotated_response_opt(annotated_response)
+                                .timestamp(timestamp)
+                                .build(),
+                        ),
+                    ),
                     Err(_) => None,
                 }
             };
@@ -337,22 +354,12 @@ impl LlmStreamWrapper {
             publication_context,
             subscriber_dispatcher::with_async_publication_context(publication_barrier, finalize),
         );
-        if background_thread {
-            // `Drop` cannot await middleware and may run while the caller's
-            // executor is synchronously flushing subscribers. A process-local
-            // executor polls all detached finalizers on one shared OS thread.
-            // Pending middleware therefore does not create one thread per
-            // abandoned stream.
-            let _ = subscriber_dispatcher::spawn_background_publication(finalize);
-            return None;
-        }
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => Some(handle.spawn(finalize)),
-            Err(_) => {
-                let _ = subscriber_dispatcher::spawn_background_publication(finalize);
-                None
-            }
-        }
+        // Stream finalization is observability-only. Queue it on the shared
+        // publication executor so stream termination does not await response
+        // or event sanitizers. The registered barrier keeps subscriber flushes
+        // ordered behind this END event.
+        let _ = subscriber_dispatcher::spawn_background_publication(finalize);
+        None
     }
 
     /// Emit a compact per-chunk receipt mark before collector processing.
@@ -420,10 +427,8 @@ impl Stream for LlmStreamWrapper {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
 
-        // The END event runs async because response and event sanitizers may
-        // await. Do not expose stream termination until that work has queued
-        // the event: callers commonly flush subscribers immediately after
-        // exhausting a stream, and that flush must include its END event.
+        // Retain support for an already-scheduled finalization task while the
+        // stream is being polled.
         if let Some(finalization) = this.finalization.as_mut() {
             return match Pin::new(finalization).poll(cx) {
                 Poll::Pending => Poll::Pending,

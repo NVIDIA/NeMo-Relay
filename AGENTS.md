@@ -177,7 +177,7 @@ preserve.
 - Middleware is priority-ordered after merging global and visible scope-local entries.
 - Intercepts change the real execution path. Request intercepts rewrite the request. Execution intercepts wrap or replace the callback. Stream execution intercepts handle streaming lifecycle behavior.
 - Guardrails either block execution or sanitize emitted observability payloads. Sanitize guardrails do not rewrite the real callback arguments or return value.
-- Managed execution order is conditional guardrails, request intercepts, sanitize-request guardrails for start events, execution intercepts, callback execution, then sanitize-response guardrails for end events.
+- Managed execution runs conditional guardrails and request intercepts, queues sanitize-request guardrails for the start event, runs execution intercepts and callback execution, then queues sanitize-response guardrails for the end event. Payload sanitizers run on the observability dispatcher and do not delay the application callback or result.
 - Events use ATOF `0.1` as the canonical event format. Scope events use start/end pairs; mark events record runtime checkpoints.
 - LLM and tool event metadata belongs in the category profile, such as `model_name`, `tool_call_id`, and custom `subtype` fields.
 - Exporters can transform runtime events to ATIF trajectories, OpenTelemetry traces, or OpenInference-compatible output. Root scope identity is used to isolate concurrent agents.
