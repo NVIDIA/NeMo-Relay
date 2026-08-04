@@ -938,6 +938,37 @@ fn absent_optional_plugin_config_is_ignored() {
     let loaded = load_plugin_toml_config_from_paths(vec![missing]).unwrap();
 
     assert!(loaded.is_none());
+    assert!(!ResolvedConfig::default().plugin_had_input);
+    assert!(ResolvedConfig::default().plugin_diagnostics.is_empty());
+}
+
+#[test]
+fn existing_plugin_config_preserves_activation_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugins_path = temp.path().join("plugins.toml");
+    std::fs::write(&plugins_path, "").unwrap();
+
+    let loaded = load_plugin_toml_config_from_paths(vec![plugins_path.clone()])
+        .unwrap()
+        .expect("the physical plugin file participates even when it has no components");
+    assert!(loaded.had_input);
+    assert_eq!(loaded.diagnostics.len(), 1);
+    assert_eq!(loaded.diagnostics[0].code, "plugin.configuration_inherited");
+    assert!(
+        loaded.diagnostics[0]
+            .message
+            .contains(plugins_path.to_string_lossy().as_ref())
+    );
+
+    let mut resolved = ResolvedConfig::default();
+    apply_plugin_toml_config(&mut resolved, Some(loaded));
+    assert!(resolved.gateway.plugin_config.is_none());
+    assert!(resolved.plugin_had_input);
+    assert_eq!(resolved.plugin_diagnostics.len(), 1);
+    assert_eq!(
+        resolved.plugin_diagnostics[0].code,
+        "plugin.configuration_inherited"
+    );
 }
 
 #[cfg(unix)]
@@ -2535,6 +2566,31 @@ fn persistent_fingerprint_tracks_provider_auth_headers() {
 }
 
 #[test]
+fn persistent_fingerprint_distinguishes_absent_and_existing_empty_plugin_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let xdg = temp.path().join("xdg");
+    let user_config_dir = xdg.join("nemo-relay");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&user_config_dir).unwrap();
+    let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
+
+    let absent = resolve_persistent_server_config(&GatewayOverrides::default()).unwrap();
+    assert!(!absent.plugin_had_input);
+    assert!(absent.gateway.plugin_config.is_none());
+
+    std::fs::write(user_config_dir.join("plugins.toml"), "").unwrap();
+    let existing_empty = resolve_persistent_server_config(&GatewayOverrides::default()).unwrap();
+    assert!(existing_empty.plugin_had_input);
+    assert!(existing_empty.gateway.plugin_config.is_none());
+    assert_eq!(existing_empty.plugin_diagnostics.len(), 1);
+    assert_ne!(
+        absent.bootstrap_fingerprint, existing_empty.bootstrap_fingerprint,
+        "an existing empty plugins.toml owns an activation and must not reuse an absent-config daemon"
+    );
+}
+
+#[test]
 fn managed_bootstrap_canonicalizes_unset_and_zero_padded_default_idle_timeout() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
@@ -2734,7 +2790,7 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
     std::fs::create_dir_all(&project).unwrap();
     std::fs::create_dir_all(&user_config).unwrap();
     std::fs::create_dir_all(&plugin_dir).unwrap();
-    let _scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
+    let scope = PluginConfigDiscoveryScope::enter(&project, &xdg);
     let plugin_id = "acme.read-only-hook-identity";
     let manifest_path = write_dynamic_manifest(&plugin_dir, plugin_id);
     let plugins_toml = user_config.join("plugins.toml");
@@ -2782,6 +2838,21 @@ fn persistent_hook_identity_authenticates_python_marker_without_rehashing_enviro
     assert!(active[0].activation_snapshot.is_some());
     let snapshot_fingerprint = persistent_bootstrap_fingerprint(&resolved, &active).unwrap();
     assert!(snapshot_fingerprint.starts_with("hmac-sha256:"));
+    scope.set_bootstrap_fingerprint(&snapshot_fingerprint);
+    let managed_args = GatewayOverrides {
+        ready_file: Some(temp.path().join("managed.ready.json")),
+        ..GatewayOverrides::default()
+    };
+    let identity = managed_bootstrap_identity(&managed_args, &resolved, &active)
+        .unwrap()
+        .unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        active[0].activation_snapshot.as_ref().unwrap(),
+        identity.active_dynamic_plugins[0]
+            .activation_snapshot
+            .as_ref()
+            .unwrap(),
+    ));
     crate::plugins::lifecycle::reset_test_python_environment_digest_calls();
 
     std::fs::write(

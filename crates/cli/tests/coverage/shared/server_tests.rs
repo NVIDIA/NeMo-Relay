@@ -25,10 +25,11 @@ use nemo_relay::api::registry::{
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
 use nemo_relay::plugin::{
-    ConfigDiagnostic, Plugin, PluginRegistration, PluginRegistrationContext, deregister_plugin,
-    register_plugin,
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistration, PluginRegistrationContext,
+    deregister_plugin, register_plugin,
 };
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, oneshot};
 use tokio::task::JoinHandle;
@@ -37,7 +38,7 @@ use tower::ServiceExt;
 use super::*;
 use crate::configuration::BootstrapChallengeKey;
 use crate::error::CliError;
-use crate::plugins::lifecycle::ActiveDynamicPluginComponent;
+use crate::plugins::lifecycle::{ActiveDynamicPluginComponent, DynamicPluginActivationSnapshot};
 use crate::test_support::PLUGIN_CONFIG_TEST_LOCK;
 
 const GENERIC_TEST_PLUGIN_KIND: &str = "cli-test-generic-plugin";
@@ -253,14 +254,23 @@ fn startup_status_reports_not_configured_when_no_exporters() {
     assert!(output.contains("Exporters      not configured"));
 }
 
-fn write_missing_native_plugin_manifest(
+fn write_invalid_native_plugin_manifest(
     dir: &std::path::Path,
     plugin_id: &str,
 ) -> std::path::PathBuf {
-    let missing_library = dir.join("missing-native-plugin");
+    let invalid_library_bytes = b"not a dynamic library";
+    let invalid_library = dir.join("invalid-native-plugin");
+    std::fs::write(&invalid_library, invalid_library_bytes).unwrap();
     let manifest_ref = dir.join("relay-plugin.toml");
     let plugin_id = serde_json::to_string(plugin_id).unwrap();
-    let library = serde_json::to_string(&missing_library.to_string_lossy()).unwrap();
+    let library = serde_json::to_string(&invalid_library.to_string_lossy()).unwrap();
+    let digest = format!(
+        "sha256:{}",
+        Sha256::digest(invalid_library_bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
     std::fs::write(
         &manifest_ref,
         format!(
@@ -279,6 +289,12 @@ enabled = false
 
 [capabilities]
 items = ["plugin_native"]
+
+[source]
+artifact = {library}
+
+[integrity]
+sha256 = "{digest}"
 
 [load]
 library = {library}
@@ -2116,7 +2132,7 @@ async fn serve_listener_activates_any_registered_plugin_kind() {
 }
 
 #[tokio::test]
-async fn static_only_cli_configuration_keeps_the_legacy_lifecycle() {
+async fn static_only_cli_configuration_uses_owned_file_lifecycle() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
@@ -2131,19 +2147,95 @@ async fn static_only_cli_configuration_keeps_the_legacy_lifecycle() {
                 "config": {}
             }]
         })),
+        true,
+        Vec::new(),
         Vec::new(),
     )
     .await
     .expect("static CLI config should initialize")
     .expect("static CLI config should return a teardown guard");
-    assert!(matches!(&activation, ServerPluginActivation::Static));
+    assert!(activation.is_active());
 
     nemo_relay::plugin::clear_plugin_configuration()
-        .expect("legacy clear should remain available for a static-only CLI config");
+        .expect_err("generic clear must not bypass the owned file activation");
+    nemo_relay::plugin::initialize_plugins_exact(PluginConfig::default())
+        .await
+        .expect_err("legacy initialization must not replace the owned file activation");
+    let conflict = initialize_plugin_host(Some(json!({})), true, Vec::new(), Vec::new())
+        .await
+        .err()
+        .expect("a second owned activation must conflict");
+    assert!(
+        conflict.to_string().contains("owned by an active"),
+        "{conflict}"
+    );
     activation
         .clear()
-        .expect("the static teardown guard should tolerate prior clear");
+        .expect("the owned static activation should clear");
     let _ = deregister_plugin(GENERIC_TEST_PLUGIN_KIND);
+}
+
+#[tokio::test]
+async fn plugin_host_distinguishes_no_input_from_explicit_empty_and_preserves_diagnostics() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let inactive = initialize_plugin_host(None, false, Vec::new(), Vec::new())
+        .await
+        .expect("no-input initialization should succeed");
+    assert!(inactive.is_none());
+
+    let diagnostic = ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: "plugin.configuration_inherited".into(),
+        component: None,
+        field: None,
+        message: "Inherited plugin configuration from /redacted/plugins.toml".into(),
+    };
+    let activation =
+        initialize_plugin_host(Some(json!({})), true, vec![diagnostic.clone()], Vec::new())
+            .await
+            .expect("explicit empty configuration should activate")
+            .expect("explicit empty configuration should own a host");
+    assert!(activation.is_active());
+    assert_eq!(activation.report().diagnostics, vec![diagnostic]);
+    activation.clear().unwrap();
+}
+
+#[test]
+fn plugin_host_plan_uses_the_exact_activation_snapshot_resource() {
+    let temp = tempfile::tempdir().unwrap();
+    let manifest_ref = write_invalid_native_plugin_manifest(temp.path(), "cli.snapshot-plan");
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest_ref.to_str().unwrap(),
+        "cli.snapshot-plan",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .expect("the test plugin should produce an activation snapshot");
+    let expected_manifest_ref = snapshot.activation_manifest_ref();
+    let expected_resource: Arc<dyn DynamicPluginActivationResource> = snapshot.clone();
+    let plan = plugin_host_activation_plan(
+        PluginConfig::default(),
+        Vec::new(),
+        vec![ActiveDynamicPluginComponent {
+            plugin_id: "cli.snapshot-plan".into(),
+            kind: DynamicPluginKind::RustDynamic,
+            lifecycle_generation: 1,
+            manifest_ref: Some("/untrusted/original/relay-plugin.toml".into()),
+            environment_ref: Some("/untrusted/original/environment".into()),
+            config: Map::new(),
+            activation_snapshot: Some(snapshot),
+        }],
+    )
+    .expect("the server should build a plan from the snapshot");
+
+    assert_eq!(plan.dynamic_plugins.len(), 1);
+    let planned = &plan.dynamic_plugins[0];
+    assert_eq!(planned.spec.manifest_ref, expected_manifest_ref);
+    assert_eq!(planned.spec.environment_ref, None);
+    assert!(Arc::ptr_eq(&expected_resource, &planned.resource));
 }
 
 #[test]
@@ -2207,14 +2299,10 @@ fn dynamic_component_without_manifest(
 #[tokio::test]
 async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let inactive = PluginActivation::initialize(None, Vec::new())
-        .await
-        .unwrap();
-    assert!(!inactive.active);
-    inactive.clear().unwrap();
-
-    let invalid = PluginActivation::initialize(
+    let invalid = initialize_plugin_host(
         Some(json!("not a plugin config")),
+        true,
+        Vec::new(),
         vec![dynamic_component_without_manifest(
             "acme.invalid-config",
             DynamicPluginKind::Worker,
@@ -2225,8 +2313,10 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     .expect("invalid config should fail activation");
     assert!(invalid.to_string().contains("invalid plugin config"));
 
-    let native = PluginActivation::initialize(
+    let native = initialize_plugin_host(
         None,
+        true,
+        Vec::new(),
         vec![dynamic_component_without_manifest(
             "acme.native-missing",
             DynamicPluginKind::RustDynamic,
@@ -2235,10 +2325,12 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     .await
     .err()
     .expect("native plugin without a manifest should fail activation");
-    assert!(native.to_string().contains("native dynamic plugin"));
+    assert!(native.to_string().contains("activation snapshot"));
 
-    let worker = PluginActivation::initialize(
+    let worker = initialize_plugin_host(
         None,
+        true,
+        Vec::new(),
         vec![dynamic_component_without_manifest(
             "acme.worker-missing",
             DynamicPluginKind::Worker,
@@ -2247,7 +2339,7 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     .await
     .err()
     .expect("worker plugin without a manifest should fail activation");
-    assert!(worker.to_string().contains("worker dynamic plugin"));
+    assert!(worker.to_string().contains("activation snapshot"));
 }
 
 #[tokio::test]
@@ -2432,7 +2524,15 @@ async fn serve_listener_with_dynamic_reports_native_load_errors() {
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
     let temp = tempfile::tempdir().unwrap();
-    let manifest_ref = write_missing_native_plugin_manifest(temp.path(), "cli.missing-native");
+    let manifest_ref = write_invalid_native_plugin_manifest(temp.path(), "cli.invalid-native");
+    let snapshot = DynamicPluginActivationSnapshot::create(
+        manifest_ref.to_str().unwrap(),
+        "cli.invalid-native",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .expect("the invalid library should still produce an immutable activation snapshot");
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     drop(shutdown_tx);
@@ -2440,13 +2540,13 @@ async fn serve_listener_with_dynamic_reports_native_load_errors() {
         listener,
         test_config(),
         vec![ActiveDynamicPluginComponent {
-            plugin_id: "cli.missing-native".into(),
+            plugin_id: "cli.invalid-native".into(),
             kind: DynamicPluginKind::RustDynamic,
             lifecycle_generation: 0,
             manifest_ref: Some(manifest_ref.to_string_lossy().into_owned()),
             environment_ref: None,
             config: Map::new(),
-            activation_snapshot: None,
+            activation_snapshot: Some(snapshot),
         }],
         Some(shutdown_rx),
     )
@@ -2455,8 +2555,14 @@ async fn serve_listener_with_dynamic_reports_native_load_errors() {
 
     let error = error.to_string();
     assert!(error.contains("native plugin load failed"), "{error}");
-    assert!(error.contains("does not exist"), "{error}");
+    assert!(error.contains("invalid-native-plugin"), "{error}");
     assert!(nemo_relay::plugin::active_plugin_report().is_none());
+
+    let recovery = initialize_plugin_host(Some(json!({})), true, Vec::new(), Vec::new())
+        .await
+        .expect("failed native loading must release the host lease")
+        .expect("explicit empty recovery config should own the host");
+    recovery.clear().unwrap();
 }
 
 #[tokio::test]

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use axum::http::HeaderMap;
 use nemo_relay::logging::LoggingConfig;
+use nemo_relay::plugin::ConfigDiagnostic;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use strum::{Display, IntoStaticStr};
@@ -64,6 +65,8 @@ pub(crate) struct ResolvedConfig {
     pub(crate) dynamic_plugins: Vec<ResolvedDynamicPluginConfig>,
     pub(crate) dynamic_plugin_policy: DynamicPluginHostPolicy,
     pub(crate) plugin_selected_sources: Vec<PathBuf>,
+    pub(crate) plugin_had_input: bool,
+    pub(crate) plugin_diagnostics: Vec<ConfigDiagnostic>,
     pub(crate) bootstrap_fingerprint: Option<String>,
 }
 
