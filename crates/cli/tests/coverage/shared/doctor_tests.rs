@@ -1856,8 +1856,27 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
             .contains("headers.x-test must not be blank")
     );
 
-    let mixed_case_duplicate = probe_atof_endpoint(
+    let _env = EnvScope::set(&[(
+        "NEMO_RELAY_INVALID_ATOF_HEADER",
+        Some(std::ffi::OsStr::new("bad\nvalue")),
+    )]);
+    let invalid_header_env = probe_atof_endpoint(
         5,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "header_env": {"x-test": "NEMO_RELAY_INVALID_ATOF_HEADER"}
+        }),
+    )
+    .await;
+    assert_eq!(invalid_header_env.status, Status::Fail);
+    assert!(
+        invalid_header_env
+            .details
+            .contains("header_env.x-test invalid")
+    );
+
+    let mixed_case_duplicate = probe_atof_endpoint(
+        6,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "headers": {"Authorization": "Bearer literal"},
@@ -1873,7 +1892,7 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
     );
 
     let duplicate_static_header = probe_atof_endpoint(
-        6,
+        7,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "headers": {
@@ -1891,7 +1910,7 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
     );
 
     let unsupported = probe_atof_endpoint(
-        7,
+        8,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "transport": "grpc"
