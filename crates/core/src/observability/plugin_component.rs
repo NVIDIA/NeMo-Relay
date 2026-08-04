@@ -61,10 +61,11 @@ use crate::observability::{
     validate_attribute_mappings,
 };
 use crate::plugin::{
-    ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic,
-    ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError, PluginRegistration,
-    PluginRegistrationCleanupOutcome, PluginRegistrationContext, Result as PluginResult,
-    UnsupportedBehavior, apply_global_config_policy, deregister_plugin, register_builtin_plugin,
+    ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel,
+    OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, Plugin, PluginComponentSpec, PluginError,
+    PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext,
+    Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
+    register_builtin_plugin,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
@@ -1016,13 +1017,19 @@ fn register_opentelemetry(
     ctx.add_registration(PluginRegistration::new_with_outcome(
         "observability",
         ctx.qualify_name("opentelemetry.shutdown"),
-        Box::new(move || match shutdown_opentelemetry_subscribers(&subscribers) {
-            None => PluginRegistrationCleanupOutcome::Removed,
-            Some(error) if error.to_string().contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER) => {
-                PluginRegistrationCleanupOutcome::RemovedWithError(error)
-            }
-            Some(error) => PluginRegistrationCleanupOutcome::NotRemoved(error),
-        }),
+        Box::new(
+            move || match shutdown_opentelemetry_subscribers(&subscribers) {
+                None => PluginRegistrationCleanupOutcome::Removed,
+                Some(error)
+                    if error
+                        .to_string()
+                        .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER) =>
+                {
+                    PluginRegistrationCleanupOutcome::RemovedWithError(error)
+                }
+                Some(error) => PluginRegistrationCleanupOutcome::NotRemoved(error),
+            },
+        ),
     ));
     ctx.register_subscriber(
         "opentelemetry",
@@ -1648,7 +1655,7 @@ fn render_atif_filename(
         for segment in selector.split('.') {
             resolved = match resolved {
                 Some(Json::Object(object)) => object.get(segment),
-                None => break,
+                None | Some(Json::Null) => break,
                 Some(_) => {
                     return Err(format!(
                         "filename_template placeholder '{{metadata.{selector}}}' traversed a non-object value"

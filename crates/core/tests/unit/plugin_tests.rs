@@ -1518,7 +1518,7 @@ fn test_teardown_marker_text_does_not_imply_successful_removal() {
             Box::new(|| {
                 Err(PluginError::RegistrationFailed(format!(
                     "unrelated failure mentioning {}",
-                    crate::observability::plugin_component::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
                 )))
             }),
         )],
@@ -1587,14 +1587,16 @@ fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
-        vec![PluginRegistration::new(
+        vec![PluginRegistration::new_with_outcome(
             "fixture",
             "opentelemetry-shutdown",
             Box::new(|| {
-                Err(PluginError::RegistrationFailed(format!(
-                    "{}: otel.spans_dropped (2)",
-                    crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
-                )))
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    format!(
+                        "{}: otel.spans_dropped (2)",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
             }),
         )],
     )
@@ -1613,14 +1615,16 @@ fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
-        vec![PluginRegistration::new(
+        vec![PluginRegistration::new_with_outcome(
             "fixture",
             "opentelemetry-shutdown",
             Box::new(|| {
-                Err(PluginError::RegistrationFailed(format!(
-                    "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
-                    crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
-                )))
+                PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                    format!(
+                        "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
             }),
         )],
     )
@@ -1630,6 +1634,62 @@ fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
     assert!(!outcome.callbacks_cleared);
     let error = outcome.result.unwrap_err().to_string();
     assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    let owner_cleanup = PluginMutationOwnerCleanup;
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "atif-shutdown",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "atif.remote_delivery_failed".into(),
+                    component: "observability".into(),
+                    field: Some("storage[0]".into()),
+                    message: "HTTP 500".into(),
+                    session_id: Some("session-123".into()),
+                    count: 1,
+                });
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    "ATIF delivery failed".into(),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("ATIF delivery failed"),
+        "{error}"
+    );
+    let report = active_plugin_report().expect("failed replacement should retain its report");
+    assert_eq!(report.runtime_diagnostics.len(), 1);
+    assert_eq!(
+        report.runtime_diagnostics[0].code,
+        "atif.remote_delivery_failed"
+    );
+    assert_eq!(
+        report.runtime_diagnostics[0].field.as_deref(),
+        Some("storage[0]")
+    );
+    assert_eq!(report.runtime_diagnostics[0].count, 1);
+
+    clear_plugin_configuration_inner();
+    drop(owner_cleanup);
     reset_global();
 }
 

@@ -1579,8 +1579,33 @@ async fn initialize_plugins_exact_inner(
     };
 
     if let Some(mut previous_state) = previous {
+        // Keep the previous report installed while teardown callbacks run so
+        // runtime diagnostics emitted by teardown remain observable.
+        {
+            let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
+                PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+            })?;
+            *guard = Some(ActivePluginConfiguration {
+                config: previous_state.config.clone(),
+                report: previous_state.report.clone(),
+                registrations: Vec::new(),
+            });
+        }
         let teardown = rollback_registrations_checked(&mut previous_state.registrations);
+        let teardown_report = ACTIVE_PLUGIN_CONFIGURATION
+            .lock()
+            .map_err(|err| {
+                PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+            })?
+            .take()
+            .map(|state| state.report);
         if !teardown.errors.is_empty() {
+            if let Some(report) =
+                teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+                && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+            {
+                *guard = Some(report);
+            }
             record_rollback_failures(rollback_failures.as_ref(), teardown.errors.clone());
             return Err(PluginError::RegistrationFailed(format!(
                 "previous plugin configuration could not be cleared: {}",
