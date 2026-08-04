@@ -456,24 +456,28 @@ class TestObservabilityConfigHelpers:
             )
         )
 
-        with scope.scope("python-invalid-metadata-agent", ScopeType.Agent, metadata={"atif_prefix": 123}):
-            pass
-        await subscribers.flush_async()
+        try:
+            with scope.scope("python-invalid-metadata-agent", ScopeType.Agent, metadata={"atif_prefix": 123}):
+                pass
+            await subscribers.flush_async()
 
-        report = plugin.report()
-        assert report is not None
-        assert any(
-            diagnostic["code"] == "atif.destination_render_failed" and "non-string" in diagnostic["message"]
-            for diagnostic in report["runtime_diagnostics"]
-        )
-        assert not (tmp_path / "unassigned").exists()
+            report = plugin.report()
+            assert report is not None
+            assert any(
+                diagnostic["code"] == "atif.destination_render_failed" and "non-string" in diagnostic["message"]
+                for diagnostic in report["runtime_diagnostics"]
+            )
+            assert not (tmp_path / "unassigned").exists()
 
-        with pytest.raises(RuntimeError, match="atif.destination_render_failed") as teardown:
-            await plugin.clear_async()
-        assert "could not be removed" not in str(teardown.value)
-        assert plugin.report() is not None
-
-        await plugin.clear_async()
+            with pytest.raises(RuntimeError, match=r"atif\.destination_render_failed") as teardown:
+                await plugin.clear_async()
+            assert "could not be removed" not in str(teardown.value)
+            assert plugin.report() is not None
+        finally:
+            try:
+                await plugin.clear_async()
+            except RuntimeError:
+                await plugin.clear_async()
         assert plugin.report() is None
 
     async def test_atif_splits_multiple_top_level_agent_scopes(self, tmp_path):

@@ -337,7 +337,13 @@ pub struct PluginRegistration {
     pub kind: String,
     /// Runtime-qualified registration name.
     pub name: String,
-    deregister: Box<dyn FnMut() -> Result<()> + Send>,
+    deregister: Box<dyn FnMut() -> PluginRegistrationCleanupOutcome + Send>,
+}
+
+pub(crate) enum PluginRegistrationCleanupOutcome {
+    Removed,
+    RemovedWithError(PluginError),
+    NotRemoved(PluginError),
 }
 
 impl fmt::Debug for PluginRegistration {
@@ -354,7 +360,22 @@ impl PluginRegistration {
     pub fn new(
         kind: impl Into<String>,
         name: impl Into<String>,
-        deregister: Box<dyn FnMut() -> Result<()> + Send>,
+        mut deregister: Box<dyn FnMut() -> Result<()> + Send>,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            name: name.into(),
+            deregister: Box::new(move || match deregister() {
+                Ok(()) => PluginRegistrationCleanupOutcome::Removed,
+                Err(error) => PluginRegistrationCleanupOutcome::NotRemoved(error),
+            }),
+        }
+    }
+
+    pub(crate) fn new_with_outcome(
+        kind: impl Into<String>,
+        name: impl Into<String>,
+        deregister: Box<dyn FnMut() -> PluginRegistrationCleanupOutcome + Send>,
     ) -> Self {
         Self {
             kind: kind.into(),
@@ -1558,12 +1579,12 @@ async fn initialize_plugins_exact_inner(
     };
 
     if let Some(mut previous_state) = previous {
-        let teardown_errors = rollback_registrations_checked(&mut previous_state.registrations);
-        if !teardown_errors.is_empty() {
-            record_rollback_failures(rollback_failures.as_ref(), teardown_errors.clone());
+        let teardown = rollback_registrations_checked(&mut previous_state.registrations);
+        if !teardown.errors.is_empty() {
+            record_rollback_failures(rollback_failures.as_ref(), teardown.errors.clone());
             return Err(PluginError::RegistrationFailed(format!(
                 "previous plugin configuration could not be cleared: {}",
-                teardown_errors.join("; ")
+                teardown.errors.join("; ")
             )));
         }
         match initialize_plugin_components_catching_panics(
@@ -2123,7 +2144,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     };
     // Keep the report installed while callbacks run so runtime diagnostics
     // emitted by teardown work can be recorded against it.
-    let deregistration_errors = registrations
+    let deregistration = registrations
         .as_mut()
         .map(rollback_registrations_checked)
         .unwrap_or_default();
@@ -2138,16 +2159,10 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
             };
         }
     };
-    // Runtime delivery failures are reported by an otherwise successful
-    // deregistration callback. They must propagate without treating callback
-    // removal itself as unsafe.
-    let callbacks_cleared = deregistration_errors
-        .iter()
-        .all(|error| is_runtime_delivery_failure(error));
-    let deregistration_error = (!deregistration_errors.is_empty()).then(|| {
+    let deregistration_error = (!deregistration.errors.is_empty()).then(|| {
         PluginError::RegistrationFailed(format!(
             "plugin teardown failed: {}",
-            deregistration_errors.join("; ")
+            deregistration.errors.join("; ")
         ))
     });
     let result = match (flush_error, deregistration_error) {
@@ -2170,17 +2185,8 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     }
     PluginHostClearOutcome {
         result,
-        callbacks_cleared,
+        callbacks_cleared: deregistration.callbacks_cleared,
     }
-}
-
-fn is_runtime_delivery_failure(error: &str) -> bool {
-    [
-        ATIF_RUNTIME_DELIVERY_FAILURE_MARKER,
-        OTEL_RUNTIME_DELIVERY_FAILURE_MARKER,
-    ]
-    .iter()
-    .any(|marker| error.contains(&format!("registration failed: {marker}:")))
 }
 
 pub(crate) fn plugin_configuration_is_active() -> Result<bool> {
@@ -2342,30 +2348,50 @@ pub fn rollback_registrations(registrations: &mut Vec<PluginRegistration>) {
     let _ = rollback_registrations_checked(registrations);
 }
 
-fn rollback_registrations_checked(registrations: &mut Vec<PluginRegistration>) -> Vec<String> {
-    let mut errors = Vec::new();
+struct PluginRollbackOutcome {
+    errors: Vec<String>,
+    callbacks_cleared: bool,
+}
+
+impl Default for PluginRollbackOutcome {
+    fn default() -> Self {
+        Self {
+            errors: Vec::new(),
+            callbacks_cleared: true,
+        }
+    }
+}
+
+fn rollback_registrations_checked(
+    registrations: &mut Vec<PluginRegistration>,
+) -> PluginRollbackOutcome {
+    let mut outcome = PluginRollbackOutcome::default();
     for registration in registrations.iter_mut().rev() {
-        let failure = match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error.to_string()),
-            Err(payload) => Some(format!(
-                "deregistration panicked: {}",
-                panic_payload_message(payload)
-            )),
-        };
-        if let Some(error) = failure {
-            if error.contains(ATIF_RUNTIME_DELIVERY_FAILURE_MARKER) {
-                errors.push(error);
-            } else {
-                errors.push(format!(
+        match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
+            Ok(PluginRegistrationCleanupOutcome::Removed) => {}
+            Ok(PluginRegistrationCleanupOutcome::RemovedWithError(error)) => {
+                outcome.errors.push(error.to_string());
+            }
+            Ok(PluginRegistrationCleanupOutcome::NotRemoved(error)) => {
+                outcome.callbacks_cleared = false;
+                outcome.errors.push(format!(
                     "{} registration '{}' could not be removed: {error}",
                     registration.kind, registration.name
+                ));
+            }
+            Err(payload) => {
+                outcome.callbacks_cleared = false;
+                outcome.errors.push(format!(
+                    "{} registration '{}' could not be removed: deregistration panicked: {}",
+                    registration.kind,
+                    registration.name,
+                    panic_payload_message(payload)
                 ));
             }
         }
     }
     registrations.clear();
-    errors
+    outcome
 }
 
 fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -2448,8 +2474,8 @@ impl PendingPluginRegistrations {
 
 impl Drop for PendingPluginRegistrations {
     fn drop(&mut self) {
-        let errors = rollback_registrations_checked(&mut self.registrations);
-        record_rollback_failures(self.rollback_failures.as_ref(), errors);
+        let outcome = rollback_registrations_checked(&mut self.registrations);
+        record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
     }
 }
 
@@ -2473,8 +2499,8 @@ impl PendingPluginRegistrationContext {
 
 impl Drop for PendingPluginRegistrationContext {
     fn drop(&mut self) {
-        let errors = rollback_registrations_checked(&mut self.context.registrations);
-        record_rollback_failures(self.rollback_failures.as_ref(), errors);
+        let outcome = rollback_registrations_checked(&mut self.context.registrations);
+        record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
     }
 }
 

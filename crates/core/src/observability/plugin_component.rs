@@ -61,10 +61,10 @@ use crate::observability::{
     validate_attribute_mappings,
 };
 use crate::plugin::{
-    ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel,
-    OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    apply_global_config_policy, deregister_plugin, register_builtin_plugin,
+    ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic,
+    ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError, PluginRegistration,
+    PluginRegistrationCleanupOutcome, PluginRegistrationContext, Result as PluginResult,
+    UnsupportedBehavior, apply_global_config_policy, deregister_plugin, register_builtin_plugin,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
@@ -892,41 +892,55 @@ fn register_atif_dispatcher(
     );
     ctx.register_subscriber("atif", dispatcher)?;
     let shutdown_storage = Arc::clone(&storage);
-    ctx.add_registration(PluginRegistration::new(
+    ctx.add_registration(PluginRegistration::new_with_outcome(
         "observability",
         ctx.qualify_name("atif.shutdown"),
         Box::new(move || {
-            let work = {
-                let mut guard = manager.lock().map_err(|err| {
-                    PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-                })?;
-                guard.flush_open_agents()
-            };
-            for (scope_uuid, name) in work.scope_subscribers {
-                deregister_atif_shutdown_subscriber(&scope_uuid, &name)?;
-            }
-            for export in work.exports {
-                let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
-                    .map_err(observability_registration_error)?;
-                let agent_uuid = write.agent_uuid;
-                let targets = {
-                    let guard = manager.lock().map_err(|err| {
+            let cleanup = (|| -> PluginResult<()> {
+                let work = {
+                    let mut guard = manager.lock().map_err(|err| {
                         PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
                     })?;
-                    guard.sink_targets()
+                    guard.flush_open_agents()
                 };
-                let results = write_atif(&write, shutdown_storage.as_slice(), &targets);
-                let mut guard = manager.lock().map_err(|err| {
-                    PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-                })?;
-                let _ = guard.complete_scope_write(agent_uuid, results);
+                for (scope_uuid, name) in work.scope_subscribers {
+                    deregister_atif_shutdown_subscriber(&scope_uuid, &name)?;
+                }
+                for export in work.exports {
+                    let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
+                        .map_err(observability_registration_error)?;
+                    let agent_uuid = write.agent_uuid;
+                    let targets = {
+                        let guard = manager.lock().map_err(|err| {
+                            PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
+                        })?;
+                        guard.sink_targets()
+                    };
+                    let results = write_atif(&write, shutdown_storage.as_slice(), &targets);
+                    let mut guard = manager.lock().map_err(|err| {
+                        PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
+                    })?;
+                    let _ = guard.complete_scope_write(agent_uuid, results);
+                }
+                Ok(())
+            })();
+            if let Err(error) = cleanup {
+                return PluginRegistrationCleanupOutcome::NotRemoved(error);
             }
-            let guard = manager.lock().map_err(|err| {
-                PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-            })?;
-            guard
-                .last_error_result()
-                .map_err(observability_registration_error)
+            let guard = match manager.lock() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    return PluginRegistrationCleanupOutcome::NotRemoved(PluginError::Internal(
+                        format!("ATIF dispatcher lock poisoned: {error}"),
+                    ));
+                }
+            };
+            match guard.last_error_result() {
+                Ok(()) => PluginRegistrationCleanupOutcome::Removed,
+                Err(error) => PluginRegistrationCleanupOutcome::RemovedWithError(
+                    observability_registration_error(error),
+                ),
+            }
         }),
     ));
     Ok(())
@@ -999,10 +1013,16 @@ fn register_opentelemetry(
     // Retain the subscribers as long as the registered fan-out callback exists.
     // Their tracer providers and exporter runtimes must outlive event delivery.
     let delivery_subscribers = subscribers.clone();
-    ctx.add_registration(PluginRegistration::new(
+    ctx.add_registration(PluginRegistration::new_with_outcome(
         "observability",
         ctx.qualify_name("opentelemetry.shutdown"),
-        Box::new(move || shutdown_opentelemetry_subscribers(&subscribers).map_or(Ok(()), Err)),
+        Box::new(move || match shutdown_opentelemetry_subscribers(&subscribers) {
+            None => PluginRegistrationCleanupOutcome::Removed,
+            Some(error) if error.to_string().contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER) => {
+                PluginRegistrationCleanupOutcome::RemovedWithError(error)
+            }
+            Some(error) => PluginRegistrationCleanupOutcome::NotRemoved(error),
+        }),
     ));
     ctx.register_subscriber(
         "opentelemetry",
@@ -1624,9 +1644,18 @@ fn render_atif_filename(
             })?;
         let expression = rendered[selector_start..end].to_string();
         let (selector, fallback) = parse_atif_metadata_expression(&expression)?;
-        let resolved = selector
-            .split('.')
-            .fold(metadata, |value, segment| value?.get(segment));
+        let mut resolved = metadata;
+        for segment in selector.split('.') {
+            resolved = match resolved {
+                Some(Json::Object(object)) => object.get(segment),
+                None => break,
+                Some(_) => {
+                    return Err(format!(
+                        "filename_template placeholder '{{metadata.{selector}}}' traversed a non-object value"
+                    ));
+                }
+            };
+        }
         let value = match resolved {
             Some(Json::String(value)) => value.as_str(),
             None | Some(Json::Null) => fallback.ok_or_else(|| {

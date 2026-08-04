@@ -1506,13 +1506,41 @@ fn test_checked_teardown_reports_unremoved_registrations() {
 }
 
 #[test]
-fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+fn test_teardown_marker_text_does_not_imply_successful_removal() {
     let _guard = lock_runtime_owner();
     reset_global();
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
         vec![PluginRegistration::new(
+            "fixture",
+            "stale-marker-callback",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(format!(
+                    "unrelated failure mentioning {}",
+                    crate::observability::plugin_component::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                )))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("stale-marker-callback"), "{error}");
+    assert!(error.contains("could not be removed"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
             "fixture",
             "atif-shutdown",
             Box::new(|| {
@@ -1524,10 +1552,11 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
                     session_id: Some("session-123".into()),
                     count: 1,
                 });
-                Err(PluginError::RegistrationFailed(format!(
+                let error = PluginError::RegistrationFailed(format!(
                     "{}: atif.remote_delivery_failed (1)",
                     crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
-                )))
+                ));
+                PluginRegistrationCleanupOutcome::RemovedWithError(error)
             }),
         )],
     )
@@ -2209,11 +2238,18 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     set_conflicting_runtime_owner_for_tests();
     for (registration, expected) in registrations.iter_mut().zip(expected_messages) {
         match (registration.deregister)() {
-            Err(PluginError::RegistrationFailed(message)) => {
+            PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                message,
+            )) => {
                 assert!(message.contains(expected), "{message}");
             }
-            Err(other) => panic!("unexpected deregistration failure: {other}"),
-            Ok(()) => panic!("expected deregistration to fail"),
+            PluginRegistrationCleanupOutcome::NotRemoved(other) => {
+                panic!("unexpected deregistration failure: {other}")
+            }
+            PluginRegistrationCleanupOutcome::Removed
+            | PluginRegistrationCleanupOutcome::RemovedWithError(_) => {
+                panic!("expected deregistration to fail")
+            }
         }
     }
 

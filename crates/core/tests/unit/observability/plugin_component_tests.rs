@@ -2456,6 +2456,16 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
         .prepare_destination("session-1", Some(&non_string))
         .unwrap_err();
     assert!(error.contains("resolved to a non-string value"), "{error}");
+    let nested_non_string = json!({"artifact": 123});
+    let nested_dispatcher = AtifDispatcher::new(AtifSectionConfig {
+        filename_template: "{metadata.artifact.path:-unassigned}/trajectory-{session_id}.json"
+            .to_string(),
+        ..AtifSectionConfig::default()
+    });
+    let error = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_non_string))
+        .unwrap_err();
+    assert!(error.contains("traversed a non-object value"), "{error}");
 
     for template in [
         "/tmp/trajectory-{session_id}.json",
