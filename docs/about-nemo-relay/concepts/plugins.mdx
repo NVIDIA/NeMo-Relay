@@ -287,15 +287,18 @@ for the authoring workflow.
 
 The operator lifecycle is explicit:
 
-1. `plugins add` records the manifest and prepares managed worker resources when
-   required.
-2. `plugins validate` checks compatibility, schema, policy, and trust evidence.
-3. `plugins enable` changes desired state; the plugin loads during the next host
-   startup.
-4. `plugins disable` keeps the registration but prevents it from loading on the
-   next startup.
-5. `plugins remove` deletes the registration and any Relay-managed worker
-   environment after the running host has stopped.
+1. `nemo-relay plugins add <manifest>` records the manifest and prepares managed
+   worker resources when required.
+2. `nemo-relay plugins inspect <plugin-id>` reads the stored registration and
+   resolved manifest without changing desired state.
+3. `nemo-relay plugins validate <plugin-id>` checks compatibility, schema,
+   policy, and trust evidence.
+4. `nemo-relay plugins enable <plugin-id>` changes desired state; the plugin
+   loads during the next host startup.
+5. `nemo-relay plugins disable <plugin-id>` keeps the registration but prevents
+   it from loading on the next startup.
+6. `nemo-relay plugins remove <plugin-id>` deletes the registration and any
+   Relay-managed worker environment after the running host has stopped.
 
 These commands manage future host activation. Teardown of an already running
 host remains part of that host's owned plugin cleanup.
