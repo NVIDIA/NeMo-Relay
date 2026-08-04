@@ -528,6 +528,27 @@ fn make_end_event(
     )
 }
 
+fn make_end_event_with_metadata(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    scope_type: ScopeType,
+    metadata: Json,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .uuid(uuid)
+            .name(name)
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::from(scope_type),
+        None,
+    ))
+}
+
 fn make_scope_event(
     scope_category: ScopeCategory,
     uuid: Uuid,
@@ -1579,6 +1600,105 @@ fn gen_ai_end_projection_preserves_explicit_error_type() {
         attributes.get("error.type"),
         Some(&"invalid_argument".to_string())
     );
+}
+
+#[test]
+fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::GenAi] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+                provider,
+                "error-propagation-test".to_string(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+            );
+        let agent_uuid = Uuid::now_v7();
+        let function_uuid = Uuid::now_v7();
+        let llm_uuid = Uuid::now_v7();
+        processor.process(&make_start_event(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            None,
+        ));
+        let llm_parent_uuid = if otel_type == OpenTelemetryType::GenAi {
+            processor.process(&make_start_event(
+                function_uuid,
+                Some(agent_uuid),
+                "function",
+                ScopeType::Function,
+                None,
+            ));
+            function_uuid
+        } else {
+            agent_uuid
+        };
+        processor.process(&make_start_event(
+            llm_uuid,
+            Some(llm_parent_uuid),
+            "chat",
+            ScopeType::Llm,
+            None,
+        ));
+        processor.process(&make_end_event_with_metadata(
+            llm_uuid,
+            Some(llm_parent_uuid),
+            "chat",
+            ScopeType::Llm,
+            json!({
+                "otel.status_code": "ERROR",
+                "otel.status_description": "internal error: ValueError: boom",
+                "error.type": "internal_error",
+                "exception.type": "ValueError",
+            }),
+        ));
+        if otel_type == OpenTelemetryType::GenAi {
+            processor.process(&make_end_event_with_metadata(
+                function_uuid,
+                Some(agent_uuid),
+                "function",
+                ScopeType::Function,
+                json!({
+                    "otel.status_code": "ERROR",
+                    "otel.status_description": "internal error: ValueError: boom",
+                }),
+            ));
+        }
+        processor.process(&make_end_event_with_metadata(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            json!({
+                "otel.status_code": "ERROR",
+                "otel.status_description": "internal error: ValueError: boom",
+            }),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 2);
+        for span in &spans {
+            assert_eq!(
+                attr_map(&span.attributes).get("error.type"),
+                Some(&"internal_error".to_string())
+            );
+            let exception = span
+                .events
+                .events
+                .iter()
+                .find(|event| event.name.as_ref() == "exception")
+                .expect("expected exception event");
+            assert_eq!(
+                attr_map(&exception.attributes).get("exception.type"),
+                Some(&"ValueError".to_string())
+            );
+        }
+    }
 }
 
 #[test]

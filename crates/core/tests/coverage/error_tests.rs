@@ -104,6 +104,12 @@ fn otel_error_type_maps_internal_failures_to_generic_code() {
         FlowError::Internal("application callback failed".into()).otel_error_type(),
         "internal_error"
     );
+    let external = FlowError::CallbackException {
+        message: "ValueError: boom".into(),
+        exception_type: "ValueError".into(),
+    };
+    assert_eq!(external.otel_error_type(), "internal_error");
+    assert_eq!(external.exception_type(), Some("ValueError"));
 }
 
 #[test]

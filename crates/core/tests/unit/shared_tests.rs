@@ -142,6 +142,17 @@ fn test_metadata_with_otel_error_adds_structured_error_type() {
     .unwrap();
 
     assert_eq!(explicit_metadata["error.type"], json!("provider_timeout"));
+
+    let external_metadata = metadata_with_otel_error(
+        None,
+        &FlowError::CallbackException {
+            message: "ValueError: boom".into(),
+            exception_type: "ValueError".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(external_metadata["error.type"], json!("internal_error"));
+    assert_eq!(external_metadata["exception.type"], json!("ValueError"));
 }
 
 #[test]

@@ -165,6 +165,7 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       }, (error) => {
         settlePublication();
         let message = 'unknown error';
+        let exceptionType = 'Error';
         try {
           if (typeof error === 'string') {
             message = error;
@@ -173,8 +174,11 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           } else if (error != null && typeof error.message === 'string') {
             message = error.message;
           }
+          if (error != null && typeof error.name === 'string' && error.name.length > 0) {
+            exceptionType = error.name;
+          }
         } catch {}
-        reject(message);
+        reject(message, exceptionType);
       });
     };
     eventSanitizerContext.run(token, invoke);
@@ -212,11 +216,15 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       ) {
         if (error != null) {
           let message = 'unknown error';
+          let exceptionType = 'Error';
           try {
             message = String(error?.message ?? error);
+            if (typeof error?.name === 'string' && error.name.length > 0) {
+              exceptionType = error.name;
+            }
           } catch {}
           if (typeof reject === 'function') {
-            reject(message);
+            reject(message, exceptionType);
           }
           return;
         }
