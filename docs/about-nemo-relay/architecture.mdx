@@ -16,70 +16,73 @@ This page explains how NeMo Relay connects [scopes](/about-nemo-relay/concepts/s
 
 ## Architecture Diagram
 
-This diagram shows the CLI and language bindings hosting the shared Rust
-runtime. Plugin components install behavior into that runtime, and subscribers
-deliver event snapshots to in-process consumers or external backends.
+This diagram shows how runtime hosts and integrations reach the shared Rust
+runtime. Plugin components install reusable behavior, and subscribers deliver
+event snapshots to in-process consumers or external backends.
 
 <MermaidStyles />
 
 ```mermaid
 flowchart TB
-    subgraph Hosts[Runtime Hosts]
+    subgraph AppLayer[Runtime Hosts and Integrations]
         CLI[NeMo Relay CLI]
         App[Application Code]
         Framework[Framework Integration]
-        Bindings[Rust / Python / Node.js Bindings]
-        App -->|uses| Framework
-        App -. direct use .-> Bindings
-        Framework -->|calls| Bindings
     end
 
-    Config[Plugin Configuration]
+    subgraph BindingLayer[Language Bindings]
+        Bindings[Language Bindings]
+    end
 
-    subgraph Runtime[Relay Runtime]
-        Core[Rust Core Runtime]
+    subgraph PluginLayer[Plugin System and Components]
         PluginSystem[Plugin System]
-        Components[Installed Plugin Components]
+        Components[Adaptive / Observability / Guardrail Components]
+        PluginSystem -->|activates| Components
+    end
+
+    subgraph CoreLayer[Core Runtime]
+        Core[Rust Core Runtime]
 
         subgraph RuntimeState[Runtime State]
-            Scope[Active Scope Stack]
+            Scope[Scope Stack]
             Registry[Middleware Registries]
-            Events[Parent-Linked Event Records]
         end
 
+        Events[Event Stream]
         Dispatcher[Async Subscriber Dispatcher]
-
-        PluginSystem -->|activates| Components
-        Components -->|register| Registry
-        Components -->|register| Dispatcher
-        Core -->|updates| Scope
-        Core -->|resolves| Registry
-        Core -->|emits| Events
-        Events -->|enqueue snapshots| Dispatcher
     end
 
-    subgraph Destinations[Subscriber and Export Destinations]
-        InProcess[In-Process Subscribers]
-        Files[ATOF / ATIF Files]
-        Backends[OTLP / HTTP / S3-Compatible Backends]
+    subgraph ObsLayer[Subscribers and Observability Backends]
+        Subs[Subscribers / Exporters]
+        Backends[Files / OTLP / Other Backends]
     end
 
+    App -->|uses| Framework
+    App -. direct use .-> Bindings
+    App -->|registers and configures| PluginSystem
+    Framework -->|calls| Bindings
     CLI -->|hosts| Core
+    CLI -->|loads configuration| PluginSystem
     Bindings --> Core
-    Config --> PluginSystem
-    Dispatcher -->|deliver FIFO| InProcess
-    Dispatcher -->|export| Files
-    Dispatcher -->|export| Backends
+    Components -->|register middleware| Registry
+    Components -->|register subscribers| Subs
+    Core -->|updates| Scope
+    Core -->|resolves| Registry
+    Core -->|emits| Events
+    Events -->|enqueue snapshots| Dispatcher
+    Dispatcher -->|deliver FIFO| Subs
+    Subs -->|export to| Backends
 
-    class Hosts grey-hint;
-    class Runtime grey-hint;
-    class Destinations grey-hint;
+    class AppLayer grey-hint;
+    class BindingLayer grey-hint;
+    class PluginLayer grey-hint;
+    class CoreLayer grey-hint;
+    class ObsLayer grey-hint;
     class RuntimeState grey-lightest;
     class CLI purple-lightest;
     class App purple-lightest;
     class Framework yellow-lightest;
     class Bindings green-lightest;
-    class Config blue-lightest;
     class PluginSystem green-light;
     class Components blue-lightest;
     class Core green-light;
@@ -87,8 +90,7 @@ flowchart TB
     class Registry green-light;
     class Events green-light;
     class Dispatcher green-light;
-    class InProcess green-lightest;
-    class Files grey-light;
+    class Subs green-light;
     class Backends grey-light;
 ```
 
@@ -186,6 +188,29 @@ The scope stack defines:
 - When scope-local registrations are cleaned up
 - Whether concurrent requests stay isolated
 
+Only scopes are pushed onto the stack. Managed LLM and tool calls emit lifecycle
+records that use the current top scope as `parent_uuid`; they do not become
+stack entries. This example shows an agent scope with a nested function scope
+named `turn-a`.
+
+```mermaid
+flowchart BT
+    Root["BOTTOM: Implicit root<br/>uuid = root-a"]
+    Agent["Agent scope<br/>uuid = agent-a<br/>parent_uuid = root-a"]
+    Turn["TOP: Function scope (turn)<br/>uuid = turn-a<br/>parent_uuid = agent-a"]
+
+    Root -->|"push agent-a"| Agent
+    Agent -->|"push turn-a"| Turn
+
+    class Root grey-light;
+    class Agent,Turn green-light;
+```
+
+With `turn-a` at the top, managed LLM and tool records receive
+`parent_uuid = turn-a`, so they are siblings in the event tree. Popping
+`turn-a` returns `agent-a` to the top and removes registrations owned by the
+turn. A concurrent request uses a separate stack.
+
 ### Middleware Ownership
 
 Middleware exists at two levels:
@@ -194,6 +219,40 @@ Middleware exists at two levels:
 - **scope-local registrations** are owned by one scope and disappear when that scope closes
 
 That split lets long-lived defaults coexist with request-specific or task-specific behavior.
+
+```mermaid
+flowchart TB
+    Global["Global middleware<br/>process-wide"]
+
+    subgraph RequestA["Request A scope stack"]
+        LocalA["Scope-local middleware<br/>owned by agent-a"]
+        ResolveA["Merge visible entries<br/>and order by priority"]
+        CallA["Managed call A"]
+        CloseA["Close agent-a"]
+        LocalA --> ResolveA --> CallA
+        CloseA -.->|"removes"| LocalA
+    end
+
+    subgraph RequestB["Request B scope stack"]
+        LocalB["Scope-local middleware<br/>owned by agent-b"]
+        ResolveB["Merge visible entries<br/>and order by priority"]
+        CallB["Managed call B"]
+        LocalB --> ResolveB --> CallB
+    end
+
+    Global --> ResolveA
+    Global --> ResolveB
+
+    class Global blue-lightest;
+    class RequestA,RequestB grey-lightest;
+    class LocalA,LocalB green-lightest;
+    class ResolveA,ResolveB green-light;
+    class CallA,CallB yellow-lightest;
+    class CloseA grey-light;
+```
+
+Global entries are visible to both calls. Each scope-local entry is visible
+only through its owning stack and is removed when that scope closes.
 
 ## Managed Execution Pipeline
 
@@ -205,6 +264,45 @@ Managed tool and LLM execution follows the same high-level order:
 4. Execution intercepts wrap or replace the user callback.
 5. The user callback runs.
 6. Sanitize-response guardrails can rewrite the emitted end-event payload.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as Application / Framework
+    participant Runtime as NeMo Relay Runtime
+    participant Conditional as Conditional Guardrails
+    participant Request as Request Intercepts
+    participant Sanitizers as Request / Response Sanitizers
+    participant Execution as Execution Intercepts
+    participant Callback as Real Callback
+    participant Dispatcher as Async Subscriber Dispatcher
+
+    Caller->>Runtime: managed tool or LLM call
+    Runtime->>Conditional: evaluate real request
+    alt rejected
+        Conditional-->>Runtime: rejection
+        Runtime-->>Caller: guardrail error
+    else allowed
+        Conditional-->>Runtime: continue
+        Runtime->>Request: transform real request
+        Request-->>Runtime: intercepted request
+        Runtime->>Sanitizers: sanitize event-only request copy
+        Sanitizers-->>Runtime: start-event payload
+        Runtime->>Dispatcher: enqueue start event
+        Runtime->>Execution: invoke intercept chain
+        alt intercept replaces execution
+            Execution-->>Runtime: replacement result
+        else intercept calls next
+            Execution->>Callback: invoke real callback
+            Callback-->>Execution: real result
+            Execution-->>Runtime: real result
+        end
+        Runtime->>Sanitizers: sanitize event-only response copy
+        Sanitizers-->>Runtime: end-event payload
+        Runtime->>Dispatcher: enqueue end event
+        Runtime-->>Caller: return real result
+    end
+```
 
 Two distinctions matter:
 
