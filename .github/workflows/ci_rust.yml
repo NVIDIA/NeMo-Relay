@@ -211,7 +211,8 @@ jobs:
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
               export RUSTFLAGS="-C target-feature=-crt-static"
-              export PYO3_PYTHON=/opt/python/cp311-cp311/bin/python
+              export PYO3_PYTHON=/usr/bin/python3
+              "$PYO3_PYTHON" -c "import sysconfig; assert sysconfig.get_config_var(\"Py_ENABLE_SHARED\") == 1, \"Alpine Python must provide a shared libpython for PyO3 tests\""
               cargo test --locked --workspace --exclude nemo-relay-ffi
               cargo test --locked -p nemo-relay-ffi -- --test-threads=1
             '

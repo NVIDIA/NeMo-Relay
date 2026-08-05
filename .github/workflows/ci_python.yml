@@ -171,6 +171,7 @@ jobs:
               curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="/opt/python/cp311-cp311/bin:$HOME/.cargo/bin:$PATH"
+              export PYTHONPATH="$PWD/python"
               export RUSTFLAGS="-C target-feature=-crt-static"
               export UV_PYTHON=/opt/python/cp311-cp311/bin/python
               "$UV_PYTHON" -m pip install --no-cache-dir "uv==$NEMO_RELAY_UV_VERSION"
@@ -180,8 +181,8 @@ jobs:
                 --no-install-project \
                 --no-install-package nemo-relay \
                 --reinstall-package nemo-relay-plugin
-              PYTHONPATH=python .venv/bin/python -m maturin develop --locked --skip-install
-              PYTHONPATH=python .venv/bin/python -m pytest \
+              .venv/bin/python -m maturin develop --locked --skip-install
+              .venv/bin/python -m pytest \
                 python/tests \
                 --ignore=python/tests/integrations
             '
