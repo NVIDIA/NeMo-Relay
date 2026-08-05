@@ -96,7 +96,7 @@ install directories, rollback behavior, and source marketplace notes.
 
 ## Shared Config
 
-Create `.nemo-relay/config.toml` for project defaults or
+Create `$XDG_CONFIG_HOME/nemo-relay/config.toml` or
 `~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
@@ -111,8 +111,8 @@ To forward Claude Code requests to a custom provider host, configure Relay's
 endpoint and authentication as described in
 [Provider Upstreams](/nemo-relay-cli/basic-usage#provider-upstreams).
 
-Then configure observability with `nemo-relay plugins edit --project` or
-`.nemo-relay/plugins.toml`:
+Then configure observability with `nemo-relay plugins edit` or the XDG user
+`plugins.toml`:
 
 ```toml
 version = 1
@@ -137,7 +137,7 @@ endpoint = "http://127.0.0.1:4318/v1/traces"
 ```
 
 Run `nemo-relay run --agent claude` to use the configured command and plugin
-config. Files layer from explicit-or-user to project to system, so system
+config. Files layer from explicit-or-user to system, so system
 configuration has the highest file-level priority.
 
 ## Standalone Gateway

@@ -134,7 +134,7 @@ omitted.
 
 When Relay layers `config.toml` files, the resolved destination `path` is the
 file sink identity. Distinct paths are emitted in highest-to-lowest precedence
-order: system, project, then explicit-or-user. For matching paths, higher-layer
+order: system, then explicit-or-user. For matching paths, higher-layer
 fields recursively overlay lower-layer fields, producing one effective sink.
 Path aliases such as `relay.log` and `./relay.log` resolve to one sink, using
 the higher-layer spelling and settings.

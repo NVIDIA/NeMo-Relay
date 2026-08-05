@@ -13,7 +13,40 @@ intervening release in sequence.
 
 ## Upgrade to NeMo Relay 0.8
 
-Migration guidance will be added before the 0.8 release.
+### Move Project Configuration to a Supported Location
+
+NeMo Relay 0.8 no longer discovers repository-local configuration. Files named
+`.nemo-relay/config.toml`, `.nemo-relay/plugins.toml`, and
+`.nemo-relay/.dynamic-plugins.json` do not affect normal commands, plugin
+activation, or dynamic-plugin lifecycle state.
+
+Move settings that should apply to your account into these files:
+
+- `$XDG_CONFIG_HOME/nemo-relay/config.toml` and `plugins.toml`
+- `~/.config/nemo-relay/config.toml` and `plugins.toml` when
+  `XDG_CONFIG_HOME` is not set
+
+Use `/etc/nemo-relay/config.toml` and `/etc/nemo-relay/plugins.toml` on Unix,
+or `%ProgramData%\nemo-relay\config.toml` and
+`%ProgramData%\nemo-relay\plugins.toml` on Windows, for system policy. System
+configuration has higher precedence than the selected user or explicit
+configuration.
+
+For a deliberately selected file in any location, pass `--config` or
+`--plugin-config-path`. A `plugins.toml` beside an explicit `config.toml` is
+still selected automatically. Relay does not move, rewrite, or delete legacy
+project files. Run `nemo-relay doctor` to find ignored files in the current
+directory's ancestors.
+
+Remove `--project` from config, plugin, and model-pricing commands. The
+interactive `nemo-relay config` workflow now writes user configuration only,
+and `config --reset` resets that user file. The former setup project/both
+choices and `config --reset --scope` option have been removed. `--user` and
+`--global` remain available.
+
+Local output directories such as `.nemo-relay/atof`, `.nemo-relay/atif`, and
+logs remain supported. Only configuration discovery and dynamic-plugin
+lifecycle state lose project semantics.
 
 ## Related Release Information
 

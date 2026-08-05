@@ -40,8 +40,24 @@ supported platforms and architectures, worker runtimes, coding agents, and
 integrations. It also records current limitations, including platform-specific
 worker requirements.
 
-Migration guidance for upgrading from 0.7 to 0.8 will be added to the
-[Migration Guides](/reference/migration-guides) before the release.
+Migration guidance for upgrading from 0.7 to 0.8 is available in the
+[Migration Guides](/reference/migration-guides).
+
+### Breaking Changes
+
+- Repository-local `.nemo-relay/config.toml`, `plugins.toml`, and
+  `.dynamic-plugins.json` files are no longer discovered or activated. Runtime
+  resolution is explicit-or-user followed by higher-precedence system policy.
+- Project setup scopes and the `--project` and `config --reset --scope`
+  interfaces have been removed. Setup and reset now target XDG user
+  configuration; `--user`, `--global`, `--config`, and
+  `--plugin-config-path` remain supported.
+- `nemo-relay doctor` reports ignored ancestor project configuration as
+  warning-only migration diagnostics. Relay does not automatically move,
+  rewrite, or delete those legacy files.
+
+Refer to [Migration Guides](/reference/migration-guides#move-project-configuration-to-a-supported-location)
+for destination paths and explicit-file alternatives.
 
 ### Fixed Known Issues in 0.8
 
