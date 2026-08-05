@@ -622,7 +622,11 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
         match decoder.finish() {
             Ok(Some(event)) => yield Ok(event.data),
             Ok(None) => {}
-            Err(error) => yield Err(error),
+            Err(error) => {
+                emit_provider_body_size("gateway.provider.response", body_size_bytes);
+                yield Err(error);
+                return;
+            }
         }
         emit_provider_body_size("gateway.provider.response", body_size_bytes);
     };
@@ -1133,10 +1137,17 @@ async fn passthrough_streaming(
     let body = Body::from_stream(stream! {
         let mut body_size_bytes = 0usize;
         while let Some(chunk) = bytes.next().await {
-            if let Ok(buffer) = &chunk {
-                body_size_bytes = body_size_bytes.saturating_add(buffer.len());
+            match chunk {
+                Ok(buffer) => {
+                    body_size_bytes = body_size_bytes.saturating_add(buffer.len());
+                    yield Ok(buffer);
+                }
+                Err(error) => {
+                    emit_provider_body_size("gateway.provider.response", body_size_bytes);
+                    yield Err(error);
+                    return;
+                }
             }
-            yield chunk;
         }
         emit_provider_body_size("gateway.provider.response", body_size_bytes);
     });
