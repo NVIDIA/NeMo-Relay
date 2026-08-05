@@ -1,7 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
-interface:
-  display_name: "Run Latency Benchmark"
-  short_description: "Run and interpret the NeMo Relay latency benchmark"
-  default_prompt: "Use $run-latency-benchmark to run a NeMo Relay latency benchmark and explain the results."
