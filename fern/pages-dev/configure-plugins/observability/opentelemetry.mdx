@@ -31,7 +31,11 @@ compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
 receive the same event stream use the same identifiers and parentage. Different
 endpoint types must therefore use independent OTLP destinations; configuring
 them with the same endpoint and transport is rejected to prevent identifier
-collisions at the receiver.
+collisions at the receiver. Duplicate detection compares canonical destinations:
+HTTP and HTTPS default ports are realized, repeated and trailing path slashes
+are normalized, and standardized loopback hosts such as `localhost`, names
+under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
+DNS resolution for this comparison, and query strings remain significant.
 Rooted Relay propagation continues the Relay-derived trace across the import
 boundary. Rootless propagation retains Relay event parentage but starts a new
 OpenTelemetry trace from the first local event. Carry W3C `traceparent` and
@@ -206,14 +210,23 @@ For managed LLM, tool, and stream failures, NeMo Relay maps structured
 | Upstream invalid request | `invalid_request` |
 | Other upstream failure | `upstream_error` |
 | `Internal` | `internal_error` |
+| Binding callback exception | `internal_error` |
 
 External application and callback exceptions that do not have a more specific
-`FlowError` classification are represented as `Internal` and emit
-`internal_error`. NeMo Relay does not inspect error messages to recover Python,
-JavaScript, or application-defined exception class names. When no structured
-`FlowError` is available, such as a cancellation or dropped execution, the
-GenAI projection emits `_OTHER`. Caller-provided `error.type` metadata takes
-precedence over the derived mapping.
+`FlowError` classification emit `internal_error`. Python and JavaScript callback
+boundaries also preserve the exception class separately, and both the `full`
+and `gen_ai` projections emit an `exception` span event with `exception.type`.
+NeMo Relay does not inspect error messages to recover exception class names.
+When an errored parent span has no useful classification of its own, it
+inherits the failed descendant's `error.type` and exception type. When no
+structured `FlowError` is available, such as a cancellation or dropped
+execution, the projection emits `_OTHER`. Caller-provided `error.type` and
+`exception.type` metadata take precedence over values derived from `FlowError`.
+
+`FlowError` is an exhaustive Rust enum. Rust callers upgrading to this release
+must handle the new `CallbackException` variant in exhaustive matches. It maps
+to the same internal status as `Internal`, while retaining `exception_type` for
+observability projection.
 
 ## Direct Subscriber
 

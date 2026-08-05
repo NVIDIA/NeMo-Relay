@@ -32,6 +32,10 @@ compatibility information applies to the current 0.7 prerelease.
 
 ### Highlights
 
+- Generated coding-agent enforcement hooks now fail closed when Relay cannot
+  start, authenticate, evaluate, or deliver a response. Lifecycle and
+  after-the-fact hooks explicitly fail open. Reinstall each coding-agent
+  integration with `nemo-relay install <agent> --force` after upgrading.
 - LLM observability sanitizers now receive the active request or response codec
   for each managed call. Sanitizers can normalize built-in,
   runtime-registered, and opaque codec payloads without changing the
@@ -98,6 +102,12 @@ their values cannot be isolated between endpoints.
 
 ### Fixed Known Issues in 0.7
 
+- Embedded Python hosts can use
+  `plugin.load_dynamic_plugin_activation_specs(path)` to convert the standard
+  `[[plugins.dynamic]]` records in one explicitly selected `plugins.toml` into
+  the activation specs accepted by `initialize_with_dynamic_plugins()`. This
+  scoped 0.7 compatibility helper removes host-side TOML and manifest parsing;
+  a future unified file-backed initializer is expected to replace it.
 - Programmatically declared plugin components now apply their `enabled` value
   over discovered file configuration. When code re-enables a component that a
   discovered file disabled, initialization reports a warning that names the

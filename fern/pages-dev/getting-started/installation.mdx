@@ -45,12 +45,6 @@ pip install "nemo-relay[cli]"
 ```
 </Tab>
 
-<Tab title="npm">
-```bash
-npm install --global nemo-relay-cli-bin
-```
-</Tab>
-
 <Tab title="Unix shell">
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NeMo-Relay/main/install.sh | sh
@@ -114,9 +108,9 @@ user `PATH`; the Unix installer does not edit shell configuration.
 Use the GNU target on glibc-based distributions such as Ubuntu, Debian, and
 RHEL. Use the musl target on Alpine Linux and other musl-based systems. The
 Unix shell installer intentionally selects the portable musl target on Linux.
-For package versions that publish the corresponding artifacts, `pip`, `uv`, and
-`npm` automatically select a target compatible with the host CPU and C library
-on supported platforms.
+For package versions that publish the corresponding artifacts, `pip` and `uv`
+automatically select a target compatible with the host CPU and C library on
+supported platforms.
 
 The installer reports the detected operating system and architecture when no
 matching asset exists. Intel macOS is not supported because no matching release
@@ -186,7 +180,7 @@ new download before replacing the binary in the selected installation directory.
 
 ### Alternative Installation Methods
 
-The PyPI, npm, and installer methods install the same CLI release with a binary
+The PyPI and installer methods install the same CLI release with a binary
 compatible with the host platform. Use Cargo on unsupported platforms or when
 you prefer to build from source:
 

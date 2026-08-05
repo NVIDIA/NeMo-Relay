@@ -29,7 +29,7 @@ Use the source that matches how Relay is launched:
 | Use Case | Configuration Source |
 | --- | --- |
 | Run the Relay CLI with temporary settings | `--log-*` options |
-| Configure a process without a Relay config file | `NEMO_RELAY_LOG*` environment variables |
+| Configure a language binding or CLI process | `NEMO_RELAY_LOG*` environment variables |
 | Reuse logging settings across runs | `[logging]` in TOML |
 | Embed Relay in a Rust application | `LoggingConfig` and `LoggingRuntime` |
 
@@ -40,8 +40,10 @@ For CLI processes, Relay selects one source in this order:
 3. `[logging]` in the resolved Relay `config.toml`
 4. Built-in defaults
 
-Sources are selected rather than merged. Rust applications explicitly choose
-which `LoggingRuntime` initialization method to use and do not apply the CLI
+Sources are selected rather than merged. Python, Node.js, and Go install a
+process-lifetime `LoggingRuntime` when the binding loads, using environment
+configuration or built-in defaults. Rust applications explicitly choose which
+`LoggingRuntime` initialization method to use and do not apply the CLI
 precedence rules.
 
 ## CLI Options
@@ -63,8 +65,9 @@ Do not combine `--log-config-path` with `--log-level` or
 
 ## Environment Variables
 
-Set these variables for the CLI or a Rust application that initializes logging
-with `LoggingRuntime::configure_from_environment()`:
+Set these variables for a Python, Node.js, or Go process, the CLI, or a Rust
+application that initializes logging with
+`LoggingRuntime::configure_from_environment()`:
 
 ```bash
 export NEMO_RELAY_LOG=debug
@@ -84,6 +87,22 @@ export NEMO_RELAY_LOG_CONFIG_PATH=/absolute/path/to/logging.toml
 
 `NEMO_RELAY_LOG_CONFIG_PATH` cannot be combined with the other logging
 environment variables.
+
+When none of these variables are set, Python, Node.js, and Go install Relay's
+built-in default logger unless the host already owns Rust's process-global
+`log` facade. They also preserve an existing Relay logger rather than replacing
+it. Records emitted before any logger is installed are discarded, and a host
+cannot install its own logger after Relay has claimed the facade. Set one of
+these variables when Relay must configure its own logging.
+
+This binding behavior differs from
+`LoggingRuntime::configure_from_environment()`, which always attempts to
+install Relay's built-in defaults when no variables are set.
+
+Python and Node.js drain pending file-sink records during normal runtime
+teardown. Go applications that configure file sinks must call
+`nemo_relay.ShutdownLogging` before `main` returns; defer it near the start of
+`main` so it runs after other Relay cleanup.
 
 ## TOML Configuration
 

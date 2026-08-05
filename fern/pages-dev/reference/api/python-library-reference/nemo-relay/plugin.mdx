@@ -295,6 +295,14 @@ Clear callbacks and unload plugins; repeated calls are safe.
 
 ## Functions
 
+### `load_dynamic_plugin_activation_specs`
+
+```python
+def load_dynamic_plugin_activation_specs(plugin_config_path: str | os.PathLike[str]) -> list[DynamicPluginActivationSpec]
+```
+
+Load dynamic activation specs from one standard `plugins.toml`.
+
 ### `validate`
 
 ```python
@@ -314,7 +322,7 @@ Validate and activate a plugin configuration.
 ### `initialize_with_dynamic_plugins`
 
 ```python
-async def initialize_with_dynamic_plugins(config: PluginConfig | JsonObject, dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject]) -> PluginHostActivation
+async def initialize_with_dynamic_plugins(config: PluginConfig | JsonObject, dynamic_plugins: Sequence[DynamicPluginActivationSpec | JsonObject]) -> PluginHostActivation
 ```
 
 Initialize registered components with dynamic plugins as one owned host.
