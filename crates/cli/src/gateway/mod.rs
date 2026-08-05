@@ -182,6 +182,7 @@ async fn run_unmanaged_gateway(
     let status = response.status();
     let headers = response_headers(response.headers());
     let bytes = response.bytes().await?;
+    emit_provider_body_size("gateway.provider.response", bytes.len());
     build_response(status, headers, Body::from(bytes))
 }
 
@@ -368,6 +369,7 @@ fn build_buffered_func(
                     );
                 }
             };
+            emit_provider_body_size("gateway.provider.response", bytes.len());
             if !status.is_success() {
                 if retry_aware {
                     return Err(FlowError::Upstream(http_failure(
@@ -563,6 +565,7 @@ fn build_streaming_func(
                         );
                     }
                 };
+                emit_provider_body_size("gateway.provider.response", bytes.len());
                 if retry_aware {
                     return Err(FlowError::Upstream(http_failure(
                         status,
@@ -593,13 +596,16 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
     let mut decoder = SseEventDecoder::new();
     let mut bytes = response.bytes_stream();
     let stream = stream! {
+        let mut body_size_bytes = 0usize;
         while let Some(chunk) = bytes.next().await {
             match chunk {
                 Ok(buffer) => {
+                    body_size_bytes = body_size_bytes.saturating_add(buffer.len());
                     for result in decoder.push_bytes_results(&buffer) {
                         match result {
                             Ok(event) => yield Ok(event.data),
                             Err(error) => {
+                                emit_provider_body_size("gateway.provider.response", body_size_bytes);
                                 yield Err(error);
                                 return;
                             }
@@ -607,6 +613,7 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
                     }
                 }
                 Err(error) => {
+                    emit_provider_body_size("gateway.provider.response", body_size_bytes);
                     yield Err(FlowError::Internal(error.to_string()));
                     return;
                 }
@@ -617,6 +624,7 @@ fn sse_json_stream(response: reqwest::Response) -> LlmJsonStream {
             Ok(None) => {}
             Err(error) => yield Err(error),
         }
+        emit_provider_body_size("gateway.provider.response", body_size_bytes);
     };
     LlmJsonStream::new(stream)
 }
@@ -804,6 +812,7 @@ async fn forward_upstream_request(
         url,
         forwarding.source_route,
     );
+    emit_provider_body_size("gateway.provider.request", effective.body_bytes.len());
     let configured_auth_header = forwarding.configured_auth_header(effective.target_route);
     let mut upstream = http
         .request(method.clone(), &effective.url)
@@ -824,6 +833,15 @@ async fn forward_upstream_request(
         configured_auth_header,
     );
     upstream.send().await
+}
+
+fn emit_provider_body_size(name: &'static str, body_size_bytes: usize) {
+    let _ = nemo_relay::api::scope::event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name(name)
+            .data(serde_json::json!({"body_size_bytes": body_size_bytes}))
+            .build(),
+    );
 }
 
 #[derive(Clone)]
@@ -1113,9 +1131,14 @@ async fn passthrough_streaming(
     let headers = response_headers(response.headers());
     let mut bytes = response.bytes_stream();
     let body = Body::from_stream(stream! {
+        let mut body_size_bytes = 0usize;
         while let Some(chunk) = bytes.next().await {
+            if let Ok(buffer) = &chunk {
+                body_size_bytes = body_size_bytes.saturating_add(buffer.len());
+            }
             yield chunk;
         }
+        emit_provider_body_size("gateway.provider.response", body_size_bytes);
     });
     build_response(status, headers, body)
 }
