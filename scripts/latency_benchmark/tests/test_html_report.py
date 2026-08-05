@@ -98,6 +98,8 @@ class HtmlReportTests(unittest.TestCase):
         self.assertNotIn('class="lede"', report)
         self.assertIn('"git_commit":"0123456789abcdef"', report)
         self.assertIn("Gateway Latency by Payload Size", report)
+        self.assertIn('"relay-file": "ATOF file exporter"', report)
+        self.assertIn('"relay-otlp": "OTLP exporter"', report)
         self.assertIn("function drawLineChart", report)
         self.assertNotIn("__BENCHMARK_DATA__", report)
         self.assertNotIn("__BENCHMARK_STYLES__", report)

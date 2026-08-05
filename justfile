@@ -1130,6 +1130,10 @@ latency-benchmark *benchmark_args:
         --output "$result_dir/nemo-relay-latency-report.json" \
         "$@"
 
+# Runs the fast latency benchmark fixture tests without building Relay.
+test-latency-benchmark:
+    uv run --locked python -m pytest scripts/latency_benchmark/tests
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash

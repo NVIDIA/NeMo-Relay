@@ -15,9 +15,9 @@ loopback, so network and model-service latency do not hide Relay overhead.
 Run all commands from the repository root. Start with the smoke test unless you
 are collecting reportable performance results.
 
-The default matrix can write tens of gigabytes of temporary ATOF data, so make
-sure the operating system's temporary directory has ample free space. The
-benchmark removes this data after a normal run.
+The default matrix can write about 25 GiB of temporary ATOF data. Keep at least
+30 GiB free in the operating system's temporary directory. The benchmark
+removes this data after a normal run.
 
 ## Prerequisites
 
@@ -31,6 +31,16 @@ The benchmark keeps executable source under `src/`, repeatable TOML fixtures
 under `config/`, static coding-agent fixtures under `data/`, and focused unit
 tests under `tests/`. Add runtime behavior to `src/` and keep fixed test input
 outside executable modules.
+
+Run the fixture's fast unit tests with the following recipe:
+
+```bash
+just test-latency-benchmark
+```
+
+The recipe runs
+`uv run --locked python -m pytest scripts/latency_benchmark/tests`. Keep the
+`python -m` form so imports resolve from the repository root.
 
 The `data/mock-codex.*` fixture is a small lifecycle stub used when Relay starts
 a configured Codex command in transparent mode. It is not a simulated hook
@@ -70,9 +80,13 @@ The default configuration runs the following three suites:
 
 | Suite | What It Measures |
 | --- | --- |
-| `gateway` | Request latency through direct, minimal Relay, ATOF file-exporter, and OTLP Relay paths |
+| `gateway` | Request latency through direct, minimal Relay, ATOF file exporter, and OTLP exporter paths |
 | `hooks` | Full Codex and Claude Code `nemo-relay hook-forward` subprocess wall time |
 | `startup` | Cold Relay process launch through a healthy gateway |
+
+During a run, the terminal prints an `[x/y]` indicator after each completed
+benchmark test. Each gateway matrix scenario counts as one test. The hooks and
+startup suites each count as one test.
 
 ### Gateway Suite
 
@@ -83,8 +97,8 @@ same request through four paths in a rotated order:
 - `direct` calls the mock provider without Relay.
 - `relay-minimal` measures Relay without an exporter and isolates the managed
   gateway pipeline.
-- `relay-file` adds the local ATOF file exporter.
-- `relay-otlp` adds the local OTLP HTTP exporter.
+- `relay-file` adds the ATOF file exporter.
+- `relay-otlp` adds the OTLP exporter.
 
 The suite varies provider protocol, buffered or streaming response mode,
 request-content size, and concurrency. `total` measures from request start
@@ -101,16 +115,18 @@ cycle reduces unrelated timing variation.
 
 The hooks suite measures the complete wall time of a new
 `nemo-relay hook-forward` subprocess for Codex and Claude Code through minimal,
-ATOF file-exporter, and OTLP gateways. Its paired comparisons subtract a
-`nemo-relay --version` subprocess measured in the same cycle. This process
-baseline estimates generic executable startup cost; it is not a no-op hook.
+ATOF file exporter, and OTLP exporter configurations. Its paired comparisons
+subtract a `nemo-relay --version` subprocess measured in the same cycle. This
+process baseline estimates generic executable startup cost; it is not a no-op
+hook.
 
 ### Startup Suite
 
 The startup suite measures a cold Relay process from launch until its
-`/healthz` endpoint reports ready for minimal, ATOF file-exporter, and OTLP
-configurations. Its paired comparisons subtract the same `nemo-relay --version`
-process baseline to make Relay-specific readiness work easier to distinguish.
+`/healthz` endpoint reports ready for minimal, ATOF file exporter, and OTLP
+exporter configurations. Its paired comparisons subtract the same
+`nemo-relay --version` process baseline to make Relay-specific readiness work
+easier to distinguish.
 
 ## Configure a Run
 
@@ -158,9 +174,9 @@ just latency-benchmark --help
 
 ## Benchmark Custom Middleware
 
-Every run includes the `relay-minimal`, `relay-file`, and `relay-otlp`
-variants. Add middleware as an opt-in variant by pointing the benchmark to a
-valid Relay plugin configuration.
+Every run includes the minimal Relay (`relay-minimal`), ATOF file exporter
+(`relay-file`), and OTLP exporter (`relay-otlp`) variants. Add middleware as an
+opt-in variant by pointing the benchmark to a valid Relay plugin configuration.
 
 The fixture includes `config/plugins-pii-redaction.toml` for the simplest
 self-contained middleware test. It installs the built-in email detector and
@@ -257,8 +273,10 @@ The reports use the following statistics:
 | Median 95% CI | Deterministic bootstrap uncertainty interval around the median paired delta, not a range containing 95% of observations |
 
 The exporter-delivery byte and request counts are correctness checks. They
-confirm that the fixture observed ATOF and OTLP delivery; they are not latency
-metrics.
+confirm that the ATOF file exporter and OTLP exporter delivered data; they are
+not latency metrics. If this validation fails, the command still writes the
+JSON and HTML reports, records the messages in `validation_errors`, and then
+exits with an error.
 
 When comparing variants, prefer added milliseconds over percentages. Record
 the commit, release build, hardware, operating system, matrix, and sample count
@@ -270,9 +288,9 @@ differences look large as percentages.
 Use these checks to diagnose the most common benchmark failures:
 
 - A loopback bind error means the environment must allow local HTTP listeners.
-- An exporter-delivery error means the ATOF file or OTLP receiver observed no
-  benchmark events. Rerun a small gateway suite to isolate the exporter path;
-  Relay startup failures include their captured log output.
+- An exporter-delivery error means the ATOF file exporter or OTLP exporter
+  delivered no benchmark events. Rerun a small gateway suite to isolate the
+  exporter path; Relay startup failures include their captured log output.
 - A validation error names the invalid TOML or CLI value. Gateway samples must
   be at least as large as every requested concurrency value.
 - A normal run removes the large temporary ATOF output and its

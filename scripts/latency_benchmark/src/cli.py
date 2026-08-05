@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Command-line orchestration for the coding-agent latency benchmark."""
+"""Command-line orchestration for the latency benchmark."""
 
 from __future__ import annotations
 
 import contextlib
 import json
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ def _benchmark_gateway(
     provider_url: str,
     configs: dict[str, Path],
     config: BenchmarkConfig,
+    report_complete: Callable[[str], None],
 ) -> list[dict[str, Any]]:
     with contextlib.ExitStack() as stack:
         relays = {
@@ -57,7 +59,32 @@ def _benchmark_gateway(
                                 concurrency=concurrency,
                             )
                         )
+                        report_complete(
+                            f"gateway {provider} {mode}, payload={payload_bytes}, concurrency={concurrency}"
+                        )
         return scenarios
+
+
+def _benchmark_test_count(config: BenchmarkConfig) -> int:
+    gateway_tests = 0
+    if "gateway" in config.tests:
+        gateway_tests = len(config.providers) * len(config.modes) * len(config.payload_sizes) * len(config.concurrency)
+    return gateway_tests + int("hooks" in config.tests) + int("startup" in config.tests)
+
+
+def _exporter_delivery(root: Path) -> tuple[dict[str, int], list[str]]:
+    atof_path = root / "atof" / "events.jsonl"
+    atof_bytes = atof_path.stat().st_size if atof_path.is_file() else 0
+    delivery = {
+        "atof_bytes": atof_bytes,
+        "otlp_requests": OtlpHandler.request_count,
+    }
+    errors = []
+    if atof_bytes == 0:
+        errors.append("local ATOF exporter did not write benchmark events")
+    if OtlpHandler.request_count == 0:
+        errors.append("local OTLP receiver did not receive benchmark exports")
+    return delivery, errors
 
 
 def run_benchmarks(binary: Path, config: BenchmarkConfig) -> dict[str, Any]:
@@ -68,6 +95,14 @@ def run_benchmarks(binary: Path, config: BenchmarkConfig) -> dict[str, Any]:
         "environment": environment_record(binary),
         "parameters": config.parameters(),
     }
+    completed_tests = 0
+    total_tests = _benchmark_test_count(config)
+
+    def report_complete(label: str) -> None:
+        nonlocal completed_tests
+        completed_tests += 1
+        print(f"[{completed_tests}/{total_tests}] Completed {label}", flush=True)
+
     with tempfile.TemporaryDirectory(prefix="nemo-relay-latency-") as temporary:
         root = Path(temporary)
         write_relay_config(root)
@@ -84,7 +119,14 @@ def run_benchmarks(binary: Path, config: BenchmarkConfig) -> dict[str, Any]:
         ):
             configs = write_plugin_configs(root, otlp_url, config.middleware)
             if "gateway" in config.tests:
-                results["gateway"] = _benchmark_gateway(binary, root, provider_url, configs, config)
+                results["gateway"] = _benchmark_gateway(
+                    binary,
+                    root,
+                    provider_url,
+                    configs,
+                    config,
+                    report_complete,
+                )
             if "hooks" in config.tests:
                 results["hooks"] = benchmark_hooks(
                     binary,
@@ -94,6 +136,7 @@ def run_benchmarks(binary: Path, config: BenchmarkConfig) -> dict[str, Any]:
                     samples=config.hook_samples,
                     warmup=config.warmup,
                 )
+                report_complete("hooks suite")
             if "startup" in config.tests:
                 results["startup"] = benchmark_startup(
                     binary,
@@ -103,17 +146,12 @@ def run_benchmarks(binary: Path, config: BenchmarkConfig) -> dict[str, Any]:
                     samples=config.startup_samples,
                     warmup=config.warmup,
                 )
+                report_complete("startup suite")
 
             if {"gateway", "hooks"}.intersection(config.tests):
-                atof_path = root / "atof" / "events.jsonl"
-                if not atof_path.is_file() or atof_path.stat().st_size == 0:
-                    raise RuntimeError("local ATOF exporter did not write benchmark events")
-                if OtlpHandler.request_count == 0:
-                    raise RuntimeError("local OTLP receiver did not receive benchmark exports")
-                results["exporter_delivery"] = {
-                    "atof_bytes": atof_path.stat().st_size,
-                    "otlp_requests": OtlpHandler.request_count,
-                }
+                results["exporter_delivery"], validation_errors = _exporter_delivery(root)
+                if validation_errors:
+                    results["validation_errors"] = validation_errors
     return results
 
 
@@ -126,3 +164,6 @@ def main(argv: list[str] | None = None) -> None:
     print_results(results)
     print(f"\nJSON results: {options.output}")
     print(f"HTML report: {options.report}")
+    validation_errors = [str(error) for error in results.get("validation_errors", [])]
+    if validation_errors:
+        raise RuntimeError(f"benchmark validation failed: {'; '.join(validation_errors)}")

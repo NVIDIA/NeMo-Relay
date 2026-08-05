@@ -21,10 +21,11 @@ def _git_output(*args: str) -> str:
 
 def environment_record(binary: Path) -> dict[str, Any]:
     version = subprocess.run([str(binary), "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    git_status = _git_output("status", "--porcelain")
     return {
         "generated_at": dt.datetime.now(dt.UTC).isoformat(),
         "git_commit": _git_output("rev-parse", "HEAD"),
-        "git_dirty": bool(_git_output("status", "--porcelain")),
+        "git_dirty": git_status not in {"", "unknown"},
         "relay_version": version,
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -72,3 +73,8 @@ def print_results(results: dict[str, Any]) -> None:
         print("\nExporter delivery verification")
         print(f"  ATOF bytes written       {delivery['atof_bytes']:>12}")
         print(f"  OTLP requests received   {delivery['otlp_requests']:>12}")
+
+    if "validation_errors" in results:
+        print("\nValidation errors")
+        for error in results["validation_errors"]:
+            print(f"  {error}")

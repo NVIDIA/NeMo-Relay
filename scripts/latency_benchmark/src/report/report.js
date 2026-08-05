@@ -41,13 +41,13 @@ function labelName(value) {
   const names = {
     "direct": "Direct",
     "relay-minimal": "Relay minimal",
-    "relay-file": "Relay ATOF file",
-    "relay-otlp": "Relay OTLP",
+    "relay-file": "ATOF file exporter",
+    "relay-otlp": "OTLP exporter",
     "relay-minimal_vs_direct": "Minimal − direct",
-    "relay-file_vs_direct": "ATOF file − direct",
-    "relay-otlp_vs_direct": "OTLP − direct",
-    "file_exporter_vs_minimal": "ATOF file − minimal",
-    "otlp_exporter_vs_minimal": "OTLP − minimal",
+    "relay-file_vs_direct": "ATOF file exporter − direct",
+    "relay-otlp_vs_direct": "OTLP exporter − direct",
+    "file_exporter_vs_minimal": "ATOF file exporter − minimal",
+    "otlp_exporter_vs_minimal": "OTLP exporter − minimal",
     "process_baseline": "Process baseline",
   };
   if (names[value]) {
