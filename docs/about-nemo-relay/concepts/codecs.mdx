@@ -88,7 +88,9 @@ changing a key overlays it.
 - `messages`, content parts, function calls and results, tools, and tool choice
   expose portable components when the shapes have shared semantics.
 - `api_specific` is a tagged, mutable surface for modeled Anthropic Messages,
-  OpenAI Chat Completions, or OpenAI Responses controls.
+  OpenAI Chat Completions, or OpenAI Responses request controls. Response
+  annotations use the same pattern for provider-only metadata, including Gemini
+  thinking tokens.
 - Provider-only messages, content blocks, input items, tools, and tool choices
   use `{ provider, kind, value }`, where `value` is the exact native JSON.
 - Top-level `extra` is reserved for unknown future fields.
@@ -118,9 +120,9 @@ normalization logic without changing runtime ownership or public binding APIs.
 ### Provider Schema Extraction
 
 Provider schema extraction is codec-owned. Built-in provider surfaces, such as
-OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages, each own the
-logic that recognizes their request and response shapes and maps them into
-`AnnotatedLlmRequest` or `AnnotatedLlmResponse`.
+OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini
+generateContent, each own the logic that recognizes their request and response
+shapes and maps them into `AnnotatedLlmRequest` or `AnnotatedLlmResponse`.
 
 When a managed LLM event already has an annotation, subscribers and exporters
 consume that annotation. When an event has only raw provider JSON, best-effort

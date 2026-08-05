@@ -594,6 +594,21 @@ fn chat_shaped_requests_key_on_the_detected_decode() {
 }
 
 #[test]
+fn gemini_shaped_requests_key_on_the_detected_decode() {
+    let request = request(json!({
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {"temperature": 0.0}
+    }));
+    let (body, effective_codec) = resolved_body("gemini", &request);
+    assert_eq!(effective_codec, Some("gemini"));
+    assert_ne!(
+        body, request.content,
+        "Gemini requests must use the normalized decode when it is lossless"
+    );
+}
+
+#[test]
 fn undetectable_shape_falls_back_to_raw_keying() {
     // No `messages`/`input`/`system` top-level key: no surface detects, so
     // the raw body is fingerprinted — still a usable, stable key.

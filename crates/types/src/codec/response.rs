@@ -190,11 +190,16 @@ fn default_cost_currency() -> String {
 /// Normalized reason why the model stopped generating.
 ///
 /// Maps from provider-specific stop reasons:
-/// - **Complete**: OpenAI Chat `"stop"`, Anthropic `"end_turn"`, Responses `"completed"`
-/// - **Length**: OpenAI Chat `"length"`, Anthropic `"max_tokens"`, Responses incomplete+max_output_tokens
-/// - **ToolUse**: OpenAI Chat `"tool_calls"`, Anthropic `"tool_use"`
-/// - **ContentFilter**: OpenAI Chat `"content_filter"`, Responses incomplete+content_filter
+/// - **Complete**: OpenAI Chat `"stop"`, Anthropic `"end_turn"`, Responses `"completed"`,
+///   Gemini `"STOP"` (without function-call parts)
+/// - **Length**: OpenAI Chat `"length"`, Anthropic `"max_tokens"`, Responses incomplete+max_output_tokens,
+///   Gemini `"MAX_TOKENS"`
+/// - **ToolUse**: OpenAI Chat `"tool_calls"`, Anthropic `"tool_use"`,
+///   Gemini `"TOOL_CODE"` (unconditional) or `"STOP"` when function-call parts are present
+/// - **ContentFilter**: OpenAI Chat `"content_filter"`, Responses incomplete+content_filter,
+///   Gemini `"SAFETY"` / `"RECITATION"` / `"BLOCKLIST"` / `"PROHIBITED_CONTENT"` and other policy codes
 /// - **Unknown**: Forward-compatible catch-all for unrecognized reasons
+///   (e.g. Gemini `"MALFORMED_FUNCTION_CALL"`, `"UNEXPECTED_TOOL_CALL"`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
@@ -229,7 +234,7 @@ impl FinishReason {
 /// Unlike the request-side `ToolCall` (which stores arguments as a JSON
 /// string per OpenAI convention), response tool calls store arguments as
 /// parsed [`Json`]. Codecs parse OpenAI's string arguments during decode;
-/// Anthropic's `input` is already parsed JSON.
+/// Anthropic's `input` and Gemini's `args` are already parsed JSON objects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseToolCall {
     /// Unique identifier for this tool call.
@@ -324,6 +329,26 @@ pub enum ApiSpecificResponse {
         /// Full content blocks array for direct access.
         #[serde(skip_serializing_if = "Option::is_none")]
         content_blocks: Option<Vec<Json>>,
+    },
+
+    /// Gemini generateContent API-specific fields.
+    #[serde(rename = "gemini")]
+    Gemini {
+        /// Tokens consumed by the model's internal reasoning (Gemini thinking).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thoughts_tokens: Option<u64>,
+        /// Candidate-level safety ratings from the Gemini response.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        safety_ratings: Option<Json>,
+        /// Grounding metadata (web search attribution, etc.).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        grounding_metadata: Option<Json>,
+        /// Citation metadata for grounded responses.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        citation_metadata: Option<Json>,
+        /// Any remaining candidate-level fields not modeled above.
+        #[serde(flatten, skip_serializing_if = "serde_json::Map::is_empty")]
+        extra: serde_json::Map<String, Json>,
     },
 
     /// Custom/unknown API -- catch-all for user-implemented codecs.

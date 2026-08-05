@@ -23,6 +23,7 @@ describe('Type constants', () => {
     assert.equal(typeof lib.OpenAIChatCodec, 'function');
     assert.equal(typeof lib.OpenAIResponsesCodec, 'function');
     assert.equal(typeof lib.AnthropicMessagesCodec, 'function');
+    assert.equal(typeof lib.GeminiCodec, 'function');
   });
 
   it('scope type enum values', () => {
@@ -77,5 +78,105 @@ describe('ScopeStack', () => {
   it('constructs a scope stack instance', () => {
     const stack = new ScopeStack();
     assert.ok(stack instanceof ScopeStack);
+  });
+});
+
+// ===========================================================================
+// GeminiCodec
+// ===========================================================================
+
+describe('GeminiCodec', () => {
+  const { GeminiCodec } = lib;
+
+  it('instantiates', () => {
+    const codec = new GeminiCodec();
+    assert.ok(codec instanceof GeminiCodec);
+  });
+
+  it('decode returns an AnnotatedLLMRequest with messages and no params', () => {
+    const codec = new GeminiCodec();
+    const req = new LlmRequest({}, {
+      contents: [
+        { role: 'user', parts: [{ text: 'hello' }] },
+        { role: 'model', parts: [{ text: 'hi' }] },
+      ],
+      systemInstruction: { parts: [{ text: 'Be helpful.' }] },
+    });
+    const annotated = codec.decode(req);
+    const msgs = annotated.messages;
+    assert.equal(msgs.length, 3, 'system + user + model = 3 messages');
+    assert.equal(msgs[0].role, 'system');
+    assert.equal(msgs[1].role, 'user');
+    assert.equal(msgs[2].role, 'assistant', 'model role must normalize to assistant');
+  });
+
+  it('decode captures generationConfig into params', () => {
+    const codec = new GeminiCodec();
+    const req = new LlmRequest({}, {
+      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+      generationConfig: { temperature: 0.5, maxOutputTokens: 256 },
+    });
+    const annotated = codec.decode(req);
+    assert.ok(annotated.params !== null && annotated.params !== undefined, 'params must be set');
+    assert.ok(Math.abs(annotated.params.temperature - 0.5) < 1e-6);
+    // Rust serializes GenerationParams fields in snake_case (max_tokens, not maxTokens)
+    assert.equal(annotated.params.max_tokens, 256);
+  });
+
+  it('encode round-trips extra fields', () => {
+    const codec = new GeminiCodec();
+    const req = new LlmRequest({}, {
+      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+      safetySettings: [{ category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' }],
+    });
+    const annotated = codec.decode(req);
+    const reEncoded = codec.encode(annotated, req);
+    assert.ok(
+      Array.isArray(reEncoded.content.safetySettings),
+      'safetySettings must survive encode round-trip',
+    );
+  });
+
+  it('decodeResponse extracts text and finish reason', () => {
+    const codec = new GeminiCodec();
+    const raw = {
+      candidates: [{
+        content: { role: 'model', parts: [{ text: 'Hello!' }] },
+        finishReason: 'STOP',
+        index: 0,
+      }],
+      usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2, totalTokenCount: 7 },
+      modelVersion: 'gemini-2.0-flash',
+    };
+    const resp = codec.decodeResponse(raw);
+    // message is a plain string (MessageContent::Text serializes to a string, not {text: ...})
+    assert.equal(resp.message, 'Hello!');
+    // finish_reason is snake_case; value matches FinishReason::Complete serialized as "complete"
+    assert.equal(resp.finish_reason, 'complete');
+    assert.equal(resp.model, 'gemini-2.0-flash');
+    // usage fields are also snake_case
+    assert.equal(resp.usage?.prompt_tokens, 5);
+  });
+
+  it('decodeResponse maps functionCall id correctly', () => {
+    const codec = new GeminiCodec();
+    const raw = {
+      candidates: [{
+        content: {
+          role: 'model',
+          parts: [{ functionCall: { id: 'call_xyz', name: 'my_fn', args: { x: 1 } } }],
+        },
+        finishReason: 'STOP',
+        index: 0,
+      }],
+      usageMetadata: {},
+    };
+    const resp = codec.decodeResponse(raw);
+    // tool_calls is snake_case
+    assert.ok(Array.isArray(resp.tool_calls), 'tool_calls must be an array');
+    assert.equal(resp.tool_calls[0].id, 'call_xyz', 'id must come from functionCall.id, not the function name');
+    assert.equal(resp.tool_calls[0].name, 'my_fn');
+    // Sanity: confirm the id is NOT the function name
+    assert.notEqual(resp.tool_calls[0].id, 'my_fn', 'id must not be the function name');
   });
 });

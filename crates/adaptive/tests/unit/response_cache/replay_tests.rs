@@ -79,6 +79,34 @@ fn replay_chunks_roundtrip_through_the_codecs() {
 }
 
 #[test]
+fn gemini_replay_uses_a_valid_native_stream_event() {
+    let aggregate = json!({
+        "candidates": [{
+            "index": 0,
+            "content": {"role": "model", "parts": [{"text": "hello"}]},
+            "finishReason": "STOP"
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 3,
+            "totalTokenCount": 12
+        },
+        "modelVersion": "gemini-2.5-flash",
+        "responseId": "resp_1"
+    });
+    let chunks = synthesize_replay_chunks(&aggregate).expect("gemini shape");
+    assert_eq!(
+        chunks,
+        vec![aggregate.clone()],
+        "a GenerateContentResponse aggregate is already a native Gemini stream event"
+    );
+    assert!(
+        !replay_is_lossy(&aggregate),
+        "the Gemini streaming codec must reassemble the native replay exactly"
+    );
+}
+
+#[test]
 fn responses_replay_sequence_numbers_are_contiguous() {
     let aggregate = json!({
         "id": "r1",

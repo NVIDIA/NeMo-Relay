@@ -14,7 +14,7 @@ use super::request::AnnotatedLlmRequest;
 use super::response::AnnotatedLlmResponse;
 use super::streaming::StreamingCodec;
 use super::traits::{LlmCodec, LlmResponseCodec};
-use super::{anthropic, openai_chat, openai_responses};
+use super::{anthropic, gemini, openai_chat, openai_responses};
 
 /// A built-in provider request/response surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +25,8 @@ pub enum ProviderSurface {
     OpenAIResponses,
     /// Anthropic Messages.
     AnthropicMessages,
+    /// Gemini generateContent.
+    Gemini,
 }
 
 /// Request shape detector; the optional `&str` is a provider hint a codec may use
@@ -67,15 +69,16 @@ pub(crate) static BUILTIN_PROVIDER_SURFACES: &[ProviderSurfaceDescriptor] = &[
     openai_responses::PROVIDER_SURFACE,
     anthropic::PROVIDER_SURFACE,
     openai_chat::PROVIDER_SURFACE,
+    gemini::PROVIDER_SURFACE,
 ];
 
 /// Detect the request surface from a raw request body by top-level key.
 ///
 /// Priority: OpenAI Responses (`input`/`instructions`) > Anthropic Messages
-/// (`system`) > OpenAI Chat (`messages`). `None` when no key matches or `body`
-/// is not an object. This is a best-effort heuristic: an Anthropic request that
-/// omits the optional top-level `system` is indistinguishable from OpenAI Chat
-/// and classifies as `OpenAIChat`.
+/// (`system`) > OpenAI Chat (`messages`) > Gemini (`contents`). `None` when no
+/// key matches or `body` is not an object. This is a best-effort heuristic: an
+/// Anthropic request that omits the optional top-level `system` is
+/// indistinguishable from OpenAI Chat and classifies as `OpenAIChat`.
 #[must_use]
 pub fn detect_request_surface(body: &Json) -> Option<ProviderSurface> {
     detect_request_surface_with_hint(body, None)
@@ -152,6 +155,7 @@ fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescripto
         ProviderSurface::OpenAIChat => &openai_chat::PROVIDER_SURFACE,
         ProviderSurface::OpenAIResponses => &openai_responses::PROVIDER_SURFACE,
         ProviderSurface::AnthropicMessages => &anthropic::PROVIDER_SURFACE,
+        ProviderSurface::Gemini => &gemini::PROVIDER_SURFACE,
     }
 }
 

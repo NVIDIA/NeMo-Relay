@@ -337,7 +337,7 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .and_then(Json::as_array)
                     .is_some_and(|blocks| blocks.iter().any(lossy_system_block))
         }
-        ProviderSurface::OpenAIResponses => false,
+        ProviderSurface::OpenAIResponses | ProviderSurface::Gemini => false,
     }
 }
 
