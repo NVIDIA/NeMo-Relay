@@ -13,7 +13,7 @@ two execution lanes:
 
 | Lane | Use when | Stable boundary |
 | --- | --- | --- |
-| `rust_dynamic` | Behavior must run in the Relay process. | Native ABI v2 |
+| `rust_dynamic` | Behavior must run in the Relay process. | Versioned native plugin C ABI |
 | `worker` | Behavior should run in a separate local process. | `grpc-v1` |
 
 The manifest describes compatibility, capabilities, artifact integrity, and the
@@ -76,7 +76,7 @@ The following requirements vary by execution lane:
 | Manifest area | Native dynamic plugin | Worker plugin |
 | --- | --- | --- |
 | `plugin.kind` | `rust_dynamic` | `worker` |
-| `compat` | `native_api = "1"` | `worker_protocol = "grpc-v1"` |
+| `compat` | `native_api = "1"` for the established surface. For targeted LLM continuations, use `native_api = "2"` with `relay = ">=0.8,<1.0"`. | `worker_protocol = "grpc-v1"` |
 | `capabilities.items` | Includes `plugin_native` | Includes `plugin_worker` |
 | `load` | `library` and `symbol` | `runtime` and `entrypoint` |
 | `source.manifest_root` | Optional | Required for `runtime = "python"`; `nemo-relay plugins add` uses it to create and retain the managed worker environment. |

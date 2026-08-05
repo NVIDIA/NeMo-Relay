@@ -361,21 +361,25 @@ wrong-direction capability IDs.
 
 ### Rebuild Native Plugins and Raw FFI Consumers
 
-NeMo Relay 0.7 uses native ABI v3. Recompile native plugins against the 0.7
+NeMo Relay 0.7 uses the V3 native C host table for manifest native API v1.
+Recompile native plugins against the 0.7
 `nemo-relay-plugin` crate and rebuild raw FFI consumers against the generated
 0.7 header.
 
 The v3 table preserves the v2 prefix, and Relay retries a legacy v2 table when
 loading a plugin that rejects v3. That fallback supports loading, not
 compatibility with changed middleware, LLM sanitizer, ABI, or schema contracts.
-Rebuild native plugins that use the raw plugin ABI callbacks: native ABI v3
+Rebuild native plugins that use the raw plugin ABI callbacks: the V3 host table
 adds completion-based async middleware registration, async execution
 continuations, and explicit cancellation/late-settlement behavior. This is
 separate from the synchronous `nemo-relay-ffi` middleware registration API.
 
-The plugin manifest value remains `compat.native_api = "1"`. This manifest
-contract version is separate from the host ABI version; do not change it to
-`"2"`.
+Existing plugins keep `compat.native_api = "1"`. This manifest contract
+version is separate from the host-table revision. Select `"2"` only when a
+plugin adopts the targeted LLM continuation surface; rebuilding an existing
+native API v1 plugin does not require that migration. Rust plugins with an
+exhaustive `NemoRelayStatus` match must add an arm for `WouldBlock` when
+recompiling against the 0.8 SDK; existing plugin binaries remain compatible.
 
 Request and response callbacks now receive distinct context structures. Each
 structure contains structured codec identity and a borrowed directional codec
@@ -388,7 +392,7 @@ after the callback returns. Release host-owned output strings with the standard
 host string release operation.
 
 For the complete ABI contract, refer to
-[Native ABI v3](/build-plugins/dynamic-plugins/native-dynamic/about#native-abi-v3).
+[Native C ABI Table Versioning](/build-plugins/dynamic-plugins/native-dynamic/about#native-c-abi-table-versioning).
 
 ### Update PII Redaction Configuration
 

@@ -5,6 +5,9 @@ use super::*;
 use crate::api::optimization::{
     LlmOptimizationRecorder, record_llm_optimization_contribution, scope_llm_optimization_recorder,
 };
+use crate::api::runtime::llm_dispatch_context::{
+    LlmDispatchTargetContext, current_llm_dispatch_target,
+};
 use crate::api::runtime::scope_stack::{
     TASK_SCOPE_STACK, active_event_uuid, create_scope_stack, current_scope_stack,
     with_active_event_uuid,
@@ -61,6 +64,51 @@ fn continuation_context_restores_all_managed_execution_state() {
         assert_eq!(observed.2, Some(event_uuid));
         assert!(observed.3);
         assert!(Arc::ptr_eq(&observed.4, &scope_stack));
+    });
+}
+
+#[test]
+fn continuation_context_restores_target_across_task_and_thread_hops() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let event_uuid = uuid::Uuid::now_v7();
+        let target = LlmDispatchTargetContext::try_new(
+            "https://provider.example/v1/chat/completions".into(),
+            std::collections::BTreeMap::from([(
+                "authorization".into(),
+                "Bearer target-secret".into(),
+            )]),
+        )
+        .unwrap();
+        let context = with_active_event_uuid(event_uuid, async {
+            MiddlewareContinuationContext::capture()
+        })
+        .await;
+        let captured = context
+            .invoke_with_llm_dispatch_target(target.clone(), || async {
+                assert_eq!(current_llm_dispatch_target(), Some(target.clone()));
+                MiddlewareContinuationContext::capture()
+            })
+            .await;
+
+        let task_context = captured.clone();
+        let task_target = tokio::spawn(async move {
+            task_context
+                .run(async { current_llm_dispatch_target() })
+                .await
+        })
+        .await
+        .unwrap();
+        assert_eq!(task_target, Some(target.clone()));
+
+        let thread_target = std::thread::spawn(move || {
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(captured.run(async { current_llm_dispatch_target() }))
+        })
+        .join()
+        .unwrap();
+        assert_eq!(thread_target, Some(target));
     });
 }
 

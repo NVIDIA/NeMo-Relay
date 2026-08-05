@@ -1714,6 +1714,7 @@ dependencies = [
 name = "nemo-relay"
 version = "0.8.0"
 dependencies = [
+ "async-stream",
  "bitflags",
  "chrono",
  "futures",
@@ -1886,6 +1887,7 @@ dependencies = [
 name = "nemo-relay-plugin"
 version = "0.8.0"
 dependencies = [
+ "futures",
  "nemo-relay-types",
  "serde",
  "serde_json",

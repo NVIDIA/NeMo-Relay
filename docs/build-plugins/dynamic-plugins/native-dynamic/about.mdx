@@ -1,6 +1,6 @@
 ---
 title: "Native Dynamic Plugins (Rust)"
-description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v3."
+description: "Build in-process Rust shared-library plugins against NeMo Relay native API v1 or v2."
 position: 10
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -13,7 +13,7 @@ contract: a stable kind, JSON component configuration, validation diagnostics,
 and registration through a component-scoped context.
 
 <Warning>
-Native plugins are not sandboxed. They run in the gateway process, must not
+Native plugins are not sandboxed. They run in the Relay host process, must not
 unwind across ABI callbacks, and remain loaded until Relay removes their
 registered callbacks.
 </Warning>
@@ -116,11 +116,161 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
-## Native ABI v3
+## Select a Native API
+
+`compat.native_api` is the operator-facing native plugin C API version. It is
+separate from the internal host-table `abi_version` field:
+
+| Manifest API | Rust export macro | Host table | Use case |
+|---|---|---|---|
+| `"1"` | `nemo_relay_plugin!` | `NemoRelayNativeHostApiV3` | Existing subscribers, guardrails, scopes, and generic middleware |
+| `"2"` | `nemo_relay_plugin_v2!` | `NemoRelayNativeHostApiV4` | Host-dispatched LLM calls with typed HTTP targets and provider streams |
+
+Relay preserves native API v1 symbols, layouts, numeric values, and loader
+behavior. Existing binaries remain compatible. Rust plugins that exhaustively
+match `NemoRelayStatus` must handle the new `WouldBlock` variant when they
+recompile against the 0.8 SDK. A v2-only plugin is rejected clearly by a v1
+host and is not retried against an older table. Validation, inspection, and
+doctor output report the selected manifest API.
+
+Native API v2 is intended for in-process orchestrators that decide which LLM
+call to make while Relay still owns provider transport. The plugin supplies a
+replacement `LlmRequest` and a target containing the absolute HTTP(S) URL and
+explicit outbound headers. Relay sends targeted LLM requests with HTTP `POST`.
+Target headers may contain provider credentials. Relay validates and
+transports them but never places their values in diagnostics or observability.
+Protocol selection and request translation remain plugin concerns; Relay sends
+the supplied JSON to the selected target.
+
+The typed target is invocation-scoped continuation context. It is not encoded
+into `LlmRequest.headers`, and target credentials are not visible to downstream
+request middleware. Relay returns either:
+
+- buffered response JSON, bounded to 16 MiB;
+- an HTTP failure with status, a body bounded to 16 KiB, and a conservative
+  safe-header allowlist;
+- a non-HTTP failure classified as transport, timeout, cancelled, invalid
+  request, guardrail, or internal; or
+- a host-owned provider stream pulled one JSON event at a time, including typed
+  setup and late failures.
+
+Targeted streaming endpoints must return SSE with a JSON value in each `data`
+frame. Relay removes the SSE framing and exposes those JSON events to the
+plugin; raw byte streams and non-SSE streaming protocols are outside this
+contract.
+
+Relay core owns the terminal HTTP transport for these continuations. The same
+targeted plugin therefore works in the CLI gateway and in an SDK-embedded Relay
+host that calls `llm_call_execute` or `llm_stream_call_execute` directly.
+Remaining LLM execution intercepts still run before core dispatches the target;
+the host's original provider callback is used only when no target is bound.
+
+Relay reports neutral HTTP status and non-HTTP failure data. Each plugin owns
+its retry, reselection, and fallback policy; the SDK does not classify failures
+as retryable. Relay does not inspect provider bodies to infer context-window or
+model-availability errors.
+
+Targeted dispatch does not follow redirects. Relay rejects embedded URL
+credentials, hop-by-hop headers, host-owned framing headers, and
+`x-nemo-relay-internal-*` headers. Provider streams are pull-based and permit
+one pending poll; plugin output and direct pass-through use bounded queues.
+Dropping or cancelling a stream stops provider production, and the
+library stays loaded until all callbacks and streams release their handles.
+
+A clean activation unloads its native library normally. If activation teardown
+finds an opaque callback, task, continuation, or stream handle that still owns
+plugin code, Relay releases the descriptor and handle state but conservatively
+keeps that library mapping loaded for the rest of the process. This prevents a
+final release made from plugin code from unmapping its own caller before the FFI
+operation returns.
+
+Safe v2 callbacks register through the generic V3 asynchronous-middleware APIs
+and return `Pending`. Buffered callbacks use one completion; streaming
+callbacks produce incrementally through an output stream. Relay polls their
+Rust futures cooperatively on its existing Tokio runtime, restoring the
+captured continuation and scope context for every poll. A pending callback does
+not occupy a blocking worker or create an OS thread. Separate callback
+invocations can run concurrently and have no stable OS-thread affinity.
+
+Rust authors use the safe SDK facade. Buffered callbacks receive
+`LlmContinuationV2`; streaming callbacks receive `LlmStreamContinuationV2`
+and return either a boxed Rust stream or an explicit pass-through request.
+For this native API v2 example, use `nemo-relay-plugin = "0.8.0"` and add
+`futures = "0.3"` to the plugin's `Cargo.toml` dependencies.
+
+```rust
+use futures::StreamExt;
+use nemo_relay_plugin::{
+    LlmContinuationInvocationV2, LlmStreamExecutionOutcomeV2,
+};
+
+let buffered_target = target.clone();
+context.register_async_llm_execution_v2("route", 0, move |_name, request, next| {
+    let target = buffered_target.clone();
+    async move {
+        next.call(LlmContinuationInvocationV2 { request, target })
+            .await
+            .map_err(|failure| format!("{failure:?}"))
+    }
+})?;
+
+let stream_target = target.clone();
+context.register_async_llm_stream_execution_v2(
+    "route-stream",
+    0,
+    move |_name, request, next| {
+        let target = stream_target.clone();
+        async move {
+            let provider = next
+                .open_stream(LlmContinuationInvocationV2 { request, target })
+                .await
+                .map_err(|failure| format!("{failure:?}"))?;
+            let stream = provider.map(|item| {
+                item.map_err(|failure| format!("{failure:?}"))
+            });
+            Ok(LlmStreamExecutionOutcomeV2::Stream(Box::pin(stream)))
+        }
+    },
+)?;
+```
+
+Use `LlmContinuationV2::call_passthrough` to invoke the ordinary untargeted
+downstream continuation for a buffered call. For streaming, return
+`LlmStreamExecutionOutcomeV2::Passthrough(request)`. The call remains inside
+its managed Relay LLM lifecycle, but Relay connects the downstream stream
+directly to the caller through its bounded queue, so pass-through events do not
+cross the plugin boundary.
+
+Continuation operations follow the outer callback mode. A streaming callback
+can open targeted streams or pass through to the downstream stream, but it
+cannot invoke a buffered continuation. A streaming policy that needs a judge
+or side call must consume that call as a stream and aggregate it itself.
+
+The SDK returns `Pending` to the host, which drives safe callback futures and
+returned streams as cooperative tasks. `LlmProviderStreamV2` implements
+`Stream`, enforces one pending pull, and cancels unfinished provider production
+on drop. If the bounded plugin-output queue fills, Relay wakes the task when
+the consumer makes room instead of tying up a worker while waiting.
+
+Export a v2-only plugin with:
+
+```rust
+nemo_relay_plugin::nemo_relay_plugin_v2!(
+    nemo_relay_register_plugin,
+    || NativePolicy
+);
+```
+
+Set `compat.native_api = "2"` in its manifest. Use
+the safe registration methods above for normal Rust plugins.
+
+## Native C ABI Table Versioning
 
 The entry symbol receives a `*const NemoRelayNativeHostApiV1` pointer. It
-points at the v1 prefix of a v3 `NemoRelayNativeHostApiV3` table; check
-`abi_version` and `struct_size` before casting. The plugin returns a
+points at the frozen v1 prefix of the negotiated host table; check
+`abi_version` and `struct_size` before casting. A manifest native API v1 plugin
+receives `NemoRelayNativeHostApiV3`, while native API v2 receives the V4
+extension. The plugin returns a
 `NemoRelayNativePluginV1` descriptor:
 
 ```rust
@@ -130,7 +280,18 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The v3 host table retains the frozen legacy prefix and appends a
+`PluginContext::host_api_v4` and the generic V3 raw registration methods are
+the advanced escape hatch for raw ABI consumers and non-Rust bindings. The
+safe Rust facade uses V3's completion-based buffered registration and
+incremental async-stream registration. V4 contributes the targeted LLM
+continuation operations and general opaque host-task hooks needed to poll
+Rust-side futures cooperatively; it does not add an LLM-specific execution
+lane. Raw callers must own host strings, completion settlement, task and stream
+backpressure, cancellation, panic fencing, and every release operation. Rust
+futures, streams, trait objects, and allocator-owned strings never cross the
+shared-library boundary.
+
+The V3 host table used by manifest native API v1 retains the frozen legacy prefix and appends a
 completion-based asynchronous middleware extension. An entry that rejects the
 v3 table with `InvalidArg` is retried with the legacy table. Rust plugins using the
 typed `NativePlugin` APIs continue to work unchanged. Raw ABI plugins can use

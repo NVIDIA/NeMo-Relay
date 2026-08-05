@@ -3,17 +3,20 @@
 
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use futures::StreamExt;
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
-    Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
-    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
-    PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
-    ToolExecutionInterceptOutcome,
+    Json, LlmContinuationInvocationV2, LlmContinuationTargetV2, LlmContinuationV2,
+    LlmJsonAsyncStreamV2, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome,
+    LlmStreamExecutionOutcomeV2, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
+    NemoRelayNativePluginContext, NemoRelayNativePluginV1, NemoRelayNativeString,
+    NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime,
+    ScopeCategory, ScopeType, ToolExecutionInterceptOutcome, NEMO_RELAY_NATIVE_ABI_VERSION,
 };
 use serde_json::{Map, json};
 
@@ -297,6 +300,176 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 }
 
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || FixtureNativePlugin);
+nemo_relay_plugin::nemo_relay_plugin_v2!(nemo_relay_fixture_native_api_v2_plugin, || {
+    FixtureNativePlugin
+});
+
+struct TargetedFixturePlugin;
+
+static ESCAPED_V2_CONTINUATION: Mutex<Option<LlmContinuationV2>> = Mutex::new(None);
+static TARGETED_V2_PLUGIN_DROPPED: AtomicBool = AtomicBool::new(false);
+
+impl Drop for TargetedFixturePlugin {
+    fn drop(&mut self) {
+        TARGETED_V2_PLUGIN_DROPPED.store(true, Ordering::Release);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_release_escaped_v2_continuation() -> bool {
+    ESCAPED_V2_CONTINUATION
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+        .is_some()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_v2_library_probe() -> u64 {
+    0x4e52_5632_u64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_targeted_v2_plugin_dropped() -> bool {
+    TARGETED_V2_PLUGIN_DROPPED.load(Ordering::Acquire)
+}
+
+impl NativePlugin for TargetedFixturePlugin {
+    fn plugin_kind(&self) -> &str {
+        "fixture_native"
+    }
+
+    fn register(
+        &mut self,
+        plugin_config: &Map<String, Json>,
+        ctx: &mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::Result<()> {
+        let runtime = ctx.runtime();
+        let url = plugin_config
+            .get("target_url")
+            .and_then(Json::as_str)
+            .ok_or_else(|| "targeted fixture requires target_url".to_string())?
+            .to_owned();
+        let buffered_url = url.clone();
+        let buffered_runtime = runtime.clone();
+        let escape_continuation = plugin_config
+            .get("escape_continuation")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        ctx.register_async_llm_execution_v2(
+            "fixture_targeted_llm",
+            0,
+            move |name, mut request, continuation| {
+                let url = buffered_url.clone();
+                let runtime = buffered_runtime.clone();
+                async move {
+                    if escape_continuation {
+                        *ESCAPED_V2_CONTINUATION
+                            .lock()
+                            .unwrap_or_else(|error| error.into_inner()) =
+                            Some(continuation.clone());
+                    }
+                    if name == "fixture_passthrough_llm" {
+                        return continuation.call_passthrough(request).await;
+                    }
+                    cooperative_yield_once().await;
+                    runtime.emit_mark(
+                        "fixture.native.v2.after_await",
+                        Some(&json!({"phase": "resumed"})),
+                        None,
+                    )?;
+                    request.content["fixture_targeted"] = json!(true);
+                    continuation
+                        .call(targeted_fixture_invocation(url, request))
+                        .await
+                        .map_err(|error| format!("targeted fixture dispatch failed: {error:?}"))
+                }
+            },
+        )?;
+
+        ctx.register_async_llm_stream_execution_v2(
+            "fixture_targeted_llm_stream",
+            0,
+            move |name, mut request, continuation| {
+                let url = url.clone();
+                async move {
+                    if name == "fixture_passthrough_llm_stream" {
+                        return Ok(LlmStreamExecutionOutcomeV2::Passthrough(request));
+                    }
+                    request.content["fixture_targeted_stream"] = json!(true);
+                    let stream = continuation
+                        .open_stream(targeted_fixture_invocation(url, request))
+                        .await
+                        .map_err(|error| {
+                            format!("targeted fixture stream dispatch failed: {error:?}")
+                        })?;
+                    let stream: LlmJsonAsyncStreamV2 = Box::pin(stream.map(|item| {
+                        item.map_err(|error| {
+                            format!("targeted fixture provider stream failed: {error:?}")
+                        })
+                    }));
+                    Ok(LlmStreamExecutionOutcomeV2::Stream(stream))
+                }
+            },
+        )
+    }
+}
+
+async fn cooperative_yield_once() {
+    let mut yielded = false;
+    futures::future::poll_fn(move |cx| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}
+
+fn targeted_fixture_invocation(url: String, request: LlmRequest) -> LlmContinuationInvocationV2 {
+    LlmContinuationInvocationV2 {
+        request,
+        target: LlmContinuationTargetV2 {
+            url,
+            headers: std::collections::BTreeMap::from([(
+                "authorization".into(),
+                "Bearer fixture-target".into(),
+            )]),
+        },
+    }
+}
+
+nemo_relay_plugin::nemo_relay_plugin_v2!(nemo_relay_fixture_targeted_v2_plugin, || {
+    TargetedFixturePlugin
+});
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_api_v1_plugin(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    let Some(host_ref) = (unsafe { host.as_ref() }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION
+        || host_ref.struct_size != std::mem::size_of::<NemoRelayNativeHostApiV3>()
+    {
+        return NemoRelayStatus::InvalidArg;
+    }
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "fixture_native",
+            None,
+            None,
+            Some(raw_noop_register),
+        )
+    }
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_async_entry(

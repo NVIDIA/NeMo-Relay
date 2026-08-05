@@ -12,7 +12,57 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Stable classification for a failure from an upstream provider attempt.
+pub(crate) const MAX_UPSTREAM_FAILURE_BODY_BYTES: usize = 16 * 1024;
+pub(crate) const MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES: usize = 1024;
+
+pub(crate) fn bounded_utf8(value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value[..boundary].to_owned()
+}
+
+pub(crate) fn sanitize_upstream_failure_headers(
+    headers: impl IntoIterator<Item = (String, String)>,
+) -> BTreeMap<String, String> {
+    headers
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let normalized = name.to_ascii_lowercase();
+            matches!(
+                normalized.as_str(),
+                "retry-after"
+                    | "request-id"
+                    | "traceparent"
+                    | "x-request-id"
+                    | "x-ratelimit-limit"
+                    | "x-ratelimit-remaining"
+                    | "x-ratelimit-reset"
+                    | "ratelimit-limit"
+                    | "ratelimit-remaining"
+                    | "ratelimit-reset"
+            )
+            .then(|| {
+                (
+                    normalized,
+                    bounded_utf8(value, MAX_UPSTREAM_FAILURE_HEADER_VALUE_BYTES),
+                )
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn sanitize_upstream_failure(mut failure: UpstreamFailure) -> UpstreamFailure {
+    failure.body = bounded_utf8(failure.body, MAX_UPSTREAM_FAILURE_BODY_BYTES);
+    failure.headers = sanitize_upstream_failure_headers(failure.headers);
+    failure
+}
+
+/// Stable classification for an upstream provider failure captured by managed dispatch.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamFailureClass {
@@ -34,7 +84,7 @@ pub enum UpstreamFailureClass {
     Other,
 }
 
-/// Structured failure returned by one upstream provider attempt.
+/// Structured provider failure surfaced by targeted or explicitly retry-aware dispatch.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpstreamFailure {
     /// HTTP status when a provider response was received.
@@ -48,7 +98,7 @@ pub struct UpstreamFailure {
 }
 
 impl UpstreamFailure {
-    /// Whether Switchyard may be consulted for another bounded provider attempt.
+    /// Whether a provider-neutral routing policy may make another bounded attempt.
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.class,
@@ -122,7 +172,7 @@ pub enum FlowError {
     #[error("guardrail rejected: {0}")]
     GuardrailRejected(String),
 
-    /// Structured upstream provider failure from retry-aware gateway dispatch.
+    /// Structured upstream provider failure from managed provider dispatch.
     #[error("{0}")]
     Upstream(UpstreamFailure),
 

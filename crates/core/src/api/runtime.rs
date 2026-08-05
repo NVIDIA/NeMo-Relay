@@ -6,6 +6,7 @@
 pub mod callbacks;
 mod continuation_context;
 pub mod global;
+mod llm_dispatch_context;
 pub mod scope_stack;
 pub mod state;
 pub mod subscriber_dispatcher;
@@ -23,6 +24,11 @@ pub use continuation_context::MiddlewareContinuationContext;
 #[cfg(test)]
 pub(crate) use continuation_context::MiddlewareContinuationLease;
 pub use global::global_context;
+#[cfg(test)]
+pub(crate) use llm_dispatch_context::current_llm_dispatch_target;
+pub(crate) use llm_dispatch_context::{
+    LlmDispatchTargetContext, targeted_llm_execution, targeted_llm_stream_execution,
+};
 pub use scope_stack::{
     PropagationContext, ScopeStack, ScopeStackHandle, TASK_SCOPE_STACK, ThreadScopeStackBinding,
     capture_propagation_context, capture_propagation_context_with_root, capture_thread_scope_stack,
