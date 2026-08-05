@@ -1,7 +1,7 @@
 ---
 title: "Release Notes for NVIDIA NeMo Relay"
 sidebar-title: "Release Notes"
-description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.7."
+description: "Review highlights, compatibility updates, fixed known issues, and current known issues for NVIDIA NeMo Relay 0.8."
 template-library-version: "1.0.0"
 position: 6
 ---
@@ -25,155 +25,29 @@ This is the Release Notes template. Document one release version per page and us
 This page contains the release notes for [NVIDIA NeMo
 Relay](/about-nemo-relay/overview).
 
-## Release 0.7
+## Release 0.8
 
-NVIDIA NeMo Relay 0.7 adds asynchronous middleware, codec-aware observability
-sanitization, typed OpenTelemetry exporters, cross-boundary context
-propagation, and opt-in exact-match LLM response caching. It also expands CLI
-configuration, packaging, logging, and diagnostics workflows.
+NVIDIA NeMo Relay 0.8 release notes are in preparation.
 
 ### Highlights
 
-The following highlights summarize the most significant user-facing changes in
-0.7:
-
-- **Asynchronous middleware and ordered event delivery:** Rust middleware
-  callbacks can await work directly, Python callbacks can return awaitables,
-  and Node.js callbacks can return Promises. Scope and mark APIs remain
-  synchronous while Relay publishes sanitized events through an ordered
-  background dispatcher.
-- **Codec-aware privacy controls:** LLM sanitizers receive the active per-call
-  codec across in-process, native-plugin, and worker boundaries. The PII
-  redaction plugin can protect mixed OpenAI Chat, OpenAI Responses, and
-  Anthropic Messages traffic without a fixed provider codec.
-- **Unified OpenTelemetry export:** One typed, multi-endpoint configuration
-  supports `full`, `gen_ai`, and `openinference` projections. The `gen_ai`
-  projection implements a pinned
-  [OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
-- **Portable Relay context:** Transport-neutral propagation can seed isolated
-  scope stacks across process and runtime boundaries. Python applications can
-  also fork the active scope stack for concurrent `asyncio` tasks.
-- **Opt-in LLM response caching:** The Adaptive plugin can serve eligible
-  exact-match calls from in-memory or Redis stores. The cache remains disabled
-  unless `response_cache` is configured.
-- **CLI and operational improvements:** The CLI adds structured configuration
-  editing, PyPI distribution, size-based log rotation, and offline `doctor`
-  probes. Python, Node.js, and Go bindings initialize default operational
-  logging from the same environment controls as the CLI.
+- _Highlights will be added for the 0.8 release._
 
 ### Support Matrix and Compatibility Updates
-
-<Warning>
-LLM sanitizer callbacks require migration in 0.7. Callbacks now receive the
-payload first and a directional context second, and they return an optional
-payload. There is no one-argument compatibility adapter. Rust worker mark,
-scope, tool, and LLM sanitizer callbacks are also asynchronous in 0.7. Native
-plugins and workers must be rebuilt with the matching 0.7 SDK and protocol
-definitions.
-</Warning>
 
 The [Support Matrix](/reference/support-matrix) is the canonical reference for
 supported platforms and architectures, worker runtimes, coding agents, and
 integrations. It also records current limitations, including platform-specific
 worker requirements.
 
-Before upgrading from 0.6, follow the
-[0.7 Migration Guide](/reference/migration-guides#upgrade-to-nemo-relay-07).
-For the new callback contract and codec operations, refer to
-[Codec-Aware LLM Sanitizers](/about-nemo-relay/concepts/middleware#codec-aware-llm-sanitizers).
+Migration guidance for upgrading from 0.7 to 0.8 will be added to the
+[Migration Guides](/reference/migration-guides) before the release.
 
-Rust callers that exhaustively match `FlowError` must handle the new
-`CallbackException` variant. It retains Python and JavaScript exception types
-for OpenTelemetry projection while preserving the existing `internal_error`
-classification.
+### Fixed Known Issues in 0.8
 
-Observability configuration version 3 is a breaking change. It removes the
-standalone `openinference` section and standalone OpenInference subscriber APIs,
-and requires a type and endpoint for every OpenTelemetry exporter. Legacy mark
-and attribute-alias controls remain available on typed `full` and
-`openinference` endpoints. Refer to
-[Migration Guides](/reference/migration-guides#observability-configuration-version-3)
-for before-and-after configuration and binding API changes.
+- _Fixed issues will be added for the 0.8 release._
 
-Each `opentelemetry.endpoints` entry can resolve sensitive header values from
-environment variables through `header_env`. Plugin activation rejects missing
-variables, blank values, and duplicate header names, then snapshots each valid
-value for the endpoint.
-Process-global `OTEL_EXPORTER_OTLP_HEADERS` and
-`OTEL_EXPORTER_OTLP_TRACES_HEADERS` now fail construction or activation because
-their values cannot be isolated between endpoints.
-
-The experimental Relay-owned Switchyard plugin is deprecated in 0.7. It is
-excluded from default CLI builds and is scheduled for removal in 0.8, when a
-Switchyard-owned native plugin is expected to replace it.
-
-### Fixed Known Issues in 0.7
-
-The following known issues are fixed in 0.7:
-
-- Sanitizer callback errors, panics, rejected awaitables or Promises, and
-  invalid return values now fail closed. Relay withholds the governed
-  observability payload instead of emitting the original unsanitized value.
-- Relay removes known LLM credential headers before emitting request events,
-  and the PII redaction plugin rejects malformed RFC 6901 `target_paths` before
-  activation.
-- Generated coding-agent enforcement hooks now fail closed for transport,
-  startup, authentication, evaluation, malformed-response, and policy-delivery
-  failures. Lifecycle and after-the-fact hooks continue to fail open.
-- OpenTelemetry exporters now report finite batch-queue span loss through
-  operational logs and plugin runtime diagnostics, including an exact dropped
-  span count during graceful shutdown.
-- Typed OpenTelemetry configuration now rejects colliding destinations after
-  canonical endpoint resolution, validates attribute mappings before
-  activation, and completes bare OTLP HTTP endpoints with `/v1/traces`.
-- OpenTelemetry and OpenInference prefer response-side model attribution,
-  preserve binding callback exception types, and map structured `FlowError`
-  values to useful `error.type` attributes. OpenInference emits system content
-  as ordered input messages.
-- ATIF no longer duplicates user steps for same-turn continuations. Model
-  fallback matches the span exporters, and metadata-routing and remote-delivery
-  failures remain visible and recoverable through flush and teardown.
-- Explicit configuration editor targets are preserved, file layers follow one
-  documented priority model, disabled plugin entries do not contribute
-  configuration, and programmatic component enablement takes precedence over
-  discovered files.
-- Library initialization reports inherited `plugins.toml` files without
-  exposing their values. `nemo-relay doctor` reports invalid explicit and
-  logging configuration, supports offline exporter validation, and reports
-  effective upstream authentication presence without exposing credentials.
-- Transparent gateways preserve non-success streaming provider responses and
-  have bounded, interruptible shutdown behavior.
-- Node.js preserves asynchronous propagation context, includes queued callback
-  delivery in flush completion, and isolates subscriber exceptions instead of
-  aborting the process.
-- Python plugin teardown is safe from a running `asyncio` loop, cancelled
-  scopes are reported as errors, and completion callbacks no longer target a
-  closed event loop during cancellation.
-- Prebuilt CLI binaries carry the intended release version, so an upgraded CLI
-  does not silently reuse a gateway started by a differently identified build.
-- `object_store` is upgraded to `0.14.1`, which removes the temporary
-  `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` advisory exceptions.
-- Embedded Python hosts can use
-  `plugin.load_dynamic_plugin_activation_specs(path)` to convert the standard
-  `[[plugins.dynamic]]` records in one explicitly selected `plugins.toml` into
-  the activation specs accepted by `initialize_with_dynamic_plugins()`. This
-  scoped 0.7 compatibility helper removes host-side TOML and manifest parsing;
-  a future unified file-backed initializer is expected to replace it.
-- Programmatically declared plugin components now apply their `enabled` value
-  over discovered file configuration. When code re-enables a component that a
-  discovered file disabled, initialization reports a warning that names the
-  component and source file.
-- Library plugin initialization now emits a warning for each discovered
-  `plugins.toml` file inherited by the caller configuration. The warning is
-  available in operational logs, initialization results, and the active plugin
-  report without exposing configuration values or credentials.
-- LLM payload redaction now follows the codec active for each call instead of a
-  codec captured from plugin configuration. Codec-dependent policies omit the
-  observability payload and annotation when Relay cannot safely normalize the
-  payload. This change resolves the mixed-provider PII sanitization issue
-  [#526](https://github.com/NVIDIA/NeMo-Relay/issues/526).
-
-## Known Issues in 0.7
+## Known Issues in 0.8
 
 - Go and the raw C FFI remain experimental and source-first. Generated API
   pages focus on Rust, Python, and Node.js.
