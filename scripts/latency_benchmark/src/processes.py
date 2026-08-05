@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import IO
 
-from .fixtures import isolated_environment, write_agent_config, write_fake_codex
+from .fixtures import isolated_environment, write_agent_config, write_mock_codex
 from .servers import connection_for
 
 
@@ -138,7 +138,7 @@ class TransparentRelayProcess:
 
     def start(self) -> None:
         gateway_file = self.root / f"{self.name}-{uuid.uuid4().hex}.gateway"
-        config = write_agent_config(self.root, self.name, write_fake_codex(self.root))
+        config = write_agent_config(self.root, self.name, write_mock_codex(self.root))
         log_path = self.root / f"{self.name}.log"
         self.log_handle = log_path.open("ab")
         environment = isolated_environment(self.root)
@@ -162,6 +162,7 @@ class TransparentRelayProcess:
             command,
             cwd=self.root,
             env=environment,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=self.log_handle,
         )

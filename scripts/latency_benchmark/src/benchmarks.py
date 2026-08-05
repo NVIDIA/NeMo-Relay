@@ -23,9 +23,6 @@ from .processes import RelayProcess, TransparentRelayProcess
 from .protocol import make_request, request_headers, request_path
 from .servers import connection_for
 
-VARIANTS = ("direct", "relay-minimal", "relay-file", "relay-otlp")
-RELAY_VARIANTS = ("relay-minimal", "relay-file", "relay-otlp")
-
 
 def percentile(values: Sequence[int | float], fraction: float) -> float:
     """Return a linearly interpolated percentile for a non-empty sample."""
@@ -112,6 +109,7 @@ def benchmark_scenario(
     warmup: int,
     concurrency: int,
 ) -> dict[str, Any]:
+    variants = tuple(urls)
     body = make_request(
         provider,
         streaming,
@@ -127,12 +125,12 @@ def benchmark_scenario(
         connections = {name: connection_for(url) for name, url in urls.items()}
         try:
             for _ in range(warmup):
-                for name in VARIANTS:
+                for name in variants:
                     perform_request(connections[name], provider, body, streaming)
             barrier.wait()
             local = []
             for index in indices:
-                order = list(VARIANTS)
+                order = list(variants)
                 shift = (index + worker_id) % len(order)
                 order = order[shift:] + order[:shift]
                 local.append({name: perform_request(connections[name], provider, body, streaming) for name in order})
@@ -154,15 +152,19 @@ def benchmark_scenario(
             metric.removesuffix("_ns"): summarize_ns([cycle[name][metric] for cycle in observations])
             for metric in metrics
         }
-        for name in VARIANTS
+        for name in variants
     }
-    comparison_pairs = {
-        "relay-minimal_vs_direct": ("relay-minimal", "direct"),
-        "relay-file_vs_direct": ("relay-file", "direct"),
-        "relay-otlp_vs_direct": ("relay-otlp", "direct"),
-        "file_exporter_vs_minimal": ("relay-file", "relay-minimal"),
-        "otlp_exporter_vs_minimal": ("relay-otlp", "relay-minimal"),
-    }
+    relay_variants = tuple(name for name in variants if name != "direct")
+    comparison_pairs = {f"{name}_vs_direct": (name, "direct") for name in relay_variants}
+    for name in relay_variants:
+        if name == "relay-minimal":
+            continue
+        label = name.removeprefix("relay-")
+        comparison = {
+            "file": "file_exporter_vs_minimal",
+            "otlp": "otlp_exporter_vs_minimal",
+        }.get(label, f"{label}_vs_minimal")
+        comparison_pairs[comparison] = (name, "relay-minimal")
     comparisons = {}
     for comparison, (left, right) in comparison_pairs.items():
         comparisons[comparison] = {}
@@ -212,15 +214,11 @@ def benchmark_hooks(
     samples: int,
     warmup: int,
 ) -> dict[str, Any]:
-    measurements = {
-        "process_baseline": [],
-        "codex_minimal": [],
-        "codex_file": [],
-        "codex_otlp": [],
-        "claude_minimal": [],
-        "claude_file": [],
-        "claude_otlp": [],
-    }
+    relay_variants = tuple(configs)
+    measurements = {"process_baseline": []}
+    for agent in ("codex", "claude"):
+        for variant in relay_variants:
+            measurements[f"{agent}_{variant.removeprefix('relay-')}"] = []
 
     with contextlib.ExitStack() as stack:
         relay_urls = {
@@ -229,18 +227,19 @@ def benchmark_hooks(
                     binary,
                     root,
                     provider_url,
-                    configs[f"relay-{variant}"],
+                    configs[variant],
                     f"transparent-{variant}",
                 )
             ).url
-            for variant in ("minimal", "file", "otlp")
+            for variant in relay_variants
         }
 
         def hook(agent: str, variant: str, index: int) -> int:
+            variant_name = variant.removeprefix("relay-")
             event_name = "sessionStart" if agent == "codex" else "SessionStart"
             payload = json.dumps(
                 {
-                    "session_id": f"benchmark-{agent}-{variant}-{index}",
+                    "session_id": f"benchmark-{agent}-{variant_name}-{index}",
                     "hook_event_name": event_name,
                 }
             ).encode()
@@ -261,8 +260,9 @@ def benchmark_hooks(
         for index in range(-warmup, samples):
             cycle = {"process_baseline": lambda: run_subprocess_timed([str(binary), "--version"], root=root)}
             for agent in ("codex", "claude"):
-                for variant in ("minimal", "file", "otlp"):
-                    cycle[f"{agent}_{variant}"] = lambda agent=agent, variant=variant: hook(agent, variant, index)
+                for variant in relay_variants:
+                    name = f"{agent}_{variant.removeprefix('relay-')}"
+                    cycle[name] = lambda agent=agent, variant=variant: hook(agent, variant, index)
             names = list(cycle)
             random.Random(index).shuffle(names)
             values = {name: cycle[name]() for name in names}
@@ -276,8 +276,8 @@ def benchmark_hooks(
         "comparisons": {},
     }
     for agent in ("codex", "claude"):
-        for variant in ("minimal", "file", "otlp"):
-            name = f"{agent}_{variant}"
+        for variant in relay_variants:
+            name = f"{agent}_{variant.removeprefix('relay-')}"
             deltas = [left - right for left, right in zip(measurements[name], baseline)]
             summary = summarize_ns(deltas)
             summary["median_ci95_ms"] = median_confidence_interval_ns(deltas, seed=len(name) * 1_009)
@@ -294,11 +294,12 @@ def benchmark_startup(
     samples: int,
     warmup: int,
 ) -> dict[str, Any]:
-    measurements = {"process_baseline": [], **{variant: [] for variant in RELAY_VARIANTS}}
+    relay_variants = tuple(configs)
+    measurements = {"process_baseline": [], **{variant: [] for variant in relay_variants}}
     for index in range(-warmup, samples):
         baseline = run_subprocess_timed([str(binary), "--version"], root=root)
         cycle = {}
-        for variant in RELAY_VARIANTS:
+        for variant in relay_variants:
             process = RelayProcess(binary, root, provider_url, configs[variant], f"startup-{variant}-{index}")
             process.start()
             cycle[variant] = process.startup_ns
@@ -312,7 +313,7 @@ def benchmark_startup(
         "comparisons": {},
     }
     baseline = measurements["process_baseline"]
-    for variant in RELAY_VARIANTS:
+    for variant in relay_variants:
         deltas = [left - right for left, right in zip(measurements[variant], baseline)]
         summary = summarize_ns(deltas)
         summary["median_ci95_ms"] = median_confidence_interval_ns(deltas, seed=len(variant) * 2_003)

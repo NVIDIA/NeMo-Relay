@@ -28,19 +28,22 @@ These checks exercise installed coding-agent clients and are intentionally outsi
 
 ## Opt-In Performance Benchmark
 
-Run `just benchmark-coding-agent-latency` to build the release CLI and compare
+Run `just latency-benchmark` to build the release CLI and compare
 direct provider requests with Relay's minimal, local-file, and local-OTLP
 configurations. The benchmark also measures full hook subprocess and cold
 gateway startup time. It writes structured results under
-`target/benchmark-results/` by default and is intentionally outside regular CI.
+`target/benchmark-results/nemo-relay-latency-report.json` and
+`target/benchmark-results/nemo-relay-latency-report.html` by default and is
+intentionally outside regular CI. Large ATOF output goes to a
+`nemo-relay-latency-*` directory in the operating system's temporary location
+and is removed after a normal run.
 
-The defaults live in
-`scripts/benchmark_coding_agent_latency/config/default.toml`. Supply a partial
-TOML file with `--config`, or override individual values on the command line.
-For example, this runs only a small OpenAI gateway matrix:
+The defaults live in `scripts/latency_benchmark/config/default.toml`. Supply a
+partial TOML file with `--config`, or override individual values on the command
+line. For example, this runs only a small OpenAI gateway matrix:
 
 ```bash
-just benchmark-coding-agent-latency \
+just latency-benchmark \
   --tests gateway \
   --providers openai \
   --payload-sizes 4096 \
@@ -48,11 +51,13 @@ just benchmark-coding-agent-latency \
   --samples 10
 ```
 
-Run `uv run python -m scripts.benchmark_coding_agent_latency --help` to list
-all overrides. The three selectable suites are `gateway`, `hooks`, and
-`startup`. See
-[`benchmark_coding_agent_latency/README.md`](benchmark_coding_agent_latency/README.md)
-for the complete human-facing run guide.
+Run `just latency-benchmark --help` to list all overrides without
+building Relay. The three selectable suites are `gateway`, `hooks`, and
+`startup`. Each run writes machine-readable JSON and a self-contained HTML
+report with graphs. Add repeatable `--middleware NAME=PATH` options to measure
+custom Relay plugin configurations alongside the three default variants. Refer
+to [`latency_benchmark/README.md`](latency_benchmark/README.md) for the complete
+human-facing run guide.
 
 ## Internal Layout
 

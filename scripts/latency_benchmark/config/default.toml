@@ -13,6 +13,7 @@ payload_sizes = [4096, 65536, 262144, 1048576, 4194304]
 concurrency = [1, 2, 4, 8, 16]
 response_bytes = 16384
 stream_chunks = 32
+middleware = []
 
 [models]
 openai = "gpt-5-codex"

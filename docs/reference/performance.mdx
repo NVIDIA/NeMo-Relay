@@ -37,11 +37,11 @@ loopback OpenAI and Anthropic providers so network and model-service latency do
 not hide Relay's contribution.
 
 ```bash
-just benchmark-coding-agent-latency
+just latency-benchmark
 ```
 
-The command builds the release CLI. Its default configuration measures these
-paths:
+The command builds the release CLI. Its default configuration measures the
+following paths:
 
 - Direct requests to the mock provider.
 - Relay with no exporter, which isolates the managed gateway pipeline.
@@ -59,7 +59,7 @@ p50, p95, and p99 paired latency differences and a bootstrap 95% confidence
 interval for the median.
 
 Configure a run with a partial TOML file. Unspecified values inherit from
-`scripts/benchmark_coding_agent_latency/config/default.toml`:
+`scripts/latency_benchmark/config/default.toml`:
 
 ```toml
 tests = ["gateway"]
@@ -74,7 +74,7 @@ concurrency = [1, 4]
 Pass the file to the benchmark:
 
 ```bash
-just benchmark-coding-agent-latency --config /path/to/benchmark.toml
+just latency-benchmark --config /path/to/benchmark.toml
 ```
 
 Command-line values take precedence over the TOML file. Use comma-separated
@@ -82,7 +82,7 @@ values for list overrides. This example runs only the OpenAI streaming gateway
 suite, regardless of the values in the file:
 
 ```bash
-just benchmark-coding-agent-latency \
+just latency-benchmark \
   --config /path/to/benchmark.toml \
   --tests gateway \
   --providers openai \
@@ -92,22 +92,43 @@ just benchmark-coding-agent-latency \
 ```
 
 The selectable suites are `gateway`, `hooks`, and `startup`. Run
-`uv run python -m scripts.benchmark_coding_agent_latency --help` to see every
-matrix and sample-count override. Results contain only the selected suite
-sections.
+`just latency-benchmark --help` to see every matrix and
+sample-count override without building Relay. Results contain only the
+selected suite sections.
 
-The command prints a readable summary and writes structured JSON to
-`target/benchmark-results/coding-agent-latency.json`. Set the repository-wide
-`output_dir` variable to choose another result location:
+The minimal, ATOF file-exporter, and OTLP variants run by default. Add an
+opt-in middleware variant with a `[[middleware]]` table in the benchmark TOML
+file:
 
-```bash
-just output_dir=/tmp/relay-benchmarks benchmark-coding-agent-latency
+```toml
+[[middleware]]
+name = "pii-redaction"
+plugin_config = "./plugins-pii-redaction.toml"
 ```
 
-The local-file scenarios can write tens of gigabytes of temporary ATOF data
-with the default matrix. The harness verifies exporter delivery for gateway and
-hook runs and removes its temporary workspace after the run, but you should
-confirm that the system has sufficient free disk space before starting it.
+The plugin configuration path is relative to the benchmark TOML file. For a
+one-off run, pass `--middleware NAME=PATH`; repeat the option for multiple
+variants. Each custom gateway variant is compared with direct calls and the
+minimal Relay variant, and each custom variant is included in the selected hook
+and startup suites.
+
+The command prints a readable summary and writes structured JSON to
+`target/benchmark-results/nemo-relay-latency-report.json`. It also writes a
+self-contained report with graphs and metric explanations to
+`target/benchmark-results/nemo-relay-latency-report.html`. Set the
+repository-wide `output_dir` variable to choose another result location:
+
+```bash
+just output_dir=/tmp/relay-benchmarks latency-benchmark
+```
+
+With the current default matrix, the local-file scenarios are expected to write
+about 25 GiB of temporary ATOF data. Reserve at least 30 GiB of free space. By
+default, this large output goes to the operating system's temporary directory
+in a folder named `nemo-relay-latency-*`, typically under `/tmp`. The harness
+verifies exporter delivery for gateway and hook runs and removes the temporary
+workspace after a normal run. The JSON and HTML report files remain in the
+result directory.
 
 Treat results as environment-specific. Record the commit, release build,
 hardware, operating system, workload sizes, and sample counts when sharing a

@@ -14,6 +14,7 @@ from typing import Any
 from .benchmarks import benchmark_hooks, benchmark_scenario, benchmark_startup
 from .config import BenchmarkConfig, parse_args
 from .fixtures import write_plugin_configs, write_relay_config
+from .html_report import write_html_report
 from .processes import RelayProcess
 from .reporting import environment_record, print_results
 from .servers import OtlpHandler, ProviderHandler, local_server
@@ -29,7 +30,7 @@ def _benchmark_gateway(
     with contextlib.ExitStack() as stack:
         relays = {
             variant: stack.enter_context(RelayProcess(binary, root, provider_url, configs[variant], variant))
-            for variant in ("relay-minimal", "relay-file", "relay-otlp")
+            for variant in configs
         }
         urls = {"direct": provider_url} | {variant: relay.url for variant, relay in relays.items()}
         scenarios = []
@@ -81,7 +82,7 @@ def run_benchmarks(binary: Path, config: BenchmarkConfig) -> dict[str, Any]:
             ) as provider_url,
             local_server(OtlpHandler) as otlp_url,
         ):
-            configs = write_plugin_configs(root, otlp_url)
+            configs = write_plugin_configs(root, otlp_url, config.middleware)
             if "gateway" in config.tests:
                 results["gateway"] = _benchmark_gateway(binary, root, provider_url, configs, config)
             if "hooks" in config.tests:
@@ -121,5 +122,7 @@ def main(argv: list[str] | None = None) -> None:
     results = run_benchmarks(options.relay_bin, options.config)
     options.output.parent.mkdir(parents=True, exist_ok=True)
     options.output.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_html_report(results, options.report)
     print_results(results)
     print(f"\nJSON results: {options.output}")
+    print(f"HTML report: {options.report}")

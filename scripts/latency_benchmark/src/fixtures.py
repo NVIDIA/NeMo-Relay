@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from .config import CONFIG_ROOT, DATA_ROOT
+from .config import CONFIG_ROOT, DATA_ROOT, MiddlewareVariant
 
 
 def _read_data(name: str) -> str:
@@ -40,8 +40,12 @@ def write_relay_config(root: Path) -> Path:
     return path
 
 
-def write_plugin_configs(root: Path, otlp_url: str) -> dict[str, Path]:
-    """Write the three Relay plugin configurations used for paired runs."""
+def write_plugin_configs(
+    root: Path,
+    otlp_url: str,
+    middleware: tuple[MiddlewareVariant, ...] = (),
+) -> dict[str, Path]:
+    """Write default plugin configs and add opt-in middleware variants."""
     paths = {
         "relay-minimal": root / "plugins-minimal.toml",
         "relay-file": root / "plugins-file.toml",
@@ -59,13 +63,14 @@ def write_plugin_configs(root: Path, otlp_url: str) -> dict[str, Path]:
         _render_config("plugins-otlp.toml", {'"__OTLP_ENDPOINT__"': toml_string(f"{otlp_url}/v1/traces")}),
         encoding="utf-8",
     )
+    paths.update((variant.relay_name, variant.plugin_config) for variant in middleware)
     return paths
 
 
-def write_fake_codex(root: Path) -> Path:
-    """Copy the platform-specific static fake Codex client into the workspace."""
-    source_name = "fake-codex.cmd" if os.name == "nt" else "fake-codex.sh"
-    target_name = "benchmark-codex.cmd" if os.name == "nt" else "benchmark-codex"
+def write_mock_codex(root: Path) -> Path:
+    """Copy the platform-specific static mock Codex client into the workspace."""
+    source_name = "mock-codex.cmd" if os.name == "nt" else "mock-codex.sh"
+    target_name = "mock-codex.cmd" if os.name == "nt" else "mock-codex"
     path = root / target_name
     path.write_text(_read_data(source_name), encoding="utf-8")
     if os.name != "nt":
@@ -73,10 +78,10 @@ def write_fake_codex(root: Path) -> Path:
     return path
 
 
-def write_agent_config(root: Path, name: str, fake_codex: Path) -> Path:
+def write_agent_config(root: Path, name: str, mock_codex: Path) -> Path:
     path = root / f"{name}-config.toml"
     path.write_text(
-        _render_config("agent-config.toml", {'"__CODEX_COMMAND__"': toml_string(fake_codex)}),
+        _render_config("agent-config.toml", {'"__CODEX_COMMAND__"': toml_string(mock_codex)}),
         encoding="utf-8",
     )
     return path

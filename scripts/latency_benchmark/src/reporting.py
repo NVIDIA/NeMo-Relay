@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def _git_output(*args: str) -> str:
@@ -40,12 +40,10 @@ def print_results(results: dict[str, Any]) -> None:
         headers = ("provider", "mode", "bytes", "c", "comparison", "metric", "p50", "p95", "p99")
         print("  ".join(f"{header:>12}" for header in headers))
         for scenario in results["gateway"]:
-            for comparison in (
-                "relay-minimal_vs_direct",
-                "relay-file_vs_direct",
-                "relay-otlp_vs_direct",
-            ):
-                for metric, summary in scenario["comparisons"][comparison].items():
+            for comparison, metrics in scenario["comparisons"].items():
+                if not comparison.endswith("_vs_direct"):
+                    continue
+                for metric, summary in metrics.items():
                     values = (
                         scenario["provider"],
                         scenario["mode"],
