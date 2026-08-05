@@ -9,15 +9,19 @@ import json
 import os
 from pathlib import Path
 
-from .config import DATA_ROOT
+from .config import CONFIG_ROOT, DATA_ROOT
 
 
 def _read_data(name: str) -> str:
     return (DATA_ROOT / name).read_text(encoding="utf-8")
 
 
-def _render_data(name: str, replacements: dict[str, str]) -> str:
-    rendered = _read_data(name)
+def _read_config(name: str) -> str:
+    return (CONFIG_ROOT / name).read_text(encoding="utf-8")
+
+
+def _render_config(name: str, replacements: dict[str, str]) -> str:
+    rendered = _read_config(name)
     for marker, value in replacements.items():
         if marker not in rendered:
             raise RuntimeError(f"static fixture {name} is missing marker {marker}")
@@ -32,7 +36,7 @@ def toml_string(value: str | Path) -> str:
 
 def write_relay_config(root: Path) -> Path:
     path = root / "config.toml"
-    path.write_text(_read_data("relay-config.toml"), encoding="utf-8")
+    path.write_text(_read_config("relay-config.toml"), encoding="utf-8")
     return path
 
 
@@ -43,16 +47,16 @@ def write_plugin_configs(root: Path, otlp_url: str) -> dict[str, Path]:
         "relay-file": root / "plugins-file.toml",
         "relay-otlp": root / "plugins-otlp.toml",
     }
-    paths["relay-minimal"].write_text(_read_data("plugins-minimal.toml"), encoding="utf-8")
+    paths["relay-minimal"].write_text(_read_config("plugins-minimal.toml"), encoding="utf-8")
 
     atof_dir = root / "atof"
     atof_dir.mkdir()
     paths["relay-file"].write_text(
-        _render_data("plugins-file.toml", {'"__ATOF_OUTPUT_DIRECTORY__"': toml_string(atof_dir)}),
+        _render_config("plugins-file.toml", {'"__ATOF_OUTPUT_DIRECTORY__"': toml_string(atof_dir)}),
         encoding="utf-8",
     )
     paths["relay-otlp"].write_text(
-        _render_data("plugins-otlp.toml", {'"__OTLP_ENDPOINT__"': toml_string(f"{otlp_url}/v1/traces")}),
+        _render_config("plugins-otlp.toml", {'"__OTLP_ENDPOINT__"': toml_string(f"{otlp_url}/v1/traces")}),
         encoding="utf-8",
     )
     return paths
@@ -72,7 +76,7 @@ def write_fake_codex(root: Path) -> Path:
 def write_agent_config(root: Path, name: str, fake_codex: Path) -> Path:
     path = root / f"{name}-config.toml"
     path.write_text(
-        _render_data("agent-config.toml", {'"__CODEX_COMMAND__"': toml_string(fake_codex)}),
+        _render_config("agent-config.toml", {'"__CODEX_COMMAND__"': toml_string(fake_codex)}),
         encoding="utf-8",
     )
     return path

@@ -64,7 +64,7 @@ responses, multiple request sizes, and multiple concurrency levels.
 
 The benchmark resolves settings in this order:
 
-1. Defaults from `data/default.toml`.
+1. Defaults from `config/default.toml`.
 2. Values from the file passed with `--config`.
 3. CLI arguments, which take final precedence.
 

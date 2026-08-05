@@ -17,7 +17,7 @@ final checks. Keep benchmark changes isolated from runtime behavior.
 - Keep the human run guide in
   `scripts/benchmark_coding_agent_latency/README.md` current with CLI and
   configuration changes.
-- Read `scripts/benchmark_coding_agent_latency/data/default.toml` before a run.
+- Read `scripts/benchmark_coding_agent_latency/config/default.toml` before a run.
   A custom TOML file overlays these defaults, then CLI arguments take final
   precedence.
 - Change config parsing and validation in `config.py`.
@@ -26,9 +26,9 @@ final checks. Keep benchmark changes isolated from runtime behavior.
 - Keep temporary Relay and coding-agent process lifecycle in `processes.py`.
 - Add measurement logic to `benchmarks.py`, orchestration to `cli.py`, and
   terminal presentation to `reporting.py`.
-- Put multi-line configs, scripts, and other fixed fixture text under `data/`.
-  Load or render those assets through `fixtures.py`; do not embed them in
-  executable modules.
+- Put TOML assets under `config/` and platform scripts under `data/`. Load or
+  render those assets through `fixtures.py`; do not embed them in executable
+  modules.
 
 ## Run The Fixture
 

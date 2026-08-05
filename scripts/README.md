@@ -35,7 +35,7 @@ gateway startup time. It writes structured results under
 `target/benchmark-results/` by default and is intentionally outside regular CI.
 
 The defaults live in
-`scripts/benchmark_coding_agent_latency/data/default.toml`. Supply a partial
+`scripts/benchmark_coding_agent_latency/config/default.toml`. Supply a partial
 TOML file with `--config`, or override individual values on the command line.
 For example, this runs only a small OpenAI gateway matrix:
 

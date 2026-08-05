@@ -13,7 +13,8 @@ from typing import Any
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 DATA_ROOT = PACKAGE_ROOT / "data"
-DEFAULT_CONFIG_PATH = DATA_ROOT / "default.toml"
+CONFIG_ROOT = PACKAGE_ROOT / "config"
+DEFAULT_CONFIG_PATH = CONFIG_ROOT / "default.toml"
 
 AVAILABLE_TESTS = ("gateway", "hooks", "startup")
 AVAILABLE_PROVIDERS = ("openai", "anthropic")
