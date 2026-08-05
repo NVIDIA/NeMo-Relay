@@ -84,7 +84,7 @@ the same component config directly through the plugin APIs.
 
 Source precedence is deployment controlled:
 
-1. Explicit application or user model pricing.
+1. Explicit application model pricing supplied programmatically.
 2. Enterprise-managed system sources, such as a remotely synced file or a service
    backed by a database.
 
@@ -92,8 +92,9 @@ The built-in `pricing` plugin component accepts inline catalogs or JSON catalog
 files in precedence order. In discovered `plugins.toml` config, system config
 has higher precedence than the selected explicit-or-user config. For the
 `pricing` component, higher-priority `sources` are prepended instead of
-replacing lower-priority sources, so a user override can win for one model while
-enterprise or fleet model pricing remains available for everything else:
+replacing lower-priority sources, so a system source wins for a matching model
+while explicit-or-user sources remain available as fallbacks. Programmatic
+application sources can precede both file layers:
 
 ```toml
 [[components]]
@@ -134,11 +135,14 @@ plus tests. It should not require adding another Rust `match` arm.
 Use the CLI to validate catalog files and manage file-backed model pricing sources:
 
 ```bash
-nemo-relay model-pricing validate /path/to/pricing.json
+nemo-relay model-pricing validate <path/to/pricing.json>
 nemo-relay model-pricing init --user
-nemo-relay model-pricing add-source /path/to/pricing.json --user
+nemo-relay model-pricing add-source <path/to/pricing.json> --user
 nemo-relay model-pricing resolve gpt-4o-mini --provider openai --prompt-tokens 1000 --completion-tokens 500
 ```
+
+Replace `<path/to/pricing.json>` with the path to your pricing catalog before
+running the validation or source-management commands.
 
 `model-pricing init` creates or enables the `pricing` plugin component in the
 selected `plugins.toml`. The initialized component has an empty `sources` list.

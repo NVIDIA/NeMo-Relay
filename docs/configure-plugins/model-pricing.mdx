@@ -68,13 +68,14 @@ Run the following commands to validate a catalog and add it to user
 configuration:
 
 ```bash
-nemo-relay model-pricing validate /path/to/pricing.json
+nemo-relay model-pricing validate <path/to/pricing.json>
 nemo-relay model-pricing init --user
-nemo-relay model-pricing add-source /path/to/pricing.json --user
+nemo-relay model-pricing add-source <path/to/pricing.json> --user
 ```
 
-Use `--user` for the user configuration file or `--global` for system
-configuration at `/etc/nemo-relay/plugins.toml` on Unix or
+Replace `<path/to/pricing.json>` with the path to your pricing catalog before
+running either command. Use `--user` for the user configuration file or
+`--global` for system configuration at `/etc/nemo-relay/plugins.toml` on Unix or
 `%ProgramData%\nemo-relay\plugins.toml` on Windows. `add-source` places a new
 source ahead of existing sources by default. Use `--append` to keep it as a
 fallback.

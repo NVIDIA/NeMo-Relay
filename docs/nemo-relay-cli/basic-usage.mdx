@@ -174,7 +174,7 @@ Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with the resume command printed by Relay.
 For an explicit `--config path/to/config.toml` flow, the equivalent command is
-`nemo-relay --plugin-config-path path/to/plugins.toml plugins edit`. Otherwise,
+`nemo-relay --config path/to/config.toml plugins edit`. Otherwise,
 use `nemo-relay plugins edit` for user configuration.
 
 ### Edit Gateway Configuration
@@ -351,12 +351,14 @@ Create a Relay model pricing catalog JSON file:
 Validate and add the file-backed source:
 
 ```bash
-nemo-relay model-pricing validate /path/to/pricing.json
+nemo-relay model-pricing validate <path/to/pricing.json>
 nemo-relay model-pricing init --user
-nemo-relay model-pricing add-source /path/to/pricing.json --user
+nemo-relay model-pricing add-source <path/to/pricing.json> --user
 ```
 
-Use `--global` for `/etc/nemo-relay/plugins.toml` on Unix or
+Replace `<path/to/pricing.json>` with the path to your pricing catalog before
+running either command. Use `--global` for `/etc/nemo-relay/plugins.toml` on
+Unix or
 `%ProgramData%\nemo-relay\plugins.toml` on Windows. `model-pricing add-source`
 prepends the source by default, so the new file becomes the highest-priority
 source for that scope. Use `--append` to add it as a lower-priority fallback.
@@ -372,7 +374,7 @@ nemo-relay model-pricing resolve gpt-4o-mini \
 
 `model-pricing resolve` prints the source that won, the matched provider/model,
 and an estimated total when token counts are supplied. Use it to debug
-overlapping fleet, project, and user model pricing files.
+overlapping system, explicit, and user model pricing sources.
 
 Run doctor to validate the active model pricing sources alongside exporter
 checks:

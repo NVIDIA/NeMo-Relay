@@ -171,8 +171,10 @@ process-tree cleanup guarantees.
 
 Persistent plugin mode loads system and user Relay configuration only. It does
 not load a project's `.nemo-relay` files. The sidecar starts in the user Relay
-configuration directory, so relative exporter paths are deterministic. Use a
-transparent `nemo-relay run` when project-specific configuration is required.
+configuration directory, so relative exporter paths are deterministic. When
+configuration belongs with a repository, use `nemo-relay --config
+path/to/config.toml run`; Relay selects its sibling `plugins.toml`
+automatically.
 
 The generated MCP entry forwards variable names, never values, for provider
 credentials, Relay runtime settings, common OpenTelemetry, AWS, proxy, and

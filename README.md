@@ -111,8 +111,9 @@ then configure these sections:
 5. Press `s` to save.
 
 > [!NOTE]
-> Repository-local `.nemo-relay/plugins.toml` files are ignored. Pass an
-> explicit `--plugin-config-path` when a run must use a file from another location.
+> Repository-local `.nemo-relay/plugins.toml` files are ignored. To use a
+> configuration stored elsewhere, pass `--config path/to/config.toml`; Relay
+> also selects the sibling `path/to/plugins.toml`.
 
 #### 3. Run a Coding Agent Through Relay
 
