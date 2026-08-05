@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.benchmark_coding_agent_latency.config import DEFAULT_CONFIG_PATH, load_config, parse_args
-from scripts.benchmark_coding_agent_latency.fixtures import write_agent_config, write_fake_codex, write_plugin_configs
+from ..config import DEFAULT_CONFIG_PATH, load_config, parse_args
+from ..fixtures import write_agent_config, write_fake_codex, write_plugin_configs
 
 
 class BenchmarkConfigTests(unittest.TestCase):

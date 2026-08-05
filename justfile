@@ -1120,7 +1120,7 @@ benchmark-coding-agent-latency *benchmark_args:
     result_dir="${result_dir:-target/benchmark-results}"
     benchmark_args=({{ benchmark_args }})
     cargo build --release -p nemo-relay-cli
-    uv run python scripts/benchmark-coding-agent-latency.py \
+    uv run python -m scripts.benchmark_coding_agent_latency \
         --relay-bin target/release/nemo-relay \
         --output "$result_dir/coding-agent-latency.json" \
         "${benchmark_args[@]}"

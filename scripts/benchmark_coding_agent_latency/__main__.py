@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sys
 
-from benchmark_coding_agent_latency.cli import main
+from .cli import main
 
 if __name__ == "__main__":
     try:

@@ -230,7 +230,10 @@ def _arg_nonnegative_int(value: str) -> int:
 
 def parse_args(argv: list[str] | None = None) -> CliOptions:
     """Parse CLI options, applying them after values from the config file."""
-    parser = argparse.ArgumentParser(description="Measure local coding-agent gateway latency.")
+    parser = argparse.ArgumentParser(
+        prog="python -m scripts.benchmark_coding_agent_latency",
+        description="Measure local coding-agent gateway latency.",
+    )
     parser.add_argument("--relay-bin", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="TOML overrides for the benchmark")

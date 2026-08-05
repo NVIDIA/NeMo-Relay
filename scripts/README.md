@@ -48,9 +48,11 @@ just benchmark-coding-agent-latency \
   --samples 10
 ```
 
-Run `uv run python scripts/benchmark-coding-agent-latency.py --help` to list
+Run `uv run python -m scripts.benchmark_coding_agent_latency --help` to list
 all overrides. The three selectable suites are `gateway`, `hooks`, and
-`startup`.
+`startup`. See
+[`benchmark_coding_agent_latency/README.md`](benchmark_coding_agent_latency/README.md)
+for the complete human-facing run guide.
 
 ## Internal Layout
 

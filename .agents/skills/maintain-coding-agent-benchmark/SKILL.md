@@ -12,7 +12,11 @@ final checks. Keep benchmark changes isolated from runtime behavior.
 
 ## Understand The Layout
 
-- Use `scripts/benchmark-coding-agent-latency.py` as the stable entry point.
+- Use `python -m scripts.benchmark_coding_agent_latency` as the direct entry
+  point and `just benchmark-coding-agent-latency` as the normal wrapper.
+- Keep the human run guide in
+  `scripts/benchmark_coding_agent_latency/README.md` current with CLI and
+  configuration changes.
 - Read `scripts/benchmark_coding_agent_latency/data/default.toml` before a run.
   A custom TOML file overlays these defaults, then CLI arguments take final
   precedence.
@@ -31,7 +35,7 @@ final checks. Keep benchmark changes isolated from runtime behavior.
 List every config override without building Relay:
 
 ```bash
-uv run python scripts/benchmark-coding-agent-latency.py --help
+uv run python -m scripts.benchmark_coding_agent_latency --help
 ```
 
 Run a small functional check before a statistically meaningful run:
@@ -95,7 +99,7 @@ To add a test suite:
 3. Dispatch it conditionally in `cli.py` and report it conditionally in
    `reporting.py`.
 4. Add config and selection tests in
-   `scripts/tests/test_benchmark_coding_agent_latency.py`.
+   `scripts/benchmark_coding_agent_latency/tests/test_config.py`.
 5. Update `scripts/README.md` and `docs/reference/performance.mdx`.
 
 To add a provider, mode, or matrix axis, update config validation, the protocol
@@ -107,13 +111,10 @@ together. Add static fixture files when the change introduces fixed text.
 Format and test the focused surface first:
 
 ```bash
-uv run ruff format scripts/benchmark-coding-agent-latency.py \
-  scripts/benchmark_coding_agent_latency \
-  scripts/tests/test_benchmark_coding_agent_latency.py
-uv run ruff check scripts/benchmark-coding-agent-latency.py \
-  scripts/benchmark_coding_agent_latency \
-  scripts/tests/test_benchmark_coding_agent_latency.py
-uv run python -m unittest scripts.tests.test_benchmark_coding_agent_latency
+uv run ruff format scripts/benchmark_coding_agent_latency
+uv run ruff check scripts/benchmark_coding_agent_latency
+uv run python -m unittest \
+  scripts.benchmark_coding_agent_latency.tests.test_config
 ```
 
 Run the small functional command above after lifecycle, protocol, server,
