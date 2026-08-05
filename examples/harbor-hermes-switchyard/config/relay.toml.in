@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version = 1
+
+[[components]]
+kind = "pricing"
+enabled = true
+
+[[components.config.sources]]
+type = "inline"
+
+[components.config.sources.catalog]
+version = 1
+
+[[components.config.sources.catalog.entries]]
+provider = "openai"
+model_id = "@TARGET_MODEL@"
+currency = "USD"
+unit = "per_token"
+pricing_as_of = "2026-08-05"
+pricing_source = "harbor-hermes-switchyard-example"
+
+[components.config.sources.catalog.entries.rates]
+input_per_million = 0.0
+output_per_million = 0.0
+cache_read_per_million = 0.0
+
+[components.config.sources.catalog.entries.prompt_cache]
+read_accounting = "included_in_prompt_tokens"
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 3
+
+[components.config.atof]
+enabled = true
+
+[[components.config.atof.sinks]]
+type = "file"
+mode = "append"
+output_directory = "/logs/agent/direct-hermes/relay"
+filename = "trajectory.atof.jsonl"
+
+[components.config.atif]
+enabled = true
+agent_name = "Hermes"
+agent_version = "@HERMES_COMMIT@"
+model_name = "@TARGET_MODEL@"
+output_directory = "/logs/agent/direct-hermes/relay/atif"
+filename_template = "trajectory-{session_id}.atif.json"
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "openinference"
+transport = "http_binary"
+endpoint = "@OPENINFERENCE_ENDPOINT@"
+service_name = "harbor-hermes-switchyard"
+service_namespace = "nemo-relay-examples"
+instrumentation_scope = "harbor-hermes-switchyard"
+timeout_millis = 5000
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"openinference.project.name" = "@PHOENIX_PROJECT@"
+"evaluation.cohort" = "@EVAL_COHORT@"
+
+[[plugins.dynamic]]
+manifest = "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml"
+
+[plugins.dynamic.config]
+version = 2
+priority = 0
+max_retries = 1
+
+[plugins.dynamic.config.algorithm]
+kind = "random"
+seed = 42
+
+[plugins.dynamic.config.default_targets]
+openai_chat = "primary"
+
+[plugins.dynamic.config.targets.primary]
+model = "@TARGET_MODEL@"
+protocol = "openai_chat"
+endpoint = "/v1/chat/completions"
+base_url = "@UPSTREAM_BASE_URL@"
+weight = 1
+
+[plugins.dynamic.config.targets.primary.header_env]
+authorization = "@UPSTREAM_AUTH_ENV@"
