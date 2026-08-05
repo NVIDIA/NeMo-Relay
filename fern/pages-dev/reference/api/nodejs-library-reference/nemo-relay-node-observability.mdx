@@ -111,6 +111,9 @@ export interface OpenTelemetryEndpointConfig {
   service_version?: string;
   instrumentation_scope?: string;
   timeout_millis?: number;
+  max_queue_size?: number;
+  max_export_batch_size?: number;
+  scheduled_delay_millis?: number;
 }
 ```
 
@@ -184,9 +187,7 @@ export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfi
 Create multi-endpoint OpenTelemetry settings.
 
 ```ts
-export declare function openTelemetryConfig(
-  config?: OpenTelemetrySectionConfig,
-): OpenTelemetrySectionConfig;
+export declare function openTelemetryConfig(config?: OpenTelemetrySectionConfig): OpenTelemetrySectionConfig;
 ```
 
 ### `ComponentSpec` function

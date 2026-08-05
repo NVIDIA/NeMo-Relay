@@ -109,9 +109,10 @@ for destination paths and explicit-file alternatives.
   endpoint queue drops completed spans without applying backpressure and can
   leave an incomplete trace, including a missing root span. The SDK warns on
   the first drop and reports the exact dropped-span count during graceful
-  shutdown. Increase `OTEL_BSP_MAX_QUEUE_SIZE` before plugin activation to
-  reduce the risk for a known burst size; endpoint-specific batch sizing is not
-  available, and a larger finite queue does not guarantee lossless telemetry.
+  shutdown. Configure `max_queue_size`, `max_export_batch_size`, and
+  `scheduled_delay_millis` independently on each endpoint, or use the standard
+  `OTEL_BSP_*` environment variables as process-wide fallbacks. A larger finite
+  queue does not guarantee lossless telemetry.
 - Operational logging configuration and sink lifecycle are available, but broad
   operational log coverage across commands is not yet available.
 
