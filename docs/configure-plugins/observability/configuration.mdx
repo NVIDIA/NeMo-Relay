@@ -104,7 +104,7 @@ for queue sizing and drop-warning behavior.
 Top-level component `config` lists concatenate across configuration layers,
 with higher-precedence entries first. The observability destination lists
 `atof.sinks`, `opentelemetry.endpoints`, and `atif.storage` follow the same
-rule, so explicit-or-user, project, system, and programmatic layers can
+rule, so explicit-or-user, system, and programmatic layers can
 contribute destinations. Arbitrary lists nested inside structured values
 retain replacement semantics. List entries are not merged item by item.
 

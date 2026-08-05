@@ -12,8 +12,7 @@ use toml_edit::DocumentMut;
 
 #[cfg(test)]
 use self::model::{
-    ConfigScope, build_config, plugins_edit_command_for_scope, plugins_resume_command,
-    preview_paths, save_config,
+    build_config, plugins_edit_command, plugins_resume_command, preview_paths, save_config,
 };
 use super::model;
 use crate::agents::CodingAgent;
@@ -21,7 +20,7 @@ use crate::error::CliError;
 
 #[cfg(test)]
 use self::model::{
-    Defaults, SetupAnswers, global_config_dir, read_agents_from_doc, read_existing_defaults, reset,
+    Defaults, SetupAnswers, read_agents_from_doc, read_existing_defaults, reset, user_config_dir,
     write_or_merge,
 };
 

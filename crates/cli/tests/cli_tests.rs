@@ -313,7 +313,7 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
 }
 
 #[test]
-fn cli_layered_logging_path_aliases_initialize_one_sink() {
+fn cli_explicit_logging_ignores_project_path_alias() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workspace");
     let project_config = cwd.join(".nemo-relay/config.toml");
@@ -1946,7 +1946,7 @@ fn cli_doctor_json_emits_versioned_report() {
 
     assert!(output.status.success());
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["schema_version"], 2);
     assert!(parsed["environment"].is_object());
     assert!(parsed["configuration"].is_object());
     assert!(parsed["agents"].is_array());
@@ -1989,7 +1989,7 @@ fn cli_plugins_validate_rejects_malformed_python_entrypoints_by_path_and_id() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     let plugin_id = "acme.invalid-python-entrypoint";
     std::fs::create_dir_all(&config_dir).unwrap();
     write_python_dynamic_plugin_manifest(&plugin_dir, plugin_id);
@@ -2097,7 +2097,7 @@ fn cli_plugins_list_all_json_includes_tombstoned_records() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2304,7 +2304,7 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-blocked-list");
@@ -2313,7 +2313,7 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2379,7 +2379,7 @@ fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-trust-list");
@@ -2388,7 +2388,7 @@ fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2440,7 +2440,7 @@ fn cli_plugins_validate_json_reports_blocked_policy_for_installed_id_target() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-blocked-id");
@@ -2449,7 +2449,7 @@ fn cli_plugins_validate_json_reports_blocked_policy_for_installed_id_target() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2516,7 +2516,7 @@ fn cli_plugins_inspect_json_emits_installed_plugin_details() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2546,7 +2546,7 @@ fn cli_plugins_inspect_json_emits_installed_plugin_details() {
     assert_eq!(parsed["target"], "acme.inspect-json");
     assert_eq!(parsed["data"]["id"], "acme.inspect-json");
     assert_eq!(parsed["data"]["kind"], "worker");
-    assert_eq!(parsed["data"]["scope"], "project");
+    assert_eq!(parsed["data"]["scope"], "user");
     assert_eq!(parsed["data"]["policy_state"], "valid");
     assert_eq!(parsed["data"]["startup_class"], "optional");
     assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
@@ -2559,7 +2559,7 @@ fn cli_plugins_inspect_json_reports_blocked_policy_for_installed_plugin() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.inspect-blocked");
@@ -2568,7 +2568,7 @@ fn cli_plugins_inspect_json_reports_blocked_policy_for_installed_plugin() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2640,7 +2640,7 @@ fn cli_plugins_mutation_commands_emit_terse_confirmation_output() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2709,7 +2709,7 @@ fn cli_plugins_mutation_commands_emit_terse_confirmation_output() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2736,7 +2736,7 @@ fn cli_plugins_enable_tombstoned_plugin_returns_refused_exit_code() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2854,19 +2854,19 @@ fn cli_model_pricing_validate_rejects_invalid_catalog() {
 }
 
 #[test]
-fn cli_model_pricing_init_creates_project_pricing_component() {
+fn cli_model_pricing_init_creates_user_pricing_component() {
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
+    let xdg = temp.path().join("xdg");
 
     let output = Command::new(gateway_bin())
-        .current_dir(&project)
-        .args(["model-pricing", "init", "--project"])
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["model-pricing", "init", "--user"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
-    let path = project.join(".nemo-relay/plugins.toml");
+    let path = xdg.join("nemo-relay/plugins.toml");
     let rendered = std::fs::read_to_string(path).unwrap();
     assert!(rendered.contains("kind = \"pricing\""));
     assert!(!rendered.contains("include_bundled"));
@@ -3225,8 +3225,9 @@ fn cli_bare_invocation_runs_doctor_when_config_exists() {
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
-    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream]\n").unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(xdg.join("nemo-relay")).unwrap();
+    std::fs::write(xdg.join("nemo-relay/config.toml"), "[upstream]\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -3252,9 +3253,10 @@ fn cli_bare_invocation_reports_invalid_config_resolution() {
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
-    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream]\n").unwrap();
-    std::fs::write(cwd.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(xdg.join("nemo-relay")).unwrap();
+    std::fs::write(xdg.join("nemo-relay/config.toml"), "[upstream]\n").unwrap();
+    std::fs::write(xdg.join("nemo-relay/plugins.toml"), "components = [\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -3453,7 +3455,7 @@ fn cli_doctor_accepts_a_valid_explicit_logging_config() {
 }
 
 #[test]
-fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
+fn cli_doctor_reports_unsupported_ancestor_project_config() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("workspace");
     let nested = project.join("services/relay");
@@ -3475,8 +3477,19 @@ fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
         .unwrap();
 
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let workspace = &report["configuration"]["workspace"];
-    let reported_path = PathBuf::from(workspace["path"].as_str().unwrap());
+    assert!(report["configuration"].get("workspace").is_none());
+    let unsupported = report["configuration"]["unsupported_project_files"]
+        .as_array()
+        .unwrap();
+    let warning = unsupported
+        .iter()
+        .find(|entry| {
+            entry["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("config.toml"))
+        })
+        .unwrap();
+    let reported_path = PathBuf::from(warning["path"].as_str().unwrap());
     assert!(
         reported_path.exists(),
         "doctor reported undiscovered workspace path {}",
@@ -3486,8 +3499,8 @@ fn cli_doctor_reports_the_nearest_ancestor_workspace_config() {
         reported_path.canonicalize().unwrap(),
         project_config.canonicalize().unwrap()
     );
-    assert_eq!(workspace["status"], "pass");
-    assert_eq!(workspace["active"], true);
+    assert_eq!(warning["status"], "warn");
+    assert_eq!(warning["active"], false);
 }
 
 #[test]
@@ -3495,11 +3508,11 @@ fn cli_doctor_json_reports_effective_upstream_auth_presence() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("workspace");
     let nested = project.join("nested");
-    let project_config = project.join(".nemo-relay/config.toml");
-    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    let user_config = temp.path().join("xdg/nemo-relay/config.toml");
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
-        &project_config,
+        &user_config,
         r#"
 [upstream]
 openai_base_url = "http://project-openai"
@@ -3565,7 +3578,7 @@ fn cli_doctor_json_reports_unknown_upstream_auth_when_resolution_fails() {
 }
 
 #[test]
-fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
+fn cli_doctor_explicit_config_warns_about_ignored_malformed_project_config() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     let cwd = temp.path().join("workdir");
@@ -3585,7 +3598,7 @@ fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         report["configuration"]["explicit"]["path"],
@@ -3593,18 +3606,24 @@ fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
     );
     assert_eq!(report["configuration"]["explicit"]["status"], "pass");
     assert_eq!(report["configuration"]["explicit"]["active"], true);
-    assert_eq!(
-        PathBuf::from(
-            report["configuration"]["workspace"]["path"]
+    let warning = report["configuration"]["unsupported_project_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["path"]
                 .as_str()
-                .unwrap()
-        )
-        .canonicalize()
-        .unwrap(),
+                .is_some_and(|path| path.ends_with("config.toml"))
+        })
+        .unwrap();
+    assert_eq!(
+        PathBuf::from(warning["path"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
         workspace_config.canonicalize().unwrap()
     );
-    assert_eq!(report["configuration"]["workspace"]["status"], "fail");
-    assert_eq!(report["configuration"]["workspace"]["active"], false);
+    assert_eq!(warning["status"], "warn");
+    assert_eq!(warning["active"], false);
     assert_eq!(report["configuration"]["global"]["status"], "info");
     assert_eq!(report["configuration"]["global"]["active"], false);
     assert!(
@@ -3621,12 +3640,12 @@ fn cli_doctor_explicit_config_reports_invalid_layered_workspace_config() {
         .args(["--config", config.to_str().unwrap(), "doctor"])
         .output()
         .unwrap();
-    assert!(!human_output.status.success());
+    assert!(human_output.status.success());
     let stdout = String::from_utf8_lossy(&human_output.stdout);
     assert!(stdout.contains("Explicit"));
     assert!(stdout.contains(config.to_str().unwrap()));
-    assert!(stdout.contains("Workspace"));
-    assert!(stdout.contains("invalid TOML"));
+    assert!(stdout.contains("Unsupported"));
+    assert!(stdout.contains("ignored"));
     assert!(stdout.contains("replaced by explicit --config"));
 }
 
@@ -3674,28 +3693,17 @@ fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
         "version = 1\ncomponents = []\n",
     )
     .unwrap();
-    let invalid_project_plugins = Command::new(gateway_bin())
+    let ignored_project_plugins = Command::new(gateway_bin())
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", &xdg)
         .env("HOME", temp.path())
         .args(["--config", config.to_str().unwrap(), "doctor"])
         .output()
         .unwrap();
-    assert!(!invalid_project_plugins.status.success());
-    let stdout = String::from_utf8_lossy(&invalid_project_plugins.stdout);
-    assert!(stdout.contains("invalid plugin TOML"));
-    assert!(
-        [
-            project_plugins.display().to_string(),
-            project_plugins
-                .canonicalize()
-                .unwrap()
-                .display()
-                .to_string(),
-        ]
-        .iter()
-        .any(|path| stdout.contains(path))
-    );
+    assert!(ignored_project_plugins.status.success());
+    let stdout = String::from_utf8_lossy(&ignored_project_plugins.stdout);
+    assert!(stdout.contains("Unsupported"));
+    assert!(stdout.contains("ignored"));
 
     std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
     let valid_config = Command::new(gateway_bin())
@@ -3710,30 +3718,29 @@ fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
     let plugin_configs = report["configuration"]["plugin_configs"]
         .as_array()
         .unwrap();
-    for path in [config_dir.join("plugins.toml"), project_plugins] {
-        let expected = path.canonicalize().unwrap();
-        let layer = plugin_configs
-            .iter()
-            .find(|config| {
-                config["path"]
-                    .as_str()
-                    .map(PathBuf::from)
-                    .and_then(|reported| reported.canonicalize().ok())
-                    .is_some_and(|reported| reported == expected)
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "doctor should report layered plugin source {}",
-                    path.display()
-                )
-            });
-        assert_ne!(
-            layer["status"],
-            "fail",
-            "doctor should clear invalid diagnostics for {}",
-            path.display()
-        );
-    }
+    let path = config_dir.join("plugins.toml");
+    let expected = path.canonicalize().unwrap();
+    let layer = plugin_configs
+        .iter()
+        .find(|config| {
+            config["path"]
+                .as_str()
+                .map(PathBuf::from)
+                .and_then(|reported| reported.canonicalize().ok())
+                .is_some_and(|reported| reported == expected)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "doctor should report layered plugin source {}",
+                path.display()
+            )
+        });
+    assert_ne!(
+        layer["status"],
+        "fail",
+        "doctor should clear invalid diagnostics for {}",
+        path.display()
+    );
 }
 
 #[test]
@@ -3833,7 +3840,7 @@ fn cli_run_dry_run_rejects_missing_explicit_config() {
 }
 
 #[test]
-fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
+fn cli_run_dry_run_ignores_project_and_uses_user_and_env_config() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let nested = project.join("nested");
@@ -3917,10 +3924,11 @@ fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let nested = project.join("nested");
-    std::fs::create_dir_all(project.join(".nemo-relay")).unwrap();
+    let user_config = temp.path().join("xdg/nemo-relay/config.toml");
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
-        project.join(".nemo-relay/config.toml"),
+        user_config,
         r#"
 [upstream]
 openai_base_url = "http://project-openai"

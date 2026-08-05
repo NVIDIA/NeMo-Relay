@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::configuration::{
-    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
-};
+use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::plugins::ConfigurationScope;
 use nemo_relay::config_editor::{
     EditorConfig, EditorListItemSpec, EditorSchema, EditorTaggedUnionSpec, EditorVariantSpec,
@@ -158,8 +156,8 @@ fn target_scope_defaults_to_user_and_rejects_conflicts() {
         TargetScope::User
     );
     assert_eq!(
-        target_scope(&ConfigurationScope::Project).unwrap(),
-        TargetScope::Project
+        target_scope(&ConfigurationScope::User).unwrap(),
+        TargetScope::User
     );
     assert_eq!(
         target_scope(&ConfigurationScope::Global).unwrap(),
@@ -3076,14 +3074,7 @@ fn string_map_add_rejects_an_existing_trimmed_key() {
 }
 
 #[test]
-fn target_path_resolves_project_and_global_without_user_env() {
-    let _cwd = crate::test_support::CwdTestScope::locked();
-    let cwd = std::env::current_dir().unwrap();
-
-    assert_eq!(
-        target_path(TargetScope::Project).unwrap(),
-        project_plugin_config_path(&cwd)
-    );
+fn target_path_resolves_global_scope() {
     assert_eq!(
         target_path(TargetScope::Global).unwrap(),
         global_plugin_config_path()

@@ -2642,21 +2642,14 @@ fn test_plugin_config_loading_reports_read_parse_and_version_type_errors() {
 }
 
 #[test]
-fn test_default_plugin_config_paths_order_user_project_system() {
+fn test_default_plugin_config_paths_order_user_system() {
     let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join("project");
-    let child = project.join("nested");
     let user = dir.path().join("user");
-    let project_plugins = project.join(".nemo-relay/plugins.toml");
-    std::fs::create_dir_all(&child).unwrap();
-    std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
-    std::fs::write(&project_plugins, "version = 1\n").unwrap();
 
     assert_eq!(
-        default_plugin_config_paths(Some(&child), Some(user.clone())),
+        default_plugin_config_paths(Some(user.clone())),
         vec![
             user.join("plugins.toml"),
-            project_plugins,
             PathBuf::from("/etc/nemo-relay/plugins.toml"),
         ]
     );

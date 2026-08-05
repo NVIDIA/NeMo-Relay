@@ -52,9 +52,10 @@ pub(crate) struct EnvironmentInfo {
 pub(crate) struct ConfigurationInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explicit: Option<ConfigLayer>,
-    pub workspace: ConfigLayer,
     pub global: ConfigLayer,
     pub system: ConfigLayer,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unsupported_project_files: Vec<ConfigLayer>,
     pub upstream_auth: UpstreamAuthInfo,
     pub plugin_configs: Vec<ConfigLayer>,
     pub plugin_resolution: Check,

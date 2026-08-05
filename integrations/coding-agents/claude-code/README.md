@@ -77,7 +77,7 @@ nemo-relay run \
 
 ## Shared Config
 
-Use `.nemo-relay/config.toml` for project defaults or
+Use `$XDG_CONFIG_HOME/nemo-relay/config.toml` or
 `~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
@@ -85,8 +85,8 @@ Use `.nemo-relay/config.toml` for project defaults or
 command = "claude"
 ```
 
-Configure observability with `nemo-relay plugins edit --project` or
-`.nemo-relay/plugins.toml`:
+Configure observability with `nemo-relay plugins edit` or the XDG user
+`plugins.toml`:
 
 ```toml
 version = 1

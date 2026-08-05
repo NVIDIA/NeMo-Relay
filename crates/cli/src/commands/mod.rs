@@ -73,16 +73,13 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         });
     }
 
-    let user_only = matches!(cli.command.as_ref(), Some(Command::Mcp));
-    let explicit_config = match (user_only, cli.command.as_ref()) {
-        (true, _) => None,
-        (false, Some(Command::Run(command))) => {
-            command.config.as_deref().or(cli.server.config.as_deref())
-        }
-        (false, _) => cli.server.config.as_deref(),
+    let explicit_config = match cli.command.as_ref() {
+        Some(Command::Mcp) => None,
+        Some(Command::Run(command)) => command.config.as_deref().or(cli.server.config.as_deref()),
+        _ => cli.server.config.as_deref(),
     };
     let mut fallback_error = None;
-    let config = match cli.logging.resolve(explicit_config, user_only) {
+    let config = match cli.logging.resolve(explicit_config) {
         Ok(config) => config,
         Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
             fallback_error = Some(error);

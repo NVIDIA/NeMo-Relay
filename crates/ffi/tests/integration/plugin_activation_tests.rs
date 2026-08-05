@@ -85,12 +85,15 @@ fn run_discovered_config_activation_test() {
     *DISCOVERED_STATIC_CONFIG.lock().unwrap() = None;
 
     let environment = TempDir::new().expect("plugin discovery environment");
-    let project_config_dir = environment.path().join(".nemo-relay");
     let xdg_config_home = environment.path().join("xdg");
-    std::fs::create_dir_all(&project_config_dir).expect("project config directory");
-    std::fs::create_dir_all(&xdg_config_home).expect("isolated user config directory");
-    let plugins_toml = project_config_dir.join("plugins.toml");
-    std::fs::write(&plugins_toml, "invalid = [").expect("write invalid plugin config");
+    let user_config_dir = xdg_config_home.join("nemo-relay");
+    let project_config_dir = environment.path().join(".nemo-relay");
+    std::fs::create_dir_all(&user_config_dir).expect("isolated user config directory");
+    std::fs::create_dir_all(&project_config_dir).expect("legacy project config directory");
+    let plugins_toml = user_config_dir.join("plugins.toml");
+    std::fs::write(project_config_dir.join("plugins.toml"), "invalid = [")
+        .expect("write ignored project plugin config");
+    std::fs::write(&plugins_toml, "invalid = [").expect("write invalid user plugin config");
     let _environment = PluginDiscoveryTestEnv::enter(environment.path(), &xdg_config_home);
 
     // Empty specifications fail before discovery or ownership. The malformed
@@ -110,7 +113,7 @@ kind = {DISCOVERED_STATIC_PLUGIN_KIND:?}
 enabled = true
 
 [components.config]
-source = "project-file"
+source = "user-file"
 "#
         ),
     )
@@ -202,7 +205,7 @@ fn write_and_assert_discovered_activation(report: &Json, plugins_toml: &Path) {
     assert_eq!(DISCOVERED_STATIC_REGISTRATIONS.load(Ordering::SeqCst), 1);
     assert_eq!(
         DISCOVERED_STATIC_CONFIG.lock().unwrap().as_ref(),
-        Some(&json!({"source": "project-file"}))
+        Some(&json!({"source": "user-file"}))
     );
     assert!(plugin_kinds().iter().any(|kind| kind == "fixture_native"));
 

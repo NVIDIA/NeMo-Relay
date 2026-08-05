@@ -56,7 +56,6 @@ pub(crate) struct GatewaySpec {
     bind: SocketAddr,
     launch_args: Vec<OsString>,
     bootstrap_fingerprint: Option<String>,
-    user_config_scope: bool,
 }
 
 impl GatewaySpec {
@@ -65,7 +64,6 @@ impl GatewaySpec {
             bind,
             launch_args: Vec::new(),
             bootstrap_fingerprint: None,
-            user_config_scope: false,
         }
     }
 
@@ -76,11 +74,6 @@ impl GatewaySpec {
 
     pub(crate) fn with_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
         self.bootstrap_fingerprint = Some(fingerprint.into());
-        self
-    }
-
-    pub(crate) fn with_user_config_scope(mut self) -> Self {
-        self.user_config_scope = true;
         self
     }
 
@@ -335,18 +328,6 @@ fn start_gateway(spec: &GatewaySpec, state: &Path) -> Result<GatewayEndpoint, St
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    if spec.user_config_scope {
-        command.env("NEMO_RELAY_CONFIG_SCOPE", "user");
-        if let Some(config_dir) = crate::configuration::user_config_dir() {
-            fs::create_dir_all(&config_dir).map_err(|error| {
-                format!(
-                    "failed to create gateway working directory {}: {error}",
-                    config_dir.display()
-                )
-            })?;
-            command.current_dir(config_dir);
-        }
-    }
     detached::configure_detached(&mut command);
     let child = detached::spawn_detached(&mut command)
         .map_err(|error| format!("failed to spawn nemo-relay gateway: {error}"))?;
@@ -549,8 +530,7 @@ pub(crate) fn resolve_plugin_gateway(
     Ok(PluginGatewaySpec {
         gateway: GatewaySpec::new(bind)
             .with_launch_args(launch_args)
-            .with_fingerprint(bootstrap_fingerprint)
-            .with_user_config_scope(),
+            .with_fingerprint(bootstrap_fingerprint),
         max_hook_payload_bytes,
     })
 }

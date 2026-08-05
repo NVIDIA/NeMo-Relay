@@ -586,7 +586,7 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	}
 	library := goNativePluginFixture(t)
 	manifest := writeGoNativePluginManifest(t, library)
-	pluginsTOML := configureNativePluginProject(t)
+	pluginsTOML := configureNativePluginUserConfig(t)
 	staticRegistrations, staticCallbacks := registerStaticFixturePlugin(t)
 
 	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
@@ -621,14 +621,15 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	assertMissingNativePluginFails(t)
 }
 
-func configureNativePluginProject(t *testing.T) string {
+func configureNativePluginUserConfig(t *testing.T) string {
 	t.Helper()
 	projectDir := t.TempDir()
-	projectConfigDir := filepath.Join(projectDir, ".nemo-relay")
-	if err := os.MkdirAll(projectConfigDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(project config) error = %v", err)
+	xdgConfigHome := filepath.Join(projectDir, "xdg")
+	userConfigDir := filepath.Join(xdgConfigHome, "nemo-relay")
+	if err := os.MkdirAll(userConfigDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(user config) error = %v", err)
 	}
-	pluginsTOML := filepath.Join(projectConfigDir, "plugins.toml")
+	pluginsTOML := filepath.Join(userConfigDir, "plugins.toml")
 	const staticKind = "go.fixture.static_base"
 	fileConfig := fmt.Sprintf(`version = 1
 
@@ -637,7 +638,7 @@ kind = %q
 enabled = true
 
 [components.config]
-source = "project-file"
+source = "user-file"
 `, staticKind)
 	if err := os.WriteFile(pluginsTOML, []byte(fileConfig), 0o600); err != nil {
 		t.Fatalf("WriteFile(plugins.toml) error = %v", err)
@@ -654,7 +655,7 @@ source = "project-file"
 			t.Errorf("restore working directory error = %v", err)
 		}
 	})
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(projectDir, "xdg"))
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 	return pluginsTOML
 }
 
@@ -665,8 +666,8 @@ func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
 	staticCallbacks := &atomic.Int32{}
 	if err := RegisterPlugin(staticKind, PluginFuncs{
 		RegisterFunc: func(config map[string]any, ctx *PluginContext) error {
-			if config["source"] != "project-file" {
-				return fmt.Errorf("static plugin config = %#v, want project-file source", config)
+			if config["source"] != "user-file" {
+				return fmt.Errorf("static plugin config = %#v, want user-file source", config)
 			}
 			staticRegistrations.Add(1)
 			return ctx.RegisterToolRequestIntercept(
