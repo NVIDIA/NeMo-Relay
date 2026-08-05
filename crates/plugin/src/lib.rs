@@ -1115,6 +1115,352 @@ pub type Result<T> = std::result::Result<T, String>;
 /// Synchronous JSON chunk stream used by native LLM stream intercept helpers.
 pub type LlmJsonStream = Box<dyn Iterator<Item = Result<Json>> + Send>;
 
+/// Result of a nonblocking write to an asynchronous native output stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncStreamWrite {
+    /// Relay accepted the value.
+    Accepted,
+    /// Relay's bounded output queue is full and the value may be retried.
+    Backpressured,
+    /// The output stream has already closed or been cancelled.
+    Closed,
+}
+
+/// Item delivered by an asynchronously invoked downstream LLM stream.
+#[derive(Debug)]
+pub enum AsyncLlmStreamEvent {
+    /// One downstream provider event.
+    Chunk(Json),
+    /// The downstream stream failed or was cancelled.
+    Error(String),
+    /// The downstream stream completed normally.
+    Done,
+}
+
+/// Controls whether Relay should continue a downstream LLM stream invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncStreamControl {
+    /// Continue delivering downstream events.
+    Continue,
+    /// Cancel downstream production after the current callback.
+    Stop,
+}
+
+#[derive(Clone, Copy)]
+enum AsyncCancellationHandle {
+    Completion(*const NemoRelayNativeAsyncCompletion),
+    Stream(*const NemoRelayNativeAsyncStream),
+}
+
+/// Borrowed cancellation probe for pending native middleware work.
+///
+/// The probe may be moved into a cancellation future while the owning
+/// completion or stream remains responsible for settlement and release.
+pub struct AsyncCancellation<'a> {
+    host: NemoRelayNativeHostApiV3,
+    handle: AsyncCancellationHandle,
+    _owner: PhantomData<&'a ()>,
+}
+
+// Cancellation queries are read-only host operations designed to race with
+// cancellation and settlement on the Relay side.
+unsafe impl Send for AsyncCancellation<'_> {}
+
+impl AsyncCancellation<'_> {
+    /// Returns whether Relay has cancelled the associated operation.
+    pub fn is_cancelled(&self) -> bool {
+        unsafe {
+            match self.handle {
+                AsyncCancellationHandle::Completion(completion) => {
+                    (self.host.async_completion_is_cancelled)(completion)
+                }
+                AsyncCancellationHandle::Stream(stream) => {
+                    (self.host.async_stream_is_cancelled)(stream)
+                }
+            }
+        }
+    }
+}
+
+/// Owned completion for one asynchronous native LLM execution intercept.
+///
+/// Move this value to plugin-owned asynchronous work. The operation must
+/// eventually be resolved, rejected, or continued. Dropping it unsettled
+/// rejects the middleware invocation and releases all host handles.
+pub struct AsyncLlmExecution {
+    host: NemoRelayNativeHostApiV3,
+    completion: *const NemoRelayNativeAsyncCompletion,
+    next: *const NemoRelayNativeAsyncNext,
+    parent: *mut NemoRelayNativeScopeHandle,
+    settled: bool,
+}
+
+// ABI-v3 explicitly permits retained handles to move to plugin-owned threads.
+unsafe impl Send for AsyncLlmExecution {}
+
+impl AsyncLlmExecution {
+    fn new(
+        host: NemoRelayNativeHostApiV3,
+        completion: *const NemoRelayNativeAsyncCompletion,
+        next: *const NemoRelayNativeAsyncNext,
+    ) -> Self {
+        Self {
+            parent: capture_parent_scope(&host.v1),
+            host,
+            completion,
+            next,
+            settled: false,
+        }
+    }
+
+    /// Returns whether Relay has cancelled the managed invocation.
+    pub fn is_cancelled(&self) -> bool {
+        unsafe { (self.host.async_completion_is_cancelled)(self.completion) }
+    }
+
+    /// Borrows a probe that can be moved into a cancellation future.
+    pub fn cancellation(&self) -> AsyncCancellation<'_> {
+        AsyncCancellation {
+            host: self.host,
+            handle: AsyncCancellationHandle::Completion(self.completion),
+            _owner: PhantomData,
+        }
+    }
+
+    /// Emits a mark under the scope active when the interceptor was invoked.
+    pub fn emit_mark(
+        &self,
+        name: &str,
+        data: Option<&Json>,
+        metadata: Option<&Json>,
+    ) -> Result<()> {
+        emit_mark_with_parent(&self.host.v1, self.parent, name, data, metadata)
+    }
+
+    /// Resolves the middleware invocation without calling the remaining chain.
+    pub fn resolve(mut self, response: Json) -> Result<()> {
+        let response = HostString::from_json(&self.host.v1, &response)
+            .ok_or_else(|| "failed to allocate async LLM response".to_string())?;
+        let status = unsafe {
+            (self.host.async_completion_resolve_json)(self.completion, response.as_ptr())
+        };
+        drop(response);
+        self.settled = true;
+        self.release();
+        native_async_status(status, "resolve async LLM execution")
+    }
+
+    /// Rejects the middleware invocation without calling the remaining chain.
+    pub fn reject(mut self, message: impl AsRef<str>) -> Result<()> {
+        let status = reject_async_completion(&self.host, self.completion, message.as_ref());
+        self.settled = true;
+        self.release();
+        native_async_status(status, "reject async LLM execution")
+    }
+
+    /// Continues the remaining LLM execution chain with a replacement request.
+    pub fn continue_with(mut self, request: LlmRequest) -> Result<()> {
+        let request = HostString::from_json(&self.host.v1, &request)
+            .ok_or_else(|| "failed to allocate async LLM request".to_string())?;
+        let status =
+            unsafe { (self.host.async_next_invoke)(self.next, request.as_ptr(), self.completion) };
+        drop(request);
+        if status != NemoRelayStatus::Ok {
+            let _ = reject_async_completion(
+                &self.host,
+                self.completion,
+                "Relay rejected async LLM continuation",
+            );
+        }
+        self.settled = true;
+        self.release();
+        native_async_status(status, "continue async LLM execution")
+    }
+
+    fn release(&mut self) {
+        if !self.next.is_null() {
+            unsafe { (self.host.async_next_release)(self.next) };
+            self.next = ptr::null();
+        }
+        if !self.completion.is_null() {
+            unsafe { (self.host.async_completion_release)(self.completion) };
+            self.completion = ptr::null();
+        }
+        free_parent_scope(&self.host.v1, &mut self.parent);
+    }
+}
+
+impl Drop for AsyncLlmExecution {
+    fn drop(&mut self) {
+        if !self.settled && !self.completion.is_null() {
+            let _ = reject_async_completion(
+                &self.host,
+                self.completion,
+                "async LLM execution dropped without settlement",
+            );
+        }
+        self.release();
+    }
+}
+
+/// Owned output and continuation handles for one asynchronous LLM stream intercept.
+///
+/// Move this value to plugin-owned asynchronous work. Dropping it unfinished
+/// closes the stream with an error and releases all host handles.
+pub struct AsyncLlmStream {
+    host: NemoRelayNativeHostApiV3,
+    stream: *const NemoRelayNativeAsyncStream,
+    next: *const NemoRelayNativeAsyncNext,
+    parent: *mut NemoRelayNativeScopeHandle,
+    finished: bool,
+}
+
+// ABI-v3 explicitly permits retained handles to move to plugin-owned threads.
+unsafe impl Send for AsyncLlmStream {}
+
+impl AsyncLlmStream {
+    fn new(
+        host: NemoRelayNativeHostApiV3,
+        stream: *const NemoRelayNativeAsyncStream,
+        next: *const NemoRelayNativeAsyncNext,
+    ) -> Self {
+        Self {
+            parent: capture_parent_scope(&host.v1),
+            host,
+            stream,
+            next,
+            finished: false,
+        }
+    }
+
+    /// Returns whether Relay has cancelled the caller-facing stream.
+    pub fn is_cancelled(&self) -> bool {
+        unsafe { (self.host.async_stream_is_cancelled)(self.stream) }
+    }
+
+    /// Borrows a probe that can be moved into a cancellation future.
+    pub fn cancellation(&self) -> AsyncCancellation<'_> {
+        AsyncCancellation {
+            host: self.host,
+            handle: AsyncCancellationHandle::Stream(self.stream),
+            _owner: PhantomData,
+        }
+    }
+
+    /// Emits a mark under the scope active when the interceptor was invoked.
+    pub fn emit_mark(
+        &self,
+        name: &str,
+        data: Option<&Json>,
+        metadata: Option<&Json>,
+    ) -> Result<()> {
+        emit_mark_with_parent(&self.host.v1, self.parent, name, data, metadata)
+    }
+
+    /// Attempts to push one event into Relay's bounded output queue.
+    pub fn try_push(&self, event: &Json) -> Result<AsyncStreamWrite> {
+        let event = HostString::from_json(&self.host.v1, event)
+            .ok_or_else(|| "failed to allocate async LLM stream event".to_string())?;
+        let status = unsafe { (self.host.async_stream_push_json)(self.stream, event.as_ptr()) };
+        async_stream_write_status(status, "push async LLM stream event")
+    }
+
+    /// Attempts to reject the output stream.
+    pub fn try_reject(&mut self, message: &str) -> Result<AsyncStreamWrite> {
+        let message = HostString::try_new(&self.host.v1, message).ok();
+        let status = unsafe {
+            (self.host.async_stream_reject)(
+                self.stream,
+                message.as_ref().map_or(ptr::null(), HostString::as_ptr),
+            )
+        };
+        let result = async_stream_write_status(status, "reject async LLM stream")?;
+        drop(message);
+        if result != AsyncStreamWrite::Backpressured {
+            self.finished = true;
+            self.release();
+        }
+        Ok(result)
+    }
+
+    /// Finishes the caller-facing stream successfully.
+    pub fn finish(mut self) -> Result<()> {
+        let status = unsafe { (self.host.async_stream_finish)(self.stream) };
+        self.finished = true;
+        self.release();
+        native_async_status(status, "finish async LLM stream")
+    }
+
+    /// Invokes the remaining stream chain and receives its events incrementally.
+    ///
+    /// Relay invokes `callback` on Relay runtime workers. It must not block.
+    pub fn invoke_next<F>(&self, request: &LlmRequest, callback: F) -> Result<()>
+    where
+        F: FnMut(AsyncLlmStreamEvent) -> AsyncStreamControl + Send + 'static,
+    {
+        let request = HostString::from_json(&self.host.v1, request)
+            .ok_or_else(|| "failed to allocate async downstream LLM request".to_string())?;
+        let state = Box::new(AsyncNextStreamCallback {
+            host: self.host.v1,
+            callback: Mutex::new(callback),
+        });
+        let user_data = Box::into_raw(state).cast::<c_void>();
+        let status = unsafe {
+            (self.host.async_next_invoke_stream)(
+                self.next,
+                request.as_ptr(),
+                self.stream,
+                async_next_stream_trampoline::<F>,
+                user_data,
+            )
+        };
+        if status == NemoRelayStatus::Ok {
+            Ok(())
+        } else {
+            unsafe {
+                drop(Box::from_raw(
+                    user_data.cast::<AsyncNextStreamCallback<F>>(),
+                ))
+            };
+            Err(format!(
+                "invoke async downstream LLM stream failed: {status:?}"
+            ))
+        }
+    }
+
+    fn release(&mut self) {
+        if !self.next.is_null() {
+            unsafe { (self.host.async_next_release)(self.next) };
+            self.next = ptr::null();
+        }
+        if !self.stream.is_null() {
+            unsafe { (self.host.async_stream_release)(self.stream) };
+            self.stream = ptr::null();
+        }
+        free_parent_scope(&self.host.v1, &mut self.parent);
+    }
+}
+
+impl Drop for AsyncLlmStream {
+    fn drop(&mut self) {
+        if !self.finished && !self.stream.is_null() {
+            let message =
+                HostString::try_new(&self.host.v1, "async LLM stream dropped without settlement")
+                    .ok();
+            let status = unsafe {
+                (self.host.async_stream_reject)(
+                    self.stream,
+                    message.as_ref().map_or(ptr::null(), HostString::as_ptr),
+                )
+            };
+            if status == NemoRelayStatus::Internal {
+                let _ = unsafe { (self.host.async_stream_finish)(self.stream) };
+            }
+        }
+        self.release();
+    }
+}
+
 /// Cloneable high-level runtime handle for host APIs available to native plugins.
 #[derive(Clone)]
 pub struct PluginRuntime {
@@ -2216,6 +2562,88 @@ impl<'a> PluginContext<'a> {
         )
     }
 
+    /// Registers a completion-based typed LLM execution intercept.
+    ///
+    /// The callback must move the supplied operation to plugin-owned work or
+    /// settle it before returning. Relay's runtime worker is released as soon
+    /// as this callback returns.
+    pub fn register_async_llm_execution_intercept<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(String, LlmRequest, AsyncLlmExecution) -> Result<()> + Send + Sync + 'static,
+    {
+        let host = self.async_host()?;
+        let name = HostString::try_new(&host.v1, name)
+            .map_err(|status| status_error(&host.v1, status, "async LLM execution name"))?;
+        let user_data = typed_async_callback_user_data(host, callback);
+        let status = unsafe {
+            (host.plugin_context_register_async_middleware)(
+                self.raw,
+                NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept as u32,
+                name.as_ptr(),
+                priority,
+                false,
+                typed_async_llm_execution_trampoline::<F>,
+                user_data,
+                Some(drop_typed_async_callback::<F>),
+            )
+        };
+        // ABI v3 owns user_data from the moment registration is attempted.
+        if status == NemoRelayStatus::Ok {
+            Ok(())
+        } else {
+            Err(status_error(
+                &host.v1,
+                status,
+                "async LLM execution intercept",
+            ))
+        }
+    }
+
+    /// Registers a completion-based typed LLM stream execution intercept.
+    ///
+    /// The callback must move the supplied stream to plugin-owned work or
+    /// settle it before returning. Stream writes are nonblocking and report
+    /// bounded-queue backpressure through [`AsyncStreamWrite`].
+    pub fn register_async_llm_stream_execution_intercept<F>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(String, LlmRequest, AsyncLlmStream) -> Result<()> + Send + Sync + 'static,
+    {
+        let host = self.async_host()?;
+        let name = HostString::try_new(&host.v1, name)
+            .map_err(|status| status_error(&host.v1, status, "async LLM stream name"))?;
+        let user_data = typed_async_callback_user_data(host, callback);
+        let status = unsafe {
+            (host.plugin_context_register_async_stream_middleware)(
+                self.raw,
+                name.as_ptr(),
+                priority,
+                typed_async_llm_stream_trampoline::<F>,
+                user_data,
+                Some(drop_typed_async_callback::<F>),
+            )
+        };
+        // ABI v3 owns user_data from the moment registration is attempted.
+        if status == NemoRelayStatus::Ok {
+            Ok(())
+        } else {
+            Err(status_error(
+                &host.v1,
+                status,
+                "async LLM stream execution intercept",
+            ))
+        }
+    }
+
     /// Registers a raw event subscriber callback.
     ///
     /// # Safety
@@ -2617,6 +3045,15 @@ impl<'a> PluginContext<'a> {
         })
     }
 
+    fn async_host(&self) -> Result<NemoRelayNativeHostApiV3> {
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        {
+            return Err("Relay host does not support asynchronous native middleware".into());
+        }
+        Ok(unsafe { *(self.host as *const _ as *const NemoRelayNativeHostApiV3) })
+    }
+
     fn with_name(
         &self,
         name: &str,
@@ -2635,6 +3072,16 @@ struct TypedCallback<F> {
     callback: F,
 }
 
+struct TypedAsyncCallback<F> {
+    host: NemoRelayNativeHostApiV3,
+    callback: F,
+}
+
+struct AsyncNextStreamCallback<F> {
+    host: NemoRelayNativeHostApiV1,
+    callback: Mutex<F>,
+}
+
 fn typed_callback_user_data<F>(host: &NemoRelayNativeHostApiV1, callback: F) -> *mut c_void {
     Box::into_raw(Box::new(TypedCallback {
         host: *host,
@@ -2650,6 +3097,68 @@ unsafe extern "C" fn drop_typed_callback<F>(user_data: *mut c_void) {
             set_last_error(&host, "native plugin typed callback state drop panicked");
         }
     }
+}
+
+fn typed_async_callback_user_data<F>(host: NemoRelayNativeHostApiV3, callback: F) -> *mut c_void {
+    Box::into_raw(Box::new(TypedAsyncCallback { host, callback })).cast()
+}
+
+unsafe extern "C" fn drop_typed_async_callback<F>(user_data: *mut c_void) {
+    if !user_data.is_null() {
+        let callback = unsafe { Box::from_raw(user_data.cast::<TypedAsyncCallback<F>>()) };
+        let host = callback.host.v1;
+        if catch_unwind(AssertUnwindSafe(|| drop(callback))).is_err() {
+            set_last_error(&host, "native plugin async callback state drop panicked");
+        }
+    }
+}
+
+unsafe extern "C" fn async_next_stream_trampoline<F>(
+    user_data: *mut c_void,
+    chunk_json: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+    done: bool,
+) -> bool
+where
+    F: FnMut(AsyncLlmStreamEvent) -> AsyncStreamControl + Send + 'static,
+{
+    if user_data.is_null() {
+        return false;
+    }
+    let state = unsafe { &*user_data.cast::<AsyncNextStreamCallback<F>>() };
+    let terminal = done || !error.is_null();
+    let event = if !error.is_null() {
+        match read_host_string(&state.host, error) {
+            Ok(message) => AsyncLlmStreamEvent::Error(message),
+            Err(_) => AsyncLlmStreamEvent::Error("invalid downstream stream error".into()),
+        }
+    } else if done {
+        AsyncLlmStreamEvent::Done
+    } else {
+        match read_json_value(&state.host, chunk_json, "downstream LLM stream event") {
+            Ok(chunk) => AsyncLlmStreamEvent::Chunk(chunk),
+            Err(_) => AsyncLlmStreamEvent::Error("invalid downstream LLM stream event".into()),
+        }
+    };
+    let control = catch_unwind(AssertUnwindSafe(|| {
+        let mut callback = state
+            .callback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (callback)(event)
+    }));
+    let keep_going = matches!(control, Ok(AsyncStreamControl::Continue)) && !terminal;
+    if control.is_err() {
+        set_last_error(&state.host, "async downstream stream callback panicked");
+    }
+    if terminal || !keep_going {
+        unsafe {
+            drop(Box::from_raw(
+                user_data.cast::<AsyncNextStreamCallback<F>>(),
+            ))
+        };
+    }
+    keep_going
 }
 
 fn finish_typed_registration<F>(
@@ -2680,6 +3189,182 @@ fn callback_error(host: &NemoRelayNativeHostApiV1, message: String) -> NemoRelay
 fn callback_panic(host: &NemoRelayNativeHostApiV1, label: &str) -> NemoRelayStatus {
     set_last_error(host, &format!("{label} panicked"));
     NemoRelayStatus::Internal
+}
+
+fn native_async_status(status: NemoRelayStatus, operation: &str) -> Result<()> {
+    if status == NemoRelayStatus::Ok {
+        Ok(())
+    } else {
+        Err(format!("{operation} failed: {status:?}"))
+    }
+}
+
+fn async_stream_write_status(status: NemoRelayStatus, operation: &str) -> Result<AsyncStreamWrite> {
+    match status {
+        NemoRelayStatus::Ok => Ok(AsyncStreamWrite::Accepted),
+        NemoRelayStatus::Internal => Ok(AsyncStreamWrite::Backpressured),
+        NemoRelayStatus::InvalidArg => Ok(AsyncStreamWrite::Closed),
+        other => Err(format!("{operation} failed: {other:?}")),
+    }
+}
+
+fn reject_async_completion(
+    host: &NemoRelayNativeHostApiV3,
+    completion: *const NemoRelayNativeAsyncCompletion,
+    message: &str,
+) -> NemoRelayStatus {
+    let message = HostString::try_new(&host.v1, message).ok();
+    unsafe {
+        (host.async_completion_reject)(
+            completion,
+            message.as_ref().map_or(ptr::null(), HostString::as_ptr),
+        )
+    }
+}
+
+fn capture_parent_scope(host: &NemoRelayNativeHostApiV1) -> *mut NemoRelayNativeScopeHandle {
+    let mut parent = ptr::null_mut();
+    let status = unsafe { (host.scope_get_current)(&mut parent) };
+    if status == NemoRelayStatus::Ok {
+        parent
+    } else {
+        ptr::null_mut()
+    }
+}
+
+fn free_parent_scope(
+    host: &NemoRelayNativeHostApiV1,
+    parent: &mut *mut NemoRelayNativeScopeHandle,
+) {
+    if !parent.is_null() {
+        unsafe { (host.scope_handle_free)(*parent) };
+        *parent = ptr::null_mut();
+    }
+}
+
+fn emit_mark_with_parent(
+    host: &NemoRelayNativeHostApiV1,
+    parent: *mut NemoRelayNativeScopeHandle,
+    name: &str,
+    data: Option<&Json>,
+    metadata: Option<&Json>,
+) -> Result<()> {
+    let name = HostString::try_new(host, name)
+        .map_err(|status| format!("failed to allocate mark name: {status:?}"))?;
+    let data = OptionalHostJson::new(host, data)?;
+    let metadata = OptionalHostJson::new(host, metadata)?;
+    let status = unsafe {
+        (host.emit_mark)(
+            name.as_ptr(),
+            parent,
+            data.as_ptr(),
+            metadata.as_ptr(),
+            ptr::null(),
+        )
+    };
+    native_async_status(status, "emit async plugin mark")
+}
+
+#[derive(serde::Deserialize)]
+struct AsyncLlmInvocation {
+    name: String,
+    request: LlmRequest,
+}
+
+unsafe extern "C" fn typed_async_llm_execution_trampoline<F>(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32
+where
+    F: Fn(String, LlmRequest, AsyncLlmExecution) -> Result<()> + Send + Sync + 'static,
+{
+    if user_data.is_null() {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    }
+    let state = unsafe { &*user_data.cast::<TypedAsyncCallback<F>>() };
+    if next.is_null() || completion.is_null() {
+        if !next.is_null() {
+            unsafe { (state.host.async_next_release)(next) };
+        }
+        if !completion.is_null() {
+            let _ = reject_async_completion(
+                &state.host,
+                completion,
+                "async LLM execution requires next and completion handles",
+            );
+            unsafe { (state.host.async_completion_release)(completion) };
+        }
+        return NemoRelayNativeAsyncCallbackState::Pending as u32;
+    }
+    let operation = AsyncLlmExecution::new(state.host, completion, next);
+    let invocation = read_json_value::<AsyncLlmInvocation>(
+        &state.host.v1,
+        invocation_json,
+        "async LLM invocation",
+    );
+    let result = catch_unwind(AssertUnwindSafe(|| match invocation {
+        Ok(invocation) => (state.callback)(invocation.name, invocation.request, operation),
+        Err(_) => Err("invalid async LLM invocation".into()),
+    }));
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(message)) => set_last_error(&state.host.v1, &message),
+        Err(_) => set_last_error(&state.host.v1, "async LLM execution callback panicked"),
+    }
+    NemoRelayNativeAsyncCallbackState::Pending as u32
+}
+
+unsafe extern "C" fn typed_async_llm_stream_trampoline<F>(
+    user_data: *mut c_void,
+    invocation_json: *const NemoRelayNativeString,
+    next: *const NemoRelayNativeAsyncNext,
+    stream: *const NemoRelayNativeAsyncStream,
+) -> u32
+where
+    F: Fn(String, LlmRequest, AsyncLlmStream) -> Result<()> + Send + Sync + 'static,
+{
+    if user_data.is_null() {
+        return NemoRelayNativeAsyncCallbackState::Complete as u32;
+    }
+    let state = unsafe { &*user_data.cast::<TypedAsyncCallback<F>>() };
+    if next.is_null() || stream.is_null() {
+        if !next.is_null() {
+            unsafe { (state.host.async_next_release)(next) };
+        }
+        if !stream.is_null() {
+            let message = HostString::try_new(
+                &state.host.v1,
+                "async LLM stream requires next and stream handles",
+            )
+            .ok();
+            let _ = unsafe {
+                (state.host.async_stream_reject)(
+                    stream,
+                    message.as_ref().map_or(ptr::null(), HostString::as_ptr),
+                )
+            };
+            unsafe { (state.host.async_stream_release)(stream) };
+        }
+        return NemoRelayNativeAsyncCallbackState::Pending as u32;
+    }
+    let operation = AsyncLlmStream::new(state.host, stream, next);
+    let invocation = read_json_value::<AsyncLlmInvocation>(
+        &state.host.v1,
+        invocation_json,
+        "async LLM stream invocation",
+    );
+    let result = catch_unwind(AssertUnwindSafe(|| match invocation {
+        Ok(invocation) => (state.callback)(invocation.name, invocation.request, operation),
+        Err(_) => Err("invalid async LLM stream invocation".into()),
+    }));
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(message)) => set_last_error(&state.host.v1, &message),
+        Err(_) => set_last_error(&state.host.v1, "async LLM stream callback panicked"),
+    }
+    NemoRelayNativeAsyncCallbackState::Pending as u32
 }
 
 unsafe extern "C" fn typed_subscriber_trampoline<F>(
