@@ -34,59 +34,29 @@ configuration, packaging, logging, and diagnostics workflows.
 
 ### Highlights
 
-- Generated coding-agent enforcement hooks now fail closed when Relay cannot
-  start, authenticate, evaluate, or deliver a response. Lifecycle and
-  after-the-fact hooks explicitly fail open. Reinstall each coding-agent
-  integration with `nemo-relay install <agent> --force` after upgrading.
-- Rust middleware callbacks are asynchronous. Python middleware can return an
-  awaitable, and Node.js middleware can return a Promise. Relay awaits the
-  merged global and scope-local middleware chain in priority order.
-- Scope and mark lifecycle APIs remain synchronous, but sanitization and
-  subscriber publication run on an ordered background dispatcher. Python
-  applications can use `flush_async()` when delivery depends on asynchronous
-  callbacks.
-- LLM observability sanitizers now receive the active request or response codec
-  for each managed call. Sanitizers can normalize built-in,
-  runtime-registered, and opaque codec payloads without changing the
-  client-visible request or response.
-- Sanitizer callback failures now fail closed across mark, scope, tool, and
-  LLM surfaces: Relay withholds the governed observability payload while
-  preserving application execution.
-- The PII redaction plugin now selects the active codec per call. One component
-  can safely sanitize mixed OpenAI Chat, OpenAI Responses, and Anthropic
-  Messages traffic without a fixed provider codec.
-- Native and worker plugins can resolve invocation-scoped codec capabilities.
-  Request sanitizers can decode and encode requests, and response sanitizers
-  can decode responses.
-- The Observability plugin now uses one typed, multi-endpoint OpenTelemetry
-  section for `full`, `gen_ai`, and `openinference` trace projections.
-- The `gen_ai` projection implements the pinned
+- **Asynchronous middleware and ordered event delivery:** Rust middleware
+  callbacks can await work directly, Python callbacks can return awaitables,
+  and Node.js callbacks can return Promises. Scope and mark APIs remain
+  synchronous while Relay publishes sanitized events through an ordered
+  background dispatcher.
+- **Codec-aware privacy controls:** LLM sanitizers receive the active per-call
+  codec across in-process, native-plugin, and worker boundaries. The PII
+  redaction plugin can protect mixed OpenAI Chat, OpenAI Responses, and
+  Anthropic Messages traffic without a fixed provider codec.
+- **Unified OpenTelemetry export:** One typed, multi-endpoint configuration
+  supports `full`, `gen_ai`, and `openinference` projections. The `gen_ai`
+  projection implements a pinned
   [OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
-- OpenTelemetry exporter dependencies, including OpenInference semantic
-  support, are always enabled instead of being controlled by Cargo features.
-- OpenTelemetry Rust is upgraded to `0.32`.
-- Relay propagation values can seed isolated scope stacks across process and
-  runtime boundaries. Python applications can also fork the active scope stack
-  for concurrent `asyncio` tasks without sharing mutable task-local context.
-- The Adaptive plugin provides opt-in exact-match LLM response caching with
-  in-memory and Redis stores. The cache is disabled unless `response_cache` is
-  configured.
-- ATIF filename templates can route trajectories with path-safe values from
-  top-level scope metadata and use configured fallbacks when metadata is
-  optional.
-- The CLI adds a structured `nemo-relay config edit` workflow, size-based
-  operational log rotation, and offline `doctor` probes. Python, Node.js, and
-  Go bindings initialize default operational logging from the same environment
-  controls as the CLI.
-- Prebuilt CLI binaries are available from PyPI through
-  `nemo-relay-cli-bin` and the exact-version `nemo-relay[cli]` extra. The 0.7
-  release does not publish a standalone CLI package to npm.
-- Top-level plugin component `config` lists and the observability destination
-  lists `atof.sinks`, `opentelemetry.endpoints`, and `atif.storage`
-  concatenate across configuration layers, with higher-precedence entries
-  first.
-- `object_store` is upgraded to `0.14.1`, which removes the temporary
-  `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` advisory exceptions.
+- **Portable Relay context:** Transport-neutral propagation can seed isolated
+  scope stacks across process and runtime boundaries. Python applications can
+  also fork the active scope stack for concurrent `asyncio` tasks.
+- **Opt-in LLM response caching:** The Adaptive plugin can serve eligible
+  exact-match calls from in-memory or Redis stores. The cache remains disabled
+  unless `response_cache` is configured.
+- **CLI and operational improvements:** The CLI adds structured configuration
+  editing, PyPI distribution, size-based log rotation, and offline `doctor`
+  probes. Python, Node.js, and Go bindings initialize default operational
+  logging from the same environment controls as the CLI.
 
 ### Support Matrix and Compatibility Updates
 
@@ -176,6 +146,8 @@ Switchyard-owned native plugin is expected to replace it.
   closed event loop during cancellation.
 - Prebuilt CLI binaries carry the intended release version, so an upgraded CLI
   does not silently reuse a gateway started by a differently identified build.
+- `object_store` is upgraded to `0.14.1`, which removes the temporary
+  `RUSTSEC-2026-0194` and `RUSTSEC-2026-0195` advisory exceptions.
 - Embedded Python hosts can use
   `plugin.load_dynamic_plugin_activation_specs(path)` to convert the standard
   `[[plugins.dynamic]]` records in one explicitly selected `plugins.toml` into
