@@ -6,9 +6,9 @@
 //! Projection functions used by the unified OpenTelemetry subscriber.
 
 use super::{
-    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
-    merge_usage, model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_top_level_json_attributes,
+    END_OUTPUT_SIZE_BYTES, START_INPUT_SIZE_BYTES, estimate_cost_for_response_or_model,
+    estimate_cost_for_response_or_requested_model, manual, merge_usage, model_name_for_llm_event,
+    push_json_size, push_serialized_top_level_attributes, push_top_level_json_attributes,
 };
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::scope::ScopeType;
@@ -110,6 +110,7 @@ pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
     if is_llm {
         push_llm_request_attributes(&mut attributes, event);
     }
+    push_json_size(&mut attributes, START_INPUT_SIZE_BYTES, event.input());
     attributes
 }
 
@@ -126,6 +127,7 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
     }
     push_top_level_json_attributes(&mut attributes, "openinference.metadata", event.metadata());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
+    push_json_size(&mut attributes, END_OUTPUT_SIZE_BYTES, event.output());
     if let Some((output, mime_type)) = openinference_output_value(event) {
         attributes.push(KeyValue::new("output.value", output));
         attributes.push(KeyValue::new("output.mime_type", mime_type));

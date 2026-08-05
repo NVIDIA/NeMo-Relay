@@ -1256,8 +1256,16 @@ fn records_span_start_mark_and_end() {
         Some(&"hello".to_string())
     );
     assert_eq!(
+        attributes.get("nemo_relay.start.input_size_bytes"),
+        Some(&"17".to_string())
+    );
+    assert_eq!(
         attributes.get("nemo_relay.end.output.result"),
         Some(&"ok".to_string())
+    );
+    assert_eq!(
+        attributes.get("nemo_relay.end.output_size_bytes"),
+        Some(&"15".to_string())
     );
 }
 

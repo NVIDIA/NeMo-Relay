@@ -168,6 +168,13 @@ controls shown above. `gen_ai` is standards-only: it ignores those controls and
 does not emit Relay-private attributes. `semantic_selector` and
 `capture_content` are unsupported.
 
+The `full` and `openinference` projections emit
+`nemo_relay.start.input_size_bytes` and `nemo_relay.end.output_size_bytes` as
+the compact serialized JSON sizes of the post-sanitization event input and
+output. These semantic payload sizes describe what the exporter observes, not
+network bytes. The `gen_ai` projection does not emit these Relay-private
+attributes.
+
 ## GenAI Projection
 
 The `gen_ai` endpoint uses these operation names:

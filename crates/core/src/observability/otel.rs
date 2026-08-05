@@ -24,12 +24,13 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
-    MarkProjection, OpenTelemetryType, OtlpAttributeMapping, apply_attribute_mappings,
-    attribute_mapping_aliases, attribute_mapping_inputs, default_mark_exclude_names,
-    effective_mark_projection, estimate_cost_for_response_or_model,
-    estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
-    push_serialized_top_level_attributes, push_session_identity_attributes,
-    push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
+    END_OUTPUT_SIZE_BYTES, MarkProjection, OpenTelemetryType, OtlpAttributeMapping,
+    START_INPUT_SIZE_BYTES, apply_attribute_mappings, attribute_mapping_aliases,
+    attribute_mapping_inputs, default_mark_exclude_names, effective_mark_projection,
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
+    model_name_for_llm_event, push_json_size, push_serialized_top_level_attributes,
+    push_session_identity_attributes, push_top_level_json_attributes, relay_span_id,
+    relay_trace_id, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
@@ -1416,6 +1417,7 @@ fn start_attributes(event: &Event) -> Vec<KeyValue> {
         event.metadata(),
     );
     push_top_level_json_attributes(&mut attributes, "nemo_relay.start.input", event.input());
+    push_json_size(&mut attributes, START_INPUT_SIZE_BYTES, event.input());
     attributes
 }
 
@@ -1424,6 +1426,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.data", event.data());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.metadata", event.metadata());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
+    push_json_size(&mut attributes, END_OUTPUT_SIZE_BYTES, event.output());
     if event
         .category()
         .is_some_and(|category| category.as_str() == "llm")

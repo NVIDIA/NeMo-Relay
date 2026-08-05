@@ -804,6 +804,13 @@ async fn forward_upstream_request(
         url,
         forwarding.source_route,
     );
+    log::debug!(
+        target: "nemo_relay.gateway",
+        event = "effective_dispatch_request",
+        provider = effective.target_route.name(),
+        gateway_provider_body_bytes = effective.body_bytes.len();
+        "Prepared effective provider request"
+    );
     let configured_auth_header = forwarding.configured_auth_header(effective.target_route);
     let mut upstream = http
         .request(method.clone(), &effective.url)

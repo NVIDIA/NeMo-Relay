@@ -1363,7 +1363,7 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
         path: "/responses".into(),
         provider: ProviderRoute::OpenAiResponses,
         upstream_url: "http://openai/v1/responses".into(),
-        body_bytes: axum::body::Bytes::new(),
+        body_bytes: axum::body::Bytes::from_static(b"gateway-body"),
         request_json: request_json.clone(),
         streaming: true,
         authorization: crate::provider_auth::ProviderRequestAuthorization {
@@ -1383,6 +1383,10 @@ fn build_llm_gateway_start_uses_alignment_identifiers_and_metadata() {
     assert_eq!(start.request_id.as_deref(), Some("transport-req"));
     assert!(start.streaming);
     assert_eq!(start.metadata["gateway_path"], json!("/responses"));
+    assert_eq!(
+        start.metadata["gateway_ingress_body_bytes"],
+        json!(prepared.body_bytes.len())
+    );
     assert_eq!(start.request.content, request_json);
     assert!(
         !start.request.headers.contains_key("authorization"),

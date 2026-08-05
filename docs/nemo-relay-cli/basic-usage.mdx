@@ -49,6 +49,11 @@ payload schemas. It removes only hop-by-hop transport headers, forwards
 streaming responses as streams, and emits NeMo Relay LLM start and end events
 under the active session scope.
 
+Each gateway LLM start event records the exact inbound HTTP body length as
+`metadata.gateway_ingress_body_bytes`. Debug logs record
+`gateway_provider_body_bytes` after request interceptors and any JSON
+re-encoding, immediately before the effective request is sent upstream.
+
 ## Transparent Run
 
 Use the agent shortcuts for no-install local observability. The wrapper starts

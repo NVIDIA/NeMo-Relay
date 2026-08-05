@@ -295,6 +295,24 @@ pub(crate) fn push_top_level_json_attributes(
     }
 }
 
+pub(crate) const START_INPUT_SIZE_BYTES: &str = "nemo_relay.start.input_size_bytes";
+pub(crate) const END_OUTPUT_SIZE_BYTES: &str = "nemo_relay.end.output_size_bytes";
+
+pub(crate) fn push_json_size(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    key: &'static str,
+    value: Option<&crate::json::Json>,
+) {
+    if let Some(size) =
+        value.and_then(|value| serde_json::to_vec(value).ok().map(|value| value.len()))
+    {
+        attributes.push(opentelemetry::KeyValue::new(
+            key,
+            i64::try_from(size).unwrap_or(i64::MAX),
+        ));
+    }
+}
+
 /// Adds canonical session-correlation attributes from event metadata and the
 /// active scope-stack instance.
 pub(crate) fn push_session_identity_attributes(

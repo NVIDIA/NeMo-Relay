@@ -205,6 +205,9 @@ pub(super) fn build_llm_gateway_start(request: &PreparedGatewayRequest) -> LlmGa
             content: request.request_json.clone(),
         },
         streaming: request.streaming,
-        metadata: json!({ "gateway_path": request.path }),
+        metadata: json!({
+            "gateway_path": request.path,
+            "gateway_ingress_body_bytes": request.body_bytes.len(),
+        }),
     }
 }
