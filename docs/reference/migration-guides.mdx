@@ -31,6 +31,32 @@ Rust code that constructs `AdaptiveConfig` with an exhaustive struct literal
 must add `response_cache: None`. Prefer `..AdaptiveConfig::default()` when the
 literal should remain compatible with new optional fields.
 
+### Update Exhaustive FlowError Matches
+
+Rust callers that exhaustively match `FlowError` must add the new
+`FlowError::CallbackException` variant or use a wildcard arm. The variant
+retains the originating Python or JavaScript exception type for observability
+while preserving the existing `internal_error` classification.
+
+### Reinstall Coding-Agent Enforcement Hooks
+
+Generated enforcement hooks now fail closed when Relay cannot start,
+authenticate, evaluate, or deliver a response. Generated lifecycle and
+after-the-fact hooks continue to fail open.
+
+After upgrading, reinstall every persistent coding-agent integration so its
+generated hooks use the 0.7 policy:
+
+```bash
+nemo-relay install claude-code --force
+nemo-relay install codex --force
+nemo-relay install hermes --force
+```
+
+Custom enforcement hooks must pass `--fail-closed` or set
+`NEMO_RELAY_FAIL_CLOSED=1`. Do not apply fail-closed behavior to lifecycle or
+after-the-fact hooks that cannot prevent the action they observe.
+
 ### Migrate Middleware Callbacks
 
 The following callback families are now asynchronous: conditional execution
