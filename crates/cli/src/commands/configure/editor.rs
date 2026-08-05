@@ -547,7 +547,7 @@ fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
                     "cannot determine user config directory; set HOME or XDG_CONFIG_HOME".into(),
                 )
             }),
-        TargetScope::Global => Ok(PathBuf::from("/etc/nemo-relay/config.toml")),
+        TargetScope::Global => Ok(crate::configuration::system_config_dir().join("config.toml")),
     }
 }
 

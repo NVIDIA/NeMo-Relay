@@ -75,7 +75,7 @@ pub(crate) struct PluginsScopeArgs {
     /// Edit the selected low layer: an explicit plugin target, or the XDG user config.
     #[arg(long)]
     pub(crate) user: bool,
-    /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
+    /// Edit system config (`/etc/nemo-relay` on Unix; `%ProgramData%\nemo-relay` on Windows).
     #[arg(long)]
     pub(crate) global: bool,
 }

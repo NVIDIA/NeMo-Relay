@@ -111,6 +111,9 @@ version = 1
 entries = []
 ```
 
+On Windows, use the expanded ProgramData path in TOML, for example
+`C:\\ProgramData\\nemo-relay\\pricing.json`.
+
 Each catalog entry declares:
 
 - `provider` and canonical `model_id`.
@@ -146,7 +149,8 @@ Use `model-pricing add-source` or an inline config edit to provide model pricing
 file source by default, making it the highest-priority source in that scope. Use
 `--append` when the file should be a lower-priority fallback. Both commands
 default to user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Pass
-`--global` for `/etc/nemo-relay/plugins.toml`.
+`--global` for `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows.
 
 `model-pricing resolve` uses the same discovered config path as the gateway. It
 reports the winning catalog source, matched provider/model, and, when token
@@ -213,9 +217,10 @@ entry, Relay omits the estimate instead of guessing.
 Database-backed or remote model pricing should be implemented as a source that
 returns a validated `PricingCatalog` snapshot to Relay. Keep database queries,
 service auth, refresh cadence, and caching outside the LLM response hot path. A
-fleet deployment can refresh `/etc/nemo-relay/pricing.json` from an IT-managed
-service, or embed a custom Rust `PricingSource` that reads from a database and
-installs a `PricingResolver` snapshot during process startup.
+fleet deployment can refresh `/etc/nemo-relay/pricing.json` on Unix or the
+corresponding `%ProgramData%\nemo-relay\pricing.json` file on Windows from an
+IT-managed service, or embed a custom Rust `PricingSource` that reads from a
+database and installs a `PricingResolver` snapshot during process startup.
 
 External model pricing catalogs should be converted into Relay catalog JSON
 out-of-band and then loaded through a `file` source, unless the embedding

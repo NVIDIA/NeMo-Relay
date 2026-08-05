@@ -169,7 +169,7 @@ fn collect_configuration(
         .map(|dir| dir.join("config.toml"))
         .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
-    let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
+    let system_path = crate::configuration::system_config_dir().join("config.toml");
     let explicit = gateway_overrides.config.as_deref().map(layer_status);
     let global = if explicit_config {
         replaced_user_layer_status(&global_path)

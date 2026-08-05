@@ -186,11 +186,14 @@ controls for gateway limits, provider upstreams, and operational logging:
 nemo-relay config edit
 ```
 
-Use `--global` to edit `/etc/nemo-relay/config.toml`. The editor creates a missing target only
-after you select **Save**, preserves unrelated TOML sections, and lets you
-clear a setting to restore normal configuration precedence and defaults. Global
-saves are system-readable (`0644` on Unix), so they reject authorization
-headers; store credentials in a user config or environment variables instead.
+Use `--global` to edit system configuration at
+`/etc/nemo-relay/config.toml` on Unix or
+`%ProgramData%\nemo-relay\config.toml` on Windows. The editor creates a
+missing target only after you select **Save**, preserves unrelated TOML
+sections, and lets you clear a setting to restore normal configuration
+precedence and defaults. Global saves are system-readable (`0644` on Unix), so
+they reject authorization headers; store credentials in a user config or
+environment variables instead.
 
 When the top-level CLI receives `--config path/to/config.toml`, the editor uses
 that exact file as its user target, so the default editor and
@@ -205,10 +208,11 @@ When an explicit plugin file is selected, it becomes the editor's user target:
 the default editor and `--user` open that file. Use `--global` to edit the
 system file.
 
-Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml`.
-Global plugin configuration is system-readable (`0644` on Unix), so do not
-store credentials there. The editor rejects schema-declared secret values in
-global plugin configuration.
+Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml` on
+Unix or `%ProgramData%\nemo-relay\plugins.toml` on Windows. Global plugin
+configuration is system-readable (`0644` on Unix), so do not store credentials
+there. The editor rejects schema-declared secret values in global plugin
+configuration.
 
 The upstream authorization-header controls show only whether a value is
 configured and never print it in menus or previews. Prefer
@@ -352,7 +356,8 @@ nemo-relay model-pricing init --user
 nemo-relay model-pricing add-source /path/to/pricing.json --user
 ```
 
-Use `--global` for `/etc/nemo-relay/plugins.toml`. `model-pricing add-source`
+Use `--global` for `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. `model-pricing add-source`
 prepends the source by default, so the new file becomes the highest-priority
 source for that scope. Use `--append` to add it as a lower-priority fallback.
 

@@ -1080,7 +1080,7 @@ fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
     } else if let Some(user) = user_config_path() {
         paths.push(user);
     }
-    paths.push(PathBuf::from("/etc/nemo-relay/config.toml"));
+    paths.push(system_config_dir().join("config.toml"));
     paths
 }
 
@@ -1129,7 +1129,7 @@ pub(crate) fn user_plugin_runtime_config() -> Result<Option<Value>, CliError> {
 }
 
 pub(crate) fn global_plugin_config_path() -> PathBuf {
-    PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)
+    system_config_dir().join(PLUGINS_TOML)
 }
 
 // Resolves the user config using XDG first and HOME/USERPROFILE second. Returning `None` keeps
@@ -1142,6 +1142,11 @@ fn user_config_path() -> Option<PathBuf> {
 /// resolver so the gateway, the editor, and the plugin runtime agree on the location.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
     nemo_relay::plugin::user_config_dir()
+}
+
+/// Resolves the platform system config directory shared with the core plugin runtime.
+pub(crate) fn system_config_dir() -> PathBuf {
+    nemo_relay::plugin::system_config_dir()
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields

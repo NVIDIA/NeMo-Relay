@@ -2650,9 +2650,22 @@ fn test_default_plugin_config_paths_order_user_system() {
         default_plugin_config_paths(Some(user.clone())),
         vec![
             user.join("plugins.toml"),
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            system_config_dir().join("plugins.toml"),
         ]
     );
+}
+
+#[test]
+fn test_system_config_dir_matches_platform_convention() {
+    #[cfg(windows)]
+    {
+        let expected_base = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        assert_eq!(system_config_dir(), expected_base.join("nemo-relay"));
+    }
+    #[cfg(not(windows))]
+    assert_eq!(system_config_dir(), PathBuf::from("/etc/nemo-relay"));
 }
 
 #[cfg(unix)]

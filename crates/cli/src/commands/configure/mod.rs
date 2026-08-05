@@ -44,7 +44,7 @@ pub(crate) struct ConfigEditCommand {
     /// Edit explicit `--config`, otherwise `$XDG_CONFIG_HOME/nemo-relay/config.toml`.
     #[arg(long)]
     pub(crate) user: bool,
-    /// Edit the system config at `/etc/nemo-relay/config.toml`.
+    /// Edit system config (`/etc/nemo-relay` on Unix; `%ProgramData%\nemo-relay` on Windows).
     #[arg(long)]
     pub(crate) global: bool,
 }

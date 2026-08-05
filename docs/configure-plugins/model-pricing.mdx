@@ -73,9 +73,11 @@ nemo-relay model-pricing init --user
 nemo-relay model-pricing add-source /path/to/pricing.json --user
 ```
 
-Use `--user` for the user configuration file or `--global` for
-`/etc/nemo-relay/plugins.toml`. `add-source` places a new source ahead of
-existing sources by default. Use `--append` to keep it as a fallback.
+Use `--user` for the user configuration file or `--global` for system
+configuration at `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. `add-source` places a new
+source ahead of existing sources by default. Use `--append` to keep it as a
+fallback.
 
 ## Verify the Active Configuration
 

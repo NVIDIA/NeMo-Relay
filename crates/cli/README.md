@@ -163,9 +163,10 @@ structured user-config editor:
 nemo-relay config edit
 ```
 
-Use `--global` for `/etc/nemo-relay/config.toml`. Global saves are system-readable (`0644` on
-Unix) and reject authorization headers; use the corresponding environment
-variables or a user config for credentials.
+Use `--global` for system configuration: `/etc/nemo-relay/config.toml` on Unix
+or `%ProgramData%\nemo-relay\config.toml` on Windows. Global saves are
+system-readable (`0644` on Unix) and reject authorization headers; use the
+corresponding environment variables or a user config for credentials.
 
 When the top-level CLI receives `--config path/to/config.toml`, the config
 editor uses that exact file as its user target, so the default editor and
@@ -192,10 +193,10 @@ Other dynamic plugins use a raw JSON object editor.
 The canonical plugin file is `plugins.toml`; user config lives at
 `~/.config/nemo-relay/plugins.toml` or
 `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Use
-`nemo-relay plugins edit --global` to edit
-`/etc/nemo-relay/plugins.toml`; it is system-readable (`0644` on Unix), so do
-not store credentials there. The editor rejects schema-declared secret values
-in global plugin configuration.
+`nemo-relay plugins edit --global` to edit `/etc/nemo-relay/plugins.toml` on
+Unix or `%ProgramData%\nemo-relay\plugins.toml` on Windows. It is
+system-readable (`0644` on Unix), so do not store credentials there. The editor
+rejects schema-declared secret values in global plugin configuration.
 
 Runtime plugin files layer from lowest to highest precedence as
 explicit-or-user, then system. An explicit

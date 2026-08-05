@@ -59,7 +59,7 @@ fn config_paths_layer_explicit_or_user_then_system_and_ignore_project() {
     std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
     std::fs::write(&project_config, "").unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(&child, &xdg);
-    let system_config = PathBuf::from("/etc/nemo-relay/config.toml");
+    let system_config = system_config_dir().join("config.toml");
 
     assert_eq!(
         config_paths(None),
@@ -88,7 +88,7 @@ fn plugin_config_paths_layer_explicit_or_user_then_system_and_ignore_project() {
     std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
     std::fs::write(&project_plugins, "version = 1\n").unwrap();
     let _scope = PluginConfigDiscoveryScope::enter(&child, &xdg);
-    let system_plugins = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let system_plugins = system_config_dir().join("plugins.toml");
 
     assert_eq!(
         plugin_config_paths(None, None),
@@ -1098,7 +1098,7 @@ fn plugins_toml_path_resolution_tracks_config_scope() {
         plugin_config_paths(Some(&explicit), None),
         vec![
             temp.path().join("plugins.toml"),
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            system_config_dir().join("plugins.toml"),
         ]
     );
 
@@ -1114,7 +1114,7 @@ fn plugins_toml_path_resolution_tracks_config_scope() {
         implicit_plugin_config_paths(Some(user_config.clone())),
         vec![
             user_config.join("plugins.toml"),
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            system_config_dir().join("plugins.toml"),
         ]
     );
     assert!(
@@ -1139,14 +1139,14 @@ fn all_runtime_scopes_exclude_project_gateway_and_plugin_layers() {
         config_paths(None),
         vec![
             xdg.join("nemo-relay/config.toml"),
-            PathBuf::from("/etc/nemo-relay/config.toml"),
+            system_config_dir().join("config.toml"),
         ]
     );
     assert_eq!(
         plugin_config_paths(None, None),
         vec![
             xdg.join("nemo-relay/plugins.toml"),
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            system_config_dir().join("plugins.toml"),
         ]
     );
 }

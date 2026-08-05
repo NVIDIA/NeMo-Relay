@@ -2052,8 +2052,24 @@ pub fn default_plugin_config_paths(user_dir: Option<PathBuf>) -> Vec<PathBuf> {
     if let Some(dir) = user_dir {
         paths.push(dir.join("plugins.toml"));
     }
-    paths.push(PathBuf::from("/etc/nemo-relay/plugins.toml"));
+    paths.push(system_config_dir().join("plugins.toml"));
     paths
+}
+
+/// Resolves the platform system configuration directory.
+#[doc(hidden)]
+pub fn system_config_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("nemo-relay")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/etc/nemo-relay")
+    }
 }
 
 /// Resolves the nemo-relay user config directory from `XDG_CONFIG_HOME`, then

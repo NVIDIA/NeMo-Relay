@@ -239,7 +239,9 @@ precedence:
      supplied
    - otherwise `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`, or
      `~/.config/nemo-relay/plugins.toml` when `XDG_CONFIG_HOME` is not set
-2. System: `/etc/nemo-relay/plugins.toml`
+2. System:
+   - Unix: `/etc/nemo-relay/plugins.toml`
+   - Windows: `%ProgramData%\nemo-relay\plugins.toml`
 
 The runtime skips missing files and loads a physical file only once when
 multiple paths or symlinks select it. If no plugin config source exists,
@@ -285,8 +287,9 @@ nemo-relay plugins edit --global
 
 Scope flags are mutually exclusive.
 
-`--global` writes `/etc/nemo-relay/plugins.toml` and usually requires elevated
-filesystem permissions.
+`--global` writes `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows and usually requires
+elevated filesystem permissions.
 
 The editor menus support these controls:
 

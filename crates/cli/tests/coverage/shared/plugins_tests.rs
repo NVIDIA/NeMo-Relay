@@ -1918,20 +1918,34 @@ fn assert_preserved_plugin_document(root: &toml::Table) {
     assert!(dynamic[1].get("config").is_none());
 }
 
-#[cfg(unix)]
 #[test]
-fn global_plugin_document_is_system_readable() {
-    use std::os::unix::fs::PermissionsExt;
-
+fn plugin_documents_create_missing_user_and_system_directories() {
     let temp = tempfile::tempdir().unwrap();
-    let path = temp.path().join("plugins.toml");
-    let document = PluginConfigDocument::read(&path).unwrap();
-    document.write_for_scope(TargetScope::Global).unwrap();
+    let user_path = temp.path().join("user/nested/plugins.toml");
+    let system_path = temp.path().join("system/nested/plugins.toml");
+    assert!(!user_path.parent().unwrap().exists());
+    assert!(!system_path.parent().unwrap().exists());
 
-    assert_eq!(
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
-        0o644
-    );
+    PluginConfigDocument::read(&user_path)
+        .unwrap()
+        .write_for_scope(TargetScope::User)
+        .unwrap();
+    PluginConfigDocument::read(&system_path)
+        .unwrap()
+        .write_for_scope(TargetScope::Global)
+        .unwrap();
+
+    assert!(user_path.is_file());
+    assert!(system_path.is_file());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(system_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
 }
 
 #[test]

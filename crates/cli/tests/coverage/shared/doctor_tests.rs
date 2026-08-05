@@ -65,7 +65,7 @@ fn empty_report() -> DoctorReport {
             },
             unsupported_project_files: vec![],
             system: ConfigLayer {
-                path: PathBuf::from("/etc/nemo-relay/config.toml"),
+                path: crate::configuration::system_config_dir().join("config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),

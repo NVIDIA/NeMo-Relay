@@ -199,17 +199,22 @@ fn config_editor_treats_explicit_config_as_the_user_target() {
     let (scope, path) =
         resolve_edit_target(&global, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
     assert_eq!(scope, TargetScope::Global);
-    assert_eq!(path, PathBuf::from("/etc/nemo-relay/config.toml"));
+    assert_eq!(
+        path,
+        crate::configuration::system_config_dir().join("config.toml")
+    );
 }
 
 #[test]
 fn documents_are_written_atomically_with_scope_appropriate_permissions() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("nested/config.toml");
+    let path = directory.path().join("user/nested/config.toml");
+    assert!(!path.parent().unwrap().exists());
     let document = ConfigDocument::read(path.clone()).unwrap();
     assert!(!path.exists());
     document.write(TargetScope::User).unwrap();
     assert!(path.exists());
+    assert!(path.parent().unwrap().is_dir());
 
     let original = std::fs::read_to_string(&path).unwrap();
     crate::filesystem::fail_next_atomic_write(&path);
@@ -226,11 +231,14 @@ fn documents_are_written_atomically_with_scope_appropriate_permissions() {
         );
     }
 
-    let global_path = directory.path().join("global/config.toml");
+    let global_path = directory.path().join("system/nested/config.toml");
+    assert!(!global_path.parent().unwrap().exists());
     ConfigDocument::read(global_path.clone())
         .unwrap()
         .write(TargetScope::Global)
         .unwrap();
+    assert!(global_path.is_file());
+    assert!(global_path.parent().unwrap().is_dir());
 
     #[cfg(unix)]
     {

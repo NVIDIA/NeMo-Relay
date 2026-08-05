@@ -160,6 +160,8 @@ fn save_config_writes_user_scope_to_user_config_dir() {
     };
     let doc = build_config(&answers);
     let home = tempfile::tempdir().unwrap();
+    let user_config_dir = home.path().join(".config/nemo-relay");
+    assert!(!user_config_dir.exists());
 
     let written = save_config(&doc, home.path(), None).unwrap();
 
@@ -169,6 +171,7 @@ fn save_config_writes_user_scope_to_user_config_dir() {
         home.path().join(".config/nemo-relay/config.toml")
     );
     let contents = std::fs::read_to_string(&written[0]).unwrap();
+    assert!(user_config_dir.is_dir());
     assert!(!contents.contains("[exporters]"));
     assert!(contents.contains("[agents.claude]"));
 }

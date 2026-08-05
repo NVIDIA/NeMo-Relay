@@ -39,7 +39,7 @@ pub(crate) struct PricingScopeArgs {
     /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) user: bool,
-    /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
+    /// Edit system config (`/etc/nemo-relay` on Unix; `%ProgramData%\nemo-relay` on Windows).
     #[arg(long)]
     pub(crate) global: bool,
 }
