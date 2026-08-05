@@ -34,6 +34,9 @@ configuration, packaging, logging, and diagnostics workflows.
 
 ### Highlights
 
+The following highlights summarize the most significant user-facing changes in
+0.7:
+
 - **Asynchronous middleware and ordered event delivery:** Rust middleware
   callbacks can await work directly, Python callbacks can return awaitables,
   and Node.js callbacks can return Promises. Scope and mark APIs remain
@@ -105,6 +108,8 @@ excluded from default CLI builds and is scheduled for removal in 0.8, when a
 Switchyard-owned native plugin is expected to replace it.
 
 ### Fixed Known Issues in 0.7
+
+The following known issues are fixed in 0.7:
 
 - Sanitizer callback errors, panics, rejected awaitables or Promises, and
   invalid return values now fail closed. Relay withholds the governed
