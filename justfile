@@ -1121,11 +1121,11 @@ latency-benchmark *benchmark_args:
     result_dir="${result_dir:-target/benchmark-results}"
     for argument in "$@"; do
         if [[ "$argument" == "-h" || "$argument" == "--help" ]]; then
-            exec uv run python -m scripts.latency_benchmark.src "$@"
+            exec uv run --locked python -m scripts.latency_benchmark.src "$@"
         fi
     done
-    cargo build --release -p nemo-relay-cli
-    uv run python -m scripts.latency_benchmark.src \
+    cargo build --locked --release -p nemo-relay-cli
+    uv run --locked python -m scripts.latency_benchmark.src \
         --relay-bin target/release/nemo-relay \
         --output "$result_dir/nemo-relay-latency-report.json" \
         "$@"
