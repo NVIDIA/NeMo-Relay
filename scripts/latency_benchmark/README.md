@@ -10,24 +10,14 @@ around OpenAI Responses, Anthropic Messages, Codex hooks, Claude Code hooks,
 and Relay process startup. The fixture runs deterministic providers on
 loopback, so network and model-service latency do not hide Relay overhead.
 
+## Before You Run
+
 Run all commands from the repository root. Start with the smoke test unless you
 are collecting reportable performance results.
 
-The default matrix is intentionally large. With the current defaults, its
-ATOF file-exporter path sends 11,860 measured and warmup gateway requests. The
-request content totals about 12.3 GiB before ATOF serialization. A representative
-4 MiB request produced about 8.1 MiB of ATOF JSON in a local fixture run, so a
-full default run is expected to write about 25 GiB temporarily. The exact size
-depends on the event shape. Reserve at least 30 GiB of free space before a
-default run.
-
-By default, the benchmark writes this large ATOF output and other ephemeral
-Relay files to the operating system's temporary directory in a folder named
-`nemo-relay-latency-*`. This directory is typically under `/tmp`; macOS can use
-a private per-user temporary directory instead. The benchmark removes the
-temporary directory after a normal run. The much smaller JSON result and HTML
-report are persistent and use the result directory described in
-[Read the Results](#read-the-results).
+The default matrix can write tens of gigabytes of temporary ATOF data, so make
+sure the operating system's temporary directory has ample free space. The
+benchmark removes this data after a normal run.
 
 ## Prerequisites
 
