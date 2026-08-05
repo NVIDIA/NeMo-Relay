@@ -167,14 +167,18 @@ class TransparentRelayProcess:
             stderr=self.log_handle,
         )
         deadline = time.monotonic() + 15
-        while not gateway_file.exists():
+        while True:
+            if gateway_file.is_file():
+                gateway_url = gateway_file.read_text(encoding="utf-8").strip()
+                if gateway_url:
+                    self.url = gateway_url
+                    break
             if self.process.poll() is not None:
                 self._raise_start_error(log_path)
             if time.monotonic() >= deadline:
                 self.stop()
                 raise RuntimeError(f"timed out waiting for {self.name} transparent gateway")
             time.sleep(0.001)
-        self.url = gateway_file.read_text(encoding="utf-8").strip()
 
     def stop(self) -> None:
         self.stop_file.touch()

@@ -1,7 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
-interface:
-  display_name: "Maintain Coding-Agent Benchmark"
-  short_description: "Run and extend the Relay latency fixture"
-  default_prompt: "Use $maintain-coding-agent-benchmark to run or extend the coding-agent latency benchmark."

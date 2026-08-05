@@ -1113,22 +1113,22 @@ test-hermes-mcp-e2e:
     ./scripts/test-hermes-mcp-e2e.sh
 
 # Opt-in: builds the release CLI and runs configurable local latency suites.
+[positional-arguments]
 latency-benchmark *benchmark_args:
     #!/usr/bin/env bash
     set -euo pipefail
     result_dir={{ quote(output_dir) }}
     result_dir="${result_dir:-target/benchmark-results}"
-    benchmark_args=({{ benchmark_args }})
-    for argument in "${benchmark_args[@]}"; do
+    for argument in "$@"; do
         if [[ "$argument" == "-h" || "$argument" == "--help" ]]; then
-            exec uv run python -m scripts.latency_benchmark.src "${benchmark_args[@]}"
+            exec uv run python -m scripts.latency_benchmark.src "$@"
         fi
     done
     cargo build --release -p nemo-relay-cli
     uv run python -m scripts.latency_benchmark.src \
         --relay-bin target/release/nemo-relay \
         --output "$result_dir/nemo-relay-latency-report.json" \
-        "${benchmark_args[@]}"
+        "$@"
 
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:

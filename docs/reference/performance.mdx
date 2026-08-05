@@ -29,12 +29,14 @@ Use these practices when applying the concept in application or integration code
 - Use execution intercepts when you need to wrap real execution and sanitize guardrails when you only need to change emitted observability payloads.
 - Use binding-native typed wrappers and codecs when provider payload conversion would otherwise be repeated at many call sites.
 
-## Coding-Agent Latency Benchmark
+## Latency Benchmark
 
-Use the opt-in coding-agent benchmark to measure the local latency that Relay
+Use the opt-in Latency Benchmark to measure the local latency that Relay
 adds around Codex and Claude Code traffic. The harness uses deterministic
 loopback OpenAI and Anthropic providers so network and model-service latency do
 not hide Relay's contribution.
+
+Run the benchmark with the following command:
 
 ```bash
 just latency-benchmark

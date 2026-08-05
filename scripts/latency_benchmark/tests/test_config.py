@@ -6,7 +6,9 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from scripts.latency_benchmark.src import fixtures
 from scripts.latency_benchmark.src.config import (
     DEFAULT_CONFIG_PATH,
     MiddlewareVariant,
@@ -15,6 +17,7 @@ from scripts.latency_benchmark.src.config import (
     parse_args,
 )
 from scripts.latency_benchmark.src.fixtures import (
+    isolated_environment,
     write_agent_config,
     write_mock_codex,
     write_plugin_configs,
@@ -208,6 +211,39 @@ class StaticFixtureTests(unittest.TestCase):
         self.assertNotIn("__OTLP_ENDPOINT__", rendered)
         self.assertNotIn("__CODEX_COMMAND__", rendered)
         self.assertEqual(configs["relay-guardrails"], custom_config)
+
+    def test_materializes_windows_mock_with_crlf_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(fixtures.os, "name", "nt"):
+                mock_codex = write_mock_codex(root)
+            contents = mock_codex.read_bytes()
+
+        self.assertIn(b"\r\n", contents)
+        self.assertNotIn(b"\n", contents.replace(b"\r\n", b""))
+
+    def test_isolated_environment_removes_values_that_can_skew_results(self) -> None:
+        inherited = {
+            "ANTHROPIC_API_KEY": "secret",
+            "HTTP_PROXY": "http://proxy.example",
+            "NEMO_RELAY_CONFIG": "/tmp/developer-config.toml",
+            "OPENAI_API_KEY": "secret",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.example",
+            "PATH": "/usr/bin",
+            "RUST_LOG": "debug",
+            "https_proxy": "http://proxy.example",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.dict(fixtures.os.environ, inherited, clear=True):
+                environment = isolated_environment(root)
+
+        self.assertEqual(environment["PATH"], "/usr/bin")
+        self.assertEqual(environment["NO_PROXY"], "127.0.0.1,localhost")
+        self.assertEqual(environment["no_proxy"], "127.0.0.1,localhost")
+        for name in inherited.keys() - {"PATH"}:
+            with self.subTest(name=name):
+                self.assertNotIn(name, environment)
 
 
 if __name__ == "__main__":

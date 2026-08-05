@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Coding-Agent Latency Benchmark
+# Latency Benchmark
 
 Use this opt-in benchmark to measure the local latency that NeMo Relay adds
 around OpenAI Responses, Anthropic Messages, Codex hooks, Claude Code hooks,
@@ -266,6 +266,8 @@ with any shared result. Small loopback baselines can make harmless absolute
 differences look large as percentages.
 
 ## Troubleshoot
+
+Use these checks to diagnose the most common benchmark failures:
 
 - A loopback bind error means the environment must allow local HTTP listeners.
 - An exporter-delivery error means the ATOF file or OTLP receiver observed no

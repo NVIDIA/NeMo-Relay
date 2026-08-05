@@ -423,7 +423,7 @@ function drawBarChart(svg, entries) {
   });
 }
 
-function summaryRows(collection, comparisons = false) {
+function summaryRows(collection) {
   return Object.entries(collection).map(([name, summary]) => {
     const interval = summary.median_ci95_ms;
     return [
@@ -450,7 +450,7 @@ function renderProcessSuite(name) {
   drawBarChart(byId(`${name}-chart`), entries);
   const headers = ["Path", "p50", "p95", "p99", "Median 95% CI", "Samples"];
   renderTable(byId(`${name}-absolute-table`), headers, summaryRows(result.absolute), [1, 2, 3, 5]);
-  renderTable(byId(`${name}-comparison-table`), headers, summaryRows(result.comparisons, true), [1, 2, 3, 5]);
+  renderTable(byId(`${name}-comparison-table`), headers, summaryRows(result.comparisons), [1, 2, 3, 5]);
 }
 
 function renderDelivery() {

@@ -136,6 +136,9 @@ def benchmark_scenario(
                 local.append({name: perform_request(connections[name], provider, body, streaming) for name in order})
             with observation_lock:
                 observations.extend(local)
+        except BaseException:
+            barrier.abort()
+            raise
         finally:
             for connection in connections.values():
                 connection.close()
@@ -300,10 +303,14 @@ def benchmark_startup(
         baseline = run_subprocess_timed([str(binary), "--version"], root=root)
         cycle = {}
         for variant in relay_variants:
-            process = RelayProcess(binary, root, provider_url, configs[variant], f"startup-{variant}-{index}")
-            process.start()
-            cycle[variant] = process.startup_ns
-            process.stop()
+            with RelayProcess(
+                binary,
+                root,
+                provider_url,
+                configs[variant],
+                f"startup-{variant}-{index}",
+            ) as process:
+                cycle[variant] = process.startup_ns
         if index >= 0:
             measurements["process_baseline"].append(baseline)
             for variant, value in cycle.items():
