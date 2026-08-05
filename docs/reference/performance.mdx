@@ -29,6 +29,94 @@ Use these practices when applying the concept in application or integration code
 - Use execution intercepts when you need to wrap real execution and sanitize guardrails when you only need to change emitted observability payloads.
 - Use binding-native typed wrappers and codecs when provider payload conversion would otherwise be repeated at many call sites.
 
+## Coding-Agent Latency Benchmark
+
+Use the opt-in coding-agent benchmark to measure the local latency that Relay
+adds around Codex and Claude Code traffic. The harness uses deterministic
+loopback OpenAI and Anthropic providers so network and model-service latency do
+not hide Relay's contribution.
+
+```bash
+just benchmark-coding-agent-latency
+```
+
+The command builds the release CLI. Its default configuration measures these
+paths:
+
+- Direct requests to the mock provider.
+- Relay with no exporter, which isolates the managed gateway pipeline.
+- Relay with a local ATOF file sink.
+- Relay with a local OpenTelemetry HTTP receiver.
+- Full `nemo-relay hook-forward` subprocesses for Codex and Claude Code.
+- Cold Relay process startup through gateway readiness.
+
+Gateway scenarios cover OpenAI Responses and Anthropic Messages, buffered and
+streaming responses, request payloads from 4 KiB through 4 MiB, and concurrency
+levels 1, 2, 4, 8, and 16.
+For buffered calls, inspect total latency. For streaming calls, inspect both
+time to the first content delta and total stream time. The report includes
+p50, p95, and p99 paired latency differences and a bootstrap 95% confidence
+interval for the median.
+
+Configure a run with a partial TOML file. Unspecified values inherit from
+`scripts/benchmark_coding_agent_latency/data/default.toml`:
+
+```toml
+tests = ["gateway"]
+providers = ["openai"]
+modes = ["buffered", "streaming"]
+samples = 20
+warmup = 1
+payload_sizes = [4096]
+concurrency = [1, 4]
+```
+
+Pass the file to the benchmark:
+
+```bash
+just benchmark-coding-agent-latency --config /path/to/benchmark.toml
+```
+
+Command-line values take precedence over the TOML file. Use comma-separated
+values for list overrides. This example runs only the OpenAI streaming gateway
+suite, regardless of the values in the file:
+
+```bash
+just benchmark-coding-agent-latency \
+  --config /path/to/benchmark.toml \
+  --tests gateway \
+  --providers openai \
+  --modes streaming \
+  --payload-sizes 4096,65536 \
+  --concurrency 1,4
+```
+
+The selectable suites are `gateway`, `hooks`, and `startup`. Run
+`uv run python scripts/benchmark-coding-agent-latency.py --help` to see every
+matrix and sample-count override. Results contain only the selected suite
+sections.
+
+The command prints a readable summary and writes structured JSON to
+`target/benchmark-results/coding-agent-latency.json`. Set the repository-wide
+`output_dir` variable to choose another result location:
+
+```bash
+just output_dir=/tmp/relay-benchmarks benchmark-coding-agent-latency
+```
+
+The local-file scenarios can write tens of gigabytes of temporary ATOF data
+with the default matrix. The harness verifies exporter delivery for gateway and
+hook runs and removes its temporary workspace after the run, but you should
+confirm that the system has sufficient free disk space before starting it.
+
+Treat results as environment-specific. Record the commit, release build,
+hardware, operating system, workload sizes, and sample counts when sharing a
+number. Prefer added milliseconds over percentages: a small absolute increase
+can look disproportionately large when the direct loopback baseline is much
+faster than a real model call. Use real Codex or Claude Code runs as an
+end-to-end validation, not as the primary gateway measurement, because host
+startup and scheduling add unrelated variance.
+
 ## Related Topics
 
 Use these links to continue into adjacent concepts and workflows.

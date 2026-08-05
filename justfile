@@ -1112,6 +1112,19 @@ test-claude-plugin-e2e:
 test-hermes-mcp-e2e:
     ./scripts/test-hermes-mcp-e2e.sh
 
+# Opt-in: builds the release CLI and runs configurable local latency suites.
+benchmark-coding-agent-latency *benchmark_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    result_dir={{ quote(output_dir) }}
+    result_dir="${result_dir:-target/benchmark-results}"
+    benchmark_args=({{ benchmark_args }})
+    cargo build --release -p nemo-relay-cli
+    uv run python scripts/benchmark-coding-agent-latency.py \
+        --relay-bin target/release/nemo-relay \
+        --output "$result_dir/coding-agent-latency.json" \
+        "${benchmark_args[@]}"
+
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash

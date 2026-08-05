@@ -26,6 +26,32 @@ These checks exercise installed coding-agent clients and are intentionally outsi
 - `just test-claude-plugin-e2e`
 - `just test-hermes-mcp-e2e`
 
+## Opt-In Performance Benchmark
+
+Run `just benchmark-coding-agent-latency` to build the release CLI and compare
+direct provider requests with Relay's minimal, local-file, and local-OTLP
+configurations. The benchmark also measures full hook subprocess and cold
+gateway startup time. It writes structured results under
+`target/benchmark-results/` by default and is intentionally outside regular CI.
+
+The defaults live in
+`scripts/benchmark_coding_agent_latency/data/default.toml`. Supply a partial
+TOML file with `--config`, or override individual values on the command line.
+For example, this runs only a small OpenAI gateway matrix:
+
+```bash
+just benchmark-coding-agent-latency \
+  --tests gateway \
+  --providers openai \
+  --payload-sizes 4096 \
+  --concurrency 1 \
+  --samples 10
+```
+
+Run `uv run python scripts/benchmark-coding-agent-latency.py --help` to list
+all overrides. The three selectable suites are `gateway`, `hooks`, and
+`startup`.
+
 ## Internal Layout
 
 - `docs/`: Fern reference-generation, migration cleanup, and `docs-website` branch sync helpers. Generated API reference output under `docs/reference/api/*-library-reference/` is ignored and recreated by `just docs`.
