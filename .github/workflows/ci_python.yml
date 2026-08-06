@@ -132,13 +132,13 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=$vcpkgRoot"
           Add-Content -Path $env:GITHUB_ENV -Value "VCPKGRS_TRIPLET=arm64-windows-static-md"
 
-      - name: Run Python tests with coverage
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
-
       - name: Run latency benchmark tests
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just test-latency-benchmark
+
+      - name: Run Python tests with coverage
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
 
       - name: Run Python plugin end-to-end test
         if: >-
