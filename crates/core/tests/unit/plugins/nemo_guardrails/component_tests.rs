@@ -644,12 +644,17 @@ fn assert_invalid_remote_identity_and_codec() {
         }
     })));
     assert!(bad_codec.has_errors());
-    assert!(
-        bad_codec
-            .diagnostics
+    assert!(bad_codec.diagnostics.iter().any(|diag| {
+        diag.message.contains("codec must be one of:")
+            && [
+                "openai_chat",
+                "openai_responses",
+                "anthropic_messages",
+                "gemini_generate_content",
+            ]
             .iter()
-            .any(|diag| { diag.message.contains("codec must be one of:") })
-    );
+            .all(|name| diag.message.contains(name))
+    }));
 
     let unsupported_remote_codec = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
@@ -676,6 +681,25 @@ fn assert_invalid_remote_identity_and_codec() {
     assert!(unsupported_remote_anthropic_codec.has_errors());
     assert!(
         unsupported_remote_anthropic_codec
+            .diagnostics
+            .iter()
+            .any(|diag| {
+                diag.message
+                    .contains("remote mode currently supports only codec = 'openai_chat'")
+            })
+    );
+
+    let unsupported_remote_gemini_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "gemini_generate_content",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(unsupported_remote_gemini_codec.has_errors());
+    assert!(
+        unsupported_remote_gemini_codec
             .diagnostics
             .iter()
             .any(|diag| {
