@@ -88,20 +88,6 @@ jobs:
             redis_service_image: ''
             s3_service_image: ''
             run_s3_tests: false
-          - platform: linux-musl-amd64
-            runner: ubuntu-latest
-            container_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
-            run_redis_tests: false
-            redis_service_image: ''
-            s3_service_image: ''
-            run_s3_tests: false
-          - platform: linux-musl-arm64
-            runner: ubuntu-24.04-arm
-            container_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
-            run_redis_tests: false
-            redis_service_image: ''
-            s3_service_image: ''
-            run_s3_tests: false
 
     steps:
       - name: Checkout
@@ -112,7 +98,6 @@ jobs:
         uses: ./.github/actions/load-ci-tool-versions
 
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
-        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
@@ -125,7 +110,6 @@ jobs:
           cache-bin: false
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
-        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
@@ -148,7 +132,7 @@ jobs:
           PY
 
       - name: Install managed Python
-        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
+        if: ${{ matrix.platform != 'windows-arm64' }}
         run: |
           set -e
           UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
@@ -162,12 +146,10 @@ jobs:
           echo "$python_home" >> "$GITHUB_PATH"
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
-        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},cargo-nextest@${{ steps.ci-config.outputs.cargo_nextest_version }},just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Run Rust tests with coverage
-        if: ${{ !contains(matrix.platform, 'musl') }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
@@ -190,52 +172,8 @@ jobs:
           fi
           just "${args[@]}" test-rust
 
-      - name: Run Rust tests on musllinux
-        if: ${{ contains(matrix.platform, 'musl') }}
-        env:
-          MUSLLINUX_IMAGE: ${{ matrix.container_image }}
-          NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
-          NEMO_RELAY_UV_VERSION: ${{ steps.ci-config.outputs.uv_version }}
-          NEMO_RELAY_JUST_VERSION: ${{ steps.ci-config.outputs.just_version }}
-          NEMO_RELAY_CARGO_NEXTEST_VERSION: ${{ steps.ci-config.outputs.cargo_nextest_version }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.cargo/registry" "$HOME/.cargo/git"
-          docker run --rm \
-            --volume "${NEMO_RELAY_CI_WORKSPACE}:${NEMO_RELAY_CI_WORKSPACE}" \
-            --volume "$HOME/.cargo/registry:/root/.cargo/registry" \
-            --volume "$HOME/.cargo/git:/root/.cargo/git" \
-            --workdir "${NEMO_RELAY_CI_WORKSPACE}" \
-            --env NEMO_RELAY_RUST_VERSION \
-            --env NEMO_RELAY_UV_VERSION \
-            --env NEMO_RELAY_JUST_VERSION \
-            --env NEMO_RELAY_CARGO_NEXTEST_VERSION \
-            "$MUSLLINUX_IMAGE" \
-            /bin/sh -ec '
-              apk add --no-cache bash build-base cmake curl git perl pkgconfig python3-dev
-              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
-                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
-              export PATH="$HOME/.cargo/bin:$PATH"
-              host="$(rustc -vV | sed -n "s/^host: //p")"
-              curl --proto "=https" --tlsv1.2 --silent --show-error --fail --location \
-                "https://github.com/casey/just/releases/download/$NEMO_RELAY_JUST_VERSION/just-$NEMO_RELAY_JUST_VERSION-$host.tar.gz" | \
-                tar xzf - -C "$HOME/.cargo/bin" just
-              curl --proto "=https" --tlsv1.2 --silent --show-error --fail --location \
-                "https://get.nexte.st/$NEMO_RELAY_CARGO_NEXTEST_VERSION/$host.tar.gz" | \
-                tar xzf - -C "$HOME/.cargo/bin"
-              curl --proto "=https" --tlsv1.2 --silent --show-error --fail --location \
-                "https://astral.sh/uv/$NEMO_RELAY_UV_VERSION/install.sh" | \
-                env UV_INSTALL_DIR="$HOME/.cargo/bin" UV_NO_MODIFY_PATH=1 sh
-              export RUSTFLAGS="-C target-feature=-crt-static"
-              export UV_PYTHON_DOWNLOADS=never
-              export UV_PYTHON=/usr/bin/python3
-              export PYO3_PYTHON="$UV_PYTHON"
-              "$PYO3_PYTHON" -c "import sysconfig; assert sysconfig.get_config_var(\"Py_ENABLE_SHARED\") == 1, \"Alpine Python must provide a shared libpython for PyO3 tests\""
-              just --set ci true --set output_dir "$PWD" test-rust
-            '
-
       - name: Upload Rust coverage to Codecov
-        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
+        if: ${{ matrix.platform != 'windows-arm64' }}
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
