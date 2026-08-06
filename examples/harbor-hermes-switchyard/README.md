@@ -3,10 +3,10 @@
 This example runs one complete Terminal-Bench 2.0 cohort through Harbor and
 Hermes. Hermes owns an in-process NeMo Relay 0.7.0 runtime; Relay loads the
 Switchyard native plugin, and Switchyard selects and calls the configured
-provider route. Phase 2 is one resumable 89-task cohort. Multi-cohort execution
-and result aggregation belong to Phase 3 and are intentionally out of scope.
+provider route. It runs one resumable 89-task cohort. Multi-cohort execution
+and result aggregation are intentionally out of scope for this example.
 
-## Pinned inputs
+## 1. Pinned inputs
 
 | Dependency | Input used by this example |
 |---|---|
@@ -19,7 +19,7 @@ Every source checkout is detached and verified. The Hermes installer is
 followed by `uv sync --frozen`, then the selected Relay 0.7.0 wheel is
 force-installed without dependencies and verified by digest.
 
-## Request and lifecycle ownership
+## 2. Request and lifecycle ownership
 
 There is no Switchyard service in this topology:
 
@@ -39,7 +39,7 @@ The adapter can be removed after
 is upstream and Harbor can install an immutable compatible Hermes revision
 while projecting the Relay configuration and plugin bundle.
 
-## Configuration ownership
+## 3. Configuration ownership
 
 The two configuration files have deliberately different responsibilities:
 
@@ -72,7 +72,7 @@ unserved `openai/ollama-route-stub` identity and projects a dead local OpenAI
 endpoint. If Switchyard is bypassed, the request fails closed instead of
 reaching a provider.
 
-## Host prerequisites
+## 4. Host prerequisites
 
 - Linux or macOS, Bash, Python 3.11+, Docker, and `tmux`;
 - a local, immutable Terminal-Bench 2.0 dataset export containing 89 tasks;
@@ -107,7 +107,7 @@ chmod 0600 /absolute/private/phase2-run.env
 The validator reports names and paths only. It rejects legacy secret-file
 variables and never renders or prints the authorization value.
 
-## Phase 2 admission and runbook
+## 5. Prepare and validate a cohort run
 
 Run every stage with the same immutable inputs. If the dataset, concurrency,
 architecture, Relay wheel, Switchyard library, plugin template, or Hermes
@@ -124,7 +124,7 @@ set +a
 set +x
 ```
 
-### 1. All-89 no-token admission
+## 6. Verify the complete dataset without provider tokens
 
 This loads and uniquely selects all tasks, hashes their instructions and
 verifiers, expands the complete Harbor job graph, denies registry/provider
@@ -148,7 +148,7 @@ chmod 0700 "$PHASE2_ADMISSION_ROOT"
 The passed evidence binds task names, task/instruction/verifier hashes,
 concurrency, architecture, Relay wheel, Switchyard library, and plugin config.
 
-### 2. Docker offline runtime admission
+## 7. Verify the offline container runtime
 
 Prepare a fresh admission root with test-only structured overrides. Production
 model, URL, and routing values remain owned by `plugins.toml.in`; these flags
@@ -184,7 +184,7 @@ observability, pinned-library loading, and clean shutdown. Its evidence binds
 the same Hermes commit, Relay wheel, Switchyard library, architecture, and
 plugin template consumed by the cohort.
 
-### 3. Immutable plan
+## 8. Create the immutable run plan
 
 The first command writes `plan.json`; any later invocation with different
 immutable inputs is refused. Choose concurrency before this point.
@@ -197,7 +197,7 @@ immutable inputs is refused. Choose concurrency before this point.
 and upload result opens the parallel lane even when its benchmark reward is a
 non-pass.
 
-### 4. Capacity and network preflight
+## 9. Check capacity and provider availability
 
 ```bash
 "$EXAMPLE_ROOT/run_phase2_cohort.sh" "$PHASE2_RUN_ROOT" --preflight-only
@@ -218,7 +218,7 @@ It also rejects less than the configured free-disk minimum (100G by default),
 concurrency above Docker's CPU count, and an architecture mismatch. The
 defaults are a 2G parallel lane and 4G Docker reserve.
 
-### 5. Durable launch under tmux
+## 10. Launch and resume the cohort
 
 Exit the secret-bearing admission shell first. From a shell where the protected
 file has **not** been sourced, start one detached supervisor. Only the file path
@@ -264,7 +264,7 @@ Agent setup also retries transient `apt-get` failures three times locally;
 exhausted package-manager failures are classified as infrastructure and remain
 subject to the cohort's bounded retry limit.
 
-## Completion gates
+## 11. Completion gates
 
 A task is complete only when both its `validation.json` and
 `phoenix-upload.json` have `status=passed`. A benchmark
@@ -279,5 +279,5 @@ The cohort passes only when:
 - `summary.json.status` is `passed`.
 
 `report.md` is regenerated after each completed attempt and is safe for
-progress review. Phase 3 multiple-run orchestration and aggregated reports are
-not part of this runbook.
+progress review. Running multiple cohorts and aggregating their reports are not
+part of this runbook.
