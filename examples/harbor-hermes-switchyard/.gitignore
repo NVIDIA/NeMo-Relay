@@ -1,2 +1,1 @@
-terminal-bench-run.env
-phase2-run.*.env
+.env

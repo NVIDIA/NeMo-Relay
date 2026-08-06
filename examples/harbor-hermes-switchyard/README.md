@@ -43,8 +43,8 @@ while projecting the Relay configuration and plugin bundle.
 
 The two configuration files have deliberately different responsibilities:
 
-- `terminal-bench-run.env.example` is copied to an untracked, mode-`0600`
-  `terminal-bench-run.env`. It contains per-machine paths, the run identity, Phoenix
+- `.env.example` is copied to an untracked, mode-`0600`
+  `.env`. It contains per-machine paths, the run identity, Phoenix
   destination, manually selected capacity, and the real
   `SWITCHYARD_PROVIDER_AUTHORIZATION` header.
 - `config/plugins.toml.in` is checked in and non-secret. It is the only source
@@ -99,9 +99,9 @@ placeholder, including the complete provider Authorization header. Do not
 source this file into the interactive shell used to start `tmux`.
 
 ```bash
-cp terminal-bench-run.env.example /absolute/private/terminal-bench-run.env
-chmod 0600 /absolute/private/terminal-bench-run.env
-./scripts/validate_phase2_environment.sh /absolute/private/terminal-bench-run.env
+cp .env.example /absolute/private/.env
+chmod 0600 /absolute/private/.env
+./scripts/validate_phase2_environment.sh /absolute/private/.env
 ```
 
 The validator reports names and paths only. It rejects legacy secret-file
@@ -119,7 +119,7 @@ For the commands below, enter a short-lived shell with tracing disabled:
 ```bash
 set +x
 set -a
-source /absolute/private/terminal-bench-run.env
+source /absolute/private/.env
 set +a
 set +x
 ```
@@ -228,7 +228,7 @@ disabled and persists output below the run root.
 ```bash
 exit  # only when returning from the short-lived admission shell above
 ./scripts/launch_phase2_tmux.sh \
-  /absolute/private/terminal-bench-run.env \
+  /absolute/private/.env \
   harbor-hermes-switchyard-phase2-run-1
 ```
 
@@ -251,7 +251,7 @@ tmux send-keys -t harbor-hermes-switchyard-phase2-run-1 C-c
 
 # After the old session exits, resume the same immutable root.
 ./scripts/launch_phase2_tmux.sh \
-  /absolute/private/terminal-bench-run.env \
+  /absolute/private/.env \
   harbor-hermes-switchyard-phase2-run-1
 ```
 

@@ -8,7 +8,7 @@ example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${1:-}"
 session="${2:-}"
 if [[ -z "$env_file" || "$env_file" != /* || -z "$session" ]]; then
-  echo "usage: $0 /absolute/terminal-bench-run.env tmux-session-name" >&2
+  echo "usage: $0 /absolute/.env tmux-session-name" >&2
   exit 2
 fi
 if [[ ! "$session" =~ ^[A-Za-z0-9_.-]+$ ]]; then

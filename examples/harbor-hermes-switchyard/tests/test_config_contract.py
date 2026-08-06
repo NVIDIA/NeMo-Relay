@@ -171,7 +171,7 @@ def test_agent_install_retries_transient_apt_failures() -> None:
 
 
 def test_phase2_environment_template_consolidates_secret_without_legacy_file() -> None:
-    template = (EXAMPLE_ROOT / "terminal-bench-run.env.example").read_text(encoding="utf-8")
+    template = (EXAMPLE_ROOT / ".env.example").read_text(encoding="utf-8")
     assert "SWITCHYARD_PROVIDER_AUTHORIZATION='Bearer replace-with-provider-token'" in template
     assert "INFERENCE_SECRETS_FILE" not in template
     assert "NV_INFERENCEHUB_KEY" not in template
@@ -179,7 +179,7 @@ def test_phase2_environment_template_consolidates_secret_without_legacy_file() -
     assert "STRONG_MODEL" not in template
     assert "WEAK_MODEL" not in template
     assert "UPSTREAM_BASE_URL" not in template
-    assert "terminal-bench-run.env" in (EXAMPLE_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert ".env" in (EXAMPLE_ROOT / ".gitignore").read_text(encoding="utf-8")
 
 
 def test_phase2_readme_uses_admissions_instead_of_phase1_regressions() -> None:
