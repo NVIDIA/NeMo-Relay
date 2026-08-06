@@ -586,7 +586,7 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	}
 	library := goNativePluginFixture(t)
 	manifest := writeGoNativePluginManifest(t, library)
-	pluginsTOML := configureNativePluginProject(t)
+	pluginsTOML := configureNativePluginUserConfig(t)
 	staticRegistrations, staticCallbacks := registerStaticFixturePlugin(t)
 
 	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
@@ -621,14 +621,68 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	assertMissingNativePluginFails(t)
 }
 
-func configureNativePluginProject(t *testing.T) string {
+func TestInitializeWithDynamicPluginsIgnoresProjectPluginConfig(t *testing.T) {
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(clearConfigurationErrorFmt, err)
+	}
+	library := goNativePluginFixture(t)
+	manifest := writeGoNativePluginManifest(t, library)
+	configureNativePluginProjectConfig(t)
+	staticRegistrations, staticCallbacks := registerStaticFixturePlugin(t)
+
+	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
+		PluginID:    "fixture_native",
+		Kind:        DynamicPluginKindRustDynamic,
+		ManifestRef: manifest,
+		Config:      map[string]any{},
+	}})
+	if err != nil {
+		t.Fatalf(initializePluginsErrorFmt, err)
+	}
+	defer func() {
+		if err := activation.Close(); err != nil {
+			t.Errorf("deferred Close() error = %v", err)
+		}
+	}()
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("activation diagnostics = %#v, want none", report.Diagnostics)
+	}
+	if staticRegistrations.Load() != 0 {
+		t.Fatalf("static registrations = %d, want 0", staticRegistrations.Load())
+	}
+
+	transformed, err := ToolRequestIntercepts("go-native-tool", json.RawMessage(`{"input":true}`))
+	if err != nil {
+		t.Fatalf("ToolRequestIntercepts() error = %v", err)
+	}
+	var transformedObject map[string]any
+	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
+		t.Fatalf("transformed tool args are invalid JSON: %v", err)
+	}
+	if transformedObject["native_plugin"] != true || transformedObject["go_static_base"] != nil {
+		t.Fatalf("transformed tool args = %s, want only native-plugin marker", transformed)
+	}
+	if staticCallbacks.Load() != 0 {
+		t.Fatalf("static callbacks = %d, want 0", staticCallbacks.Load())
+	}
+}
+
+func configureNativePluginUserConfig(t *testing.T) string {
 	t.Helper()
 	projectDir := t.TempDir()
-	projectConfigDir := filepath.Join(projectDir, ".nemo-relay")
-	if err := os.MkdirAll(projectConfigDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(project config) error = %v", err)
+	legacyPluginsTOML := filepath.Join(projectDir, ".nemo-relay", "plugins.toml")
+	if err := os.MkdirAll(filepath.Dir(legacyPluginsTOML), 0o700); err != nil {
+		t.Fatalf("MkdirAll(legacy project config) error = %v", err)
 	}
-	pluginsTOML := filepath.Join(projectConfigDir, "plugins.toml")
+	if err := os.WriteFile(legacyPluginsTOML, []byte("components = ["), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy project plugins.toml) error = %v", err)
+	}
+	xdgConfigHome := filepath.Join(projectDir, "xdg")
+	userConfigDir := filepath.Join(xdgConfigHome, "nemo-relay")
+	if err := os.MkdirAll(userConfigDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(user config) error = %v", err)
+	}
+	pluginsTOML := filepath.Join(userConfigDir, "plugins.toml")
 	const staticKind = "go.fixture.static_base"
 	fileConfig := fmt.Sprintf(`version = 1
 
@@ -637,7 +691,7 @@ kind = %q
 enabled = true
 
 [components.config]
-source = "project-file"
+source = "user-file"
 `, staticKind)
 	if err := os.WriteFile(pluginsTOML, []byte(fileConfig), 0o600); err != nil {
 		t.Fatalf("WriteFile(plugins.toml) error = %v", err)
@@ -654,8 +708,47 @@ source = "project-file"
 			t.Errorf("restore working directory error = %v", err)
 		}
 	})
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(projectDir, "xdg"))
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 	return pluginsTOML
+}
+
+func configureNativePluginProjectConfig(t *testing.T) {
+	t.Helper()
+	projectDir := t.TempDir()
+	projectPluginsTOML := filepath.Join(projectDir, ".nemo-relay", "plugins.toml")
+	if err := os.MkdirAll(filepath.Dir(projectPluginsTOML), 0o700); err != nil {
+		t.Fatalf("MkdirAll(project config) error = %v", err)
+	}
+	const staticKind = "go.fixture.static_base"
+	projectConfig := fmt.Sprintf(`version = 1
+
+[[components]]
+kind = %q
+enabled = true
+
+[components.config]
+source = "project-file"
+`, staticKind)
+	if err := os.WriteFile(projectPluginsTOML, []byte(projectConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile(project plugins.toml) error = %v", err)
+	}
+	xdgConfigHome := filepath.Join(projectDir, "xdg")
+	if err := os.MkdirAll(xdgConfigHome, 0o700); err != nil {
+		t.Fatalf("MkdirAll(XDG config home) error = %v", err)
+	}
+	previousCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("Chdir(project) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previousCWD); err != nil {
+			t.Errorf("restore working directory error = %v", err)
+		}
+	})
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 }
 
 func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
@@ -665,8 +758,8 @@ func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
 	staticCallbacks := &atomic.Int32{}
 	if err := RegisterPlugin(staticKind, PluginFuncs{
 		RegisterFunc: func(config map[string]any, ctx *PluginContext) error {
-			if config["source"] != "project-file" {
-				return fmt.Errorf("static plugin config = %#v, want project-file source", config)
+			if config["source"] != "user-file" {
+				return fmt.Errorf("static plugin config = %#v, want user-file source", config)
 			}
 			staticRegistrations.Add(1)
 			return ctx.RegisterToolRequestIntercept(

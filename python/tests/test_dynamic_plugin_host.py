@@ -490,9 +490,10 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
                 lambda _name, args: {**args, "file_static_base": True},
             )
 
-    project_config = tmp_path / ".nemo-relay"
-    project_config.mkdir()
-    plugins_toml = project_config / "plugins.toml"
+    isolated_user_config = tmp_path / "xdg"
+    user_config = isolated_user_config / "nemo-relay"
+    user_config.mkdir(parents=True)
+    plugins_toml = user_config / "plugins.toml"
     plugins_toml.write_text(
         textwrap.dedent(
             f"""
@@ -507,8 +508,6 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
             """
         )
     )
-    isolated_user_config = tmp_path / "xdg"
-    isolated_user_config.mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(isolated_user_config))
 

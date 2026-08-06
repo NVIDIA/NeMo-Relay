@@ -144,11 +144,11 @@ nemo-relay run --agent codex --dry-run
 
 ## Configuration
 
-Project config lives at `./.nemo-relay/config.toml`; user config lives at
-`~/.config/nemo-relay/config.toml` or `$XDG_CONFIG_HOME/nemo-relay/config.toml`.
-Runtime files layer from lowest to highest precedence as explicit-or-user,
-nearest project, then system. An explicit `--config` replaces the ambient user
-file without suppressing project or system configuration.
+User config lives at `~/.config/nemo-relay/config.toml` or
+`$XDG_CONFIG_HOME/nemo-relay/config.toml`. Runtime files layer from lowest to
+highest precedence as explicit-or-user, then system. An explicit `--config`
+replaces the ambient user file without suppressing system configuration.
+Repository-local `.nemo-relay/config.toml` files are ignored.
 
 Set up agent entries in the top-level config with:
 
@@ -163,15 +163,14 @@ structured user-config editor:
 nemo-relay config edit
 ```
 
-Use `--project` for the nearest project `config.toml`, or `--global` for
-`/etc/nemo-relay/config.toml`. Global saves are system-readable (`0644` on
-Unix) and reject authorization headers; use the corresponding environment
-variables or a user config for credentials.
+Use `--global` for system configuration: `/etc/nemo-relay/config.toml` on Unix
+or `%ProgramData%\nemo-relay\config.toml` on Windows. Global saves are
+system-readable (`0644` on Unix) and reject authorization headers; use the
+corresponding environment variables or a user config for credentials.
 
 When the top-level CLI receives `--config path/to/config.toml`, the config
 editor uses that exact file as its user target, so the default editor and
-`config edit --user` both open it. Use `--project` or `--global` to edit the
-other active layers.
+`config edit --user` both open it. Use `--global` to edit the system layer.
 
 Observability exporters are configured through the plugin config. Edit the user
 plugin config with:
@@ -183,8 +182,8 @@ nemo-relay plugins edit
 When the top-level CLI receives `--plugin-config-path`, the editor uses that
 exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
 sibling `path/to/plugins.toml`, matching runtime selection. The explicit file
-replaces the user layer, so `--user` keeps that inherited target.
-`--project` and `--global` edit the other active layers.
+replaces the user layer, so `--user` keeps that inherited target. `--global`
+edits the system layer.
 
 The top-level editor menu contains one entry per supported built-in, followed by
 the dynamic plugin references in the selected physical `plugins.toml`. Dynamic
@@ -193,16 +192,17 @@ Other dynamic plugins use a raw JSON object editor.
 
 The canonical plugin file is `plugins.toml`; user config lives at
 `~/.config/nemo-relay/plugins.toml` or
-`$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Project config lives at
-`.nemo-relay/plugins.toml`. Use `nemo-relay plugins edit --global` to edit
-`/etc/nemo-relay/plugins.toml`; it is system-readable (`0644` on Unix), so do
-not store credentials there. The editor rejects schema-declared secret values
-in global plugin configuration.
+`$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Use
+`nemo-relay plugins edit --global` to edit `/etc/nemo-relay/plugins.toml` on
+Unix or `%ProgramData%\nemo-relay\plugins.toml` on Windows. It is
+system-readable (`0644` on Unix), so do not store credentials there. The editor
+rejects schema-declared secret values in global plugin configuration.
 
 Runtime plugin files layer from lowest to highest precedence as
-explicit-or-user, nearest project, then system. An explicit
+explicit-or-user, then system. An explicit
 `--plugin-config-path`, or a `plugins.toml` beside `--config`, replaces the
-ambient XDG user file without suppressing project or system policy. Missing
+ambient XDG user file without suppressing system policy. Repository-local
+`.nemo-relay/plugins.toml` files are ignored. Missing
 files are skipped, and symlink aliases to one physical file are loaded once.
 
 Minimal ATIF example:

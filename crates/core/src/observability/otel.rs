@@ -49,8 +49,8 @@ use opentelemetry_otlp::{
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::trace::{
-    BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer, SdkTracerProvider, Span,
-    SpanData, SpanExporter, SpanProcessor,
+    BatchConfigBuilder, BatchSpanProcessor, IdGenerator, RandomIdGenerator, SdkTracer,
+    SdkTracerProvider, Span, SpanData, SpanExporter, SpanProcessor,
 };
 use uuid::Uuid;
 
@@ -197,6 +197,9 @@ pub struct OpenTelemetryConfig {
     attribute_mappings: Vec<OtlpAttributeMapping>,
     timeout: Duration,
     transport: OtlpTransport,
+    max_queue_size: Option<usize>,
+    max_export_batch_size: Option<usize>,
+    scheduled_delay: Option<Duration>,
 }
 
 impl OpenTelemetryConfig {
@@ -215,6 +218,9 @@ impl OpenTelemetryConfig {
             attribute_mappings: Vec::new(),
             timeout: Duration::from_secs(3),
             transport: OtlpTransport::HttpBinary,
+            max_queue_size: None,
+            max_export_batch_size: None,
+            scheduled_delay: None,
         }
     }
 
@@ -290,6 +296,33 @@ impl OpenTelemetryConfig {
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
+    }
+
+    /// Overrides the batch processor queue size for this endpoint.
+    pub(crate) fn with_max_queue_size(mut self, max_queue_size: usize) -> Self {
+        self.max_queue_size = Some(max_queue_size);
+        self
+    }
+
+    /// Overrides the maximum export batch size for this endpoint.
+    pub(crate) fn with_max_export_batch_size(mut self, max_export_batch_size: usize) -> Self {
+        self.max_export_batch_size = Some(max_export_batch_size);
+        self
+    }
+
+    /// Overrides the maximum delay before exporting a non-full batch.
+    pub(crate) fn with_scheduled_delay(mut self, scheduled_delay: Duration) -> Self {
+        self.scheduled_delay = Some(scheduled_delay);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch_overrides(&self) -> (Option<usize>, Option<usize>, Option<Duration>) {
+        (
+            self.max_queue_size,
+            self.max_export_batch_size,
+            self.scheduled_delay,
+        )
     }
 
     /// Sets the service namespace resource attribute.
@@ -787,8 +820,22 @@ fn build_tracer_provider(
         .with_max_attributes_per_span(u32::MAX)
         .with_max_attributes_per_event(u32::MAX);
 
-    let processor =
-        DiagnosticBatchSpanProcessor::new(exporter, config.endpoint.clone(), diagnostic_field);
+    let mut batch_config = BatchConfigBuilder::default();
+    if let Some(max_queue_size) = config.max_queue_size {
+        batch_config = batch_config.with_max_queue_size(max_queue_size);
+    }
+    if let Some(max_export_batch_size) = config.max_export_batch_size {
+        batch_config = batch_config.with_max_export_batch_size(max_export_batch_size);
+    }
+    if let Some(scheduled_delay) = config.scheduled_delay {
+        batch_config = batch_config.with_scheduled_delay(scheduled_delay);
+    }
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        exporter,
+        config.endpoint.clone(),
+        diagnostic_field,
+        batch_config.build(),
+    );
     Ok(builder.with_span_processor(processor).build())
 }
 
@@ -829,19 +876,6 @@ struct DiagnosticBatchSpanProcessor {
 }
 
 impl DiagnosticBatchSpanProcessor {
-    fn new<E: SpanExporter + 'static>(
-        exporter: E,
-        endpoint: String,
-        diagnostic_field: Option<String>,
-    ) -> Self {
-        Self::new_with_batch_config(
-            exporter,
-            endpoint,
-            diagnostic_field,
-            opentelemetry_sdk::trace::BatchConfig::default(),
-        )
-    }
-
     fn new_with_batch_config<E: SpanExporter + 'static>(
         exporter: E,
         endpoint: String,

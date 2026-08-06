@@ -1461,19 +1461,22 @@ async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
 async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_components() {
     if std::env::var_os(PLUGIN_DISCOVERY_TEST_CHILD).is_none() {
         let environment = TempDir::new().expect("plugin discovery environment should be created");
-        let project_config_dir = environment.path().join(".nemo-relay");
-        std::fs::create_dir_all(&project_config_dir)
-            .expect("project plugin config directory should be created");
+        let xdg_config_home = environment.path().join("xdg");
+        let user_config_dir = xdg_config_home.join("nemo-relay");
+        std::fs::create_dir_all(&user_config_dir)
+            .expect("user plugin config directory should be created");
         std::fs::write(
-            project_config_dir.join("plugins.toml"),
+            user_config_dir.join("plugins.toml"),
             format!(
                 "version = 1\n\n[[components]]\nkind = {STATIC_BASE_PLUGIN_KIND:?}\nenabled = true\n"
             ),
         )
-        .expect("project plugin config should be written");
-        let xdg_config_home = environment.path().join("xdg");
-        std::fs::create_dir_all(&xdg_config_home)
-            .expect("isolated user config directory should be created");
+        .expect("user plugin config should be written");
+        let legacy_project_dir = environment.path().join(".nemo-relay");
+        std::fs::create_dir_all(&legacy_project_dir)
+            .expect("legacy project config directory should be created");
+        std::fs::write(legacy_project_dir.join("plugins.toml"), "components = [\n")
+            .expect("malformed legacy project config should be written");
 
         let output = Command::new(std::env::current_exe().expect("test executable should resolve"))
             .args([

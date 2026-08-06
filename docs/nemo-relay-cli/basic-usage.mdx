@@ -144,42 +144,38 @@ install directories, host-specific behavior, and the shared-sidecar lifecycle.
 ## Shared Configuration
 
 Shared TOML config is optional. The gateway loads defaults, then the explicit
-file when supplied or the XDG user file otherwise, then the nearest project
-file, and finally the system file. System config has the highest file-level
-priority. CLI flags and environment variables override file config.
+file when supplied or the XDG user file otherwise, and finally the system file.
+System config has the highest file-level priority. CLI flags and environment
+variables override file config. Repository-local `.nemo-relay/config.toml`
+files are ignored unless selected explicitly.
 
 ### Interactive Setup
 
 Run `nemo-relay config` to set up Relay interactively:
 
-1. Choose whether the base configuration should apply to the current project,
-   your user account, or both.
-2. Select the coding agents that Relay should observe.
-3. Review and save the base `config.toml`.
-4. Choose whether to continue to the plugin editor.
+1. Select the coding agents that Relay should observe.
+2. Review and save the user `config.toml`.
+3. Choose whether to continue to the plugin editor.
 
 The base `config.toml` stores the agent settings. Select **Yes** at the plugin
 prompt to configure optional Relay components and save them separately in
-`plugins.toml`. Project setup uses the project plugin configuration, global
-setup uses the user plugin configuration, and `both` continues with the project
-plugin configuration. When the top-level command receives
-`--config path/to/config.toml`, the plugin editor instead uses the sibling
-`path/to/plugins.toml`, matching runtime selection.
+`plugins.toml`. Setup writes the XDG user configuration. When the top-level
+command receives `--config path/to/config.toml`, the plugin editor instead uses
+the sibling `path/to/plugins.toml`, matching runtime selection.
 
 Plugin files use the same file-level precedence order:
-explicit-or-user, then the nearest project file, then the system file. An
+explicit-or-user, then the system file. An
 explicit `--plugin-config-path`, or the sibling selected by `--config`,
 replaces the ambient XDG user plugin file. Likewise, an explicit `--config`
 replaces the ambient XDG user base file. Neither explicit file suppresses
-project or system configuration.
+system configuration.
 
 Select **No** to finish after saving `config.toml`. Canceling the prompt or
 leaving the plugin editor does not remove the saved base configuration. You can
 open the plugin editor again later with the resume command printed by Relay.
 For an explicit `--config path/to/config.toml` flow, the equivalent command is
-`nemo-relay --plugin-config-path path/to/plugins.toml plugins edit`. Otherwise,
-use `nemo-relay plugins edit` for user configuration or
-`nemo-relay plugins edit --project` for project configuration.
+`nemo-relay --config path/to/config.toml plugins edit`. Otherwise,
+use `nemo-relay plugins edit` for user configuration.
 
 ### Edit Gateway Configuration
 
@@ -190,30 +186,33 @@ controls for gateway limits, provider upstreams, and operational logging:
 nemo-relay config edit
 ```
 
-Use `--project` to edit the nearest `.nemo-relay/config.toml`, or `--global`
-to edit `/etc/nemo-relay/config.toml`. The editor creates a missing target only
-after you select **Save**, preserves unrelated TOML sections, and lets you
-clear a setting to restore normal configuration precedence and defaults. Global
-saves are system-readable (`0644` on Unix), so they reject authorization
-headers; store credentials in a user config or environment variables instead.
+Use `--global` to edit system configuration at
+`/etc/nemo-relay/config.toml` on Unix or
+`%ProgramData%\nemo-relay\config.toml` on Windows. The editor creates a
+missing target only after you select **Save**, preserves unrelated TOML
+sections, and lets you clear a setting to restore normal configuration
+precedence and defaults. Global saves are system-readable (`0644` on Unix), so
+they reject authorization headers; store credentials in a user config or
+environment variables instead.
 
 When the top-level CLI receives `--config path/to/config.toml`, the editor uses
 that exact file as its user target, so the default editor and
-`config edit --user` both open it. Use `--project` or `--global` to edit the
-other active layers. This selects only the file opened by the editor; it does
+`config edit --user` both open it. Use `--global` to edit the system layer.
+This selects only the file opened by the editor; it does
 not change runtime discovery, layering, or merge precedence.
 
 Agent command setup remains under `nemo-relay config`; plugin components remain
 under `nemo-relay plugins edit`.
 
 When an explicit plugin file is selected, it becomes the editor's user target:
-the default editor and `--user` open that file. Use `--project` to edit the
-nearest project `plugins.toml`, or `--global` to edit the system file.
+the default editor and `--user` open that file. Use `--global` to edit the
+system file.
 
-Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml`.
-Global plugin configuration is system-readable (`0644` on Unix), so do not
-store credentials there. The editor rejects schema-declared secret values in
-global plugin configuration.
+Use `nemo-relay plugins edit --global` for `/etc/nemo-relay/plugins.toml` on
+Unix or `%ProgramData%\nemo-relay\plugins.toml` on Windows. Global plugin
+configuration is system-readable (`0644` on Unix), so do not store credentials
+there. The editor rejects schema-declared secret values in global plugin
+configuration.
 
 The upstream authorization-header controls show only whether a value is
 configured and never print it in menus or previews. Prefer
@@ -352,13 +351,15 @@ Create a Relay model pricing catalog JSON file:
 Validate and add the file-backed source:
 
 ```bash
-nemo-relay model-pricing validate /path/to/pricing.json
-nemo-relay model-pricing init --project
-nemo-relay model-pricing add-source /path/to/pricing.json --project
+nemo-relay model-pricing validate <path/to/pricing.json>
+nemo-relay model-pricing init --user
+nemo-relay model-pricing add-source <path/to/pricing.json> --user
 ```
 
-Use `--user` instead of `--project` for a device-wide user config, or
-`--global` for `/etc/nemo-relay/plugins.toml`. `model-pricing add-source`
+Replace `<path/to/pricing.json>` with the path to your pricing catalog before
+running either command. Use `--global` for `/etc/nemo-relay/plugins.toml` on
+Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows. `model-pricing add-source`
 prepends the source by default, so the new file becomes the highest-priority
 source for that scope. Use `--append` to add it as a lower-priority fallback.
 
@@ -373,7 +374,7 @@ nemo-relay model-pricing resolve gpt-4o-mini \
 
 `model-pricing resolve` prints the source that won, the matched provider/model,
 and an estimated total when token counts are supplied. Use it to debug
-overlapping fleet, project, and user model pricing files.
+overlapping system, explicit, and user model pricing sources.
 
 Run doctor to validate the active model pricing sources alongside exporter
 checks:

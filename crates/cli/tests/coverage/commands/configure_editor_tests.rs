@@ -155,21 +155,8 @@ fn malformed_sections_and_missing_sinks_report_errors() {
 fn target_selection_and_file_loading_behave_as_expected() {
     let user = ConfigEditCommand::default();
     assert_eq!(TargetScope::from(&user), TargetScope::User);
-    let project = ConfigEditCommand {
-        project: true,
-        ..ConfigEditCommand::default()
-    };
-    assert_eq!(TargetScope::from(&project), TargetScope::Project);
 
     let root = tempfile::tempdir().unwrap();
-    let project = root.path().join("project");
-    let nested = project.join("nested");
-    std::fs::create_dir_all(&nested).unwrap();
-    let config = project.join(".nemo-relay/config.toml");
-    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(&config, "").unwrap();
-    assert_eq!(project_config_path(&nested), config);
-
     let invalid = root.path().join("invalid.toml");
     std::fs::write(&invalid, "[gateway\n").unwrap();
     let error = match ConfigDocument::read(invalid.clone()) {
@@ -205,22 +192,6 @@ fn config_editor_treats_explicit_config_as_the_user_target() {
             .join("config.toml")
     );
 
-    let project_root = tempfile::tempdir().unwrap();
-    let _cwd = crate::test_support::CwdTestScope::enter(project_root.path());
-    let project = ConfigEditCommand {
-        project: true,
-        ..ConfigEditCommand::default()
-    };
-    let (scope, path) =
-        resolve_edit_target(&project, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
-    assert_eq!(scope, TargetScope::Project);
-    assert_eq!(
-        path,
-        std::env::current_dir()
-            .unwrap()
-            .join(".nemo-relay/config.toml")
-    );
-
     let global = ConfigEditCommand {
         global: true,
         ..ConfigEditCommand::default()
@@ -228,17 +199,22 @@ fn config_editor_treats_explicit_config_as_the_user_target() {
     let (scope, path) =
         resolve_edit_target(&global, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
     assert_eq!(scope, TargetScope::Global);
-    assert_eq!(path, PathBuf::from("/etc/nemo-relay/config.toml"));
+    assert_eq!(
+        path,
+        crate::configuration::system_config_dir().join("config.toml")
+    );
 }
 
 #[test]
 fn documents_are_written_atomically_with_scope_appropriate_permissions() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("nested/config.toml");
+    let path = directory.path().join("user/nested/config.toml");
+    assert!(!path.parent().unwrap().exists());
     let document = ConfigDocument::read(path.clone()).unwrap();
     assert!(!path.exists());
     document.write(TargetScope::User).unwrap();
     assert!(path.exists());
+    assert!(path.parent().unwrap().is_dir());
 
     let original = std::fs::read_to_string(&path).unwrap();
     crate::filesystem::fail_next_atomic_write(&path);
@@ -255,11 +231,14 @@ fn documents_are_written_atomically_with_scope_appropriate_permissions() {
         );
     }
 
-    let global_path = directory.path().join("global/config.toml");
+    let global_path = directory.path().join("system/nested/config.toml");
+    assert!(!global_path.parent().unwrap().exists());
     ConfigDocument::read(global_path.clone())
         .unwrap()
         .write(TargetScope::Global)
         .unwrap();
+    assert!(global_path.is_file());
+    assert!(global_path.parent().unwrap().is_dir());
 
     #[cfg(unix)]
     {
@@ -365,17 +344,5 @@ fn sink_accessors_report_invalid_and_incomplete_entries() {
     assert_eq!(
         document.sink_string(0, "path").as_deref(),
         Some("relay.log")
-    );
-}
-
-#[test]
-fn project_path_defaults_to_start_when_no_ancestor_config_exists() {
-    let root = tempfile::tempdir().unwrap();
-    let nested = root.path().join("a/b");
-    std::fs::create_dir_all(&nested).unwrap();
-
-    assert_eq!(
-        project_config_path_with_boundary(&nested, Some(root.path())),
-        nested.join(".nemo-relay/config.toml")
     );
 }

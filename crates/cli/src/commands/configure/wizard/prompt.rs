@@ -7,18 +7,18 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use dialoguer::theme::ColorfulTheme;
-use dialoguer::{Confirm, MultiSelect, Select};
+use dialoguer::{Confirm, MultiSelect};
 use toml_edit::DocumentMut;
 
 use super::model::{
-    ConfigScope, SetupAnswers, agent_key_and_command, build_config, detect_installed_agents,
-    home_dir, plugins_edit_command_for_scope, plugins_resume_command, preview_paths,
-    read_existing_defaults, save_config,
+    SetupAnswers, agent_key_and_command, build_config, detect_installed_agents, home_dir,
+    plugins_edit_command, plugins_resume_command, preview_paths, read_existing_defaults,
+    save_config,
 };
 use crate::agents::CodingAgent;
 use crate::error::CliError;
 
-/// Prompts for the configuration scope and agents selected by the user.
+/// Prompts for the agents selected by the user.
 ///
 /// When `agent_hint` is present, the agent picker is skipped because the command already
 /// identified the requested agent.
@@ -61,7 +61,6 @@ pub(crate) fn prompt_user(
     println!();
 
     let theme = ColorfulTheme::default();
-    let scope = ask_scope(&theme, defaults.scope)?;
     let agents = match agent_hint {
         Some(agent) => vec![agent],
         None => ask_agents(&theme, detected_agents, &defaults.agents)?,
@@ -70,7 +69,7 @@ pub(crate) fn prompt_user(
         print_codex_api_key_guide();
     }
 
-    Ok(SetupAnswers { scope, agents })
+    Ok(SetupAnswers { agents })
 }
 
 pub(super) async fn run(
@@ -80,40 +79,35 @@ pub(super) async fn run(
     let detected = detect_installed_agents();
     let answers = prompt_user(&detected, agent_hint)?;
 
-    let cwd = std::env::current_dir()?;
     let home = home_dir().ok_or_else(|| {
         CliError::Config("cannot determine home directory (set $HOME or $USERPROFILE)".into())
     })?;
     let doc = build_config(&answers);
-    let preview_paths = preview_paths(answers.scope, &cwd, &home);
+    let preview_paths = preview_paths(&home);
 
     if !confirm_summary(&preview_paths, &doc)? {
         return Err(CliError::Config("setup cancelled — no config saved".into()));
     }
 
-    let written = save_config(&doc, answers.scope, &cwd, &home, agent_hint)?;
+    let written = save_config(&doc, &home, agent_hint)?;
     println!();
     println!("  ✓ Saved:");
     for path in &written {
         println!("    {}", path.display());
     }
     println!();
-    continue_to_plugins(answers.scope, explicit_plugin_path)
+    continue_to_plugins(explicit_plugin_path)
 }
 
 /// After the base config is saved, offers to continue into plugin configuration in-process.
 ///
 /// Prompts once. On acceptance it runs the existing plugin editor targeting an explicit runtime
-/// plugin path when present, otherwise the scope derived from base setup (project for
-/// `Project`/`Both`, user for `Global`). On decline it reports that the base config was saved,
+/// plugin path when present, otherwise the user plugin file. On decline it reports that the base config was saved,
 /// that plugin setup was skipped, and prints the command to resume later. Prompt interruption is
 /// treated as a skip; other prompt or editor failures surface an error that makes clear the base
 /// config remains saved. The saved `config.toml` is never rolled back here.
-fn continue_to_plugins(
-    scope: ConfigScope,
-    explicit_plugin_path: Option<PathBuf>,
-) -> Result<(), CliError> {
-    let resume_command = plugins_resume_command(scope, explicit_plugin_path.as_deref());
+fn continue_to_plugins(explicit_plugin_path: Option<PathBuf>) -> Result<(), CliError> {
+    let resume_command = plugins_resume_command(explicit_plugin_path.as_deref());
     let proceed = match confirm_plugin_setup() {
         Ok(proceed) => proceed,
         Err(error) if super::plugin_prompt_was_interrupted(&error) => {
@@ -132,7 +126,7 @@ fn continue_to_plugins(
         print_plugins_skipped(&resume_command);
         return Ok(());
     }
-    let result = crate::plugins::edit(plugins_edit_command_for_scope(scope, explicit_plugin_path));
+    let result = crate::plugins::edit(plugins_edit_command(explicit_plugin_path));
     result.map_err(|error| {
         let cause = match error {
             CliError::Config(message) => message,
@@ -180,7 +174,7 @@ fn ensure_tty() -> Result<(), CliError> {
     if !std::io::stdin().is_terminal() {
         return Err(CliError::Config(
             "interactive setup requires a TTY; pass `--config <path>` or set up \
-             `.nemo-relay/config.toml` manually"
+             `$XDG_CONFIG_HOME/nemo-relay/config.toml` manually"
                 .into(),
         ));
     }
@@ -196,26 +190,6 @@ fn print_detected_agents(detected: &[CodingAgent]) {
     if detected.is_empty() {
         println!("    (none — you can still add agents later)");
     }
-}
-
-fn ask_scope(
-    theme: &ColorfulTheme,
-    existing: Option<ConfigScope>,
-) -> Result<ConfigScope, CliError> {
-    let options = [ConfigScope::Project, ConfigScope::Global, ConfigScope::Both];
-    let labels: Vec<&str> = options.iter().map(|s| s.label()).collect();
-    // Start on the user's existing scope if there is one (so re-running the wizard doesn't
-    // accidentally relocate their config), else `Project` per the design default.
-    let default_idx = existing
-        .and_then(|s| options.iter().position(|opt| *opt == s))
-        .unwrap_or(0);
-    let idx = Select::with_theme(theme)
-        .with_prompt("Save config where?")
-        .items(&labels)
-        .default(default_idx)
-        .interact()
-        .map_err(setup_error)?;
-    Ok(options[idx])
 }
 
 fn ask_agents(

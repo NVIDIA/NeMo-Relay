@@ -68,12 +68,11 @@ nemo-relay --config path/to/config.toml run -- codex
 ```
 
 This uses the colocated `plugins.toml` instead of the ambient user plugin file.
-The nearest project file and the system file still layer on top, so run from a
-directory without a project plugin file and ensure the system layer does not
-override the exporter you want to verify. The plugin file is the configuration
-being demonstrated here; `--config` only tells the gateway which low plugin
-layer to use for this run. If you prefer implicit discovery, place the file at
-`./.nemo-relay/plugins.toml` or another discovered location. Refer to
+The system file still layers on top, so ensure system policy does not override
+the exporter you want to verify. The plugin file is the configuration being
+demonstrated here; `--config` only tells the gateway which low plugin layer to
+use for this run. For implicit discovery, place the file in the XDG user
+configuration directory. Refer to
 [CLI Basic Usage](/nemo-relay-cli/basic-usage) for the wrapper command shapes.
 
 ## What Success Looks Like
@@ -219,7 +218,7 @@ File configuration comes from `plugins.toml`:
 
 | Source | Use case |
 |---|---|
-| `plugins.toml` | Normal operator- and project-managed runtime plugin configuration. |
+| `plugins.toml` | Normal user- and system-managed runtime plugin configuration. |
 
 The runtime does not read plugin configuration from `config.toml`.
 
@@ -228,8 +227,7 @@ The runtime does not read plugin configuration from `config.toml`.
 When the CLI gateway receives `--config path/to/config.toml`, it scopes plugin
 file discovery's low layer to `path/to/plugins.toml`. An explicit
 `--plugin-config-path` selects that low layer directly. Either explicit form
-replaces the ambient user plugin file; the nearest project file and the system
-file still apply.
+replaces the ambient user plugin file; the system file still applies.
 
 ### Default Discovery Locations
 
@@ -241,15 +239,14 @@ precedence:
      supplied
    - otherwise `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`, or
      `~/.config/nemo-relay/plugins.toml` when `XDG_CONFIG_HOME` is not set
-2. Project: the nearest `.nemo-relay/plugins.toml` found by walking upward from
-   the current directory
-3. System: `/etc/nemo-relay/plugins.toml`
+2. System:
+   - Unix: `/etc/nemo-relay/plugins.toml`
+   - Windows: `%ProgramData%\nemo-relay\plugins.toml`
 
 The runtime skips missing files and loads a physical file only once when
 multiple paths or symlinks select it. If no plugin config source exists,
-initialization continues without process-level plugin activation. The
-user-only bootstrap scope suppresses project discovery but still applies the
-system layer.
+initialization continues without process-level plugin activation.
+Repository-local `.nemo-relay/plugins.toml` files are not discovered.
 
 ## Gateway Editing Files
 
@@ -277,27 +274,22 @@ When the top-level CLI receives `--plugin-config-path`, the editor uses that
 exact file. Otherwise, `--config path/to/config.toml` makes the editor use the
 sibling `path/to/plugins.toml`, matching the runtime selection for that
 configuration. This explicit file replaces the user editor target, so
-`plugins edit --user` keeps the inherited explicit target. Use `--project` or
-`--global` to edit the other active layers. These rules only select the file
+`plugins edit --user` keeps the inherited explicit target. Use `--global` to
+edit the system layer. These rules only select the file
 opened by the editor; they do not change runtime discovery, layering, or merge
 precedence.
 
 Use a scope flag to edit another location:
 
 ```bash
-nemo-relay plugins edit --project
 nemo-relay plugins edit --global
 ```
 
 Scope flags are mutually exclusive.
 
-`--project` writes the nearest existing `.nemo-relay/plugins.toml`. If none
-exists, it writes next to the nearest `.nemo-relay/config.toml`. If neither file
-exists in the parent directories, it writes `./.nemo-relay/plugins.toml` from the
-current directory.
-
-`--global` writes `/etc/nemo-relay/plugins.toml` and usually requires elevated
-filesystem permissions.
+`--global` writes `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows and usually requires
+elevated filesystem permissions.
 
 The editor menus support these controls:
 
@@ -318,8 +310,7 @@ menu to reset, clear, preview, or save.
 ## Precedence and Merge Behavior
 
 When more than one `plugins.toml` file is discovered, later files have higher
-precedence. System config overrides project config, and project config
-overrides the selected explicit-or-user config.
+precedence. System config overrides the selected explicit-or-user config.
 
 TOML tables merge recursively. Top-level lists inside a component's `config`
 concatenate, as do the declared observability destination lists. Entries from
@@ -380,7 +371,7 @@ This behavior applies to list fields declared at the top level of a component's
 `pricing.sources` and PII redaction `profiles` are top-level component config
 lists and concatenate across layers.
 Higher-precedence pricing sources can therefore override one model while still
-retaining lower-precedence project or user pricing sources.
+retaining lower-precedence user pricing sources.
 
 Lists nested inside arbitrary structured values are not treated as top-level
 plugin lists; a higher-precedence value replaces those lists.
@@ -399,7 +390,7 @@ sits on top. When the two conflict, code takes precedence. Layering works as
 follows:
 
 1. Discover and merge the `plugins.toml` files from lowest to highest precedence
-   (explicit-or-user → project → system), using the
+   (explicit-or-user → system), using the
    [Precedence And Merge Behavior](#precedence-and-merge-behavior) rules above.
 2. Layer the config object you pass to `initialize` over that merged base. Any
    setting it specifies overrides the file value, and the result is the
@@ -407,7 +398,7 @@ follows:
 
 Programmatic lists participate in the same concatenation rules. For example, a
 programmatic `config.opentelemetry.endpoints` list appears before endpoints
-inherited from system, project, and explicit-or-user files; it does not remove
+inherited from system and explicit-or-user files; it does not remove
 those file entries.
 
 When library initialization discovers `plugins.toml` files, Relay emits one
@@ -445,7 +436,7 @@ means "inherit a lower precedence value"; it does not mean "delete that value."
 Use the dedicated `nemo-relay model-pricing` commands to manage model-pricing
 catalog sources.
 
-For example, this system file disables ATOF even if a project or user file
+For example, this system file disables ATOF even if an explicit or user file
 enables it:
 
 ```toml

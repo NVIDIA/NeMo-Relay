@@ -163,15 +163,16 @@ nemo-relay run \
 
 ## Configure Transparent Runs
 
-Use `.nemo-relay/config.toml` for project defaults:
+Use `$XDG_CONFIG_HOME/nemo-relay/config.toml` or
+`~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
 [agents.codex]
 command = "codex"
 ```
 
-Configure observability with `nemo-relay plugins edit --project` or
-`.nemo-relay/plugins.toml`:
+Configure observability with `nemo-relay plugins edit` or the XDG user
+`plugins.toml`:
 
 ```toml
 version = 1
@@ -197,8 +198,8 @@ This example writes ATIF files under the project at `.nemo-relay/atif`.
 
 Use `~/.config/nemo-relay/config.toml`, or
 `$XDG_CONFIG_HOME/nemo-relay/config.toml` when `XDG_CONFIG_HOME` is set, for
-persistent provider defaults. Run `nemo-relay plugins edit` without
-`--project` to write user-scoped observability configuration. For example:
+persistent provider defaults. Run `nemo-relay plugins edit` to write
+user-scoped observability configuration. For example:
 
 ```toml
 version = 1
@@ -212,8 +213,8 @@ enabled = true
 output_directory = "atif"
 ```
 
-Persistent mode ignores project layers and starts the sidecar in the user Relay
-configuration directory. The relative path above resolves to
+Persistent mode starts the sidecar in the user Relay configuration directory.
+The relative path above resolves to
 `$XDG_CONFIG_HOME/nemo-relay/atif`, or `~/.config/nemo-relay/atif` when
 `XDG_CONFIG_HOME` is not set.
 
