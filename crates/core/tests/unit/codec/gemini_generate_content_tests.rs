@@ -358,6 +358,23 @@ fn test_decode_response_candidate_extra_removes_reserved_api_key() {
     assert_eq!(extra.get("futureField"), Some(&json!(true)));
 }
 
+#[test]
+fn test_decode_response_candidate_only_reserved_api_key_has_no_api_specific() {
+    let codec = GeminiGenerateContentCodec;
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "hi"}]},
+            "api": "bad_discriminator"
+        }]
+    });
+
+    let resp = codec.decode_response(&response).unwrap();
+    assert!(
+        resp.api_specific.is_none(),
+        "reserved api discriminator alone must not create empty Gemini api_specific metadata"
+    );
+}
+
 // ===================================================================
 // Request decode tests
 // ===================================================================

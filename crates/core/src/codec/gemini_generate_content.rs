@@ -1312,16 +1312,15 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
         // citationMetadata, thinking token count, …) that cannot be normalized
         // across providers.  thoughts_tokens lives here, not in shared Usage.
         let api_specific = {
-            let cand_extra = candidate.map(|c| c.extra.clone()).unwrap_or_default();
-            let has_candidate_data = !cand_extra.is_empty() || thoughts_tokens.is_some();
+            let mut extra = candidate.map(|c| c.extra.clone()).unwrap_or_default();
+            extra.remove("api");
+            let has_candidate_data = !extra.is_empty() || thoughts_tokens.is_some();
             if !has_candidate_data {
                 None
             } else {
-                let mut extra = cand_extra;
                 let safety_ratings = extra.remove("safetyRatings");
                 let grounding_metadata = extra.remove("groundingMetadata");
                 let citation_metadata = extra.remove("citationMetadata");
-                extra.remove("api");
                 Some(
                     super::response::ApiSpecificResponse::GeminiGenerateContent {
                         thoughts_tokens,
