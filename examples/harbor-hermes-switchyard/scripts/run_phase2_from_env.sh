@@ -21,5 +21,10 @@ set +x
 
 mkdir -p "$TERMINAL_BENCH_RUN_ROOT"
 chmod 0700 "$TERMINAL_BENCH_RUN_ROOT"
-exec "$example_root/supervise_phase2_cohort.sh" "$TERMINAL_BENCH_RUN_ROOT" \
+runtime_harness="$TERMINAL_BENCH_RUN_ROOT/runtime-harness"
+"$EVAL_PYTHON" "$example_root/scripts/stage_phase2_runtime.py" \
+  --source "$example_root" \
+  --destination "$runtime_harness" \
+  --plan "$TERMINAL_BENCH_RUN_ROOT/plan.json"
+exec "$runtime_harness/supervise_phase2_cohort.sh" "$TERMINAL_BENCH_RUN_ROOT" \
   >>"$TERMINAL_BENCH_RUN_ROOT/supervisor.log" 2>&1

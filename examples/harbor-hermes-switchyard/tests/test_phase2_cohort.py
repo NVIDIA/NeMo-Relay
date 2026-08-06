@@ -247,7 +247,36 @@ def test_tmux_launcher_projects_only_the_protected_file_path() -> None:
     assert "tmux has-session" in launcher
     assert 'source "$env_file"' in child
     assert "set +x" in child
+    assert "stage_phase2_runtime.py" in child
+    assert 'runtime_harness="$TERMINAL_BENCH_RUN_ROOT/runtime-harness"' in child
+    assert 'exec "$runtime_harness/supervise_phase2_cohort.sh"' in child
     assert "supervisor.log" in child
+
+
+def test_runtime_snapshot_remains_bound_after_checkout_changes(tmp_path: Path) -> None:
+    import importlib.util
+
+    script = EXAMPLE_ROOT / "scripts" / "stage_phase2_runtime.py"
+    spec = importlib.util.spec_from_file_location("stage_phase2_runtime", script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    source = tmp_path / "source"
+    for relative in ("agents", "config", "scripts"):
+        (source / relative).mkdir(parents=True)
+    for relative in module.RUNTIME_TOP_LEVEL:
+        (source / relative).write_text(f"{relative}\n", encoding="utf-8")
+    (source / "scripts" / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+    digest = module.runtime_digest(source, module.runtime_files(source))
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({"inputs": {"runtime_sources_sha256": digest}}), encoding="utf-8")
+    destination = tmp_path / "runtime-harness"
+
+    assert module.stage_runtime(source, destination, plan)["status"] == "staged"
+    (source / "scripts" / "helper.py").write_text("VALUE = 2\n", encoding="utf-8")
+    assert module.stage_runtime(source, destination, plan)["status"] == "verified"
+    assert (destination / "scripts" / "helper.py").read_text(encoding="utf-8") == "VALUE = 1\n"
 
 
 def test_phase2_launcher_is_local_dataset_only() -> None:

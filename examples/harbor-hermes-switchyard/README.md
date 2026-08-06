@@ -126,7 +126,7 @@ set +x
 
 ## 6. Verify the complete dataset without provider tokens
 
-This loads and uniquely selects all tasks, hashes their instructions and
+This all-89 no-token admission loads and uniquely selects all tasks, hashes their instructions and
 verifiers, expands the complete Harbor job graph, denies registry/provider
 access, and renders the runtime. It starts neither Docker nor an agent.
 
@@ -150,7 +150,8 @@ concurrency, architecture, Relay wheel, Switchyard library, and plugin config.
 
 ## 7. Verify the offline container runtime
 
-Prepare a fresh admission root with test-only structured overrides. Production
+The Docker offline runtime admission uses a fresh admission root with test-only
+structured overrides. Production
 model, URL, and routing values remain owned by `plugins.toml.in`; these flags
 exist only to point this closed offline test at its fake endpoints.
 
@@ -238,6 +239,10 @@ Exit the secret-bearing admission shell first. From a shell where the protected
 file has **not** been sourced, start one detached supervisor. Only the file path
 is placed in the tmux server environment; the child sources it with xtrace
 disabled and persists output below the run root.
+Before the supervisor starts, the launcher copies only the plan-bound harness
+sources into `runtime-harness/` below the run root and verifies their aggregate
+hash. Retries execute this snapshot, so later checkout changes cannot alter an
+active cohort. No environment file or secret is copied into the snapshot.
 
 ```bash
 exit  # only when returning from the short-lived admission shell above
@@ -263,8 +268,9 @@ jq '{status,completed_tasks,planned_tasks,benchmark_pass_count,benchmark_nonpass
 # Graceful interruption.
 tmux send-keys -t harbor-hermes-switchyard-phase2-run-1 C-c
 
-# After the old session exits, resume the same immutable root.
-./scripts/launch_phase2_tmux.sh \
+# After the old session exits, resume from the run-bound snapshot. This also
+# works after a checkout update or host reboot.
+/absolute/path/to/phase2-run-root/runtime-harness/scripts/launch_phase2_tmux.sh \
   /absolute/private/.env \
   harbor-hermes-switchyard-phase2-run-1
 ```
