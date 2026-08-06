@@ -2682,26 +2682,5 @@ fn rustc_version_runtime() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verify that BuiltinLlmCodec has a Gemini generateContent variant and that
-    /// codec_identity_from_proto decodes the "gemini_generate_content" id to the
-    /// correct built-in identity (not Opaque).
-    #[test]
-    fn test_gemini_codec_identity_decoded_as_builtin_not_opaque() {
-        use nemo_relay_worker_proto::v1::LlmCodecIdentity as ProtoIdentity;
-        use nemo_relay_worker_proto::v1::LlmCodecKind;
-
-        let proto = ProtoIdentity {
-            kind: LlmCodecKind::Builtin as i32,
-            id: Some("gemini_generate_content".to_string()),
-        };
-        let identity = codec_identity_from_proto(Some(&proto));
-        assert_eq!(
-            identity,
-            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent),
-            "Gemini generateContent codec id must decode to BuiltIn(GeminiGenerateContent), not Opaque"
-        );
-    }
-}
+#[path = "../tests/unit/codec_identity_tests.rs"]
+mod codec_identity_tests;

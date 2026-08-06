@@ -336,6 +336,28 @@ fn test_decode_response_extra_fields_preserved() {
     assert!(resp.extra.contains_key("unknownFutureField"));
 }
 
+#[test]
+fn test_decode_response_candidate_extra_removes_reserved_api_key() {
+    let codec = GeminiGenerateContentCodec;
+    let response = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "hi"}]},
+            "index": 0,
+            "api": "bad_discriminator",
+            "futureField": true
+        }]
+    });
+
+    let resp = codec.decode_response(&response).unwrap();
+    let Some(super::super::response::ApiSpecificResponse::GeminiGenerateContent { extra, .. }) =
+        resp.api_specific
+    else {
+        panic!("expected Gemini api_specific metadata");
+    };
+    assert!(extra.get("api").is_none());
+    assert_eq!(extra.get("futureField"), Some(&json!(true)));
+}
+
 // ===================================================================
 // Request decode tests
 // ===================================================================
@@ -3531,6 +3553,11 @@ fn test_decode_function_response_missing_response_errors() {
         codec.decode(&req).is_err(),
         "missing functionResponse.response must error"
     );
+}
+
+#[test]
+fn test_function_response_content_helper_missing_response_errors() {
+    assert!(gemini_function_response_to_message_content(&json!({"name": "fn"})).is_err());
 }
 
 // functionResponse.response must be an object.

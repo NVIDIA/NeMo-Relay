@@ -86,11 +86,22 @@ fn gemini_replay_uses_a_valid_native_stream_event() {
             "content": {
                 "role": "model",
                 "parts": [
-                    {"text": "hello"},
-                    {"functionCall": {"id": "call_1", "name": "lookup", "args": {"q": "x"}}}
+                    {"text": "hello", "thoughtSignature": "sig_TEXT=="},
+                    {
+                        "functionCall": {
+                            "id": "call_1",
+                            "name": "lookup",
+                            "args": {"q": "x"}
+                        },
+                        "thoughtSignature": "sig_CALL=="
+                    }
                 ]
             },
-            "finishReason": "STOP"
+            "finishReason": "STOP",
+            "safetyRatings": [
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}
+            ],
+            "groundingMetadata": {"webSearchQueries": ["example query"]}
         }],
         "usageMetadata": {
             "promptTokenCount": 9,
@@ -109,6 +120,28 @@ fn gemini_replay_uses_a_valid_native_stream_event() {
     assert!(
         !replay_is_lossy(&aggregate),
         "the Gemini streaming codec must reassemble the native replay exactly"
+    );
+}
+
+#[test]
+fn gemini_replay_rejects_multi_candidate_aggregates_as_lossy() {
+    let aggregate = json!({
+        "candidates": [
+            {
+                "index": 0,
+                "content": {"role": "model", "parts": [{"text": "first"}]},
+                "finishReason": "STOP"
+            },
+            {
+                "index": 1,
+                "content": {"role": "model", "parts": [{"text": "second"}]},
+                "finishReason": "STOP"
+            }
+        ]
+    });
+    assert!(
+        replay_is_lossy(&aggregate),
+        "Gemini streaming replay must not serve aggregates with candidates the collector cannot preserve"
     );
 }
 

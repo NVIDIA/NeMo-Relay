@@ -160,15 +160,15 @@ fn descriptor_for(surface: ProviderSurface) -> &'static ProviderSurfaceDescripto
 }
 
 impl ProviderSurface {
-    /// The canonical codec name for this surface (e.g. `"openai_chat"`), the
-    /// inverse of [`Self::from_codec_name`].
+    /// The canonical codec name for this surface (e.g. `"openai_chat"`).
     #[must_use]
     pub fn codec_name(self) -> &'static str {
         descriptor_for(self).codec_name
     }
 
-    /// Resolves a canonical codec name to its surface, or `None` when `name` is
-    /// not a built-in provider codec.
+    /// Resolves a canonical codec name or compatibility alias to its surface, or
+    /// `None` when `name` is not a built-in provider codec. `"gemini"` is accepted
+    /// as a compatibility alias for the canonical `"gemini_generate_content"`.
     #[must_use]
     pub fn from_codec_name(name: &str) -> Option<Self> {
         if name == "gemini" {

@@ -90,7 +90,7 @@ changing a key overlays it.
 - `api_specific` is a tagged, mutable surface for modeled Anthropic Messages,
   OpenAI Chat Completions, or OpenAI Responses request controls. Response
   annotations use the same pattern for provider-only metadata, including Gemini
-  generateContent thinking tokens.
+  `generateContent` thinking tokens.
 - Provider-only messages, content blocks, input items, tools, and tool choices
   use `{ provider, kind, value }`, where `value` is the exact native JSON.
 - Top-level `extra` is reserved for unknown future fields.
@@ -121,7 +121,7 @@ normalization logic without changing runtime ownership or public binding APIs.
 
 Provider schema extraction is codec-owned. Built-in provider surfaces, such as
 OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini
-generateContent, each own the logic that recognizes their request and response
+`generateContent`, each own the logic that recognizes their request and response
 shapes and maps them into `AnnotatedLlmRequest` or `AnnotatedLlmResponse`.
 
 When a managed LLM event already has an annotation, subscribers and exporters

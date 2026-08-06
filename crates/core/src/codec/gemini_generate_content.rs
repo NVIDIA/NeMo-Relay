@@ -361,7 +361,14 @@ fn validate_gemini_nested_function_response_part(part: &Json) -> Result<&str> {
 }
 
 fn gemini_function_response_to_message_content(fr: &Json) -> Result<MessageContent> {
-    let response = fr.get("response").unwrap().clone();
+    let response = fr
+        .get("response")
+        .ok_or_else(|| {
+            FlowError::InvalidArgument(
+                "Gemini functionResponse is missing required 'response'".into(),
+            )
+        })?
+        .clone();
     let content_str = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
     let Some(parts_value) = fr.get("parts") else {
         return Ok(MessageContent::Text(content_str));
@@ -1314,6 +1321,7 @@ impl LlmResponseCodec for GeminiGenerateContentCodec {
                 let safety_ratings = extra.remove("safetyRatings");
                 let grounding_metadata = extra.remove("groundingMetadata");
                 let citation_metadata = extra.remove("citationMetadata");
+                extra.remove("api");
                 Some(
                     super::response::ApiSpecificResponse::GeminiGenerateContent {
                         thoughts_tokens,

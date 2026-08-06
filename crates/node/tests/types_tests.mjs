@@ -95,13 +95,16 @@ describe('GeminiGenerateContentCodec', () => {
 
   it('decode returns an AnnotatedLLMRequest with messages and no params', () => {
     const codec = new GeminiGenerateContentCodec();
-    const req = new LlmRequest({}, {
-      contents: [
-        { role: 'user', parts: [{ text: 'hello' }] },
-        { role: 'model', parts: [{ text: 'hi' }] },
-      ],
-      systemInstruction: { parts: [{ text: 'Be helpful.' }] },
-    });
+    const req = {
+      headers: {},
+      content: {
+        contents: [
+          { role: 'user', parts: [{ text: 'hello' }] },
+          { role: 'model', parts: [{ text: 'hi' }] },
+        ],
+        systemInstruction: { parts: [{ text: 'Be helpful.' }] },
+      },
+    };
     const annotated = codec.decode(req);
     const msgs = annotated.messages;
     assert.equal(msgs.length, 3, 'system + user + model = 3 messages');
@@ -112,10 +115,13 @@ describe('GeminiGenerateContentCodec', () => {
 
   it('decode captures generationConfig into params', () => {
     const codec = new GeminiGenerateContentCodec();
-    const req = new LlmRequest({}, {
-      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-      generationConfig: { temperature: 0.5, maxOutputTokens: 256 },
-    });
+    const req = {
+      headers: {},
+      content: {
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: { temperature: 0.5, maxOutputTokens: 256 },
+      },
+    };
     const annotated = codec.decode(req);
     assert.ok(annotated.params !== null && annotated.params !== undefined, 'params must be set');
     assert.ok(Math.abs(annotated.params.temperature - 0.5) < 1e-6);
@@ -125,10 +131,13 @@ describe('GeminiGenerateContentCodec', () => {
 
   it('encode round-trips extra fields', () => {
     const codec = new GeminiGenerateContentCodec();
-    const req = new LlmRequest({}, {
-      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-      safetySettings: [{ category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' }],
-    });
+    const req = {
+      headers: {},
+      content: {
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        safetySettings: [{ category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' }],
+      },
+    };
     const annotated = codec.decode(req);
     const reEncoded = codec.encode(annotated, req);
     assert.ok(
@@ -183,16 +192,19 @@ describe('GeminiGenerateContentCodec', () => {
   it('decode throws for malformed Gemini requests', () => {
     const codec = new GeminiGenerateContentCodec();
     assert.throws(
-      () => codec.decode(new LlmRequest({}, { contents: 'not an array' })),
+      () => codec.decode({ headers: {}, content: { contents: 'not an array' } }),
       /contents must be an array/,
     );
   });
 
   it('encode throws for malformed annotated requests and codec failures', () => {
     const codec = new GeminiGenerateContentCodec();
-    const original = new LlmRequest({}, {
-      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-    });
+    const original = {
+      headers: {},
+      content: {
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+      },
+    };
     assert.throws(
       () => codec.encode({ messages: 'not an array' }, original),
       /invalid AnnotatedLlmRequest/,

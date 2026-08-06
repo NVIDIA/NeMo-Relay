@@ -95,7 +95,7 @@ higher-precedence profiles placed before lower-precedence profiles.
 For a gateway that routes requests to more than one supported provider, omit
 `codec`. Relay selects the active codec for each managed call, so the same
 policy safely applies to OpenAI Chat, OpenAI Responses, Anthropic Messages, and
-Gemini generateContent traffic:
+Gemini `generateContent` traffic:
 
 ```toml
 [[components]]
