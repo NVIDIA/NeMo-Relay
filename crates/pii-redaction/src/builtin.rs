@@ -399,7 +399,7 @@ impl CompiledBuiltinBackend {
                 .get("choices")
                 .and_then(Json::as_array)
                 .is_some_and(|choices| choices.len() > 1)
-            && self.targets_normalized_openai_chat_choice()
+            && self.targets_normalized_single_projected_response()
         {
             return None;
         }
@@ -411,7 +411,7 @@ impl CompiledBuiltinBackend {
                 .get("candidates")
                 .and_then(Json::as_array)
                 .is_some_and(|candidates| candidates.len() > 1)
-            && self.targets_normalized_gemini_candidate()
+            && self.targets_normalized_single_projected_response()
         {
             return None;
         }
@@ -461,20 +461,7 @@ impl CompiledBuiltinBackend {
         })
     }
 
-    fn targets_normalized_openai_chat_choice(&self) -> bool {
-        self.target_paths.iter().any(|path| {
-            json_pointer_segments(path)
-                .and_then(|segments| segments.into_iter().next())
-                .is_some_and(|segment| {
-                    matches!(
-                        segment.as_str(),
-                        "message" | "tool_calls" | "finish_reason" | "api_specific"
-                    )
-                })
-        })
-    }
-
-    fn targets_normalized_gemini_candidate(&self) -> bool {
+    fn targets_normalized_single_projected_response(&self) -> bool {
         self.target_paths.iter().any(|path| {
             json_pointer_segments(path)
                 .and_then(|segments| segments.into_iter().next())

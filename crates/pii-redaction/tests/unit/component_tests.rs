@@ -1795,6 +1795,27 @@ fn validate_allows_llm_surfaces_without_codec() {
 }
 
 #[test]
+fn validate_accepts_legacy_gemini_codec_alias() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini",
+        "input": true,
+        "output": true,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/messages/0/content"]
+        }
+    })));
+
+    assert!(report.diagnostics.is_empty(), "{report:?}");
+}
+
+#[test]
 fn validate_rejects_regex_replace_without_pattern() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -4348,6 +4369,61 @@ async fn builtin_backend_removes_targeted_message_names_and_ignores_missing_norm
 }
 
 #[tokio::test]
+async fn builtin_backend_accepts_legacy_gemini_codec_alias() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/messages/0/content"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-legacy-alias");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "contents": [{"role": "user", "parts": [{"text": "sk-legacy-secret"}]}],
+        }),
+    };
+
+    let _handle = llm_call(
+        LlmCallParams::builder()
+            .name("gemini-legacy-alias")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "headers": {},
+            "content": {
+                "contents": [{"role": "user", "parts": [{"text": "[REDACTED]"}]}]
+            }
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-gemini-legacy-alias").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
 async fn builtin_backend_sanitizes_gemini_provider_native_tools_via_codec() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -4600,7 +4676,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_c
                     "contents": [{"role": "user", "parts": [{"text": "run code"}]}]
                 }),
             })
-            .func(noop_openai_chat_exec_fn(response))
+            .func(noop_openai_chat_exec_fn(response.clone()))
             .response_codec(Arc::new(GeminiGenerateContentCodec))
             .build(),
     )
@@ -5531,5 +5607,84 @@ async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
     assert!(!serialized_end.contains("sk-second-secret"));
 
     deregister_subscriber("pii-redaction-gemini-multi-candidate-response").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
+    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/candidates/1/content/parts/0/text"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-raw-multi-candidate-response");
+    let response = json!({
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "sk-first-secret"}]},
+                "finishReason": "STOP",
+                "index": 0
+            },
+            {
+                "content": {"role": "model", "parts": [{"text": "sk-second-secret"}]},
+                "finishReason": "STOP",
+                "index": 1
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 10}
+    });
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("gemini-raw-multi-candidate")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+                }),
+            })
+            .func(noop_openai_chat_exec_fn(response.clone()))
+            .response_codec(Arc::new(GeminiGenerateContentCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result, response,
+        "PII sanitization must not mutate the caller result"
+    );
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    let output = captured_events[1].output().expect("sanitized output event");
+    assert_eq!(
+        output["candidates"][0]["content"]["parts"][0]["text"],
+        json!("sk-first-secret"),
+        "raw targeting must not trigger normalized multi-candidate omission"
+    );
+    assert_eq!(
+        output["candidates"][1]["content"]["parts"][0]["text"],
+        json!("[REDACTED]")
+    );
+    assert!(captured_events[1].annotated_response().is_some());
+
+    deregister_subscriber("pii-redaction-gemini-raw-multi-candidate-response").unwrap();
     clear_plugin_configuration().unwrap();
 }

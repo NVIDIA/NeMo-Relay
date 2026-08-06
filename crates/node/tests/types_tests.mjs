@@ -179,4 +179,43 @@ describe('GeminiGenerateContentCodec', () => {
     // Sanity: confirm the id is NOT the function name
     assert.notEqual(resp.tool_calls[0].id, 'my_fn', 'id must not be the function name');
   });
+
+  it('decode throws for malformed Gemini requests', () => {
+    const codec = new GeminiGenerateContentCodec();
+    assert.throws(
+      () => codec.decode(new LlmRequest({}, { contents: 'not an array' })),
+      /contents must be an array/,
+    );
+  });
+
+  it('encode throws for malformed annotated requests and codec failures', () => {
+    const codec = new GeminiGenerateContentCodec();
+    const original = new LlmRequest({}, {
+      contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+    });
+    assert.throws(
+      () => codec.encode({ messages: 'not an array' }, original),
+      /invalid AnnotatedLlmRequest/,
+    );
+
+    const annotated = codec.decode(original);
+    annotated.messages.push({ role: 'developer', content: 'unsupported role' });
+    assert.throws(
+      () => codec.encode(annotated, original),
+      /no Gemini equivalent/,
+    );
+  });
+
+  it('decodeResponse throws for malformed Gemini responses', () => {
+    const codec = new GeminiGenerateContentCodec();
+    assert.throws(
+      () => codec.decodeResponse({
+        candidates: [{
+          content: { role: 'model', parts: [{ text: 42 }] },
+          finishReason: 'STOP',
+        }],
+      }),
+      /parts.*text must be a string/,
+    );
+  });
 });

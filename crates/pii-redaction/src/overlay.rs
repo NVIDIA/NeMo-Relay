@@ -115,42 +115,29 @@ fn overlay_gemini_response(mut payload: Json, annotated: &AnnotatedLlmResponse) 
         });
         parts.extend(sanitized);
     } else {
-        // Overlay text: update all non-thought text parts, splitting multi-line normalized
-        // text across them when there are multiple.
+        // Overlay fallback text into the first visible text part.  The normalized
+        // text may contain embedded newlines, so splitting would confuse text
+        // content with Gemini part boundaries.
         let message_text = annotated_message_text(annotated.message.as_ref());
-        let text_part_count = parts
-            .iter()
-            .filter(|p| {
-                p.get("text").is_some() && p.get("thought").and_then(Json::as_bool) != Some(true)
-            })
-            .count();
-        let mut non_thought_text_count = 0usize;
-        for part in parts.iter_mut() {
+        let mut wrote_text = false;
+        parts.retain_mut(|part| {
             let is_thought = part.get("thought").and_then(Json::as_bool) == Some(true);
             if part.get("text").is_none() || is_thought {
-                continue;
+                return true;
             }
             let Some(p) = part.as_object_mut() else {
-                continue;
+                return false;
             };
-            let value = if text_part_count <= 1 {
-                message_text.as_deref()
-            } else {
-                // Multiple text parts: split on newline and assign one chunk each.
-                message_text
-                    .as_deref()
-                    .map(|t| t.split('\n').collect::<Vec<_>>())
-                    .as_ref()
-                    .and_then(|chunks| chunks.get(non_thought_text_count).copied())
-                    .or_else(|| {
-                        (non_thought_text_count == 0)
-                            .then_some(message_text.as_deref())
-                            .flatten()
-                    })
+            if wrote_text {
+                return false;
+            }
+            let Some(text) = message_text.as_deref() else {
+                return false;
             };
-            set_optional_string_field(p, "text", value);
-            non_thought_text_count += 1;
-        }
+            set_optional_string_field(p, "text", Some(text));
+            wrote_text = true;
+            true
+        });
     }
 
     // Overlay functionCall parts.
@@ -167,7 +154,9 @@ fn overlay_gemini_response(mut payload: Json, annotated: &AnnotatedLlmResponse) 
             let Some(sc) = sanitized.next() else {
                 return false; // no sanitized call left — remove this part
             };
-            set_optional_string_field(fc, "id", Some(sc.id.as_str()));
+            if fc.contains_key("id") {
+                set_optional_string_field(fc, "id", Some(sc.id.as_str()));
+            }
             set_optional_string_field(fc, "name", Some(sc.name.as_str()));
             fc.insert("args".into(), sc.arguments.clone());
             true

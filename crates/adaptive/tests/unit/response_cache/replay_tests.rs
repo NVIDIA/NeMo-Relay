@@ -83,7 +83,13 @@ fn gemini_replay_uses_a_valid_native_stream_event() {
     let aggregate = json!({
         "candidates": [{
             "index": 0,
-            "content": {"role": "model", "parts": [{"text": "hello"}]},
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "hello"},
+                    {"functionCall": {"id": "call_1", "name": "lookup", "args": {"q": "x"}}}
+                ]
+            },
             "finishReason": "STOP"
         }],
         "usageMetadata": {

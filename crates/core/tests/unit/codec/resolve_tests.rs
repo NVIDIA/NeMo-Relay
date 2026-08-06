@@ -483,6 +483,19 @@ fn codec_name_uses_canonical_spellings() {
 }
 
 #[test]
+fn from_codec_name_accepts_gemini_compatibility_alias() {
+    assert_eq!(
+        ProviderSurface::from_codec_name("gemini"),
+        Some(ProviderSurface::GeminiGenerateContent)
+    );
+    assert_eq!(
+        ProviderSurface::GeminiGenerateContent.codec_name(),
+        "gemini_generate_content",
+        "the legacy alias must not become the canonical codec spelling"
+    );
+}
+
+#[test]
 fn from_codec_name_is_none_for_unknown_names() {
     assert_eq!(ProviderSurface::from_codec_name("generate_content"), None);
     assert_eq!(ProviderSurface::from_codec_name(""), None);
@@ -505,6 +518,16 @@ fn supported_codec_names_track_the_builtin_registry() {
         .map(|descriptor| descriptor.codec_name)
         .collect();
     assert_eq!(supported_codec_names(), from_registry);
+    assert_eq!(
+        supported_codec_names_with_aliases(),
+        vec![
+            "openai_responses",
+            "anthropic_messages",
+            "openai_chat",
+            "gemini_generate_content",
+            "gemini"
+        ]
+    );
 }
 
 #[test]

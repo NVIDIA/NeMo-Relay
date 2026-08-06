@@ -178,6 +178,53 @@ fn gemini_overlay_redacts_candidate_text() {
 }
 
 #[test]
+fn gemini_overlay_preserves_embedded_newline_text_and_thought_parts() {
+    let payload = json!({
+        "candidates": [{
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "raw line one\nraw line two"},
+                    {"text": "raw second part"},
+                    {"text": "", "thought": true, "thoughtSignature": "sig-THOUGHT"}
+                ]
+            },
+            "finishReason": "STOP",
+            "index": 0
+        }]
+    });
+
+    let annotated = gemini_annotated(Some("[REDACTED]\nkept together"), None, None, None);
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
+    let parts = result["candidates"][0]["content"]["parts"]
+        .as_array()
+        .expect("Gemini parts array");
+
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["text"], json!("[REDACTED]\nkept together"));
+    assert_eq!(parts[1]["thought"], json!(true));
+    assert_eq!(parts[1]["thoughtSignature"], json!("sig-THOUGHT"));
+}
+
+#[test]
+fn gemini_overlay_does_not_add_absent_response_id_or_model_version() {
+    let payload = json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "hi"}]},
+            "finishReason": "STOP",
+            "index": 0
+        }]
+    });
+
+    let annotated = gemini_annotated(Some("hi"), None, None, None);
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
+    assert!(result.get("responseId").is_none());
+    assert!(result.get("modelVersion").is_none());
+}
+
+#[test]
 fn gemini_overlay_redacts_provider_native_candidate_part() {
     let payload = json!({
         "candidates": [{
@@ -256,6 +303,82 @@ fn gemini_overlay_updates_tool_call_args() {
         json!("[REDACTED]"),
         "Gemini overlay must redact functionCall args"
     );
+}
+
+#[test]
+fn gemini_overlay_does_not_synthesize_missing_function_call_id() {
+    let payload = json!({
+        "candidates": [{
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"functionCall": {"name": "search", "args": {"secret": "raw"}}}
+                ]
+            },
+            "finishReason": "STOP",
+            "index": 0
+        }]
+    });
+
+    let annotated = gemini_annotated(
+        None,
+        Some(vec![tool_call(
+            "search",
+            "search",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        None,
+        None,
+    );
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
+    let fc = &result["candidates"][0]["content"]["parts"][0]["functionCall"];
+
+    assert!(fc.get("id").is_none());
+    assert_eq!(fc["name"], json!("search"));
+    assert_eq!(fc["args"]["secret"], json!("[REDACTED]"));
+}
+
+#[test]
+fn gemini_overlay_removes_extra_function_call_parts() {
+    let payload = json!({
+        "candidates": [{
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"functionCall": {"name": "one", "id": "c1", "args": {"secret": "raw-1"}}},
+                    {"functionCall": {"name": "two", "id": "c2", "args": {"secret": "raw-2"}}},
+                    {"text": "", "thought": true, "thoughtSignature": "sig-KEEP"}
+                ]
+            },
+            "finishReason": "STOP",
+            "index": 0
+        }]
+    });
+
+    let annotated = gemini_annotated(
+        None,
+        Some(vec![tool_call(
+            "c1",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        None,
+        None,
+    );
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
+    let parts = result["candidates"][0]["content"]["parts"]
+        .as_array()
+        .expect("Gemini parts array");
+
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["functionCall"]["id"], json!("c1"));
+    assert_eq!(
+        parts[0]["functionCall"]["args"]["secret"],
+        json!("[REDACTED]")
+    );
+    assert_eq!(parts[1]["thoughtSignature"], json!("sig-KEEP"));
 }
 
 #[test]

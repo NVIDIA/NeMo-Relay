@@ -337,7 +337,18 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .and_then(Json::as_array)
                     .is_some_and(|blocks| blocks.iter().any(lossy_system_block))
         }
-        ProviderSurface::OpenAIResponses | ProviderSurface::GeminiGenerateContent => false,
+        ProviderSurface::OpenAIResponses => false,
+        ProviderSurface::GeminiGenerateContent => object
+            .get("generationConfig")
+            .and_then(Json::as_object)
+            .is_some_and(|generation_config| {
+                generation_config.keys().any(|key| {
+                    !matches!(
+                        key.as_str(),
+                        "temperature" | "topP" | "maxOutputTokens" | "stopSequences"
+                    )
+                })
+            }),
     }
 }
 

@@ -609,6 +609,39 @@ fn gemini_shaped_requests_key_on_the_detected_decode() {
 }
 
 #[test]
+fn gemini_unmodeled_generation_config_fields_do_not_collide() {
+    let config = cache_all_config();
+    let mime_request = |response_mime_type: &str| {
+        request(json!({
+            "model": "gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {
+                "temperature": 0.0,
+                "responseMimeType": response_mime_type
+            }
+        }))
+    };
+    let text = mime_request("text/plain");
+    let json = mime_request("application/json");
+    for request in [&text, &json] {
+        let (body, effective_codec) = resolved_body("gemini_generate_content", request);
+        assert_eq!(
+            effective_codec, None,
+            "unmodeled Gemini generationConfig fields must force raw fallback"
+        );
+        assert_eq!(
+            body, request.content,
+            "raw fallback must preserve answer-affecting Gemini generationConfig fields"
+        );
+    }
+    assert_ne!(
+        key_of("gemini_generate_content", &text, &config),
+        key_of("gemini_generate_content", &json, &config),
+        "distinct unmodeled Gemini generationConfig values must not share a cache key"
+    );
+}
+
+#[test]
 fn undetectable_shape_falls_back_to_raw_keying() {
     // No `messages`/`input`/`system` top-level key: no surface detects, so
     // the raw body is fingerprinted — still a usable, stable key.
