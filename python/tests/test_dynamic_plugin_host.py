@@ -49,6 +49,22 @@ def _relay_version() -> str:
         return str(tomllib.load(file)["workspace"]["package"]["version"])
 
 
+def _prepared_plugin_fixture(environment: str) -> Path:
+    value = os.environ.get(environment)
+    if value is not None:
+        path = Path(value)
+    else:
+        filename = (
+            _native_library_name()
+            if environment == "NEMO_RELAY_TEST_NATIVE_PLUGIN"
+            else "nemo-relay-worker-plugin-fixture" + (".exe" if sys.platform == "win32" else "")
+        )
+        path = _repo_root() / "target/test-plugin-fixtures/debug" / filename
+    if not path.is_file():
+        raise RuntimeError(f"missing plugin test fixture; run `just build-test-plugin-fixtures`: {path}")
+    return path
+
+
 def _native_library_name() -> str:
     if sys.platform == "win32":
         return "nemo_relay_plugin_fixture.dll"
@@ -59,24 +75,8 @@ def _native_library_name() -> str:
 
 @pytest.fixture(scope="session")
 def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlugin:
-    root = _repo_root()
-    target = tmp_path_factory.mktemp("native-plugin-target")
     manifest_dir = tmp_path_factory.mktemp("native-plugin-manifest")
-    subprocess.run(
-        [
-            os.environ.get("CARGO", "cargo"),
-            "build",
-            "--quiet",
-            "--manifest-path",
-            str(root / "crates/core/tests/fixtures/native_plugin/Cargo.toml"),
-            "--target-dir",
-            str(target),
-        ],
-        cwd=root,
-        check=True,
-    )
-    library = target / "debug" / _native_library_name()
-    assert library.is_file()
+    library = _prepared_plugin_fixture("NEMO_RELAY_TEST_NATIVE_PLUGIN")
     digest = hashlib.sha256(library.read_bytes()).hexdigest()
     manifest = manifest_dir / "relay-plugin.toml"
     manifest.write_text(
@@ -112,25 +112,8 @@ def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
 
 @pytest.fixture(scope="session")
 def worker_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlugin:
-    root = _repo_root()
-    target = tmp_path_factory.mktemp("worker-plugin-target")
     manifest_dir = tmp_path_factory.mktemp("worker-plugin-manifest")
-    subprocess.run(
-        [
-            os.environ.get("CARGO", "cargo"),
-            "build",
-            "--quiet",
-            "--locked",
-            "--manifest-path",
-            str(root / "crates/core/tests/fixtures/worker_plugin/Cargo.toml"),
-            "--target-dir",
-            str(target),
-        ],
-        cwd=root,
-        check=True,
-    )
-    executable = target / "debug" / ("nemo-relay-worker-plugin-fixture" + (".exe" if sys.platform == "win32" else ""))
-    assert executable.is_file()
+    executable = _prepared_plugin_fixture("NEMO_RELAY_TEST_WORKER_PLUGIN")
     manifest = manifest_dir / "relay-plugin.toml"
     manifest.write_text(
         textwrap.dedent(

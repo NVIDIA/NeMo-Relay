@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -32,14 +31,8 @@ const (
 )
 
 var (
-	goNativePluginFixtureOnce sync.Once
-	goNativePluginFixturePath string
-	goNativePluginFixtureErr  error
-	goWorkerPluginFixtureOnce sync.Once
-	goWorkerPluginFixturePath string
-	goWorkerPluginFixtureErr  error
-	workspacePackagePattern   = regexp.MustCompile(`(?ms)^[\t ]*\[workspace\.package\][\t ]*(?:#[^\r\n]*)?\r?\n(.*?)(?:^[\t ]*\[|\z)`)
-	workspaceVersionPattern   = regexp.MustCompile(`(?m)^[\t ]*version[\t ]*=[\t ]*(?:"([^"\r\n]+)"|'([^'\r\n]+)')[\t ]*(?:#[^\r\n]*)?\r?$`)
+	workspacePackagePattern = regexp.MustCompile(`(?ms)^[\t ]*\[workspace\.package\][\t ]*(?:#[^\r\n]*)?\r?\n(.*?)(?:^[\t ]*\[|\z)`)
+	workspaceVersionPattern = regexp.MustCompile(`(?m)^[\t ]*version[\t ]*=[\t ]*(?:"([^"\r\n]+)"|'([^'\r\n]+)')[\t ]*(?:#[^\r\n]*)?\r?$`)
 )
 
 func withPluginActivationStubs(t *testing.T) {
@@ -968,95 +961,41 @@ func createUnclosedPluginActivation(t *testing.T, specs []DynamicPluginActivatio
 
 func goNativePluginFixture(t *testing.T) string {
 	t.Helper()
-	goNativePluginFixtureOnce.Do(func() {
-		goNativePluginFixturePath, goNativePluginFixtureErr = buildGoNativePluginFixture()
-	})
-	if goNativePluginFixtureErr != nil {
-		t.Fatal(goNativePluginFixtureErr)
-	}
-	return goNativePluginFixturePath
-}
-
-func buildGoNativePluginFixture() (string, error) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		return "", err
-	}
-	sourceRoot, err := os.MkdirTemp("", "nemo-relay-go-native-plugin-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(sourceRoot)
-	fixtureRoot := filepath.Join(sourceRoot, "native_plugin")
-	if err := os.MkdirAll(filepath.Join(fixtureRoot, "src"), 0o700); err != nil {
-		return "", err
-	}
-	fixtureSource := filepath.Join(repoRoot, "crates", "core", "tests", "fixtures", "native_plugin")
-	manifestBytes, err := os.ReadFile(filepath.Join(fixtureSource, cargoManifestName))
-	if err != nil {
-		return "", err
-	}
-	pluginPath := filepath.Join(repoRoot, "crates", "plugin")
-	manifestContents := strings.Replace(string(manifestBytes), `nemo-relay-plugin = { path = "../../../../plugin" }`, fmt.Sprintf("nemo-relay-plugin = { path = %q }", pluginPath), 1)
-	manifest := filepath.Join(fixtureRoot, cargoManifestName)
-	if err := os.WriteFile(manifest, []byte(manifestContents), 0o600); err != nil {
-		return "", err
-	}
-	librarySource, err := os.ReadFile(filepath.Join(fixtureSource, "src", "lib.rs"))
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(fixtureRoot, "src", "lib.rs"), librarySource, 0o600); err != nil {
-		return "", err
-	}
-	target := filepath.Join(repoRoot, "target")
-	cargo := os.Getenv("CARGO")
-	if cargo == "" {
-		cargo = "cargo"
-	}
-	command := exec.Command(cargo, "build", "--quiet", "--manifest-path", manifest, "--target-dir", target)
-	if output, err := command.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("build native plugin fixture: %w\n%s", err, output)
-	}
-	fixturePath := filepath.Join(target, "debug", goNativeLibraryName())
-	if _, err := os.Stat(fixturePath); err != nil {
-		return "", fmt.Errorf("native plugin fixture output: %w", err)
-	}
-	return fixturePath, nil
+	return preparedPluginFixture(t, "NEMO_RELAY_TEST_NATIVE_PLUGIN")
 }
 
 func goWorkerPluginFixture(t *testing.T) string {
 	t.Helper()
-	goWorkerPluginFixtureOnce.Do(func() {
+	return preparedPluginFixture(t, "NEMO_RELAY_TEST_WORKER_PLUGIN")
+}
+
+func preparedPluginFixture(t *testing.T, environment string) string {
+	t.Helper()
+	path := os.Getenv(environment)
+	if path == "" {
 		repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 		if err != nil {
-			goWorkerPluginFixtureErr = err
-			return
+			t.Fatal(err)
 		}
-		manifest := filepath.Join(repoRoot, "crates", "core", "tests", "fixtures", "worker_plugin", cargoManifestName)
-		target := filepath.Join(repoRoot, "target")
-		cargo := os.Getenv("CARGO")
-		if cargo == "" {
-			cargo = "cargo"
+		filename := "nemo-relay-worker-plugin-fixture"
+		if environment == "NEMO_RELAY_TEST_NATIVE_PLUGIN" {
+			switch runtime.GOOS {
+			case "windows":
+				filename = "nemo_relay_plugin_fixture.dll"
+			case "darwin":
+				filename = "libnemo_relay_plugin_fixture.dylib"
+			default:
+				filename = "libnemo_relay_plugin_fixture.so"
+			}
+		} else if runtime.GOOS == "windows" {
+			filename += ".exe"
 		}
-		command := exec.Command(cargo, "build", "--quiet", "--locked", "--manifest-path", manifest, "--target-dir", target)
-		if output, err := command.CombinedOutput(); err != nil {
-			goWorkerPluginFixtureErr = fmt.Errorf("build worker plugin fixture: %w\n%s", err, output)
-			return
-		}
-		executable := "nemo-relay-worker-plugin-fixture"
-		if runtime.GOOS == "windows" {
-			executable += ".exe"
-		}
-		goWorkerPluginFixturePath = filepath.Join(target, "debug", executable)
-		if _, err := os.Stat(goWorkerPluginFixturePath); err != nil {
-			goWorkerPluginFixtureErr = fmt.Errorf("worker plugin fixture output: %w", err)
-		}
-	})
-	if goWorkerPluginFixtureErr != nil {
-		t.Fatal(goWorkerPluginFixtureErr)
+		path = filepath.Join(repoRoot, "target", "test-plugin-fixtures", "debug", filename)
 	}
-	return goWorkerPluginFixturePath
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("plugin test fixture %q is missing; run `just build-test-plugin-fixtures`: %v", path, err)
+	}
+	return path
 }
 
 func writeGoNativePluginManifest(t *testing.T, library string) string {
@@ -1194,16 +1133,5 @@ func TestWorkspaceVersionFromCargoTOML(t *testing.T) {
 				t.Fatalf("workspaceVersionFromCargoTOML() = %q, want %q", got, test.want)
 			}
 		})
-	}
-}
-
-func goNativeLibraryName() string {
-	switch runtime.GOOS {
-	case "windows":
-		return "nemo_relay_plugin_fixture.dll"
-	case "darwin":
-		return "libnemo_relay_plugin_fixture.dylib"
-	default:
-		return "libnemo_relay_plugin_fixture.so"
 	}
 }

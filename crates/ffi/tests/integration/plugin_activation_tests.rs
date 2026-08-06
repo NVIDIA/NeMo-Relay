@@ -5,8 +5,8 @@ use super::*;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
 
 use nemo_relay_ffi::types::{FfiPluginActivation, nemo_relay_plugin_activation_free};
 use tempfile::TempDir;
@@ -16,11 +16,6 @@ const DISCOVERED_STATIC_PLUGIN_KIND: &str = "ffi_discovered_static";
 static DISCOVERED_STATIC_REGISTRATIONS: AtomicUsize = AtomicUsize::new(0);
 static DISCOVERED_STATIC_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
 static DISCOVERED_STATIC_CONFIG: Mutex<Option<Json>> = Mutex::new(None);
-
-struct NativeFixture {
-    _source_dir: TempDir,
-    library: PathBuf,
-}
 
 struct PluginDiscoveryTestEnv {
     previous_cwd: PathBuf,
@@ -523,89 +518,41 @@ fn plugin_kinds() -> Vec<String> {
 }
 
 fn build_native_fixture() -> &'static Path {
-    static FIXTURE: OnceLock<NativeFixture> = OnceLock::new();
-    &FIXTURE
-        .get_or_init(|| {
-            let source_dir = TempDir::new().expect("native fixture source tempdir");
-            let fixture_dir = source_dir.path().join("native_plugin");
-            let source = fixture_dir.join("src");
-            std::fs::create_dir_all(&source).expect("native fixture src dir");
-            let plugin_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin");
-            let manifest_template = std::fs::read_to_string(
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../core/tests/fixtures/native_plugin/Cargo.toml"),
-            )
-            .expect("native fixture Cargo.toml");
-            let manifest = manifest_template.replace(
-                r#"nemo-relay-plugin = { path = "../../../../plugin" }"#,
-                &format!("nemo-relay-plugin = {{ path = {plugin_path:?} }}"),
-            );
-            std::fs::write(fixture_dir.join("Cargo.toml"), manifest)
-                .expect("write native fixture Cargo.toml");
-            std::fs::copy(
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../core/tests/fixtures/native_plugin/src/lib.rs"),
-                source.join("lib.rs"),
-            )
-            .expect("copy native fixture source");
-
-            // Nextest runs each test in a separate process. Keep this process's
-            // generated crate and target directory together so parallel tests do
-            // not race on a shared fixture artifact.
-            let target = source_dir.path().join("target");
-            let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-                .arg("build")
-                .arg("--quiet")
-                .arg("--manifest-path")
-                .arg(fixture_dir.join("Cargo.toml"))
-                .arg("--target-dir")
-                .arg(&target)
-                .status()
-                .expect("native fixture build should start");
-            assert!(status.success(), "native fixture build failed: {status}");
-            let library = target.join("debug").join(native_library_name());
-            assert!(
-                library.exists(),
-                "missing native fixture: {}",
-                library.display()
-            );
-            NativeFixture {
-                _source_dir: source_dir,
-                library,
-            }
-        })
-        .library
+    prepared_fixture("NEMO_RELAY_TEST_NATIVE_PLUGIN")
 }
 
 fn build_worker_fixture() -> &'static Path {
-    static FIXTURE: OnceLock<PathBuf> = OnceLock::new();
-    FIXTURE.get_or_init(|| {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../core/tests/fixtures/worker_plugin/Cargo.toml");
-        let target =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ffi-worker-plugin-fixture");
-        let status = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
-            .arg("build")
-            .arg("--quiet")
-            .arg("--locked")
-            .arg("--manifest-path")
-            .arg(manifest)
-            .arg("--target-dir")
-            .arg(&target)
-            .status()
-            .expect("worker fixture build should start");
-        assert!(status.success(), "worker fixture build failed: {status}");
-        let binary = target.join("debug").join(format!(
-            "nemo-relay-worker-plugin-fixture{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        assert!(
-            binary.exists(),
-            "missing worker fixture: {}",
-            binary.display()
-        );
-        binary
-    })
+    prepared_fixture("NEMO_RELAY_TEST_WORKER_PLUGIN")
+}
+
+fn prepared_fixture(environment: &str) -> &'static Path {
+    let path = std::env::var_os(environment)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let filename = if environment == "NEMO_RELAY_TEST_NATIVE_PLUGIN" {
+                if cfg!(target_os = "windows") {
+                    "nemo_relay_plugin_fixture.dll".into()
+                } else if cfg!(target_os = "macos") {
+                    "libnemo_relay_plugin_fixture.dylib".into()
+                } else {
+                    "libnemo_relay_plugin_fixture.so".into()
+                }
+            } else {
+                format!(
+                    "nemo-relay-worker-plugin-fixture{}",
+                    std::env::consts::EXE_SUFFIX
+                )
+            };
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/test-plugin-fixtures/debug")
+                .join(filename)
+        });
+    assert!(
+        path.exists(),
+        "plugin test fixture is missing; run `just build-test-plugin-fixtures`: {}",
+        path.display()
+    );
+    Box::leak(path.into_boxed_path())
 }
 
 fn write_native_manifest(directory: &Path, library: &Path) -> PathBuf {
@@ -674,14 +621,4 @@ entrypoint = {entrypoint:?}
     )
     .expect("write worker fixture manifest");
     manifest
-}
-
-fn native_library_name() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "nemo_relay_plugin_fixture.dll"
-    } else if cfg!(target_os = "macos") {
-        "libnemo_relay_plugin_fixture.dylib"
-    } else {
-        "libnemo_relay_plugin_fixture.so"
-    }
 }

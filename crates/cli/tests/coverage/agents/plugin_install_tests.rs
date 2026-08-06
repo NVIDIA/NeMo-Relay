@@ -1168,7 +1168,7 @@ fn cross_process_lock_holder() {
         return;
     }
     std::fs::write(ready, b"ready").unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !release.exists() {
         assert!(Instant::now() < deadline, "lock holder release timed out");
         thread::sleep(Duration::from_millis(10));
