@@ -21,6 +21,28 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def is_trial_result(value: dict[str, Any]) -> bool:
+    return "task_name" in value and "verifier_result" in value
+
+
+def read_benchmark_passed(value: dict[str, Any]) -> bool | None:
+    reward = value.get("reward")
+    if isinstance(reward, dict):
+        candidate = reward.get("task_passed")
+        if isinstance(candidate, bool):
+            return candidate
+    verifier = value.get("verifier_result")
+    rewards = verifier.get("rewards") if isinstance(verifier, dict) else None
+    if isinstance(rewards, dict):
+        candidate = rewards.get("task_passed")
+        if isinstance(candidate, bool):
+            return candidate
+        candidate = rewards.get("reward")
+        if isinstance(candidate, (int, float)) and not isinstance(candidate, bool):
+            return candidate > 0
+    return None
+
+
 def contained_files(root: Path) -> list[Path]:
     resolved_root = root.resolve(strict=True)
     files: list[Path] = []
@@ -201,15 +223,14 @@ def main() -> int:
     harbor_results: list[Path] = []
     benchmark_passed: bool | None = None
     if args.harbor_job_dir:
-        harbor_results = sorted(args.harbor_job_dir.glob("**/result.json"))
+        harbor_results = [
+            path for path in sorted(args.harbor_job_dir.glob("**/result.json")) if is_trial_result(read_json(path))
+        ]
         if len(harbor_results) != 1:
             errors.append(f"expected one Harbor trial result, found {len(harbor_results)}")
         elif harbor_results:
             harbor_result = read_json(harbor_results[0])
-            reward = harbor_result.get("reward")
-            if isinstance(reward, dict):
-                candidate = reward.get("task_passed")
-                benchmark_passed = candidate if isinstance(candidate, bool) else None
+            benchmark_passed = read_benchmark_passed(harbor_result)
 
     validation = {
         "schema_version": SCHEMA_VERSION,

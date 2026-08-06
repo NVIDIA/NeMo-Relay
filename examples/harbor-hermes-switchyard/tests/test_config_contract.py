@@ -63,3 +63,11 @@ def test_pricing_does_not_duplicate_relay_generated_aliases() -> None:
     entry = config["components"][0]["config"]["sources"][0]["catalog"]["entries"][0]
     assert entry["model_id"] == "namespace/model"
     assert "aliases" not in entry
+
+
+def test_task_runner_defaults_to_production_x86_64_architecture() -> None:
+    runner = (EXAMPLE_ROOT / "run_terminal_bench.sh").read_text(encoding="utf-8")
+    assert 'relay_architecture="${RELAY_ARCHITECTURE:-x86_64}"' in runner
+    assert '--relay-architecture "$relay_architecture"' in runner
+    assert 'SWITCHYARD_TARGET_ARCHITECTURE="$relay_architecture"' in runner
+    assert '--ak "relay_architecture=$relay_architecture"' in runner

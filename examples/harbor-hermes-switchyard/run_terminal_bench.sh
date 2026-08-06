@@ -17,6 +17,7 @@ harbor_bin="${HARBOR_BIN:-harbor}"
 python_bin="${PHASE1_PYTHON:-python3}"
 switchyard_bundle="${SWITCHYARD_BUNDLE:-}"
 relay_wheel="${RELAY_WHEEL:-}"
+relay_architecture="${RELAY_ARCHITECTURE:-x86_64}"
 agent_timeout_multiplier="${AGENT_TIMEOUT_MULTIPLIER:-3}"
 agent_setup_timeout_multiplier="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-6}"
 environment_build_timeout_multiplier="${ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER:-6}"
@@ -47,6 +48,10 @@ if [[ -z "${!upstream_auth_env:-}" ]]; then
   echo "required provider authorization environment variable is unset: $upstream_auth_env" >&2
   exit 2
 fi
+if [[ "$relay_architecture" != "x86_64" && "$relay_architecture" != "aarch64" ]]; then
+  echo "RELAY_ARCHITECTURE must be x86_64 or aarch64" >&2
+  exit 2
+fi
 
 docker info >/dev/null
 curl --fail --silent --show-error --max-time 10 "$phoenix_base" >/dev/null
@@ -69,7 +74,8 @@ trap cleanup EXIT
 if [[ -z "$switchyard_bundle" ]]; then
   temporary_build="$(mktemp -d "$(dirname "$run_root")/.phase1-switchyard-build.XXXXXX")"
   switchyard_bundle="$temporary_build/bundle"
-  "$example_root/scripts/build_switchyard_plugin.sh" "$switchyard_bundle"
+  SWITCHYARD_TARGET_ARCHITECTURE="$relay_architecture" \
+    "$example_root/scripts/build_switchyard_plugin.sh" "$switchyard_bundle"
 fi
 
 free_port="$($python_bin - <<'PY'
@@ -86,6 +92,7 @@ prepare_args=(
   "$example_root/scripts/prepare_runtime.py"
   --run-root "$run_root"
   --switchyard-bundle "$switchyard_bundle"
+  --relay-architecture "$relay_architecture"
   --upstream-base-url "$upstream_base_url"
   --upstream-auth-env "$upstream_auth_env"
   --target-model "$target_model"
@@ -148,12 +155,12 @@ fi
     --ak "switchyard_bundle_dir=$run_root/runtime/switchyard-plugin" \
     --ak "relay_wheel_path=$relay_wheel_path" \
     --ak "relay_wheel_sha256=$relay_wheel_sha256" \
+    --ak "relay_architecture=$relay_architecture" \
     "${agent_kwargs[@]}" \
     --ae "$upstream_auth_env=${!upstream_auth_env}" \
     --ae OPENAI_API_KEY=relay-managed-placeholder \
     "${agent_hosts[@]}" \
     --artifact /logs/agent/direct-hermes \
-    --agent-include-logs 'direct-hermes/**' \
     --agent-include-logs hermes-session.jsonl \
     --agent-include-logs hermes.txt \
     --job-name "$job_name" \
@@ -174,7 +181,11 @@ direct_result="$($python_bin - "$run_root/jobs/$job_name" <<'PY'
 import pathlib
 import sys
 
-matches = sorted(pathlib.Path(sys.argv[1]).glob("**/direct-hermes-result.json"))
+matches = sorted(
+    pathlib.Path(sys.argv[1]).glob(
+        "*/artifacts/logs/agent/direct-hermes/direct-hermes-result.json"
+    )
+)
 if len(matches) != 1:
     raise SystemExit(f"expected one direct Hermes result, found {len(matches)}")
 print(matches[0])

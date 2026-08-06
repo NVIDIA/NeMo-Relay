@@ -19,7 +19,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/healthz":
+        if self.path in {"/", "/healthz"}:
             self.send_response(200)
             self.end_headers()
             return

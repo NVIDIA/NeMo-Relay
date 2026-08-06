@@ -24,6 +24,9 @@ execution. The Hermes installer is followed by a final `uv sync --frozen`
 against that commit's checked-in lock because its date-relative resolution
 guard can otherwise make an older checkout appear stale. The verified Relay
 0.7.0 platform wheel is then force-installed by digest without dependencies.
+During installation only, the bridge advertises an inert `ffmpeg` command so
+the task does not install an unrelated media stack; browser setup and bundled
+skills are also disabled for this terminal-only evaluation.
 
 ## Request and lifecycle ownership
 
@@ -144,6 +147,12 @@ PHASE1_COMPAT_PLATFORM=linux/arm64 \
 That control validates the same source commits and lifecycle on a different
 released Relay wheel architecture. It does **not** replace a passing
 `linux/amd64` run on native amd64 infrastructure before merge.
+
+`run_terminal_bench.sh` also accepts `RELAY_ARCHITECTURE=aarch64` together
+with matching `SWITCHYARD_BUNDLE` and `RELAY_WHEEL` inputs. This is useful for
+exercising Harbor's complete bridge and artifact path on a native Apple
+Silicon Docker daemon. It remains a diagnostic control; the default and merge
+gate stay `x86_64`.
 
 ## Run one Terminal-Bench task
 

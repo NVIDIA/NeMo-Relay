@@ -97,3 +97,25 @@ def test_no_response_never_creates_a_passed_completion(tmp_path: Path, monkeypat
 
     completion = json.loads((root / "completion.json").read_text())
     assert completion["status"] == "failed"
+
+
+def test_empty_session_uses_bounded_quiet_cli_output(tmp_path: Path, monkeypatch) -> None:
+    module = load_finalizer()
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    session = tmp_path / "hermes-session.jsonl"
+    session.write_text("", encoding="utf-8")
+    log = tmp_path / "hermes.txt"
+    log.write_text("startup warning\n\nsession_id: cli-session\ncompleted\nanswer\n", encoding="utf-8")
+    monkeypatch.setattr(module, "HERMES_SESSION", session)
+    monkeypatch.setattr(module, "HERMES_LOG", log)
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.7.0")
+
+    args = make_args(tmp_path)
+    module.initialize(args, root)
+    module.complete(args, root)
+
+    result = json.loads((root / "direct-hermes-result.json").read_text())
+    assert result["status"] == "completed"
+    assert result["session_id"] == "cli-session"
+    assert result["final_response"] == "completed\nanswer"

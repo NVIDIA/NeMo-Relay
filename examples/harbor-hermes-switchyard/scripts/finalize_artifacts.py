@@ -10,6 +10,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
+import re
 import time
 import tomllib
 from pathlib import Path
@@ -169,6 +170,22 @@ def _last_assistant_response(messages: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _response_from_cli_log(text: str) -> tuple[str | None, str | None]:
+    """Recover quiet-mode output when Hermes produced an empty session export."""
+    lines = text.splitlines()
+    marker_index: int | None = None
+    session_id: str | None = None
+    for index, line in enumerate(lines):
+        match = re.fullmatch(r"\s*session_id:\s*(\S+)\s*", line)
+        if match:
+            marker_index = index
+            session_id = match.group(1)
+    if marker_index is None:
+        return None, None
+    response = "\n".join(lines[marker_index + 1 :]).strip()
+    return response or None, session_id
+
+
 def _write_bounded_diagnostics(root: Path) -> str:
     destination = root / "diagnostics" / "hermes-tail.txt"
     if not HERMES_LOG.is_file():
@@ -191,6 +208,9 @@ def complete(args: argparse.Namespace, root: Path) -> None:
     messages, exported_session_id = _read_session_messages(HERMES_SESSION)
     response = _last_assistant_response(messages)
     diagnostic_text = _write_bounded_diagnostics(root)
+    log_response, log_session_id = _response_from_cli_log(diagnostic_text)
+    response = response or log_response
+    exported_session_id = exported_session_id or log_session_id
     lowered = diagnostic_text.lower()
     cleanup_failure = any(
         marker in lowered

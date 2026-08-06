@@ -55,6 +55,17 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _verify_elf_architecture(path: Path, architecture: str) -> None:
+    with path.open("rb") as stream:
+        header = stream.read(20)
+    if header[:4] != b"\x7fELF" or len(header) < 20 or header[5] != 1:
+        raise ValueError("Switchyard native library must be a little-endian ELF artifact")
+    expected_machine = {"x86_64": 62, "aarch64": 183}[architecture]
+    machine = int.from_bytes(header[18:20], "little")
+    if machine != expected_machine:
+        raise ValueError(f"Switchyard native library does not target {architecture}: ELF e_machine={machine}")
+
+
 def _require_public_https_git_url(value: str) -> str:
     parsed = urlsplit(value)
     if (
@@ -130,6 +141,7 @@ class HarborHermesAgent(Hermes):
         switchyard_bundle_dir: str,
         relay_wheel_path: str,
         relay_wheel_sha256: str,
+        relay_architecture: str = "x86_64",
         switchyard_commit: str = _DEFAULT_SWITCHYARD_COMMIT,
         artifact_root: str = "/logs/agent/direct-hermes",
         inject_post_response_failure: bool = False,
@@ -142,6 +154,9 @@ class HarborHermesAgent(Hermes):
         self.commit = _require_full_sha(commit, "commit")
         self.switchyard_commit = _require_full_sha(switchyard_commit, "switchyard_commit")
         self.relay_wheel_sha256 = _require_sha256(relay_wheel_sha256, "relay_wheel_sha256")
+        if relay_architecture not in {"x86_64", "aarch64"}:
+            raise ValueError("relay_architecture must be x86_64 or aarch64")
+        self.relay_architecture = relay_architecture
 
         self.relay_config_path = Path(relay_config_path).expanduser().resolve()
         self.switchyard_bundle_dir = Path(switchyard_bundle_dir).expanduser().resolve()
@@ -156,8 +171,8 @@ class HarborHermesAgent(Hermes):
             raise FileNotFoundError(self.relay_wheel_path)
         if _sha256(self.relay_wheel_path) != self.relay_wheel_sha256:
             raise ValueError("Relay wheel digest does not match relay_wheel_sha256")
-        if "manylinux" not in self.relay_wheel_path.name or "x86_64" not in self.relay_wheel_path.name:
-            raise ValueError("Relay wheel must target Linux x86_64")
+        if "manylinux" not in self.relay_wheel_path.name or relay_architecture not in self.relay_wheel_path.name:
+            raise ValueError(f"Relay wheel must target Linux {relay_architecture}")
         _validate_relay_config(self.relay_config_path)
 
         self.switchyard_manifest = self.switchyard_bundle_dir / "relay-plugin.toml"
@@ -171,6 +186,7 @@ class HarborHermesAgent(Hermes):
         if len(libraries) != 1:
             raise ValueError("Switchyard bundle must contain exactly one native library")
         self.switchyard_library = libraries[0]
+        _verify_elf_architecture(self.switchyard_library, relay_architecture)
 
         self._example_root = Path(__file__).resolve().parents[1]
         self._finalizer_path = self._example_root / "scripts" / "finalize_artifacts.py"
@@ -205,7 +221,10 @@ class HarborHermesAgent(Hermes):
                 f"git -C {install_dir} fetch --depth 1 origin {commit}; "
                 f"git -C {install_dir} checkout --detach {commit}; "
                 f'test "$(git -C {install_dir} rev-parse HEAD)" = {commit}; '
+                "mkdir -p /tmp/hermes-install-path; "
+                "ln -sf /bin/true /tmp/hermes-install-path/ffmpeg; "
                 f"HERMES_HOME=/tmp/hermes HERMES_INSTALL_DIR={install_dir} "
+                "PATH=/tmp/hermes-install-path:$PATH "
                 f"bash {install_dir}/scripts/install.sh --skip-setup --skip-browser "
                 f"--no-skills --dir {install_dir} --branch {repository_ref} "
                 f"--commit {commit} --force-commit; "
