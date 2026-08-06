@@ -1,276 +1,283 @@
 # Harbor + Hermes + Switchyard evaluation
 
-This example runs a Terminal-Bench 2.0 task through Harbor and Hermes while
-Hermes owns an in-process NeMo Relay 0.7.0 runtime. Relay initializes static
-pricing and observability components and activates Switchyard as a standard
-dynamic native plugin.
-
-The example is deliberately a one-task integration reference. It does not
-replace Harbor's task lifecycle and it is not the full 89-task coordinator.
-The four-task regression command below is the Phase 1 readiness gate.
+This example runs one complete Terminal-Bench 2.0 cohort through Harbor and
+Hermes. Hermes owns an in-process NeMo Relay 0.7.0 runtime; Relay loads the
+Switchyard native plugin, and Switchyard selects and calls the configured
+provider route. Phase 2 is one resumable 89-task cohort. Multi-cohort execution
+and result aggregation belong to Phase 3 and are intentionally out of scope.
 
 ## Pinned inputs
 
 | Dependency | Input used by this example |
 |---|---|
-| NeMo Relay | Released Linux/amd64 `nemo-relay==0.7.0` wheel; that exact wheel is installed and its digest is recorded per run. |
-| Hermes | `bbednarski9/hermes-agent`, branch `feat/relay-native-plugin-init`, detached commit `efb63e714abc436af88af9b0d6734751c199aa6d` (PR #77915). |
-| Switchyard | `bbednarski9/Switchyard`, detached commit `8293936a0f5758aa1a782639d485b8b8948cf03e` (PR #270). |
-| Harbor | `harbor==0.18.0`, dataset `terminal-bench@2.0`. |
+| NeMo Relay | Released `nemo-relay==0.7.0` platform wheel, installed by digest rather than from this source checkout. |
+| Hermes | `bbednarski9/hermes-agent`, detached commit `efb63e714abc436af88af9b0d6734751c199aa6d` from PR #77915. |
+| Switchyard | `bbednarski9/Switchyard`, detached commit `5d9d3292d6154e44d50295d0d4a3fd4f144f2528` from PR #270. |
+| Harbor | `harbor==0.18.0`, local export of dataset `terminal-bench@2.0`. |
 
-The branch names make the development inputs discoverable; only the full
-commits are authoritative. Every checkout is detached and verified before
-execution. The Hermes installer is followed by a final `uv sync --frozen`
-against that commit's checked-in lock because its date-relative resolution
-guard can otherwise make an older checkout appear stale. The verified Relay
-0.7.0 platform wheel is then force-installed by digest without dependencies.
-During installation only, the bridge advertises an inert `ffmpeg` command so
-the task does not install an unrelated media stack; browser setup and bundled
-skills are also disabled for this terminal-only evaluation.
+Every source checkout is detached and verified. The Hermes installer is
+followed by `uv sync --frozen`, then the selected Relay 0.7.0 wheel is
+force-installed without dependencies and verified by digest.
 
 ## Request and lifecycle ownership
 
 There is no Switchyard service in this topology:
 
-1. Harbor creates the Terminal-Bench task environment and invokes its built-in
-   Hermes lifecycle through the temporary subclass in
-   `agents/harbor_hermes_agent.py`.
-2. Hermes initializes Relay and asks Relay's public dynamic-plugin loader to
-   activate `nvidia.switchyard` from `[[plugins.dynamic]]`.
-3. Relay owns the outer managed LLM operation and invokes the native execution
-   intercept.
-4. The Switchyard plugin selects the route and its `switchyard-llm-client`
-   performs the provider HTTP request.
-5. Hermes waits for Relay operations, plugin cleanup, subscribers, and
-   exporters before returning to Harbor.
+1. Harbor owns the task container, Hermes lifecycle, timeout, verifier, and
+   task artifact collection.
+2. The temporary adapter in `agents/harbor_hermes_agent.py` installs the exact
+   Hermes commit and projects Relay's config and native bundle.
+3. Hermes initializes Relay; Relay's public loader activates
+   `nvidia.switchyard` from `[[plugins.dynamic]]`.
+4. Relay dispatches the managed operation into the native intercept.
+5. Switchyard selects a route and its client owns the provider HTTP request.
+6. Hermes waits for operations, plugins, subscribers, and exporters before
+   returning to Harbor.
 
-That split is important: Relay dispatches into the plugin intercept, while the
-pinned Switchyard plugin owns the provider HTTP client. The direct receipt
-records both facts without claiming a second routing service exists.
-
-Static components and dynamic plugins are separate concepts. The pricing and
-schema-v3 observability components in `config/relay.toml.in` are static Relay
-components. Switchyard is a standard dynamic native Relay plugin. Hermes
-`[[dynamic_plugins]]` Python workers are not used, and the bridge rejects a
-configuration that mixes the two activation models before provider traffic.
-
-## Why the temporary Harbor agent exists
-
-Harbor 0.18.0's built-in Hermes agent accepts a branch-like `version` and
-clones the upstream NousResearch repository. It cannot select a fork plus an
-immutable arbitrary commit, nor can it project this example's Relay config and
-native bundle. `HarborHermesAgent` changes only installation, configuration
-projection, and additional artifact framing; the inherited Harbor setup/run,
-timeout, task, session export, and ATIF conversion remain in control.
-
-Remove this bridge and use `--agent hermes` once
+The adapter can be removed after
 [hermes-agent#77915](https://github.com/NousResearch/hermes-agent/pull/77915)
-is upstream **and** Harbor's built-in agent can install a released, pinned
-compatible Hermes revision while projecting the Relay config and plugin
-bundle. Merging the Hermes PR alone is not sufficient while Harbor remains
-upstream-repository-only and branch-only.
+is upstream and Harbor can install an immutable compatible Hermes revision
+while projecting the Relay configuration and plugin bundle.
 
-## Prerequisites
+## Configuration ownership
 
-- Docker with enough space to build one Linux/amd64 Rust plugin and task image;
-- Python 3.11 or newer;
-- access to `inference.nvidia.com` through its OpenAI-compatible endpoint;
-- a Phoenix endpoint accepting OTLP/HTTP traces; and
-- the provider authorization value in an environment variable.
+The two configuration files have deliberately different responsibilities:
 
-On macOS, place bundle and run roots below a directory shared with Docker
-(normally `/Users/...`). Do not assume `$TMPDIR` or `/private/tmp` is shared by
-Colima merely because the same path exists inside its VM.
+- `phase2-run.env.example` is copied to an untracked, mode-`0600`
+  `phase2-run.env`. It contains per-machine paths, the run identity, Phoenix
+  destination, manually selected capacity, and the real
+  `SWITCHYARD_PROVIDER_AUTHORIZATION` header.
+- `config/plugins.toml.in` is checked in and non-secret. It is the only source
+  of provider URLs, protocols, strong and weak models, routing/classifier
+  policy, native plugin manifest, authorization variable **name**, Relay
+  components, and OpenInference export behavior.
 
-Create a host-side environment for Harbor and the validation tools:
+The template configures Opus 4.6 as the strong route and Sonnet 4.6 as the
+classifier and weak route. The coordinator derives its required route-diversity
+gates from this TOML; environment variables cannot override these settings.
+Runtime rendering is limited to the Hermes revision, collector endpoint,
+Phoenix project/cohort attributes, and task-owned artifact locations.
+
+For each task, the runner writes only the provider Authorization header to a
+mode-`0600` file in the host's canonical private temporary directory,
+explicitly outside the run root, and bind-mounts it read-only at
+`/run/secrets/switchyard-provider-authorization`.
+The Hermes bridge reads and exports it inside the task container immediately
+before the agent command. The credential value is therefore absent from Harbor
+configuration, Docker Compose arguments, plans, logs, and retained evidence;
+the temporary file is removed when the task runner exits.
+
+Harbor still requires a caller model. The example uses the intentionally
+unserved `openai/ollama-route-stub` identity and projects a dead local OpenAI
+endpoint. If Switchyard is bypassed, the request fails closed instead of
+reaching a provider.
+
+## Host prerequisites
+
+- Linux or macOS, Bash, Python 3.11+, Docker, and `tmux`;
+- a local, immutable Terminal-Bench 2.0 dataset export containing 89 tasks;
+- a Switchyard plugin bundle and Relay 0.7.0 wheel matching Docker's
+  architecture (`x86_64` or `aarch64`);
+- a Phoenix endpoint accepting OTLP/HTTP OpenInference traces; and
+- provider and registry access for the full cohort. The all-89 admission uses
+  neither; the Docker admission makes no provider calls but may pull its image,
+  pinned sources, and packages when they are not cached.
+
+On macOS, keep the dataset, bundle, wheel, admission, and run roots under a
+directory shared with Docker (normally `/Users/...`).
+
+Install the exact Harbor-side requirements:
 
 ```bash
 cd examples/harbor-hermes-switchyard
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-export HARBOR_BIN="$PWD/.venv/bin/harbor"
-export PHASE1_PYTHON="$PWD/.venv/bin/python"
 ```
 
-The scripts never put the authorization value into TOML or command-line
-configuration. They pass the selected environment variable into the task and
-scan direct artifacts, Harbor logs, ATOF, ATIF, and OpenInference evidence for
-the exact secret value.
-
-### Provider configuration ownership
-
-The rendered `<run-root>/runtime/plugins.toml` is Relay and Switchyard's
-authoritative provider configuration. It contains the strong and weak models,
-classifier policy, protocol, upstream base URL and endpoint, and the **name**
-of the environment variable holding the authorization header. The defaults
-are the inference.nvidia.com catalog entries
-`aws/anthropic/bedrock-claude-opus-4-6` (strong) and
-`aws/anthropic/bedrock-claude-sonnet-4-6` (weak).
-
-The `llm_classifier` policy uses Sonnet as both the classifier and weak target.
-On the first request it asks Sonnet for a structured capability verdict, then
-routes the original request to Sonnet when `p_solve >= 0.5` or Opus otherwise.
-Invalid, unavailable, or low-confidence classifier output fails safe to Opus.
-The first decision is retained for the session, so later turns do not incur a
-second classifier call. This two-model policy avoids adding a third provider,
-but the packaged classifier prompt is not model-neutral; the threshold must be
-revalidated if either model changes.
-
-`STRONG_MODEL`, `WEAK_MODEL`, `UPSTREAM_BASE_URL`, and `UPSTREAM_AUTH_ENV` are
-preparation inputs used to materialize that immutable per-run file; they are
-not independent provider configuration consumed by Relay. When
-`INFERENCE_SECRETS_FILE` is set, the runner reads `NV_INFERENCEHUB_ENDPOINT`
-and `NV_INFERENCEHUB_KEY` from it in short-lived subshells. It derives the
-Bearer authorization value only in memory, unsets the raw variables, and
-passes only `SWITCHYARD_PROVIDER_AUTHORIZATION` into the task. The secrets file
-is never copied into the run root or a container.
-
-Harbor 0.18.0 still requires a `provider/model` value when constructing its
-built-in Hermes lifecycle, and Hermes writes that call-side model into its CLI
-configuration before Relay intercepts the operation. The runner passes
-`openai/ollama-route-stub`: an intentionally unserved, Ollama-shaped caller
-identity. `openai` describes only the caller protocol required by Harbor; the
-stub is not a Switchyard target. `OPENAI_BASE_URL` is projected as the dead
-local endpoint `http://127.0.0.1:9/v1`, so a request that bypasses Switchyard
-fails closed rather than reaching a provider. The placeholder
-`OPENAI_API_KEY` only satisfies Harbor/Hermes validation. Successful provider
-traffic must use the real targets and authorization resolved by Switchyard
-from `plugins.toml` and `header_env`.
-
-## Offline compatibility gate
-
-This is a preflight prerequisite for the first Harbor task run and whenever a
-Hermes, Relay, Switchyard, plugin-config, or shutdown-lifecycle input changes.
-It is not repeated before every task when those inputs are unchanged, and it
-does not replace the single-task or regression gates.
-
-Build the pinned Linux plugin bundle, prepare a fresh run root, and run the
-forked Hermes/Relay runtime against local fake provider and OTLP endpoints:
+Copy and protect the environment file outside the checkout. Replace every
+placeholder, including the complete provider Authorization header. Do not
+source this file into the interactive shell used to start `tmux`.
 
 ```bash
-export EXAMPLE_ROOT="$PWD"
-export SPIKE_ROOT="/absolute/new/spike-root"
+cp phase2-run.env.example /absolute/private/phase2-run.env
+chmod 0600 /absolute/private/phase2-run.env
+./scripts/validate_phase2_environment.sh /absolute/private/phase2-run.env
+```
 
-"$EXAMPLE_ROOT/scripts/build_switchyard_plugin.sh" /absolute/new/switchyard-bundle
-"$PHASE1_PYTHON" "$EXAMPLE_ROOT/scripts/prepare_runtime.py" \
-  --run-root "$SPIKE_ROOT" \
-  --switchyard-bundle /absolute/new/switchyard-bundle \
-  --upstream-base-url http://127.0.0.1:8000/v1 \
-  --strong-model phase1/fake-strong \
-  --weak-model phase1/fake-weak \
-  --hermes-caller-model ollama-route-stub \
+The validator reports names and paths only. It rejects legacy secret-file
+variables and never renders or prints the authorization value.
+
+## Phase 2 admission and runbook
+
+Run every stage with the same immutable inputs. If the dataset, concurrency,
+architecture, Relay wheel, Switchyard library, plugin template, or Hermes
+commit changes, regenerate the affected admission evidence before creating a
+plan.
+
+For the commands below, enter a short-lived shell with tracing disabled:
+
+```bash
+set +x
+set -a
+source /absolute/private/phase2-run.env
+set +a
+set +x
+```
+
+### 1. All-89 no-token admission
+
+This loads and uniquely selects all tasks, hashes their instructions and
+verifiers, expands the complete Harbor job graph, denies registry/provider
+access, and renders the runtime. It starts neither Docker nor an agent.
+
+```bash
+mkdir -p "$PHASE2_ADMISSION_ROOT"
+chmod 0700 "$PHASE2_ADMISSION_ROOT"
+"$EVAL_PYTHON" "$EXAMPLE_ROOT/scripts/smoke_phase2_dataset.py" \
+  --dataset-root "$TBENCH_DATASET_PATH" \
+  --expected-count 89 \
+  --concurrency "$TBENCH_CONCURRENCY" \
+  --harbor-bin "$HARBOR_BIN" \
+  --switchyard-bundle "$SWITCHYARD_BUNDLE" \
+  --relay-wheel "$RELAY_WHEEL" \
+  --relay-architecture "$RELAY_ARCHITECTURE" \
+  --plugin-config-template "$PLUGIN_CONFIG_TEMPLATE" \
+  --output "$PHASE2_SMOKE_EVIDENCE"
+```
+
+The passed evidence binds task names, task/instruction/verifier hashes,
+concurrency, architecture, Relay wheel, Switchyard library, and plugin config.
+
+### 2. Docker offline runtime admission
+
+Prepare a fresh admission root with test-only structured overrides. Production
+model, URL, and routing values remain owned by `plugins.toml.in`; these flags
+exist only to point this closed offline test at its fake endpoints.
+
+```bash
+OFFLINE_ROOT="$PHASE2_ADMISSION_ROOT/offline-runtime"
+"$EVAL_PYTHON" "$EXAMPLE_ROOT/scripts/prepare_runtime.py" \
+  --run-root "$OFFLINE_ROOT" \
+  --switchyard-bundle "$SWITCHYARD_BUNDLE" \
+  --relay-wheel "$RELAY_WHEEL" \
+  --relay-architecture "$RELAY_ARCHITECTURE" \
+  --plugin-config-template "$PLUGIN_CONFIG_TEMPLATE" \
+  --test-provider-base-url http://127.0.0.1:8000/v1 \
+  --test-strong-model phase2/fake-strong \
+  --test-weak-model phase2/fake-weak \
   --openinference-endpoint http://127.0.0.1:4318/v1/traces \
-  --phoenix-project phase1-offline \
-  --eval-cohort phase1-offline
-"$EXAMPLE_ROOT/scripts/run_offline_compatibility_smoke.sh" "$SPIKE_ROOT"
+  --phoenix-project phase2-offline \
+  --eval-cohort phase2-offline
+
+case "$RELAY_ARCHITECTURE" in
+  x86_64) export OFFLINE_COMPAT_PLATFORM=linux/amd64 ;;
+  aarch64) export OFFLINE_COMPAT_PLATFORM=linux/arm64 ;;
+  *) echo "unsupported architecture" >&2; return 2 ;;
+esac
+"$EXAMPLE_ROOT/scripts/run_offline_compatibility_smoke.sh" \
+  "$OFFLINE_ROOT" "$PHASE2_OFFLINE_EVIDENCE"
 ```
 
-This gate proves the exact detached Hermes checkout, released Relay wheel,
-public loader path, one native Switchyard activation, a real fake-provider HTTP
-request, routing marks, file sinks, mixed-mode rejection, and clean shutdown.
+This performs real Hermes→Relay→Switchyard calls against local fake provider
+and OTLP endpoints and proves route selection, authorization injection,
+observability, pinned-library loading, and clean shutdown. Its evidence binds
+the same Hermes commit, Relay wheel, Switchyard library, architecture, and
+plugin template consumed by the cohort.
 
-The review gate targets `linux/amd64`, matching the Terminal-Bench task
-environment. On an Apple Silicon Docker host, QEMU may crash while unloading a
-native Rust plugin; an ARM control can distinguish that emulator failure from
-an integration failure:
+### 3. Immutable plan
+
+The first command writes `plan.json`; any later invocation with different
+immutable inputs is refused. Choose concurrency before this point.
 
 ```bash
-SWITCHYARD_TARGET_ARCHITECTURE=aarch64 \
-  "$EXAMPLE_ROOT/scripts/build_switchyard_plugin.sh" /absolute/new/arm64-bundle
-"$PHASE1_PYTHON" "$EXAMPLE_ROOT/scripts/prepare_runtime.py" \
-  --run-root /absolute/new/arm64-spike-root \
-  --switchyard-bundle /absolute/new/arm64-bundle \
-  --relay-architecture aarch64 \
-  --upstream-base-url http://127.0.0.1:8000/v1 \
-  --strong-model phase1/fake-strong \
-  --weak-model phase1/fake-weak \
-  --hermes-caller-model ollama-route-stub \
-  --openinference-endpoint http://127.0.0.1:4318/v1/traces \
-  --phoenix-project phase1-offline-arm64 \
-  --eval-cohort phase1-offline-arm64
-PHASE1_COMPAT_PLATFORM=linux/arm64 \
-  "$EXAMPLE_ROOT/scripts/run_offline_compatibility_smoke.sh" \
-  /absolute/new/arm64-spike-root
+"$EXAMPLE_ROOT/run_phase2_cohort.sh" "$PHASE2_RUN_ROOT" --plan-only
 ```
 
-That control validates the same source commits and lifecycle on a different
-released Relay wheel architecture. It does **not** replace a passing
-`linux/amd64` run on native amd64 infrastructure before merge.
+`adaptive-rejection-sampler` is always first and serial. A passed validation
+and upload result opens the parallel lane even when its benchmark reward is a
+non-pass.
 
-`run_terminal_bench.sh` also accepts `RELAY_ARCHITECTURE=aarch64` together
-with matching `SWITCHYARD_BUNDLE` and `RELAY_WHEEL` inputs. This is useful for
-exercising Harbor's complete bridge and artifact path on a native Apple
-Silicon Docker daemon. It remains a diagnostic control; the default and merge
-gate stay `x86_64`.
-
-## Run one Terminal-Bench task
-
-Use a new absolute run root on every invocation:
+### 4. Capacity and network preflight
 
 ```bash
-export INFERENCE_SECRETS_FILE="/absolute/path/to/.inference_secrets"
-export PHOENIX_BASE_URL="https://your-phoenix-endpoint"
-export PHOENIX_PROJECT="harbor-hermes-switchyard-phase1"
-export EVAL_COHORT="harbor-hermes-switchyard-phase1"
-
-./run_terminal_bench.sh /absolute/new/run-root
+"$EXAMPLE_ROOT/run_phase2_cohort.sh" "$PHASE2_RUN_ROOT" --preflight-only
 ```
 
-The secrets file must define `NV_INFERENCEHUB_ENDPOINT` and
-`NV_INFERENCEHUB_KEY`. Its path is only a launch input and is never rendered
-into generated configuration or provenance. Advanced runs may override
-`STRONG_MODEL`, `WEAK_MODEL`, or `UPSTREAM_BASE_URL`; changing either model
-requires rerunning the offline gate and classifier routing smokes.
+Preflight authenticates to each configured provider's model catalog and
+requires both TOML-owned route models to be present without persisting the
+authorization value. It writes `preflight.json` with the verified model IDs,
+Docker CPU/memory/architecture, free disk, configured endpoints, selected
+concurrency, reserve, and the calculated requirement. It rejects:
 
-The default task is `adaptive-rejection-sampler`. Override it with
-`TASK_NAME`. To avoid rebuilding Switchyard for each task, set
-`SWITCHYARD_BUNDLE` to a previously built, immutable bundle. Set `RELAY_WHEEL`
-to a downloaded 0.7.0 wheel to avoid a repeated package download.
+```text
+max(concurrency × parallel_task_memory_gb, largest_task_memory_gb)
+  + docker_reserve_gb > Docker memory
+```
 
-A task is complete only if both of these files contain `"status": "passed"`:
+It also rejects less than the configured free-disk minimum (100G by default),
+concurrency above Docker's CPU count, and an architecture mismatch. The
+defaults are a 2G parallel lane and 4G Docker reserve.
 
-- `<direct-artifact-root>/validation.json`
-- `<direct-artifact-root>/phoenix-upload.json`
+### 5. Durable launch under tmux
 
-`reward.task_passed=false` is a valid completed benchmark observation and is
-not retried when both evidence gates pass.
-
-## Phase 1 regression gate
-
-Run all historical risk cases independently:
+Exit the secret-bearing admission shell first. From a shell where the protected
+file has **not** been sourced, start one detached supervisor. Only the file path
+is placed in the tmux server environment; the child sources it with xtrace
+disabled and persists output below the run root.
 
 ```bash
-./scripts/run_phase1_regressions.sh /absolute/new/regression-root
+exit  # only when returning from the short-lived admission shell above
+./scripts/launch_phase2_tmux.sh \
+  /absolute/private/phase2-run.env \
+  harbor-hermes-switchyard-phase2-run-1
 ```
 
-| Task | Assertion |
-|---|---|
-| `adaptive-rejection-sampler` | Provider/config projection, routing marks, receipt, cleanup, and secret scan. |
-| `circuit-fibsqrt` | A deterministic post-response test fault preserves the completed response and records the late failure separately. |
-| `gpt2-codegolf` | Harbor's bounded agent timeout applies and no Hermes/plugin process survives the task container. |
-| `overfull-hbox` | Streaming validation and bounded Phoenix batching preserve the completed result under a larger export load. |
+Operational commands:
 
-The deterministic `circuit-fibsqrt` fault is injected only after inherited
-Hermes execution returns. It tests the result-framing regression without
-corrupting the Relay plugin lifecycle or disabling Phoenix upload.
+```bash
+# Detect a live duplicate (success means the session exists).
+tmux has-session -t harbor-hermes-switchyard-phase2-run-1
 
-## Evidence and safety properties
+# Attach; detach without stopping the run with Ctrl-b d.
+tmux attach-session -t harbor-hermes-switchyard-phase2-run-1
 
-Each run root is immutable and private. Preparation refuses an existing root.
-The runtime snapshot contains config and dependency digests; it never contains
-credential values. Direct task artifacts include:
+# Inspect durable output and sanitized cohort progress.
+tail -F /absolute/path/to/phase2-run-root/supervisor.log
+jq '{status,completed_tasks,planned_tasks,benchmark_pass_count,benchmark_nonpass_count}' \
+  /absolute/path/to/phase2-run-root/summary.json
 
-- `direct-hermes-result.json`;
-- `direct-hermes-receipt.json`;
-- `relay/trajectory.atof.jsonl`;
-- `relay/atif/trajectory-<session>.atif.json`;
-- bounded Hermes diagnostics;
-- `validation.json`; and
-- `phoenix-upload.json`.
+# Graceful interruption.
+tmux send-keys -t harbor-hermes-switchyard-phase2-run-1 C-c
 
-Artifact validation rejects symlinks and canonical paths escaping the declared
-root. Phoenix import is streaming, bounded in batches, retry-limited, and runs
-only after the task has returned and OpenInference evidence exists.
+# After the old session exits, resume the same immutable root.
+./scripts/launch_phase2_tmux.sh \
+  /absolute/private/phase2-run.env \
+  harbor-hermes-switchyard-phase2-run-1
+```
 
-Phase 2 (a parallel 89-task cohort) and Phase 3 (multiple independent cohorts
-and aggregated reporting) intentionally remain outside this first example PR.
+The supervisor returns `0` after complete acceptance, `20` for a preserved
+integration/harness blocker, and retries other exits with bounded exponential
+backoff. The OS advisory lock rejects a second live coordinator. Validated
+attempts are immutable and preserved on restart. `tmux` survives terminal
+logout, not host reboot; after reboot, launch it again against the same root.
+Agent setup also retries transient `apt-get` failures three times locally;
+exhausted package-manager failures are classified as infrastructure and remain
+subject to the cohort's bounded retry limit.
+
+## Completion gates
+
+A task is complete only when both its `validation.json` and
+`phoenix-upload.json` have `status=passed`. A benchmark
+`reward.task_passed=false` is a valid completed result and is never retried.
+
+The cohort passes only when:
+
+- all 89 tasks are independently validated and uploaded;
+- direct artifacts and logs pass secret scans;
+- cache-read evidence is nonzero;
+- both models derived from `plugins.toml.in` appear in committed routes; and
+- `summary.json.status` is `passed`.
+
+`report.md` is regenerated after each completed attempt and is safe for
+progress review. Phase 3 multiple-run orchestration and aggregated reports are
+not part of this runbook.

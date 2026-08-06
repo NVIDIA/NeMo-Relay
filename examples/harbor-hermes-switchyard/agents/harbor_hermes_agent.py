@@ -30,7 +30,9 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _DEFAULT_HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
 _DEFAULT_HERMES_REF = "feat/relay-native-plugin-init"
 _DEFAULT_HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
-_DEFAULT_SWITCHYARD_COMMIT = "8293936a0f5758aa1a782639d485b8b8948cf03e"
+_DEFAULT_SWITCHYARD_COMMIT = "5d9d3292d6154e44d50295d0d4a3fd4f144f2528"
+_ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+_PROVIDER_AUTHORIZATION_FILE = "/run/secrets/switchyard-provider-authorization"
 
 
 def _require_full_sha(value: str, name: str) -> str:
@@ -105,15 +107,102 @@ def _validate_relay_config(path: Path) -> None:
     dynamic = plugins.get("dynamic") if isinstance(plugins, dict) else None
     if not isinstance(dynamic, list) or len(dynamic) != 1:
         raise ValueError("Relay config must contain exactly one [[plugins.dynamic]] record")
-    manifest = dynamic[0].get("manifest") if isinstance(dynamic[0], dict) else None
-    if not isinstance(manifest, str) or not manifest.endswith("/relay-plugin.toml"):
-        raise ValueError("the dynamic plugin must reference a Relay plugin manifest")
+    plugin = dynamic[0]
+    manifest = plugin.get("manifest") if isinstance(plugin, dict) else None
+    if manifest != "/opt/relay-plugins/nvidia.switchyard/relay-plugin.toml":
+        raise ValueError("the dynamic plugin must reference the staged Switchyard manifest")
 
-    _find_named_component(config, "pricing")
+    plugin_config = plugin.get("config")
+    if not isinstance(plugin_config, dict) or plugin_config.get("version") != 2:
+        raise ValueError("the Switchyard plugin must use config version = 2")
+    algorithm = plugin_config.get("algorithm")
+    expected_algorithm = {
+        "kind": "llm_classifier",
+        "classifier_target": "weak",
+        "weak_target": "weak",
+        "strong_target": "strong",
+        "base_threshold": 0.5,
+        "recent_turn_window": 0,
+        "session_affinity": True,
+        "message_hash_fallback": True,
+    }
+    if algorithm != expected_algorithm:
+        raise ValueError("the Switchyard classifier contract does not match the Phase 1 design")
+    if plugin_config.get("default_targets") != {"openai_chat": "strong"}:
+        raise ValueError("the Switchyard OpenAI default target must be strong")
+
+    targets = plugin_config.get("targets")
+    if not isinstance(targets, dict) or set(targets) != {"strong", "weak"}:
+        raise ValueError("Switchyard must define exactly the strong and weak targets")
+    provider_models: set[str] = set()
+    for name, target in targets.items():
+        if not isinstance(target, dict):
+            raise ValueError(f"Switchyard target {name!r} must be a table")
+        if target.get("protocol") != "openai_chat" or target.get("endpoint") != "/v1/chat/completions":
+            raise ValueError(f"Switchyard target {name!r} must use the OpenAI chat protocol")
+        if target.get("drop_caller_extra_body") is not True:
+            raise ValueError(f"Switchyard target {name!r} must drop Hermes' caller-specific extra_body wrapper")
+        base_url = target.get("base_url")
+        parsed_base_url = urlsplit(base_url) if isinstance(base_url, str) else None
+        if (
+            parsed_base_url is None
+            or parsed_base_url.scheme not in {"http", "https"}
+            or not parsed_base_url.hostname
+            or parsed_base_url.username is not None
+            or parsed_base_url.password is not None
+        ):
+            raise ValueError(f"Switchyard target {name!r} must use a credential-free HTTP(S) base URL")
+        model = target.get("model")
+        if not isinstance(model, str) or not model:
+            raise ValueError(f"Switchyard target {name!r} must define a model")
+        provider_models.add(model)
+        header_env = target.get("header_env")
+        authorization_env = header_env.get("authorization") if isinstance(header_env, dict) else None
+        if not isinstance(authorization_env, str) or not _ENV_NAME.fullmatch(authorization_env):
+            raise ValueError(f"Switchyard target {name!r} must source authorization from an environment variable")
+    if len(provider_models) != 2:
+        raise ValueError("Switchyard strong and weak targets must use distinct models")
+
+    pricing = _find_named_component(config, "pricing")
+    pricing_config = pricing.get("config")
+    sources = pricing_config.get("sources") if isinstance(pricing_config, dict) else None
+    if not isinstance(sources, list) or len(sources) != 1 or sources[0].get("type") != "inline":
+        raise ValueError("pricing must use exactly one inline catalog")
+    catalog = sources[0].get("catalog")
+    entries = catalog.get("entries") if isinstance(catalog, dict) and catalog.get("version") == 1 else None
+    if not isinstance(entries, list) or {entry.get("model_id") for entry in entries} != provider_models:
+        raise ValueError("pricing entries must match the Switchyard provider models")
+    for entry in entries:
+        rates = entry.get("rates") if isinstance(entry, dict) else None
+        if not isinstance(rates, dict) or any(
+            not isinstance(rates.get(key), (int, float)) or rates[key] <= 0
+            for key in ("input_per_million", "output_per_million", "cache_read_per_million")
+        ):
+            raise ValueError("pricing entries must contain positive input, output, and cache-read rates")
+
     observability = _find_named_component(config, "observability")
     observability_config = observability.get("config")
     if not isinstance(observability_config, dict) or observability_config.get("version") != 3:
         raise ValueError("the observability component must use schema version = 3")
+    atif = observability_config.get("atif")
+    caller_model = atif.get("model_name") if isinstance(atif, dict) else None
+    if not isinstance(caller_model, str) or not caller_model or caller_model in provider_models:
+        raise ValueError("the fail-closed Hermes caller model must not be a Switchyard provider model")
+    opentelemetry = observability_config.get("opentelemetry")
+    endpoints = opentelemetry.get("endpoints") if isinstance(opentelemetry, dict) else None
+    if not isinstance(opentelemetry, dict) or opentelemetry.get("enabled") is not True:
+        raise ValueError("OpenTelemetry export must be enabled")
+    if not isinstance(endpoints, list) or len(endpoints) != 1:
+        raise ValueError("observability must define exactly one OpenInference endpoint")
+    endpoint = endpoints[0]
+    if endpoint.get("type") != "openinference" or endpoint.get("transport") != "http_binary":
+        raise ValueError("the only telemetry endpoint must be OpenInference over OTLP/HTTP protobuf")
+    resource_attributes = endpoint.get("resource_attributes")
+    if not isinstance(resource_attributes, dict) or not all(
+        isinstance(resource_attributes.get(key), str) and resource_attributes[key]
+        for key in ("openinference.project.name", "evaluation.cohort")
+    ):
+        raise ValueError("OpenInference must carry project and evaluation cohort resource attributes")
 
     def reject_literal_headers(value: Any, location: str = "config") -> None:
         if isinstance(value, dict):
@@ -163,6 +252,7 @@ class HarborHermesAgent(Hermes):
         self.relay_wheel_path = Path(relay_wheel_path).expanduser().resolve()
         self.artifact_root = artifact_root.rstrip("/")
         self.inject_post_response_failure = inject_post_response_failure
+        self._load_provider_authorization = False
         if not self.artifact_root.startswith("/logs/agent/"):
             raise ValueError("artifact_root must be an absolute child of /logs/agent")
         if not self.relay_config_path.is_file():
@@ -198,13 +288,43 @@ class HarborHermesAgent(Hermes):
         super().__init__(*args, version=self.commit, extra_env=extra_env, **kwargs)
 
     @override
+    async def exec_as_agent(
+        self,
+        environment: BaseEnvironment,
+        command: str,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        timeout_sec: int | None = None,
+    ) -> Any:
+        if self._load_provider_authorization:
+            secret_file = shlex.quote(_PROVIDER_AUTHORIZATION_FILE)
+            command = (
+                f"test -r {secret_file}; "
+                f'export SWITCHYARD_PROVIDER_AUTHORIZATION="$(cat -- {secret_file})"; '
+                'test -n "$SWITCHYARD_PROVIDER_AUTHORIZATION"; '
+                f"{command}"
+            )
+        return await super().exec_as_agent(
+            environment,
+            command,
+            env=env,
+            cwd=cwd,
+            timeout_sec=timeout_sec,
+        )
+
+    @override
     async def install(self, environment: BaseEnvironment) -> None:
         await self.exec_as_root(
             environment,
             command=(
-                "apt-get update && "
-                "apt-get install -y --no-install-recommends "
-                "ca-certificates build-essential curl git ripgrep xz-utils"
+                "set -euo pipefail; last_status=1; "
+                "for attempt in 1 2 3; do "
+                "if apt-get update && apt-get install -y --no-install-recommends "
+                "ca-certificates build-essential curl git ripgrep xz-utils; then exit 0; "
+                "else last_status=$?; fi; "
+                'if [ "$attempt" -eq 3 ]; then break; fi; '
+                "rm -rf /var/lib/apt/lists/partial; sleep $((attempt * 5)); "
+                'done; exit "$last_status"'
             ),
             env={"DEBIAN_FRONTEND": "noninteractive"},
         )
@@ -320,7 +440,11 @@ class HarborHermesAgent(Hermes):
         started_at = time.time()
         error: BaseException | None = None
         try:
-            await super().run(instruction, environment, context)
+            self._load_provider_authorization = True
+            try:
+                await super().run(instruction, environment, context)
+            finally:
+                self._load_provider_authorization = False
         except BaseException as exc:
             error = exc
             raise

@@ -7,20 +7,22 @@ set -euo pipefail
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 run_root="${1:-}"
 task_name="${TASK_NAME:-adaptive-rejection-sampler}"
-strong_model="${STRONG_MODEL:-aws/anthropic/bedrock-claude-opus-4-6}"
-weak_model="${WEAK_MODEL:-aws/anthropic/bedrock-claude-sonnet-4-6}"
-hermes_caller_model="${HERMES_CALLER_MODEL:-ollama-route-stub}"
-inference_secrets_file="${INFERENCE_SECRETS_FILE:-}"
-upstream_auth_env="${UPSTREAM_AUTH_ENV:-SWITCHYARD_PROVIDER_AUTHORIZATION}"
+upstream_auth_env="SWITCHYARD_PROVIDER_AUTHORIZATION"
 fail_closed_openai_base_url="http://127.0.0.1:9/v1"
 phoenix_base="${PHOENIX_BASE_URL:-}"
 phoenix_project="${PHOENIX_PROJECT:-harbor-hermes-switchyard-phase1}"
 eval_cohort="${EVAL_COHORT:-harbor-hermes-switchyard-phase1}"
-harbor_bin="${HARBOR_BIN:-harbor}"
-python_bin="${PHASE1_PYTHON:-python3}"
+default_harbor_bin="$example_root/.venv/bin/harbor"
+default_python_bin="$example_root/.venv/bin/python"
+harbor_bin="${HARBOR_BIN:-$default_harbor_bin}"
+python_bin="${EVAL_PYTHON:-${PHASE1_PYTHON:-$default_python_bin}}"
+expected_harbor_version="0.18.0"
+eval_phase="${EVAL_PHASE:-phase1}"
+tbench_dataset_path="${TBENCH_DATASET_PATH:-}"
 switchyard_bundle="${SWITCHYARD_BUNDLE:-}"
 relay_wheel="${RELAY_WHEEL:-}"
 relay_architecture="${RELAY_ARCHITECTURE:-x86_64}"
+plugin_config_template="${PLUGIN_CONFIG_TEMPLATE:-$example_root/config/plugins.toml.in}"
 agent_timeout_multiplier="${AGENT_TIMEOUT_MULTIPLIER:-3}"
 agent_setup_timeout_multiplier="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-6}"
 environment_build_timeout_multiplier="${ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER:-6}"
@@ -35,54 +37,14 @@ if [[ -e "$run_root" ]]; then
   echo "run root already exists: $run_root" >&2
   exit 2
 fi
-if [[ ! "$upstream_auth_env" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
-  echo "UPSTREAM_AUTH_ENV must be an uppercase environment variable name" >&2
-  exit 2
-fi
-
-nv_inferencehub_endpoint="${NV_INFERENCEHUB_ENDPOINT:-}"
-nv_inferencehub_key="${NV_INFERENCEHUB_KEY:-}"
-if [[ -n "$inference_secrets_file" ]]; then
-  [[ -r "$inference_secrets_file" ]] || {
-    echo "INFERENCE_SECRETS_FILE is not readable: $inference_secrets_file" >&2
-    exit 2
-  }
-  load_secret_value() {
-    local variable_name="$1"
-    (
-      set +x
-      # The file is sourced only in this short-lived subshell. Its other
-      # variables never enter Harbor's environment.
-      source "$inference_secrets_file"
-      printf '%s' "${!variable_name:-}"
-    )
-  }
-  [[ -n "$nv_inferencehub_endpoint" ]] || \
-    nv_inferencehub_endpoint="$(load_secret_value NV_INFERENCEHUB_ENDPOINT)"
-  [[ -n "$nv_inferencehub_key" ]] || \
-    nv_inferencehub_key="$(load_secret_value NV_INFERENCEHUB_KEY)"
-fi
-
-upstream_base_url="${UPSTREAM_BASE_URL:-$nv_inferencehub_endpoint}"
-upstream_base_url="${upstream_base_url%/chat/completions}"
-if [[ -z "${!upstream_auth_env:-}" && -n "$nv_inferencehub_key" ]]; then
-  if [[ "$nv_inferencehub_key" == "Bearer "* ]]; then
-    printf -v "$upstream_auth_env" '%s' "$nv_inferencehub_key"
-  else
-    printf -v "$upstream_auth_env" 'Bearer %s' "$nv_inferencehub_key"
-  fi
-  export "$upstream_auth_env"
-fi
-# Do not propagate the raw inference variables to Harbor or task containers.
-unset NV_INFERENCEHUB_ENDPOINT NV_INFERENCEHUB_KEY nv_inferencehub_endpoint nv_inferencehub_key
-for required in "$strong_model" "$weak_model" "$hermes_caller_model" "$upstream_base_url" "$phoenix_base"; do
+for required in "$plugin_config_template" "$phoenix_base"; do
   [[ -n "$required" ]] || {
-    echo "model names, inference endpoint, and PHOENIX_BASE_URL are required" >&2
+    echo "PLUGIN_CONFIG_TEMPLATE and PHOENIX_BASE_URL are required" >&2
     exit 2
   }
 done
-if [[ "$strong_model" == "$weak_model" ]]; then
-  echo "STRONG_MODEL and WEAK_MODEL must be distinct" >&2
+if [[ ! -f "$plugin_config_template" ]]; then
+  echo "plugin configuration template is missing: $plugin_config_template" >&2
   exit 2
 fi
 for dependency in curl docker "$harbor_bin" "$python_bin"; do
@@ -91,6 +53,31 @@ for dependency in curl docker "$harbor_bin" "$python_bin"; do
     exit 1
   }
 done
+observed_harbor_version="$($python_bin -c 'import importlib.metadata; print(importlib.metadata.version("harbor"))')"
+if [[ "$observed_harbor_version" != "$expected_harbor_version" ]]; then
+  echo "Harbor $expected_harbor_version is required; $python_bin provides $observed_harbor_version" >&2
+  exit 2
+fi
+observed_harbor_cli_version="$($harbor_bin --version)"
+if [[ "$observed_harbor_cli_version" != "$expected_harbor_version" ]]; then
+  echo "Harbor CLI $expected_harbor_version is required; $harbor_bin reports $observed_harbor_cli_version" >&2
+  exit 2
+fi
+if [[ ! "$eval_phase" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+  echo "EVAL_PHASE must contain only lowercase letters, digits, and hyphens" >&2
+  exit 2
+fi
+dataset_args=(--dataset terminal-bench@2.0)
+if [[ -n "$tbench_dataset_path" ]]; then
+  if [[ "$tbench_dataset_path" != /* || ! -d "$tbench_dataset_path" ]]; then
+    echo "TBENCH_DATASET_PATH must be an absolute local dataset directory" >&2
+    exit 2
+  fi
+  dataset_args=(--path "$tbench_dataset_path")
+elif [[ "$eval_phase" == "phase2" ]]; then
+  echo "Phase 2 requires TBENCH_DATASET_PATH and never resolves the remote registry" >&2
+  exit 2
+fi
 if [[ -z "${!upstream_auth_env:-}" ]]; then
   echo "required provider authorization environment variable is unset: $upstream_auth_env" >&2
   exit 2
@@ -101,9 +88,13 @@ if [[ "$relay_architecture" != "x86_64" && "$relay_architecture" != "aarch64" ]]
 fi
 
 docker info >/dev/null
-curl --fail --silent --show-error --max-time 10 "$phoenix_base" >/dev/null
+curl --fail --silent --show-error \
+  --connect-timeout 5 --max-time 10 \
+  --retry 2 --retry-all-errors --retry-delay 2 \
+  "$phoenix_base" >/dev/null
 
 temporary_build=""
+temporary_secret_dir=""
 collector_name=""
 collector_running=0
 cleanup() {
@@ -114,12 +105,39 @@ cleanup() {
   if [[ -n "$temporary_build" && -d "$temporary_build" ]]; then
     rm -rf "$temporary_build"
   fi
+  if [[ -n "$temporary_secret_dir" && -d "$temporary_secret_dir" ]]; then
+    rm -rf "$temporary_secret_dir"
+  fi
   return "$status"
 }
 trap cleanup EXIT
 
+host_temporary_root="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+case "$host_temporary_root/" in
+  "$run_root/"*)
+    echo "Host temporary directory must be outside the task run root" >&2
+    exit 2
+    ;;
+esac
+temporary_secret_dir="$(mktemp -d "$host_temporary_root/harbor-phase2-secret.XXXXXX")"
+chmod 0700 "$temporary_secret_dir"
+provider_authorization_file="$temporary_secret_dir/switchyard-provider-authorization"
+(umask 077; printf '%s' "${!upstream_auth_env}" >"$provider_authorization_file")
+chmod 0600 "$provider_authorization_file"
+provider_authorization_target="/run/secrets/switchyard-provider-authorization"
+mounts_json="$($python_bin -c '
+import json, sys
+print(json.dumps([{
+    "type": "bind",
+    "source": sys.argv[1],
+    "target": sys.argv[2],
+    "read_only": True,
+    "bind": {"create_host_path": False},
+}], separators=(",", ":")))
+' "$provider_authorization_file" "$provider_authorization_target")"
+
 if [[ -z "$switchyard_bundle" ]]; then
-  temporary_build="$(mktemp -d "$(dirname "$run_root")/.phase1-switchyard-build.XXXXXX")"
+  temporary_build="$(mktemp -d "$(dirname "$run_root")/.switchyard-build.XXXXXX")"
   switchyard_bundle="$temporary_build/bundle"
   SWITCHYARD_TARGET_ARCHITECTURE="$relay_architecture" \
     "$example_root/scripts/build_switchyard_plugin.sh" "$switchyard_bundle"
@@ -133,18 +151,13 @@ with socket.socket() as sock:
 PY
 )"
 openinference_endpoint="http://host.docker.internal:$free_port/v1/traces"
-upstream_host="$($python_bin -c 'import sys; from urllib.parse import urlsplit; print(urlsplit(sys.argv[1]).hostname or "")' "$upstream_base_url")"
 
 prepare_args=(
   "$example_root/scripts/prepare_runtime.py"
   --run-root "$run_root"
   --switchyard-bundle "$switchyard_bundle"
   --relay-architecture "$relay_architecture"
-  --upstream-base-url "$upstream_base_url"
-  --upstream-auth-env "$upstream_auth_env"
-  --strong-model "$strong_model"
-  --weak-model "$weak_model"
-  --hermes-caller-model "$hermes_caller_model"
+  --plugin-config-template "$plugin_config_template"
   --openinference-endpoint "$openinference_endpoint"
   --phoenix-project "$phoenix_project"
   --eval-cohort "$eval_cohort"
@@ -153,6 +166,8 @@ if [[ -n "$relay_wheel" ]]; then
   prepare_args+=(--relay-wheel "$relay_wheel")
 fi
 "$python_bin" "${prepare_args[@]}" >"$run_root.prepare.log"
+
+hermes_caller_model="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["routing"]["hermes_caller_model"])' "$run_root/runtime/provenance.json")"
 
 relay_wheel_sha256="$($python_bin -c 'import json,sys; print(json.load(open(sys.argv[1]))["nemo_relay"]["wheel_sha256"])' "$run_root/runtime/provenance.json")"
 relay_wheel_path="$($python_bin -c 'import json,pathlib,sys; p=json.load(open(sys.argv[1])); print(pathlib.Path(sys.argv[1]).parent / "wheels" / p["nemo_relay"]["wheel"])' "$run_root/runtime/provenance.json")"
@@ -176,11 +191,18 @@ collector_running=1
 
 export PYTHONPATH="$example_root/agents${PYTHONPATH:+:$PYTHONPATH}"
 export OPENAI_API_KEY="relay-managed-placeholder"
-job_name="phase1-${task_name}-$(date -u +%Y%m%dT%H%M%SZ)"
+job_name="${eval_phase}-${task_name}-$(date -u +%Y%m%dT%H%M%SZ)"
 agent_hosts=(--allow-agent-host host.docker.internal)
-if [[ -n "$upstream_host" && "$upstream_host" != "host.docker.internal" ]]; then
-  agent_hosts+=(--allow-agent-host "$upstream_host")
-fi
+while IFS= read -r upstream_host; do
+  if [[ -n "$upstream_host" && "$upstream_host" != "host.docker.internal" ]]; then
+    agent_hosts+=(--allow-agent-host "$upstream_host")
+  fi
+done < <("$python_bin" -c '
+import json, sys
+from urllib.parse import urlsplit
+values = json.load(open(sys.argv[1]))["routing"]
+print("\n".join(sorted({urlsplit(value).hostname for key, value in values.items() if key.endswith("_base_url")})))
+' "$run_root/runtime/provenance.json")
 agent_kwargs=()
 validation_expectations=()
 if [[ "$inject_post_response_failure" == "true" ]]; then
@@ -192,7 +214,7 @@ elif [[ "$inject_post_response_failure" != "false" ]]; then
 fi
 (
   "$harbor_bin" run \
-    --dataset terminal-bench@2.0 \
+    "${dataset_args[@]}" \
     --include-task-name "$task_name" \
     --n-tasks 1 \
     --agent harbor_hermes_agent:HarborHermesAgent \
@@ -206,9 +228,9 @@ fi
     --ak "relay_wheel_sha256=$relay_wheel_sha256" \
     --ak "relay_architecture=$relay_architecture" \
     "${agent_kwargs[@]}" \
-    --ae "$upstream_auth_env=${!upstream_auth_env}" \
-    --ae OPENAI_API_KEY=relay-managed-placeholder \
+    --ae 'OPENAI_API_KEY=${OPENAI_API_KEY}' \
     --ae "OPENAI_BASE_URL=$fail_closed_openai_base_url" \
+    --mounts "$mounts_json" \
     "${agent_hosts[@]}" \
     --artifact /logs/agent/direct-hermes \
     --agent-include-logs hermes-session.jsonl \

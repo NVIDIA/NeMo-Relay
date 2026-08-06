@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import threading
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ async def exercise(model: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
 
     import nemo_relay
 
-    host = RelayRuntime(profile_key="phase1-offline")
+    host = RelayRuntime(profile_key="phase2-offline")
     downstream_called = False
 
     async def forbidden_downstream(_request: Any) -> dict[str, Any]:
@@ -30,8 +31,8 @@ async def exercise(model: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     responses: list[dict[str, Any]] = []
     try:
         cases = (
-            ("phase1-offline-weak-session", "reply with the smoke marker"),
-            ("phase1-offline-strong-session", "force strong route and reply with the smoke marker"),
+            ("phase2-offline-weak-session", "reply with the smoke marker"),
+            ("phase2-offline-strong-session", "force strong route and reply with the smoke marker"),
         )
         for session_id, prompt in cases:
             session = host.ensure_session({"session_id": session_id})
@@ -76,10 +77,14 @@ def main() -> int:
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--request-log", type=Path, required=True)
     parser.add_argument("--model", default="ollama-route-stub")
-    parser.add_argument("--classifier-model", default="phase1/fake-weak")
-    parser.add_argument("--expected-routed-model", default="phase1/fake-weak")
-    parser.add_argument("--expected-strong-model", default="phase1/fake-strong")
     args = parser.parse_args()
+    config = tomllib.loads(args.plugins.read_text(encoding="utf-8"))
+    plugin = config["plugins"]["dynamic"][0]["config"]
+    algorithm = plugin["algorithm"]
+    targets = plugin["targets"]
+    classifier_model = targets[algorithm["classifier_target"]]["model"]
+    weak_model = targets[algorithm["weak_target"]]["model"]
+    strong_model = targets[algorithm["strong_target"]]["model"]
     artifacts = args.artifacts.resolve()
     artifacts.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.environ["HERMES_NEMO_RELAY_PLUGINS_TOML"] = str(args.plugins.resolve())
@@ -107,10 +112,10 @@ def main() -> int:
         raise AssertionError(f"unexpected provider request sequence: {request_kinds}")
     request_models = [item.get("model") for item in requests]
     expected_models = [
-        args.classifier_model,
-        args.expected_routed_model,
-        args.classifier_model,
-        args.expected_strong_model,
+        classifier_model,
+        weak_model,
+        classifier_model,
+        strong_model,
     ]
     if request_models != expected_models:
         raise AssertionError(f"unexpected provider model sequence: {request_models}")

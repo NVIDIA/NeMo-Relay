@@ -206,10 +206,17 @@ def complete(args: argparse.Namespace, root: Path) -> None:
     receipt_path = root / "direct-hermes-receipt.json"
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     messages, exported_session_id = _read_session_messages(HERMES_SESSION)
-    response = _last_assistant_response(messages)
+    session_response = _last_assistant_response(messages)
     diagnostic_text = _write_bounded_diagnostics(root)
     log_response, log_session_id = _response_from_cli_log(diagnostic_text)
-    response = response or log_response
+    # Quiet mode sometimes leaves the exported session empty, so successful
+    # runs recover their response from stdout. A non-zero agent command may
+    # instead print an error after ``session_id:``; never promote that text to
+    # a completed response. The deterministic Phase 1 late-failure injection
+    # happens after a successful inherited run and intentionally exercises the
+    # bounded stdout recovery path.
+    allow_log_response = not args.error_type or args.error_type == "InjectedPostResponseFailure"
+    response = session_response or (log_response if allow_log_response else None)
     exported_session_id = exported_session_id or log_session_id
     lowered = diagnostic_text.lower()
     cleanup_failure = any(
@@ -240,7 +247,18 @@ def complete(args: argparse.Namespace, root: Path) -> None:
             "ended_at_unix": ended_at,
             "duration_seconds": (max(0.0, ended_at - args.started_at) if args.started_at is not None else None),
         },
-        "error": ({"type": args.error_type or "RelayCleanupError", "phase": "shutdown"} if late_failure else None),
+        "error": (
+            {
+                "type": args.error_type or "RelayCleanupError",
+                "phase": (
+                    "shutdown"
+                    if cleanup_failure or args.error_type == "InjectedPostResponseFailure"
+                    else "agent"
+                ),
+            }
+            if late_failure
+            else None
+        ),
     }
     atomic_json(root / "direct-hermes-result.json", result)
 

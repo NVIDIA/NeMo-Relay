@@ -15,32 +15,34 @@ version = 1
 
 [[components.config.sources.catalog.entries]]
 provider = "openai"
-model_id = "@STRONG_MODEL@"
+model_id = "aws/anthropic/bedrock-claude-opus-4-6"
 currency = "USD"
 unit = "per_token"
-pricing_as_of = "2026-08-05"
-pricing_source = "harbor-hermes-switchyard-example"
+pricing_as_of = "2026-05-27"
+pricing_source = "Anthropic public list pricing"
 
 [components.config.sources.catalog.entries.rates]
-input_per_million = 0.0
-output_per_million = 0.0
-cache_read_per_million = 0.0
+input_per_million = 5.0
+output_per_million = 25.0
+cache_read_per_million = 0.5
+cache_write_per_million = 6.25
 
 [components.config.sources.catalog.entries.prompt_cache]
 read_accounting = "included_in_prompt_tokens"
 
 [[components.config.sources.catalog.entries]]
 provider = "openai"
-model_id = "@WEAK_MODEL@"
+model_id = "aws/anthropic/bedrock-claude-sonnet-4-6"
 currency = "USD"
 unit = "per_token"
-pricing_as_of = "2026-08-05"
-pricing_source = "harbor-hermes-switchyard-example"
+pricing_as_of = "2026-05-27"
+pricing_source = "Anthropic public list pricing"
 
 [components.config.sources.catalog.entries.rates]
-input_per_million = 0.0
-output_per_million = 0.0
-cache_read_per_million = 0.0
+input_per_million = 3.0
+output_per_million = 15.0
+cache_read_per_million = 0.3
+cache_write_per_million = 3.75
 
 [components.config.sources.catalog.entries.prompt_cache]
 read_accounting = "included_in_prompt_tokens"
@@ -65,7 +67,7 @@ filename = "trajectory.atof.jsonl"
 enabled = true
 agent_name = "Hermes"
 agent_version = "@HERMES_COMMIT@"
-model_name = "@HERMES_CALLER_MODEL@"
+model_name = "ollama-route-stub"
 output_directory = "/logs/agent/direct-hermes/relay/atif"
 filename_template = "trajectory-{session_id}.atif.json"
 
@@ -99,7 +101,6 @@ classifier_target = "weak"
 weak_target = "weak"
 strong_target = "strong"
 base_threshold = 0.5
-min_confidence = 0.0
 recent_turn_window = 0
 session_affinity = true
 message_hash_fallback = true
@@ -108,21 +109,23 @@ message_hash_fallback = true
 openai_chat = "strong"
 
 [plugins.dynamic.config.targets.strong]
-model = "@STRONG_MODEL@"
+model = "aws/anthropic/bedrock-claude-opus-4-6"
 protocol = "openai_chat"
 endpoint = "/v1/chat/completions"
-base_url = "@UPSTREAM_BASE_URL@"
+base_url = "https://inference-api.nvidia.com/v1"
 weight = 1
+drop_caller_extra_body = true
 
 [plugins.dynamic.config.targets.strong.header_env]
-authorization = "@UPSTREAM_AUTH_ENV@"
+authorization = "SWITCHYARD_PROVIDER_AUTHORIZATION"
 
 [plugins.dynamic.config.targets.weak]
-model = "@WEAK_MODEL@"
+model = "aws/anthropic/bedrock-claude-sonnet-4-6"
 protocol = "openai_chat"
 endpoint = "/v1/chat/completions"
-base_url = "@UPSTREAM_BASE_URL@"
+base_url = "https://inference-api.nvidia.com/v1"
 weight = 1
+drop_caller_extra_body = true
 
 [plugins.dynamic.config.targets.weak.header_env]
-authorization = "@UPSTREAM_AUTH_ENV@"
+authorization = "SWITCHYARD_PROVIDER_AUTHORIZATION"

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare one immutable Phase 1 run root and render its Relay config."""
+"""Prepare one immutable evaluation run root and render its Relay config."""
 
 from __future__ import annotations
 
@@ -18,16 +18,14 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from zipfile import ZipFile
 
+import tomli_w
+
 HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
 HERMES_REF = "feat/relay-native-plugin-init"
 HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
 SWITCHYARD_REPOSITORY = "https://github.com/bbednarski9/Switchyard.git"
-SWITCHYARD_COMMIT = "8293936a0f5758aa1a782639d485b8b8948cf03e"
+SWITCHYARD_COMMIT = "5d9d3292d6154e44d50295d0d4a3fd4f144f2528"
 RELAY_VERSION = "0.7.0"
-DEFAULT_STRONG_MODEL = "aws/anthropic/bedrock-claude-opus-4-6"
-DEFAULT_WEAK_MODEL = "aws/anthropic/bedrock-claude-sonnet-4-6"
-DEFAULT_HERMES_CALLER_MODEL = "ollama-route-stub"
-ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 
 
@@ -113,7 +111,63 @@ def verify_native_library(path: Path, architecture: str) -> None:
         raise ValueError(f"Switchyard library does not target {architecture}: ELF e_machine={machine}")
 
 
-def render_config(template: Path, output: Path, replacements: dict[str, str]) -> None:
+def plugin_settings(config: dict[str, object]) -> dict[str, str]:
+    plugins = config.get("plugins")
+    if not isinstance(plugins, dict) or not isinstance(plugins.get("dynamic"), list):
+        raise ValueError("plugins.toml.in must define one dynamic plugin")
+    dynamic = plugins["dynamic"]
+    if len(dynamic) != 1 or not isinstance(dynamic[0], dict):
+        raise ValueError("plugins.toml.in must define exactly one dynamic plugin")
+    plugin_config = dynamic[0].get("config")
+    if not isinstance(plugin_config, dict) or not isinstance(plugin_config.get("targets"), dict):
+        raise ValueError("Switchyard dynamic plugin targets are missing")
+    targets = plugin_config["targets"]
+    if set(targets) != {"strong", "weak"}:
+        raise ValueError("Switchyard must define strong and weak targets")
+    settings: dict[str, str] = {}
+    for name in ("strong", "weak"):
+        target = targets[name]
+        if not isinstance(target, dict):
+            raise ValueError(f"Switchyard target is invalid: {name}")
+        model = checked_label(str(target.get("model", "")), f"{name}_model")
+        base_url = checked_url(str(target.get("base_url", "")), f"{name}_base_url")
+        header_env = target.get("header_env")
+        if header_env != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
+            raise ValueError("plugins.toml.in must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
+        settings[f"{name}_model"] = model
+        settings[f"{name}_base_url"] = base_url
+    if settings["strong_model"] == settings["weak_model"]:
+        raise ValueError("strong and weak models must be distinct")
+    components = config.get("components")
+    if not isinstance(components, list):
+        raise ValueError("Relay components are missing")
+    observability = next(
+        (
+            component
+            for component in components
+            if isinstance(component, dict) and component.get("kind") == "observability"
+        ),
+        None,
+    )
+    if not isinstance(observability, dict):
+        raise ValueError("Relay observability component is missing")
+    observation_config = observability.get("config")
+    if not isinstance(observation_config, dict) or not isinstance(observation_config.get("atif"), dict):
+        raise ValueError("Relay ATIF configuration is missing")
+    settings["hermes_caller_model"] = checked_label(
+        str(observation_config["atif"].get("model_name", "")), "hermes_caller_model"
+    )
+    if settings["hermes_caller_model"] in {settings["strong_model"], settings["weak_model"]}:
+        raise ValueError("Hermes caller model must be distinct from Switchyard targets")
+    return settings
+
+
+def render_config(
+    template: Path,
+    output: Path,
+    replacements: dict[str, str],
+    test_overrides: dict[str, str] | None = None,
+) -> dict[str, str]:
     rendered = template.read_text(encoding="utf-8")
     for key, value in replacements.items():
         if "\n" in value or "\r" in value:
@@ -122,10 +176,21 @@ def render_config(template: Path, output: Path, replacements: dict[str, str]) ->
     unresolved = sorted(set(re.findall(r"@[A-Z0-9_]+@", rendered)))
     if unresolved:
         raise ValueError(f"unresolved Relay config placeholders: {unresolved}")
-    output.write_text(rendered, encoding="utf-8")
+    config = tomllib.loads(rendered)
+    if test_overrides:
+        plugin = config["plugins"]["dynamic"][0]["config"]
+        old_models = {name: plugin["targets"][name]["model"] for name in ("strong", "weak")}
+        for name in ("strong", "weak"):
+            plugin["targets"][name]["model"] = test_overrides[f"{name}_model"]
+            plugin["targets"][name]["base_url"] = test_overrides["provider_base_url"]
+        pricing = config["components"][0]["config"]["sources"][0]["catalog"]["entries"]
+        replacement_models = {old_models[name]: test_overrides[f"{name}_model"] for name in old_models}
+        for entry in pricing:
+            entry["model_id"] = replacement_models.get(entry["model_id"], entry["model_id"])
+    settings = plugin_settings(config)
+    output.write_text(tomli_w.dumps(config), encoding="utf-8")
     os.chmod(output, 0o600)
-    with output.open("rb") as stream:
-        tomllib.load(stream)
+    return settings
 
 
 def main() -> int:
@@ -134,11 +199,10 @@ def main() -> int:
     parser.add_argument("--switchyard-bundle", type=Path, required=True)
     parser.add_argument("--relay-wheel", type=Path)
     parser.add_argument("--relay-architecture", choices=("x86_64", "aarch64"), default="x86_64")
-    parser.add_argument("--upstream-base-url", required=True)
-    parser.add_argument("--upstream-auth-env", default="SWITCHYARD_PROVIDER_AUTHORIZATION")
-    parser.add_argument("--strong-model", default=DEFAULT_STRONG_MODEL)
-    parser.add_argument("--weak-model", default=DEFAULT_WEAK_MODEL)
-    parser.add_argument("--hermes-caller-model", default=DEFAULT_HERMES_CALLER_MODEL)
+    parser.add_argument("--plugin-config-template", type=Path)
+    parser.add_argument("--test-provider-base-url")
+    parser.add_argument("--test-strong-model")
+    parser.add_argument("--test-weak-model")
     parser.add_argument("--openinference-endpoint", required=True)
     parser.add_argument("--phoenix-project", required=True)
     parser.add_argument("--eval-cohort", required=True)
@@ -172,33 +236,32 @@ def main() -> int:
         relay_wheel = download_relay_wheel(runtime / "wheels", args.relay_architecture)
         verify_relay_wheel(relay_wheel, args.relay_architecture)
 
-    upstream_base_url = checked_url(args.upstream_base_url, "upstream_base_url")
     openinference_endpoint = checked_url(args.openinference_endpoint, "openinference_endpoint")
-    if not ENV_NAME.fullmatch(args.upstream_auth_env):
-        raise ValueError("upstream_auth_env must be an uppercase environment variable name")
-    strong_model = checked_label(args.strong_model, "strong_model")
-    weak_model = checked_label(args.weak_model, "weak_model")
-    hermes_caller_model = checked_label(args.hermes_caller_model, "hermes_caller_model")
-    if strong_model == weak_model:
-        raise ValueError("strong_model and weak_model must be distinct")
     phoenix_project = checked_label(args.phoenix_project, "phoenix_project")
     eval_cohort = checked_label(args.eval_cohort, "eval_cohort")
+    plugin_template = (args.plugin_config_template or example_root / "config" / "plugins.toml.in").resolve(strict=True)
+    test_values = (args.test_provider_base_url, args.test_strong_model, args.test_weak_model)
+    if any(test_values) and not all(test_values):
+        raise ValueError("all test provider overrides must be supplied together")
+    test_overrides = None
+    if all(test_values):
+        test_overrides = {
+            "provider_base_url": checked_url(args.test_provider_base_url, "test_provider_base_url"),
+            "strong_model": checked_label(args.test_strong_model, "test_strong_model"),
+            "weak_model": checked_label(args.test_weak_model, "test_weak_model"),
+        }
 
     config_path = runtime / "plugins.toml"
-    render_config(
-        example_root / "config" / "relay.toml.in",
+    routing = render_config(
+        plugin_template,
         config_path,
         {
-            "STRONG_MODEL": strong_model,
-            "WEAK_MODEL": weak_model,
-            "HERMES_CALLER_MODEL": hermes_caller_model,
             "HERMES_COMMIT": HERMES_COMMIT,
             "OPENINFERENCE_ENDPOINT": openinference_endpoint,
             "PHOENIX_PROJECT": phoenix_project,
             "EVAL_COHORT": eval_cohort,
-            "UPSTREAM_BASE_URL": upstream_base_url,
-            "UPSTREAM_AUTH_ENV": args.upstream_auth_env,
         },
+        test_overrides,
     )
 
     manifest = bundle / "relay-plugin.toml"
@@ -227,12 +290,11 @@ def main() -> int:
             "library_sha256": sha256(libraries[0]),
         },
         "relay_config_sha256": sha256(config_path),
+        "plugin_config_template_sha256": sha256(plugin_template),
         "routing": {
             "algorithm": "llm_classifier",
             "classifier_target": "weak",
-            "strong_model": strong_model,
-            "weak_model": weak_model,
-            "hermes_caller_model": hermes_caller_model,
+            **routing,
         },
         "phoenix_project": phoenix_project,
         "eval_cohort": eval_cohort,

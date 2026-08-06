@@ -5,7 +5,7 @@
 set -euo pipefail
 
 switchyard_repository="${SWITCHYARD_REPOSITORY:-https://github.com/bbednarski9/Switchyard.git}"
-switchyard_commit="${SWITCHYARD_COMMIT:-8293936a0f5758aa1a782639d485b8b8948cf03e}"
+switchyard_commit="${SWITCHYARD_COMMIT:-5d9d3292d6154e44d50295d0d4a3fd4f144f2528}"
 target_architecture="${SWITCHYARD_TARGET_ARCHITECTURE:-x86_64}"
 output_dir="${1:-}"
 

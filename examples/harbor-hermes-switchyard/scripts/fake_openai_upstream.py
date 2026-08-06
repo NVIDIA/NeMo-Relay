@@ -61,10 +61,7 @@ class Handler(BaseHTTPRequestHandler):
             force_strong = "force strong route" in serialized_messages
             content = json.dumps(
                 {
-                    "recommended_route": "strong" if force_strong else "weak",
                     "p_solve": 0.01 if force_strong else 0.99,
-                    "confidence": 0.99,
-                    "abstain": False,
                     "capability_boundary": "supported",
                     "primary_rule": "SUP-1",
                     "crux": "deterministic offline smoke task",

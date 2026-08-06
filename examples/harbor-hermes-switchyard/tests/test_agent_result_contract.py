@@ -34,7 +34,7 @@ def make_args(tmp_path: Path, *, error_type: str = "") -> argparse.Namespace:
         relay_wheel_sha256="a" * 64,
         hermes_repository="https://github.com/bbednarski9/hermes-agent.git",
         hermes_commit="efb63e714abc436af88af9b0d6734751c199aa6d",
-        switchyard_commit="8293936a0f5758aa1a782639d485b8b8948cf03e",
+        switchyard_commit="5d9d3292d6154e44d50295d0d4a3fd4f144f2528",
         session_handle="phase1-session",
         started_at=1.0,
         error_type=error_type,
@@ -119,3 +119,30 @@ def test_empty_session_uses_bounded_quiet_cli_output(tmp_path: Path, monkeypatch
     assert result["status"] == "completed"
     assert result["session_id"] == "cli-session"
     assert result["final_response"] == "completed\nanswer"
+
+
+def test_failed_agent_output_is_not_promoted_to_a_completed_response(tmp_path: Path, monkeypatch) -> None:
+    module = load_finalizer()
+    root = tmp_path / "artifacts"
+    root.mkdir()
+    session = tmp_path / "hermes-session.jsonl"
+    session.write_text("", encoding="utf-8")
+    log = tmp_path / "hermes.txt"
+    log.write_text(
+        "session_id: failed-session\nAPI call failed after 3 retries: provider returned HTTP 400\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "HERMES_SESSION", session)
+    monkeypatch.setattr(module, "HERMES_LOG", log)
+    monkeypatch.setattr(module.importlib.metadata, "version", lambda _: "0.7.0")
+
+    args = make_args(tmp_path, error_type="NonZeroAgentExitCodeError")
+    module.initialize(args, root)
+    module.complete(args, root)
+
+    result = json.loads((root / "direct-hermes-result.json").read_text())
+    completion = json.loads((root / "completion.json").read_text())
+    assert result["status"] == "failed"
+    assert result["final_response"] is None
+    assert result["error"] == {"type": "NonZeroAgentExitCodeError", "phase": "agent"}
+    assert completion["status"] == "failed"

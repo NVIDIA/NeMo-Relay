@@ -6,8 +6,9 @@ set -euo pipefail
 
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 run_root="${1:-}"
-image="${PHASE1_COMPAT_IMAGE:-python:3.11-bookworm}"
-platform="${PHASE1_COMPAT_PLATFORM:-linux/amd64}"
+admission_output="${2:-$run_root/artifacts/offline-admission.json}"
+image="${OFFLINE_COMPAT_IMAGE:-python:3.11-bookworm}"
+platform="${OFFLINE_COMPAT_PLATFORM:-linux/amd64}"
 hermes_repository="${HERMES_REPOSITORY:-https://github.com/bbednarski9/hermes-agent.git}"
 hermes_ref="${HERMES_REF:-feat/relay-native-plugin-init}"
 hermes_commit="${HERMES_COMMIT:-efb63e714abc436af88af9b0d6734751c199aa6d}"
@@ -27,7 +28,7 @@ docker info >/dev/null
 case "$platform" in
   linux/amd64) expected_architecture=x86_64 ;;
   linux/arm64) expected_architecture=aarch64 ;;
-  *) echo "PHASE1_COMPAT_PLATFORM must be linux/amd64 or linux/arm64" >&2; exit 2 ;;
+  *) echo "OFFLINE_COMPAT_PLATFORM must be linux/amd64 or linux/arm64" >&2; exit 2 ;;
 esac
 prepared_architecture="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["nemo_relay"].get("architecture", "x86_64"))' "$run_root/runtime/provenance.json")"
 [[ "$prepared_architecture" == "$expected_architecture" ]] || {
@@ -58,7 +59,7 @@ docker run --rm \
     export DEBIAN_FRONTEND=noninteractive
     export HERMES_HOME=/tmp/hermes
     export HERMES_NEMO_RELAY_PLUGINS_TOML=/runtime/plugins.toml
-    export SWITCHYARD_PROVIDER_AUTHORIZATION="Bearer phase1-offline-secret-value"
+    export SWITCHYARD_PROVIDER_AUTHORIZATION="Bearer phase2-offline-secret-value"
     apt-get update
     apt-get install -y --no-install-recommends build-essential ca-certificates curl git ripgrep xz-utils
     git clone --no-tags --branch "'"$hermes_ref"'" "'"$hermes_repository"'" /tmp/hermes-agent-src
@@ -91,7 +92,7 @@ docker run --rm \
       --python /tmp/hermes-agent-src/venv/bin/python \
       --force-reinstall --no-deps "$relay_wheel"
     python3 /example/scripts/fake_openai_upstream.py \
-      --token phase1-offline-secret-value \
+      --token phase2-offline-secret-value \
       --request-log /logs/agent/direct-hermes/provider-requests.jsonl &
     provider_pid=$!
     python3 /example/scripts/fake_otlp_collector.py \
@@ -116,20 +117,39 @@ docker run --rm \
         --artifacts /logs/agent/direct-hermes \
         --request-log /logs/agent/direct-hermes/provider-requests.jsonl
     test -s /logs/agent/direct-hermes/otlp-requests.jsonl
-    if grep -R -F phase1-offline-secret-value /logs/agent/direct-hermes >/dev/null; then
+    if grep -R -F phase2-offline-secret-value /logs/agent/direct-hermes >/dev/null; then
       echo "offline secret leaked into persisted evidence" >&2
       exit 1
     fi
   '
 
-python3 - "$artifacts" <<'PY'
+python3 - "$artifacts" "$run_root/runtime/provenance.json" "$admission_output" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
+provenance_path = pathlib.Path(sys.argv[2])
+output = pathlib.Path(sys.argv[3])
 result = json.loads((root / "offline-smoke.json").read_text())
 if result.get("status") != "passed":
     raise SystemExit("offline compatibility smoke did not pass")
-print(json.dumps(result, indent=2))
+provenance = json.loads(provenance_path.read_text())
+admission = {
+    "schema_version": "harbor-hermes-switchyard.phase2-offline-admission.v1",
+    "status": "passed",
+    "hermes_commit": provenance["hermes"]["commit"],
+    "relay_architecture": provenance["nemo_relay"]["architecture"],
+    "relay_wheel_sha256": provenance["nemo_relay"]["wheel_sha256"],
+    "switchyard_library_sha256": provenance["switchyard"]["library_sha256"],
+    "plugin_config_template_sha256": provenance["plugin_config_template_sha256"],
+    "offline_relay_config_sha256": provenance["relay_config_sha256"],
+    "offline_smoke_sha256": hashlib.sha256((root / "offline-smoke.json").read_bytes()).hexdigest(),
+    "provider_requests": result["provider_requests"],
+    "surviving_shutdown_threads": result["surviving_shutdown_threads"],
+}
+output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+output.write_text(json.dumps(admission, indent=2, sort_keys=True) + "\n")
+print(json.dumps(admission, indent=2))
 PY
