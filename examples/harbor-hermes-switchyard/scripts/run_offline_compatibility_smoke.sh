@@ -10,7 +10,7 @@ image="${PHASE1_COMPAT_IMAGE:-python:3.11-bookworm}"
 platform="${PHASE1_COMPAT_PLATFORM:-linux/amd64}"
 hermes_repository="${HERMES_REPOSITORY:-https://github.com/bbednarski9/hermes-agent.git}"
 hermes_ref="${HERMES_REF:-feat/relay-native-plugin-init}"
-hermes_commit="${HERMES_COMMIT:-a07830e086b3055e313b74cc0c8fd5326a4c2c00}"
+hermes_commit="${HERMES_COMMIT:-efb63e714abc436af88af9b0d6734751c199aa6d}"
 
 if [[ -z "$run_root" || "$run_root" != /* ]]; then
   echo "usage: $0 /absolute/prepared-run-root" >&2

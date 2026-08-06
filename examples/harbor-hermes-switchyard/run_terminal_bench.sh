@@ -150,7 +150,7 @@ fi
     --model "openai/$target_model" \
     --ak "repository_url=https://github.com/bbednarski9/hermes-agent.git" \
     --ak "repository_ref=feat/relay-native-plugin-init" \
-    --ak "commit=a07830e086b3055e313b74cc0c8fd5326a4c2c00" \
+    --ak "commit=efb63e714abc436af88af9b0d6734751c199aa6d" \
     --ak "relay_config_path=$run_root/runtime/plugins.toml" \
     --ak "switchyard_bundle_dir=$run_root/runtime/switchyard-plugin" \
     --ak "relay_wheel_path=$relay_wheel_path" \

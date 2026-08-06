@@ -20,7 +20,7 @@ from zipfile import ZipFile
 
 HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
 HERMES_REF = "feat/relay-native-plugin-init"
-HERMES_COMMIT = "a07830e086b3055e313b74cc0c8fd5326a4c2c00"
+HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
 SWITCHYARD_REPOSITORY = "https://github.com/bbednarski9/Switchyard.git"
 SWITCHYARD_COMMIT = "8293936a0f5758aa1a782639d485b8b8948cf03e"
 RELAY_VERSION = "0.7.0"

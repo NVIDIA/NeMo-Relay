@@ -29,7 +29,7 @@ _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _DEFAULT_HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
 _DEFAULT_HERMES_REF = "feat/relay-native-plugin-init"
-_DEFAULT_HERMES_COMMIT = "a07830e086b3055e313b74cc0c8fd5326a4c2c00"
+_DEFAULT_HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
 _DEFAULT_SWITCHYARD_COMMIT = "8293936a0f5758aa1a782639d485b8b8948cf03e"
 
 

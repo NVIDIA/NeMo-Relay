@@ -14,7 +14,7 @@ def render_template(**values: str) -> dict:
     text = (EXAMPLE_ROOT / "config" / "relay.toml.in").read_text(encoding="utf-8")
     defaults = {
         "TARGET_MODEL": "phase1-test-model",
-        "HERMES_COMMIT": "a07830e086b3055e313b74cc0c8fd5326a4c2c00",
+        "HERMES_COMMIT": "efb63e714abc436af88af9b0d6734751c199aa6d",
         "OPENINFERENCE_ENDPOINT": "http://127.0.0.1:4318/v1/traces",
         "PHOENIX_PROJECT": "phase1-test",
         "EVAL_COHORT": "phase1-test",

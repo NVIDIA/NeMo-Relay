@@ -14,7 +14,7 @@ The four-task regression command below is the Phase 1 readiness gate.
 | Dependency | Input used by this example |
 |---|---|
 | NeMo Relay | Released Linux/amd64 `nemo-relay==0.7.0` wheel; that exact wheel is installed and its digest is recorded per run. |
-| Hermes | `bbednarski9/hermes-agent`, branch `feat/relay-native-plugin-init`, detached commit `a07830e086b3055e313b74cc0c8fd5326a4c2c00` (PR #77915). |
+| Hermes | `bbednarski9/hermes-agent`, branch `feat/relay-native-plugin-init`, detached commit `efb63e714abc436af88af9b0d6734751c199aa6d` (PR #77915). |
 | Switchyard | `bbednarski9/Switchyard`, detached commit `8293936a0f5758aa1a782639d485b8b8948cf03e` (PR #270). |
 | Harbor | `harbor==0.18.0`, dataset `terminal-bench@2.0`. |
 
@@ -97,7 +97,32 @@ configuration. They pass the selected environment variable into the task and
 scan direct artifacts, Harbor logs, ATOF, ATIF, and OpenInference evidence for
 the exact secret value.
 
+### Provider configuration ownership
+
+The rendered `<run-root>/runtime/plugins.toml` is Relay and Switchyard's
+authoritative provider configuration. It contains the target model, protocol,
+upstream base URL and endpoint, and the **name** of the environment variable
+holding the authorization header. `TARGET_MODEL`, `UPSTREAM_BASE_URL`, and
+`UPSTREAM_AUTH_ENV` are preparation inputs used to materialize that immutable
+per-run file; they are not an independent provider configuration consumed by
+Relay.
+
+Harbor 0.18.0 still requires a `provider/model` value when constructing its
+built-in Hermes lifecycle, and Hermes writes that call-side model into its CLI
+configuration before Relay intercepts the operation. The runner therefore
+passes `openai/<target-model>` to Harbor while Switchyard uses the matching
+target from `plugins.toml`. `openai` describes the caller protocol here; it
+does not bypass Switchyard. Likewise, the placeholder `OPENAI_API_KEY` only
+satisfies Harbor/Hermes provider validation. The real authorization value is
+resolved by Switchyard from `header_env` and must remain in the environment,
+not in TOML.
+
 ## Offline compatibility gate
+
+This is a preflight prerequisite for the first Harbor task run and whenever a
+Hermes, Relay, Switchyard, plugin-config, or shutdown-lifecycle input changes.
+It is not repeated before every task when those inputs are unchanged, and it
+does not replace the single-task or regression gates.
 
 Build the pinned Linux plugin bundle, prepare a fresh run root, and run the
 forked Hermes/Relay runtime against local fake provider and OTLP endpoints:
