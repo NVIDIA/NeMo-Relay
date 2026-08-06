@@ -166,12 +166,13 @@ hints let Anthropic Messages requests without a top-level `system` field decode
 through the Anthropic provider surface instead of being treated as shape-only
 OpenAI Chat payloads.
 
-The `nemo-relay` gateway always enables matching request codecs for
-`/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, for both buffered
-and streaming execution. Count-token, model, probe, and non-LLM passthrough
-routes do not enable request codecs. Gateway request intercepts must therefore
-edit generation bodies through `annotated_request`; raw `request.content`
-remains writable on routes without a request codec.
+The `nemo-relay` gateway always enables matching OpenAI Chat, OpenAI Responses,
+and Anthropic Messages request codecs for `/v1/messages`,
+`/v1/chat/completions`, and `/v1/responses`, for both buffered and streaming
+execution. Count-token, model, probe, Gemini `generateContent`, and non-LLM
+passthrough routes do not enable request codecs automatically. Gateway request
+intercepts must therefore edit generation bodies through `annotated_request`;
+raw `request.content` remains writable on routes without a request codec.
 
 ### Agent Payload Extraction
 
