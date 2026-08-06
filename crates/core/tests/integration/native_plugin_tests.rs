@@ -43,6 +43,9 @@ use uuid::Uuid;
 
 static NATIVE_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const PLUGIN_DISCOVERY_TEST_CHILD: &str = "NEMO_RELAY_PLUGIN_DISCOVERY_TEST_CHILD";
+const ASYNC_TYPED_CANCEL_NAME: &str = "async-typed-cancel";
+const ASYNC_TYPED_SLOW_NAME: &str = "async-typed-slow";
+const ASYNC_TYPED_STREAM_CANCEL_NAME: &str = "async-typed-stream-cancel";
 
 struct ReplacementRegistryPlugin;
 
@@ -872,7 +875,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
                 };
                 llm_call_execute(
                     LlmCallExecuteParams::builder()
-                        .name("async-typed-slow")
+                        .name(ASYNC_TYPED_SLOW_NAME)
                         .request(request)
                         .func(Arc::new(|_request| {
                             Box::pin(async { Ok(json!({"content": "slow response"})) })
@@ -921,7 +924,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         };
         llm_call_execute(
             LlmCallExecuteParams::builder()
-                .name("async-typed-cancel")
+                .name(ASYNC_TYPED_CANCEL_NAME)
                 .request(request)
                 .func(Arc::new(|_request| Box::pin(std::future::pending())))
                 .build(),
@@ -959,7 +962,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     };
     let cancelled_stream = llm_stream_call_execute(
         LlmStreamCallExecuteParams::builder()
-            .name("async-typed-stream-cancel")
+            .name(ASYNC_TYPED_STREAM_CANCEL_NAME)
             .request(request)
             .func(Arc::new(|_request| {
                 Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::empty())) })

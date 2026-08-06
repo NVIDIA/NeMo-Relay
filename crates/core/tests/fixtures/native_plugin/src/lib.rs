@@ -5,6 +5,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use nemo_relay_plugin::{
     AsyncLlmStream, AsyncLlmStreamEvent, AsyncStreamControl, AsyncStreamWrite, CategoryProfile,
@@ -28,6 +29,23 @@ static TYPED_ASYNC_LLM_CANCELLED: AtomicBool = AtomicBool::new(false);
 static TYPED_ASYNC_STREAM_CANCELLATION_ENTERED: AtomicBool = AtomicBool::new(false);
 static TYPED_ASYNC_STREAM_CANCELLED: AtomicBool = AtomicBool::new(false);
 static TYPED_ASYNC_STREAM_BACKPRESSURED: AtomicBool = AtomicBool::new(false);
+
+const ASYNC_TYPED_CANCEL_NAME: &str = "async-typed-cancel";
+const ASYNC_TYPED_SLOW_NAME: &str = "async-typed-slow";
+const ASYNC_TYPED_STREAM_CANCEL_NAME: &str = "async-typed-stream-cancel";
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const CANCELLATION_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn wait_for_cancellation(mut is_cancelled: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + CANCELLATION_TIMEOUT;
+    while Instant::now() < deadline {
+        if is_cancelled() {
+            return true;
+        }
+        std::thread::sleep(CANCELLATION_POLL_INTERVAL);
+    }
+    is_cancelled()
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_fixture_async_pending_entered() -> bool {
@@ -750,21 +768,22 @@ impl NativePlugin for FixtureAsyncPlugin {
             0,
             |name, request, output| {
                 TYPED_ASYNC_LLM_ENTERED.fetch_add(1, Ordering::AcqRel);
-                if name == "async-typed-cancel" {
+                if name == ASYNC_TYPED_CANCEL_NAME {
                     TYPED_ASYNC_LLM_CANCELLATION_ENTERED.store(true, Ordering::Release);
                     std::thread::spawn(move || {
-                        for _ in 0..5_000 {
-                            if output.is_cancelled() {
-                                TYPED_ASYNC_LLM_CANCELLED.store(true, Ordering::Release);
-                                return;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        if wait_for_cancellation(|| output.is_cancelled()) {
+                            TYPED_ASYNC_LLM_CANCELLED.store(true, Ordering::Release);
+                            return;
                         }
                         let _ = output.reject("timed out waiting for Relay cancellation");
                     });
                     return Ok(());
                 }
-                let delay = if name == "async-typed-slow" { 400 } else { 10 };
+                let delay = if name == ASYNC_TYPED_SLOW_NAME {
+                    400
+                } else {
+                    10
+                };
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(delay));
                     let _ = output.continue_with(request);
@@ -776,17 +795,12 @@ impl NativePlugin for FixtureAsyncPlugin {
             "fixture_async_llm_stream",
             0,
             |name, request, output| {
-                if name == "async-typed-stream-cancel" {
+                if name == ASYNC_TYPED_STREAM_CANCEL_NAME {
                     TYPED_ASYNC_STREAM_CANCELLATION_ENTERED.store(true, Ordering::Release);
                     std::thread::spawn(move || {
-                        for _ in 0..5_000 {
-                            if output.is_cancelled() {
-                                TYPED_ASYNC_STREAM_CANCELLED.store(true, Ordering::Release);
-                                return;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        if wait_for_cancellation(|| output.is_cancelled()) {
+                            TYPED_ASYNC_STREAM_CANCELLED.store(true, Ordering::Release);
                         }
-                        drop(output);
                     });
                     Ok(())
                 } else {

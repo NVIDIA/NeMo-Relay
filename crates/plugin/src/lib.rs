@@ -1154,7 +1154,7 @@ enum AsyncCancellationHandle {
 
 /// Borrowed cancellation probe for pending native middleware work.
 ///
-/// The probe may be moved into a cancellation future while the owning
+/// The probe may be moved into plugin-owned asynchronous work while the owning
 /// completion or stream remains responsible for settlement and release.
 pub struct AsyncCancellation<'a> {
     host: NemoRelayNativeHostApiV3,
@@ -1218,7 +1218,7 @@ impl AsyncLlmExecution {
         unsafe { (self.host.async_completion_is_cancelled)(self.completion) }
     }
 
-    /// Borrows a probe that can be moved into a cancellation future.
+    /// Borrows a probe that can be moved into plugin-owned asynchronous work.
     pub fn cancellation(&self) -> AsyncCancellation<'_> {
         AsyncCancellation {
             host: self.host,
@@ -1338,7 +1338,7 @@ impl AsyncLlmStream {
         unsafe { (self.host.async_stream_is_cancelled)(self.stream) }
     }
 
-    /// Borrows a probe that can be moved into a cancellation future.
+    /// Borrows a probe that can be moved into plugin-owned asynchronous work.
     pub fn cancellation(&self) -> AsyncCancellation<'_> {
         AsyncCancellation {
             host: self.host,
