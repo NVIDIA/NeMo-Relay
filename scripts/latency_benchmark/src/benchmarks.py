@@ -121,7 +121,7 @@ def benchmark_scenario(
     observation_lock = threading.Lock()
     barrier = threading.Barrier(concurrency)
 
-    def worker(worker_id: int, indices: list[int]) -> None:
+    def worker(indices: list[int]) -> None:
         connections = {name: connection_for(url) for name, url in urls.items()}
         try:
             for _ in range(warmup):
@@ -131,7 +131,7 @@ def benchmark_scenario(
             local = []
             for index in indices:
                 order = list(variants)
-                shift = (index + worker_id) % len(order)
+                shift = index % len(order)
                 order = order[shift:] + order[:shift]
                 local.append({name: perform_request(connections[name], provider, body, streaming) for name in order})
             with observation_lock:
@@ -145,7 +145,7 @@ def benchmark_scenario(
 
     assignments = [list(range(worker_id, samples, concurrency)) for worker_id in range(concurrency)]
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [executor.submit(worker, worker_id, indices) for worker_id, indices in enumerate(assignments)]
+        futures = [executor.submit(worker, indices) for indices in assignments]
         for future in futures:
             future.result()
 
