@@ -47,7 +47,7 @@ fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::threa
 
 fn empty_report() -> DoctorReport {
     DoctorReport {
-        schema_version: 1,
+        schema_version: 2,
         binary_version: "0.0.0-test",
         target_agent: None,
         environment: EnvironmentInfo {
@@ -57,20 +57,15 @@ fn empty_report() -> DoctorReport {
         },
         configuration: ConfigurationInfo {
             explicit: None,
-            workspace: ConfigLayer {
-                path: PathBuf::from("/x/.nemo-relay/config.toml"),
-                status: Status::Info,
-                active: false,
-                details: "not present".into(),
-            },
             global: ConfigLayer {
                 path: PathBuf::from("/x/.config/nemo-relay/config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
             },
+            unsupported_project_files: vec![],
             system: ConfigLayer {
-                path: PathBuf::from("/etc/nemo-relay/config.toml"),
+                path: crate::configuration::system_config_dir().join("config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
@@ -151,11 +146,19 @@ fn exit_code_passes_with_warn_only() {
 }
 
 #[test]
-fn exit_code_fails_when_workspace_config_is_invalid() {
+fn unsupported_project_config_warns_without_failing() {
     let mut report = empty_report();
-    report.configuration.workspace.status = Status::Fail;
-    report.configuration.workspace.details = "invalid TOML".into();
-    assert_eq!(exit_code(&report), 1);
+    report
+        .configuration
+        .unsupported_project_files
+        .push(ConfigLayer {
+            path: PathBuf::from("/x/.nemo-relay/config.toml"),
+            status: Status::Warn,
+            active: false,
+            details: "unsupported project configuration; ignored by Relay".into(),
+        });
+    assert_eq!(exit_code(&report), 0);
+    assert!(report_has_warn(&report));
 }
 
 #[test]
@@ -210,7 +213,7 @@ fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
     assert!(rendered.contains("Persistent integrations"));
     assert!(rendered.contains("repair: nemo-relay install codex --force"));
     let json: serde_json::Value = serde_json::from_str(&format_json(&report).unwrap()).unwrap();
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["host_plugins"][0]["checks"][0]["ok"], false);
     assert_eq!(
         json["host_plugins"][0]["remediation"],
@@ -370,13 +373,7 @@ async fn agents_report_surfaces_merged_config_resolution_errors() {
     let config = config_home.join("nemo-relay").join("config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, "[upstream\n").unwrap();
-    let _env = EnvScope::set(&[
-        ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
-        (
-            "NEMO_RELAY_CONFIG_SCOPE",
-            Some(std::ffi::OsStr::new("user")),
-        ),
-    ]);
+    let _env = EnvScope::set(&[("XDG_CONFIG_HOME", Some(config_home.as_os_str()))]);
 
     let error = agents_report().await.unwrap_err().to_string();
 
@@ -408,7 +405,7 @@ fn format_json_is_stable_and_versioned() {
     let json = format_json(&report).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     // schema_version pins the wire format. Bump only on breaking renames/removals.
-    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["schema_version"], 2);
     assert!(parsed["target_agent"].is_null());
     assert!(parsed["environment"]["os"].is_string());
     assert!(parsed["agents"].is_array());
@@ -650,8 +647,16 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
         },
     );
 
-    assert_eq!(configuration.workspace.status, Status::Pass);
-    assert!(configuration.workspace.active);
+    assert_eq!(configuration.unsupported_project_files.len(), 1);
+    assert_eq!(
+        configuration.unsupported_project_files[0].path,
+        workspace_config
+    );
+    assert_eq!(
+        configuration.unsupported_project_files[0].status,
+        Status::Warn
+    );
+    assert!(!configuration.unsupported_project_files[0].active);
     assert_eq!(configuration.global.path, global_config);
     assert_eq!(configuration.global.status, Status::Fail);
     assert_eq!(configuration.upstream_auth.openai, SecretPresence::Unset);
@@ -933,7 +938,7 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
             },
         },
     );
-    assert_eq!(info.workspace.status, Status::Pass);
+    assert_eq!(info.unsupported_project_files.len(), 1);
     assert!(info.global.path.starts_with(&home));
     assert_eq!(info.configured_agents, vec!["codex".to_string()]);
     assert_eq!(info.upstream_auth.openai, SecretPresence::Configured);

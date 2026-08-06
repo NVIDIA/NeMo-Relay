@@ -32,17 +32,14 @@ pub(crate) enum PricingSubcommand {
 #[derive(Debug, Clone, Default, Args)]
 #[command(group(
     ArgGroup::new("pricing_scope")
-        .args(["user", "project", "global"])
+        .args(["user", "global"])
         .multiple(false)
 ))]
 pub(crate) struct PricingScopeArgs {
     /// Edit the user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`.
     #[arg(long)]
     pub(crate) user: bool,
-    /// Edit the nearest project config at `.nemo-relay/plugins.toml`.
-    #[arg(long)]
-    pub(crate) project: bool,
-    /// Edit the system config at `/etc/nemo-relay/plugins.toml`.
+    /// Edit system config (`/etc/nemo-relay` on Unix; `%ProgramData%\nemo-relay` on Windows).
     #[arg(long)]
     pub(crate) global: bool,
 }
@@ -96,11 +93,10 @@ pub(crate) struct PricingResolveCommand {
 }
 impl From<PricingScopeArgs> for crate::plugins::ConfigurationScope {
     fn from(value: PricingScopeArgs) -> Self {
-        match (value.user, value.project, value.global) {
-            (false, false, false) => Self::Default,
-            (true, false, false) => Self::User,
-            (false, true, false) => Self::Project,
-            (false, false, true) => Self::Global,
+        match (value.user, value.global) {
+            (false, false) => Self::Default,
+            (true, false) => Self::User,
+            (false, true) => Self::Global,
             _ => Self::Invalid,
         }
     }

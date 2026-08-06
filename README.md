@@ -86,15 +86,14 @@ for version pinning, custom directories, and source-based installation.
 
 #### 2. Enable Local Observability Output
 
-From the project directory ready to be observed, open the project-scoped plugin
-editor:
+Open the user-scoped plugin editor:
 
 ```bash
-nemo-relay plugins edit --project
+nemo-relay plugins edit
 ```
 
-The editor creates or updates the nearest project plugin file at
-`.nemo-relay/plugins.toml`. In the top-level menu, select **Observability**,
+The editor creates or updates `$XDG_CONFIG_HOME/nemo-relay/plugins.toml` (or
+`~/.config/nemo-relay/plugins.toml`). In the top-level menu, select **Observability**,
 then configure these sections:
 
 1. Toggle the Observability component on.
@@ -112,8 +111,9 @@ then configure these sections:
 5. Press `s` to save.
 
 > [!NOTE]
-> Run `nemo-relay plugins edit` without `--project` only when you want
-> user-level exporter settings that apply across projects.
+> Repository-local `.nemo-relay/plugins.toml` files are ignored. To use a
+> configuration stored elsewhere, pass `--config path/to/config.toml`; Relay
+> also selects the sibling `path/to/plugins.toml`.
 
 #### 3. Run a Coding Agent Through Relay
 

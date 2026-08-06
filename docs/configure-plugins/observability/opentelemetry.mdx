@@ -64,6 +64,9 @@ type = "gen_ai"
 endpoint = "http://localhost:4318/v1/traces"
 transport = "http_binary"
 service_name = "agent-service"
+max_queue_size = 4096
+max_export_batch_size = 512
+scheduled_delay_millis = 1000
 
 [components.config.opentelemetry.endpoints.header_env]
 authorization = "OTEL_AUTHORIZATION"
@@ -90,7 +93,10 @@ work or delivery to the other exporters.
 | `service_namespace` | Omitted | Optional `service.namespace`. |
 | `service_version` | Omitted | Optional `service.version`. |
 | `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
-| `timeout_millis` | `3000` | Export timeout. |
+| `timeout_millis` | `3000` | OTLP request timeout. |
+| `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this endpoint drops new spans. |
+| `max_export_batch_size` | Environment or `512` | Maximum spans exported in one batch; capped at the effective queue size. |
+| `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this endpoint exports a non-full batch. A full batch exports sooner. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |
@@ -98,11 +104,16 @@ work or delivery to the other exporters.
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 
-## Batch Processor Environment Variables
+## Batch Processor Configuration
 
-OpenTelemetry's standard batch processor settings apply process-wide to every
-configured endpoint. Set them before the plugin activates; endpoint-specific
-batch sizing is not supported.
+Configure batch processing independently on each endpoint with
+`max_queue_size`, `max_export_batch_size`, and `scheduled_delay_millis`.
+When an endpoint omits a field, the corresponding standard OpenTelemetry
+environment variable applies process-wide. If neither is set, the SDK default
+applies.
+
+The precedence for each setting is endpoint value, then environment variable,
+then SDK default. Set environment variables before the plugin activates.
 
 | Variable | Default | Notes |
 |---|---:|---|
@@ -110,9 +121,16 @@ batch sizing is not supported.
 | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | `512` | Maximum spans exported in one batch; capped at the queue size. |
 | `OTEL_BSP_SCHEDULE_DELAY` | `5000` ms | Maximum delay before exporting a non-full batch. |
 
-Use positive integer values. The SDK falls back to its defaults for malformed
-values but accepts zero; do not use zero values. Queue capacity counts spans,
-not bytes.
+Endpoint values must be positive integers. If both endpoint size fields are
+set, `max_export_batch_size` must not exceed `max_queue_size`. When one size is
+inherited, the SDK caps the effective batch size at the effective queue size.
+The SDK falls back to its default for malformed environment values. Queue and
+batch sizes count spans, not bytes.
+
+Relay's thread-based batch processor exports serially, so it does not expose
+the SDK's concurrent-export setting. It also does not expose a separate batch
+processor export timeout; use the endpoint's `timeout_millis` to bound each
+OTLP request.
 
 <Warning>
 A full queue drops completed spans instead of applying backpressure to
@@ -135,9 +153,10 @@ failure error and retains the diagnostic for inspection. This error does not
 disable later plugin configuration.
 </Warning>
 
-Increasing `OTEL_BSP_MAX_QUEUE_SIZE` can reduce the risk for a known burst
-size, but a finite queue does not guarantee lossless telemetry. Always clear
-the plugin during graceful shutdown so NeMo Relay can record the final drop count
+Increasing an endpoint's `max_queue_size`, or the process-wide
+`OTEL_BSP_MAX_QUEUE_SIZE` fallback, can reduce the risk for a known burst size,
+but a finite queue does not guarantee lossless telemetry. Always clear the
+plugin during graceful shutdown so NeMo Relay can record the final drop count
 and the SDK can attempt to export queued spans.
 
 ## Endpoint Capacity and Sizing

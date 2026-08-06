@@ -183,7 +183,6 @@ fn persistent_gateway_resolution_keeps_server_configuration_in_one_spec() {
         crate::configuration::DEFAULT_MAX_HOOK_PAYLOAD_BYTES
     );
     assert!(resolved.gateway.bootstrap_fingerprint.is_some());
-    assert!(resolved.gateway.user_config_scope);
     assert!(
         resolved
             .gateway

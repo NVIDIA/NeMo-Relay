@@ -34,8 +34,7 @@ use crate::installation::generation::{
     GENERATION_FILE_ENV, GENERATION_TOKEN_ENV, GenerationRetirement, InstallGeneration,
 };
 
-/// Hermes host configuration is user-owned even when Relay itself uses project configuration.
-/// Project-specific Relay behavior remains available through transparent `nemo-relay run`.
+/// Hermes host configuration is user-owned.
 pub(crate) fn user_config_path(default_home: &Path) -> PathBuf {
     user_config_path_with_override(default_home, env::var_os("HERMES_HOME"))
 }

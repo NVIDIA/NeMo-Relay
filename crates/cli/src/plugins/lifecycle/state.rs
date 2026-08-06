@@ -10,9 +10,7 @@ use nemo_relay::plugin::dynamic::{DynamicPluginRecord, DynamicPluginRegistry};
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
-use crate::configuration::{
-    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
-};
+use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::error::CliError;
 
 use super::super::config_io::TargetScope;
@@ -26,7 +24,6 @@ const DYNAMIC_PLUGIN_STATE_SCHEMA_VERSION: u32 = 1;
 #[strum(serialize_all = "snake_case")]
 pub(super) enum RegistryScope {
     User,
-    Project,
     Global,
     Explicit,
 }
@@ -142,16 +139,11 @@ pub(super) fn scoped_paths_for_add(
                 "cannot determine user config directory; set HOME or XDG_CONFIG_HOME".into(),
             )
         })?,
-        TargetScope::Project => {
-            let cwd = std::env::current_dir()?;
-            project_plugin_config_path(&cwd)
-        }
         TargetScope::Global => global_plugin_config_path(),
     };
     let state_path = sibling_state_path(&plugins_toml_path);
     let scope = match scope {
         TargetScope::User => RegistryScope::User,
-        TargetScope::Project => RegistryScope::Project,
         TargetScope::Global => RegistryScope::Global,
     };
     Ok((plugins_toml_path, state_path, scope))
@@ -239,15 +231,6 @@ fn scoped_registry_layouts(
         ));
     }
 
-    let user_only = std::env::var("NEMO_RELAY_CONFIG_SCOPE").ok().as_deref() == Some("user");
-    if !user_only && let Ok(cwd) = std::env::current_dir() {
-        let plugins_toml_path = project_plugin_config_path(&cwd);
-        layouts.push((
-            RegistryScope::Project,
-            plugins_toml_path.clone(),
-            sibling_state_path(&plugins_toml_path),
-        ));
-    }
     let plugins_toml_path = global_plugin_config_path();
     layouts.push((
         RegistryScope::Global,

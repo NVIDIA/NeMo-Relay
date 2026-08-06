@@ -36,6 +36,9 @@ describe('observability plugin helpers', () => {
         type: 'gen_ai',
         endpoint: 'http://localhost:4318/v1/traces',
         header_env: { authorization: 'OTEL_AUTHORIZATION' },
+        max_queue_size: 4096,
+        max_export_batch_size: 256,
+        scheduled_delay_millis: 750,
       }),
       {
         type: 'gen_ai',
@@ -47,6 +50,9 @@ describe('observability plugin helpers', () => {
         service_name: 'unknown_service',
         instrumentation_scope: 'opentelemetry',
         timeout_millis: 3000,
+        max_queue_size: 4096,
+        max_export_batch_size: 256,
+        scheduled_delay_millis: 750,
       },
     );
 
@@ -61,10 +67,7 @@ describe('observability plugin helpers', () => {
       () => observability.openTelemetryEndpoint({ type: 'invalid', endpoint: 'http://localhost' }),
       /type must be/,
     );
-    assert.throws(
-      () => observability.openTelemetryEndpoint({ type: 'full', endpoint: ' ' }),
-      /nonblank/,
-    );
+    assert.throws(() => observability.openTelemetryEndpoint({ type: 'full', endpoint: ' ' }), /nonblank/);
     assert.equal(plugin.listKinds().includes(observability.OBSERVABILITY_PLUGIN_KIND), true);
     const report = plugin.validate({
       version: 1,

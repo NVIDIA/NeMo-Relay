@@ -84,6 +84,31 @@ class _AtofCapture:
 
 
 class TestObservabilityConfigHelpers:
+    def test_opentelemetry_endpoint_preserves_existing_positional_arguments(self):
+        endpoint = OpenTelemetryEndpointConfig(
+            "full",
+            "http://localhost:4318/v1/traces",
+            "event",
+            ["custom.mark"],
+            [{"key": "source", "alias": "destination"}],
+            "grpc",
+            "relay-service",
+            "relay-namespace",
+            "1.2.3",
+            "relay-instrumentation",
+            1234,
+            {"x-test": "header"},
+            {"authorization": "OTEL_AUTHORIZATION"},
+            {"deployment.environment": "test"},
+        )
+
+        assert endpoint.headers == {"x-test": "header"}
+        assert endpoint.header_env == {"authorization": "OTEL_AUTHORIZATION"}
+        assert endpoint.resource_attributes == {"deployment.environment": "test"}
+        assert endpoint.max_queue_size is None
+        assert endpoint.max_export_batch_size is None
+        assert endpoint.scheduled_delay_millis is None
+
     def test_defaults_and_component_wrapper(self):
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {
@@ -100,6 +125,9 @@ class TestObservabilityConfigHelpers:
             "gen_ai",
             "http://localhost:4318/v1/traces",
             header_env={"authorization": "OTEL_AUTHORIZATION"},
+            max_queue_size=4096,
+            max_export_batch_size=256,
+            scheduled_delay_millis=750,
         ).to_dict() == {
             "type": "gen_ai",
             "endpoint": "http://localhost:4318/v1/traces",
@@ -110,6 +138,9 @@ class TestObservabilityConfigHelpers:
             "service_name": "unknown_service",
             "instrumentation_scope": "opentelemetry",
             "timeout_millis": 3000,
+            "max_queue_size": 4096,
+            "max_export_batch_size": 256,
+            "scheduled_delay_millis": 750,
             "headers": {},
             "header_env": {"authorization": "OTEL_AUTHORIZATION"},
             "resource_attributes": {},

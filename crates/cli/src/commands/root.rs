@@ -54,7 +54,7 @@ pub(crate) enum Command {
         long_about = "Run Anthropic's `claude` CLI under an ephemeral NeMo Relay gateway. \
                       Observability (ATIF + OpenInference) is wired in transparently via \
                       ANTHROPIC_BASE_URL. First-time use launches the setup wizard so the \
-                      `[agents.claude]` block lands in `.nemo-relay/config.toml` and observation \
+                      `[agents.claude]` block lands in the XDG user `config.toml` and observation \
                       starts on the next invocation without prompts.",
         after_help = "Examples:\n  \
                       nemo-relay claude\n  \
@@ -102,7 +102,7 @@ pub(crate) enum Command {
                       nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
     )]
     Mcp,
-    /// Run the interactive setup (writes `.nemo-relay/config.toml`)
+    /// Run the interactive setup (writes the XDG user `config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
     Plugins(PluginsCommand),

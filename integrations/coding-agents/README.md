@@ -195,13 +195,10 @@ It writes the MCP server and trusted hooks to `$HERMES_HOME/config.yaml` or
 export the dynamic `NEMO_RELAY_GATEWAY_URL` through a process-private
 `HERMES_HOME` overlay with no fixed MCP entry.
 
-Shared TOML config is loaded from `/etc/nemo-relay/config.toml`, then nearest
-project `.nemo-relay/config.toml`, then
-`$XDG_CONFIG_HOME/nemo-relay/config.toml` or
-`~/.config/nemo-relay/config.toml`.
-
-That layering applies to transparent runs. Persistent mode skips the
-project layer and merges only system and user configuration.
+Shared TOML config uses the XDG user file (or an explicit file) and then the
+system file, with the system file at higher precedence. The system path is
+`/etc/nemo-relay/config.toml` on Unix or
+`%ProgramData%\nemo-relay\config.toml` on Windows.
 
 ```toml
 [agents.codex]
@@ -212,8 +209,7 @@ command = "hermes"
 ```
 
 Observability exporters are configured in `plugins.toml`. Run
-`nemo-relay plugins edit --project` to create `.nemo-relay/plugins.toml`, or
-write the plugin config directly:
+`nemo-relay plugins edit` to create the XDG user file, or write it directly:
 
 ```toml
 version = 1
