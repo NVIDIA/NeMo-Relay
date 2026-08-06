@@ -17,6 +17,7 @@ use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
+use crate::codec::request::MessageContent;
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
     Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -2058,6 +2059,41 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
         assert_eq!(attributes.get(key), Some(&expected.to_string()));
     }
     assert!(!attributes.contains_key("gen_ai.request.choice.count"));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.input.messages"]).unwrap(),
+        json!([{
+            "role": "user",
+            "parts": [{"type": "text", "content": "hello"}]
+        }])
+    );
+
+    let response = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    message: Some(MessageContent::Text("hello back".to_string())),
+                    finish_reason: Some(FinishReason::Complete),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let response_attributes =
+        attr_map(&crate::observability::otel_genai::end_attributes(&response));
+    assert_eq!(
+        serde_json::from_str::<Json>(&response_attributes["gen_ai.output.messages"]).unwrap(),
+        json!([{
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "hello back"}],
+            "finish_reason": "stop"
+        }])
+    );
 
     for (reason, expected) in [
         (FinishReason::Complete, "stop"),

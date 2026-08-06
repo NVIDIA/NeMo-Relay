@@ -186,8 +186,11 @@ The `gen_ai` endpoint uses these operation names:
 
 Rerankers, marks, and unsupported scope types are omitted. Supported
 descendants remain attached to their nearest exported ancestor. This
-projection never emits `nemo_relay.*` fields and does not export message
-content, tool payloads, or retrieval content.
+projection never emits `nemo_relay.*` fields. LLM spans include the
+`gen_ai.input.messages` and `gen_ai.output.messages` attributes as JSON strings
+that follow the OpenTelemetry GenAI message schemas. These attributes can
+contain sensitive prompt and response content; use event sanitizers to redact
+content before export. Tool payloads and retrieval content are not exported.
 
 ### Error Type Mapping
 
