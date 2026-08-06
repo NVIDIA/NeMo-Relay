@@ -74,7 +74,7 @@ upstream-repository-only and branch-only.
 
 - Docker with enough space to build one Linux/amd64 Rust plugin and task image;
 - Python 3.11 or newer;
-- a provider endpoint compatible with OpenAI Chat Completions;
+- access to `inference.nvidia.com` through its OpenAI-compatible endpoint;
 - a Phoenix endpoint accepting OTLP/HTTP traces; and
 - the provider authorization value in an environment variable.
 
@@ -100,22 +100,42 @@ the exact secret value.
 ### Provider configuration ownership
 
 The rendered `<run-root>/runtime/plugins.toml` is Relay and Switchyard's
-authoritative provider configuration. It contains the target model, protocol,
-upstream base URL and endpoint, and the **name** of the environment variable
-holding the authorization header. `TARGET_MODEL`, `UPSTREAM_BASE_URL`, and
-`UPSTREAM_AUTH_ENV` are preparation inputs used to materialize that immutable
-per-run file; they are not an independent provider configuration consumed by
-Relay.
+authoritative provider configuration. It contains the strong and weak models,
+classifier policy, protocol, upstream base URL and endpoint, and the **name**
+of the environment variable holding the authorization header. The defaults
+are the inference.nvidia.com catalog entries
+`aws/anthropic/bedrock-claude-opus-4-6` (strong) and
+`aws/anthropic/bedrock-claude-sonnet-4-6` (weak).
+
+The `llm_classifier` policy uses Sonnet as both the classifier and weak target.
+On the first request it asks Sonnet for a structured capability verdict, then
+routes the original request to Sonnet when `p_solve >= 0.5` or Opus otherwise.
+Invalid, unavailable, or low-confidence classifier output fails safe to Opus.
+The first decision is retained for the session, so later turns do not incur a
+second classifier call. This two-model policy avoids adding a third provider,
+but the packaged classifier prompt is not model-neutral; the threshold must be
+revalidated if either model changes.
+
+`STRONG_MODEL`, `WEAK_MODEL`, `UPSTREAM_BASE_URL`, and `UPSTREAM_AUTH_ENV` are
+preparation inputs used to materialize that immutable per-run file; they are
+not independent provider configuration consumed by Relay. When
+`INFERENCE_SECRETS_FILE` is set, the runner reads `NV_INFERENCEHUB_ENDPOINT`
+and `NV_INFERENCEHUB_KEY` from it in short-lived subshells. It derives the
+Bearer authorization value only in memory, unsets the raw variables, and
+passes only `SWITCHYARD_PROVIDER_AUTHORIZATION` into the task. The secrets file
+is never copied into the run root or a container.
 
 Harbor 0.18.0 still requires a `provider/model` value when constructing its
 built-in Hermes lifecycle, and Hermes writes that call-side model into its CLI
-configuration before Relay intercepts the operation. The runner therefore
-passes `openai/<target-model>` to Harbor while Switchyard uses the matching
-target from `plugins.toml`. `openai` describes the caller protocol here; it
-does not bypass Switchyard. Likewise, the placeholder `OPENAI_API_KEY` only
-satisfies Harbor/Hermes provider validation. The real authorization value is
-resolved by Switchyard from `header_env` and must remain in the environment,
-not in TOML.
+configuration before Relay intercepts the operation. The runner passes
+`openai/ollama-route-stub`: an intentionally unserved, Ollama-shaped caller
+identity. `openai` describes only the caller protocol required by Harbor; the
+stub is not a Switchyard target. `OPENAI_BASE_URL` is projected as the dead
+local endpoint `http://127.0.0.1:9/v1`, so a request that bypasses Switchyard
+fails closed rather than reaching a provider. The placeholder
+`OPENAI_API_KEY` only satisfies Harbor/Hermes validation. Successful provider
+traffic must use the real targets and authorization resolved by Switchyard
+from `plugins.toml` and `header_env`.
 
 ## Offline compatibility gate
 
@@ -136,7 +156,9 @@ export SPIKE_ROOT="/absolute/new/spike-root"
   --run-root "$SPIKE_ROOT" \
   --switchyard-bundle /absolute/new/switchyard-bundle \
   --upstream-base-url http://127.0.0.1:8000/v1 \
-  --target-model phase1/fake-model \
+  --strong-model phase1/fake-strong \
+  --weak-model phase1/fake-weak \
+  --hermes-caller-model ollama-route-stub \
   --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --phoenix-project phase1-offline \
   --eval-cohort phase1-offline
@@ -160,7 +182,9 @@ SWITCHYARD_TARGET_ARCHITECTURE=aarch64 \
   --switchyard-bundle /absolute/new/arm64-bundle \
   --relay-architecture aarch64 \
   --upstream-base-url http://127.0.0.1:8000/v1 \
-  --target-model phase1/fake-model \
+  --strong-model phase1/fake-strong \
+  --weak-model phase1/fake-weak \
+  --hermes-caller-model ollama-route-stub \
   --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --phoenix-project phase1-offline-arm64 \
   --eval-cohort phase1-offline-arm64
@@ -184,16 +208,19 @@ gate stay `x86_64`.
 Use a new absolute run root on every invocation:
 
 ```bash
-export TARGET_MODEL="your-provider-model"
-export UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint/v1"
-export UPSTREAM_AUTH_ENV="SWITCHYARD_PROVIDER_AUTHORIZATION"
-export SWITCHYARD_PROVIDER_AUTHORIZATION="Bearer ..."
+export INFERENCE_SECRETS_FILE="/absolute/path/to/.inference_secrets"
 export PHOENIX_BASE_URL="https://your-phoenix-endpoint"
 export PHOENIX_PROJECT="harbor-hermes-switchyard-phase1"
 export EVAL_COHORT="harbor-hermes-switchyard-phase1"
 
 ./run_terminal_bench.sh /absolute/new/run-root
 ```
+
+The secrets file must define `NV_INFERENCEHUB_ENDPOINT` and
+`NV_INFERENCEHUB_KEY`. Its path is only a launch input and is never rendered
+into generated configuration or provenance. Advanced runs may override
+`STRONG_MODEL`, `WEAK_MODEL`, or `UPSTREAM_BASE_URL`; changing either model
+requires rerunning the offline gate and classifier routing smokes.
 
 The default task is `adaptive-rejection-sampler`. Override it with
 `TASK_NAME`. To avoid rebuilding Switchyard for each task, set

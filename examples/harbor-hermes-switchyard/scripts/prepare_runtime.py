@@ -24,6 +24,9 @@ HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
 SWITCHYARD_REPOSITORY = "https://github.com/bbednarski9/Switchyard.git"
 SWITCHYARD_COMMIT = "8293936a0f5758aa1a782639d485b8b8948cf03e"
 RELAY_VERSION = "0.7.0"
+DEFAULT_STRONG_MODEL = "aws/anthropic/bedrock-claude-opus-4-6"
+DEFAULT_WEAK_MODEL = "aws/anthropic/bedrock-claude-sonnet-4-6"
+DEFAULT_HERMES_CALLER_MODEL = "ollama-route-stub"
 ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 
@@ -133,7 +136,9 @@ def main() -> int:
     parser.add_argument("--relay-architecture", choices=("x86_64", "aarch64"), default="x86_64")
     parser.add_argument("--upstream-base-url", required=True)
     parser.add_argument("--upstream-auth-env", default="SWITCHYARD_PROVIDER_AUTHORIZATION")
-    parser.add_argument("--target-model", required=True)
+    parser.add_argument("--strong-model", default=DEFAULT_STRONG_MODEL)
+    parser.add_argument("--weak-model", default=DEFAULT_WEAK_MODEL)
+    parser.add_argument("--hermes-caller-model", default=DEFAULT_HERMES_CALLER_MODEL)
     parser.add_argument("--openinference-endpoint", required=True)
     parser.add_argument("--phoenix-project", required=True)
     parser.add_argument("--eval-cohort", required=True)
@@ -171,7 +176,11 @@ def main() -> int:
     openinference_endpoint = checked_url(args.openinference_endpoint, "openinference_endpoint")
     if not ENV_NAME.fullmatch(args.upstream_auth_env):
         raise ValueError("upstream_auth_env must be an uppercase environment variable name")
-    target_model = checked_label(args.target_model, "target_model")
+    strong_model = checked_label(args.strong_model, "strong_model")
+    weak_model = checked_label(args.weak_model, "weak_model")
+    hermes_caller_model = checked_label(args.hermes_caller_model, "hermes_caller_model")
+    if strong_model == weak_model:
+        raise ValueError("strong_model and weak_model must be distinct")
     phoenix_project = checked_label(args.phoenix_project, "phoenix_project")
     eval_cohort = checked_label(args.eval_cohort, "eval_cohort")
 
@@ -180,7 +189,9 @@ def main() -> int:
         example_root / "config" / "relay.toml.in",
         config_path,
         {
-            "TARGET_MODEL": target_model,
+            "STRONG_MODEL": strong_model,
+            "WEAK_MODEL": weak_model,
+            "HERMES_CALLER_MODEL": hermes_caller_model,
             "HERMES_COMMIT": HERMES_COMMIT,
             "OPENINFERENCE_ENDPOINT": openinference_endpoint,
             "PHOENIX_PROJECT": phoenix_project,
@@ -216,6 +227,13 @@ def main() -> int:
             "library_sha256": sha256(libraries[0]),
         },
         "relay_config_sha256": sha256(config_path),
+        "routing": {
+            "algorithm": "llm_classifier",
+            "classifier_target": "weak",
+            "strong_model": strong_model,
+            "weak_model": weak_model,
+            "hermes_caller_model": hermes_caller_model,
+        },
         "phoenix_project": phoenix_project,
         "eval_cohort": eval_cohort,
     }

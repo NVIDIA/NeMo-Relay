@@ -7,9 +7,12 @@ set -euo pipefail
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 run_root="${1:-}"
 task_name="${TASK_NAME:-adaptive-rejection-sampler}"
-target_model="${TARGET_MODEL:-}"
-upstream_base_url="${UPSTREAM_BASE_URL:-}"
+strong_model="${STRONG_MODEL:-aws/anthropic/bedrock-claude-opus-4-6}"
+weak_model="${WEAK_MODEL:-aws/anthropic/bedrock-claude-sonnet-4-6}"
+hermes_caller_model="${HERMES_CALLER_MODEL:-ollama-route-stub}"
+inference_secrets_file="${INFERENCE_SECRETS_FILE:-}"
 upstream_auth_env="${UPSTREAM_AUTH_ENV:-SWITCHYARD_PROVIDER_AUTHORIZATION}"
+fail_closed_openai_base_url="http://127.0.0.1:9/v1"
 phoenix_base="${PHOENIX_BASE_URL:-}"
 phoenix_project="${PHOENIX_PROJECT:-harbor-hermes-switchyard-phase1}"
 eval_cohort="${EVAL_COHORT:-harbor-hermes-switchyard-phase1}"
@@ -32,12 +35,56 @@ if [[ -e "$run_root" ]]; then
   echo "run root already exists: $run_root" >&2
   exit 2
 fi
-for required in "$target_model" "$upstream_base_url" "$phoenix_base"; do
+if [[ ! "$upstream_auth_env" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+  echo "UPSTREAM_AUTH_ENV must be an uppercase environment variable name" >&2
+  exit 2
+fi
+
+nv_inferencehub_endpoint="${NV_INFERENCEHUB_ENDPOINT:-}"
+nv_inferencehub_key="${NV_INFERENCEHUB_KEY:-}"
+if [[ -n "$inference_secrets_file" ]]; then
+  [[ -r "$inference_secrets_file" ]] || {
+    echo "INFERENCE_SECRETS_FILE is not readable: $inference_secrets_file" >&2
+    exit 2
+  }
+  load_secret_value() {
+    local variable_name="$1"
+    (
+      set +x
+      # The file is sourced only in this short-lived subshell. Its other
+      # variables never enter Harbor's environment.
+      source "$inference_secrets_file"
+      printf '%s' "${!variable_name:-}"
+    )
+  }
+  [[ -n "$nv_inferencehub_endpoint" ]] || \
+    nv_inferencehub_endpoint="$(load_secret_value NV_INFERENCEHUB_ENDPOINT)"
+  [[ -n "$nv_inferencehub_key" ]] || \
+    nv_inferencehub_key="$(load_secret_value NV_INFERENCEHUB_KEY)"
+fi
+
+upstream_base_url="${UPSTREAM_BASE_URL:-$nv_inferencehub_endpoint}"
+upstream_base_url="${upstream_base_url%/chat/completions}"
+if [[ -z "${!upstream_auth_env:-}" && -n "$nv_inferencehub_key" ]]; then
+  if [[ "$nv_inferencehub_key" == "Bearer "* ]]; then
+    printf -v "$upstream_auth_env" '%s' "$nv_inferencehub_key"
+  else
+    printf -v "$upstream_auth_env" 'Bearer %s' "$nv_inferencehub_key"
+  fi
+  export "$upstream_auth_env"
+fi
+# Do not propagate the raw inference variables to Harbor or task containers.
+unset NV_INFERENCEHUB_ENDPOINT NV_INFERENCEHUB_KEY nv_inferencehub_endpoint nv_inferencehub_key
+for required in "$strong_model" "$weak_model" "$hermes_caller_model" "$upstream_base_url" "$phoenix_base"; do
   [[ -n "$required" ]] || {
-    echo "TARGET_MODEL, UPSTREAM_BASE_URL, and PHOENIX_BASE_URL are required" >&2
+    echo "model names, inference endpoint, and PHOENIX_BASE_URL are required" >&2
     exit 2
   }
 done
+if [[ "$strong_model" == "$weak_model" ]]; then
+  echo "STRONG_MODEL and WEAK_MODEL must be distinct" >&2
+  exit 2
+fi
 for dependency in curl docker "$harbor_bin" "$python_bin"; do
   command -v "$dependency" >/dev/null || {
     echo "missing required command: $dependency" >&2
@@ -95,7 +142,9 @@ prepare_args=(
   --relay-architecture "$relay_architecture"
   --upstream-base-url "$upstream_base_url"
   --upstream-auth-env "$upstream_auth_env"
-  --target-model "$target_model"
+  --strong-model "$strong_model"
+  --weak-model "$weak_model"
+  --hermes-caller-model "$hermes_caller_model"
   --openinference-endpoint "$openinference_endpoint"
   --phoenix-project "$phoenix_project"
   --eval-cohort "$eval_cohort"
@@ -147,7 +196,7 @@ fi
     --include-task-name "$task_name" \
     --n-tasks 1 \
     --agent harbor_hermes_agent:HarborHermesAgent \
-    --model "openai/$target_model" \
+    --model "openai/$hermes_caller_model" \
     --ak "repository_url=https://github.com/bbednarski9/hermes-agent.git" \
     --ak "repository_ref=feat/relay-native-plugin-init" \
     --ak "commit=efb63e714abc436af88af9b0d6734751c199aa6d" \
@@ -159,6 +208,7 @@ fi
     "${agent_kwargs[@]}" \
     --ae "$upstream_auth_env=${!upstream_auth_env}" \
     --ae OPENAI_API_KEY=relay-managed-placeholder \
+    --ae "OPENAI_BASE_URL=$fail_closed_openai_base_url" \
     "${agent_hosts[@]}" \
     --artifact /logs/agent/direct-hermes \
     --agent-include-logs hermes-session.jsonl \

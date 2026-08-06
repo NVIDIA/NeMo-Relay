@@ -14,15 +14,12 @@ from pathlib import Path
 from typing import Any
 
 
-async def exercise(model: str, session_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+async def exercise(model: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     from agent.relay_runtime import RelayRuntime
 
     import nemo_relay
 
     host = RelayRuntime(profile_key="phase1-offline")
-    session = host.ensure_session({"session_id": session_id})
-    if session is None:
-        raise RuntimeError("Hermes Relay runtime did not open a session")
     downstream_called = False
 
     async def forbidden_downstream(_request: Any) -> dict[str, Any]:
@@ -30,37 +27,47 @@ async def exercise(model: str, session_id: str) -> tuple[dict[str, Any], dict[st
         downstream_called = True
         raise AssertionError("Switchyard managed request reached Relay downstream callback")
 
-    request = nemo_relay.LLMRequest(
-        {},
-        {
-            "model": model,
-            "messages": [{"role": "user", "content": "reply with the smoke marker"}],
-            "stream": False,
-        },
-    )
+    responses: list[dict[str, Any]] = []
     try:
-        response = await host.run_in_session_async(
-            session,
-            nemo_relay.llm.execute,
-            "openai.chat_completions",
-            request,
-            forbidden_downstream,
-            model_name=model,
-            response_codec=nemo_relay.codecs.OpenAIChatCodec(),
+        cases = (
+            ("phase1-offline-weak-session", "reply with the smoke marker"),
+            ("phase1-offline-strong-session", "force strong route and reply with the smoke marker"),
         )
+        for session_id, prompt in cases:
+            session = host.ensure_session({"session_id": session_id})
+            if session is None:
+                raise RuntimeError("Hermes Relay runtime did not open a session")
+            request = nemo_relay.LLMRequest(
+                {},
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                },
+            )
+            response = await host.run_in_session_async(
+                session,
+                nemo_relay.llm.execute,
+                "openai.chat_completions",
+                request,
+                forbidden_downstream,
+                model_name=model,
+                response_codec=nemo_relay.codecs.OpenAIChatCodec(),
+            )
+            responses.append(response)
+            host.close_session({"session_id": session_id})
         active_report = nemo_relay.plugin.report()
         if active_report is None:
             raise AssertionError("Relay did not expose an active plugin report")
         report = active_report.to_dict() if hasattr(active_report, "to_dict") else active_report
-        host.close_session({"session_id": session_id})
     finally:
         host.shutdown()
     if downstream_called:
         raise AssertionError("Relay downstream callback was invoked")
-    content = response["choices"][0]["message"]["content"]
-    if content != "OFFLINE_SWITCHYARD_OK":
-        raise AssertionError(f"unexpected fake-provider response: {content!r}")
-    return response, report
+    contents = [response["choices"][0]["message"]["content"] for response in responses]
+    if contents != ["OFFLINE_SWITCHYARD_OK", "OFFLINE_SWITCHYARD_OK"]:
+        raise AssertionError(f"unexpected fake-provider responses: {contents!r}")
+    return responses, report
 
 
 def main() -> int:
@@ -68,13 +75,15 @@ def main() -> int:
     parser.add_argument("--plugins", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
     parser.add_argument("--request-log", type=Path, required=True)
-    parser.add_argument("--model", default="phase1/fake-model")
+    parser.add_argument("--model", default="ollama-route-stub")
+    parser.add_argument("--classifier-model", default="phase1/fake-weak")
+    parser.add_argument("--expected-routed-model", default="phase1/fake-weak")
+    parser.add_argument("--expected-strong-model", default="phase1/fake-strong")
     args = parser.parse_args()
     artifacts = args.artifacts.resolve()
     artifacts.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.environ["HERMES_NEMO_RELAY_PLUGINS_TOML"] = str(args.plugins.resolve())
-    session_id = "phase1-offline-session"
-    response, report = asyncio.run(exercise(args.model, session_id))
+    responses, report = asyncio.run(exercise(args.model))
 
     atof = artifacts / "relay" / "trajectory.atof.jsonl"
     atif = sorted((artifacts / "relay" / "atif").glob("trajectory-*.atif.json"))
@@ -91,8 +100,22 @@ def main() -> int:
     if not marks:
         raise AssertionError("Switchyard routing marks were not emitted")
     requests = [json.loads(line) for line in args.request_log.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if len(requests) != 1 or not requests[0].get("authorization_present"):
-        raise AssertionError("fake provider did not receive exactly one authenticated request")
+    if len(requests) != 4 or not all(item.get("authorization_present") for item in requests):
+        raise AssertionError("fake provider did not receive exactly four authenticated requests")
+    request_kinds = [item.get("request_kind") for item in requests]
+    if request_kinds != ["classifier", "completion", "classifier", "completion"]:
+        raise AssertionError(f"unexpected provider request sequence: {request_kinds}")
+    request_models = [item.get("model") for item in requests]
+    expected_models = [
+        args.classifier_model,
+        args.expected_routed_model,
+        args.classifier_model,
+        args.expected_strong_model,
+    ]
+    if request_models != expected_models:
+        raise AssertionError(f"unexpected provider model sequence: {request_models}")
+    if args.model in request_models:
+        raise AssertionError("Hermes caller stub reached the provider")
     surviving = [
         thread.name for thread in threading.enumerate() if thread.name.startswith("hermes-nemo-relay-shutdown-")
     ]
@@ -102,8 +125,11 @@ def main() -> int:
     result = {
         "schema_version": "harbor-hermes-switchyard.offline-smoke.v1",
         "status": "passed",
-        "response": response["choices"][0]["message"]["content"],
+        "responses": [response["choices"][0]["message"]["content"] for response in responses],
         "provider_requests": len(requests),
+        "provider_request_kinds": request_kinds,
+        "provider_models": request_models,
+        "hermes_caller_model": args.model,
         "relay_downstream_callback_called": False,
         "switchyard_routing_marks": marks,
         "active_plugin_report_before_shutdown": report,

@@ -42,14 +42,35 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError):
             self.send_error(400)
             return
+        messages = request.get("messages", [])
+        serialized_messages = json.dumps(messages, separators=(",", ":"))
+        is_classifier = request.get("response_format") is not None or (
+            "p_solve" in serialized_messages and "capability_boundary" in serialized_messages
+        )
         log_entry = {
             "path": self.path,
             "model": request.get("model"),
-            "message_count": len(request.get("messages", [])),
+            "message_count": len(messages),
+            "request_kind": "classifier" if is_classifier else "completion",
             "authorization_present": True,
         }
         with self.request_log.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(log_entry, separators=(",", ":")) + "\n")
+        content = "OFFLINE_SWITCHYARD_OK"
+        if is_classifier:
+            force_strong = "force strong route" in serialized_messages
+            content = json.dumps(
+                {
+                    "recommended_route": "strong" if force_strong else "weak",
+                    "p_solve": 0.01 if force_strong else 0.99,
+                    "confidence": 0.99,
+                    "abstain": False,
+                    "capability_boundary": "supported",
+                    "primary_rule": "SUP-1",
+                    "crux": "deterministic offline smoke task",
+                },
+                separators=(",", ":"),
+            )
         response = {
             "id": "chatcmpl-phase1",
             "object": "chat.completion",
@@ -60,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
                     "index": 0,
                     "message": {
                         "role": "assistant",
-                        "content": "OFFLINE_SWITCHYARD_OK",
+                        "content": content,
                     },
                     "finish_reason": "stop",
                 }

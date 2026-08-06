@@ -89,10 +89,11 @@ def scan_secrets(files: Iterable[Path], values: list[bytes]) -> list[str]:
     return sorted(set(findings))
 
 
-def read_atof(path: Path) -> tuple[int, list[str], list[str]]:
+def read_atof(path: Path) -> tuple[int, list[str], list[str], list[str]]:
     count = 0
     marks: list[str] = []
     models: list[str] = []
+    targets: list[str] = []
     with path.open(encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, 1):
             if not line.strip():
@@ -110,7 +111,10 @@ def read_atof(path: Path) -> tuple[int, list[str], list[str]]:
                             value = container.get(key)
                             if isinstance(value, str) and value:
                                 models.append(value)
-    return count, sorted(set(marks)), sorted(set(models))
+                        value = container.get("selected_target")
+                        if isinstance(value, str) and value:
+                            targets.append(value)
+    return count, sorted(set(marks)), sorted(set(models)), sorted(set(targets))
 
 
 def main() -> int:
@@ -194,18 +198,30 @@ def main() -> int:
     event_count = 0
     routing_marks: list[str] = []
     routed_models: list[str] = []
+    routed_targets: list[str] = []
     if required["atof"].is_file():
-        event_count, routing_marks, routed_models = read_atof(required["atof"])
+        event_count, routing_marks, routed_models, routed_targets = read_atof(required["atof"])
         if event_count == 0:
             errors.append("ATOF artifact is empty")
         if not routing_marks:
             errors.append("ATOF artifact has no Switchyard routing evidence")
+        if not routed_targets:
+            errors.append("ATOF artifact has no selected Switchyard target")
+        unexpected_targets = sorted(set(routed_targets) - {"strong", "weak"})
+        if unexpected_targets:
+            errors.append(f"ATOF artifact selected unexpected targets: {unexpected_targets}")
+
+    caller_model = provenance.get("routing", {}).get("hermes_caller_model")
+    if caller_model and caller_model in routed_models:
+        errors.append("Hermes caller stub appeared as a routed provider model")
 
     secret_values: list[bytes] = []
     for name in args.secret_env:
         value = os.environ.get(name)
         if value:
             secret_values.append(value.encode())
+            if value.startswith("Bearer ") and value[7:]:
+                secret_values.append(value[7:].encode())
     for path in args.secret_file:
         for line in path.read_bytes().splitlines():
             value = line.split(b"=", 1)[-1].strip()
@@ -243,6 +259,7 @@ def main() -> int:
         "atif_trajectory_count": len(atif_files),
         "switchyard_routing_marks": routing_marks,
         "routed_models": routed_models,
+        "routed_targets": routed_targets,
         "secret_values_scanned": len(secret_values),
         "secret_findings": findings,
     }
