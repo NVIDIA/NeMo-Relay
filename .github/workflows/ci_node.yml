@@ -424,13 +424,20 @@ jobs:
               cd "$smoke_dir"
               npm init --yes >/dev/null
               metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "nemo-relay-node-npm-[0-9]*.tgz" -print -quit)"
-              native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "*.tgz" -print -quit)"
+              native_count="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" | wc -l)"
+              test "$native_count" -eq 1
+              native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" -print -quit)"
               test -n "$metapackage"
               test -n "$native"
               npm install --ignore-scripts "$native" "$metapackage"
               node -e "
                 const assert = require(\"node:assert/strict\");
+                const { readdirSync } = require(\"node:fs\");
                 const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
+                const nativePackages = readdirSync(\"node_modules\").filter(
+                  (name) => name.startsWith(\"nemo-relay-node-\") && name !== \"nemo-relay-node\",
+                );
+                assert.equal(nativePackages.length, 1);
                 assert.deepEqual(manifest.libc, [\"musl\"]);
                 for (const entrypoint of [
                   \"nemo-relay-node\",
