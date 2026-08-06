@@ -206,9 +206,18 @@ pub struct OpenTelemetryEndpointConfig {
     /// Instrumentation scope name.
     #[serde(default = "default_otel_instrumentation_scope")]
     pub instrumentation_scope: String,
-    /// Export timeout in milliseconds.
+    /// OTLP request timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
+    /// Maximum completed spans buffered before the endpoint drops new spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_queue_size: Option<usize>,
+    /// Maximum spans exported in one batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_export_batch_size: Option<usize>,
+    /// Maximum delay before exporting a non-full batch, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_delay_millis: Option<u64>,
 }
 
 /// Multi-sink ATOF JSONL exporter config.
@@ -531,6 +540,14 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("service_version", EditorFieldKind::String, &[], true),
                 otel_editor_field("instrumentation_scope", EditorFieldKind::String, &[], false),
                 otel_editor_field("timeout_millis", EditorFieldKind::Integer, &[], false),
+                otel_editor_field("max_queue_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field("max_export_batch_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field(
+                    "scheduled_delay_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field(
@@ -1976,6 +1993,7 @@ fn build_otel_config(
         }
     };
     validate_otel_header_env(index, &section)?;
+    validate_otel_batch_config(index, &section)?;
     let mut config = CoreOpenTelemetryConfig::new(section.otel_type, section.endpoint)
         .with_transport(transport)
         .with_service_name(section.service_name)
@@ -1984,6 +2002,15 @@ fn build_otel_config(
         .with_mark_projection(section.mark_projection)
         .with_mark_exclude_names(section.mark_exclude_names)
         .with_attribute_mappings(section.attribute_mappings);
+    if let Some(max_queue_size) = section.max_queue_size {
+        config = config.with_max_queue_size(max_queue_size);
+    }
+    if let Some(max_export_batch_size) = section.max_export_batch_size {
+        config = config.with_max_export_batch_size(max_export_batch_size);
+    }
+    if let Some(scheduled_delay_millis) = section.scheduled_delay_millis {
+        config = config.with_scheduled_delay(Duration::from_millis(scheduled_delay_millis));
+    }
     if let Some(namespace) = section.service_namespace {
         config = config.with_service_namespace(namespace);
     }
@@ -1998,6 +2025,36 @@ fn build_otel_config(
         config = config.with_resource_attribute(key, value);
     }
     Ok(config)
+}
+
+fn validate_otel_batch_config(
+    index: usize,
+    section: &OpenTelemetryEndpointConfig,
+) -> PluginResult<()> {
+    for (field, value) in [
+        ("max_queue_size", section.max_queue_size),
+        ("max_export_batch_size", section.max_export_batch_size),
+    ] {
+        if value == Some(0) {
+            return Err(PluginError::InvalidConfig(format!(
+                "OpenTelemetry endpoints[{index}].{field} must be greater than 0"
+            )));
+        }
+    }
+    if section.scheduled_delay_millis == Some(0) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry endpoints[{index}].scheduled_delay_millis must be greater than 0"
+        )));
+    }
+    if matches!(
+        (section.max_export_batch_size, section.max_queue_size),
+        (Some(batch), Some(queue)) if batch > queue
+    ) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry endpoints[{index}].max_export_batch_size must be less than or equal to max_queue_size"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_otel_header_env(
@@ -2238,6 +2295,9 @@ fn validate_opentelemetry_endpoint_fields(
         "service_version",
         "instrumentation_scope",
         "timeout_millis",
+        "max_queue_size",
+        "max_export_batch_size",
+        "scheduled_delay_millis",
     ];
     const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
     let Some(endpoints) = opentelemetry.get("endpoints").and_then(Json::as_array) else {
@@ -2416,6 +2476,7 @@ fn validate_opentelemetry_section(
                 error,
             );
         }
+        validate_opentelemetry_batch_config(diagnostics, policy, index, endpoint);
         validate_opentelemetry_headers(diagnostics, policy, index, endpoint);
     }
     for error in opentelemetry_destination_collision_errors(&section.endpoints) {
@@ -2428,6 +2489,50 @@ fn validate_opentelemetry_section(
         });
     }
     validate_opentelemetry_feature_support(diagnostics, policy, section);
+}
+
+fn validate_opentelemetry_batch_config(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    endpoint: &OpenTelemetryEndpointConfig,
+) {
+    for (field, is_zero) in [
+        ("max_queue_size", endpoint.max_queue_size == Some(0)),
+        (
+            "max_export_batch_size",
+            endpoint.max_export_batch_size == Some(0),
+        ),
+        (
+            "scheduled_delay_millis",
+            endpoint.scheduled_delay_millis == Some(0),
+        ),
+    ] {
+        if is_zero {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("endpoints[{index}].{field}")),
+                format!("OpenTelemetry endpoint {field} must be greater than 0"),
+            );
+        }
+    }
+    if matches!(
+        (endpoint.max_export_batch_size, endpoint.max_queue_size),
+        (Some(batch), Some(queue)) if batch > queue
+    ) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("opentelemetry".to_string()),
+            Some(format!("endpoints[{index}].max_export_batch_size")),
+            "OpenTelemetry endpoint max_export_batch_size must be less than or equal to max_queue_size"
+                .to_string(),
+        );
+    }
 }
 
 struct OpenTelemetryDestinationCollision {

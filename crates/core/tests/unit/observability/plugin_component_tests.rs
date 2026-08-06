@@ -299,6 +299,15 @@ fn editor_schema_tracks_observability_config_types() {
             .kind,
         EditorFieldKind::StringMap
     );
+    for field in [
+        "max_queue_size",
+        "max_export_batch_size",
+        "scheduled_delay_millis",
+    ] {
+        let field = otlp_endpoint_schema.field(field).expect("batch field");
+        assert_eq!(field.kind, EditorFieldKind::Integer);
+        assert!(field.optional);
+    }
     assert_eq!(
         default_opentelemetry_endpoint_editor_value(),
         json!({
@@ -453,6 +462,9 @@ fn default_config_and_component_conversion_cover_public_shape() {
             service_version: None,
             instrumentation_scope: default_otel_instrumentation_scope(),
             timeout_millis: default_timeout_millis(),
+            max_queue_size: None,
+            max_export_batch_size: None,
+            scheduled_delay_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -473,6 +485,30 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(3));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
+    let serialized_endpoint = &generic.config["opentelemetry"]["endpoints"][0];
+    for field in [
+        "max_queue_size",
+        "max_export_batch_size",
+        "scheduled_delay_millis",
+    ] {
+        assert!(serialized_endpoint.get(field).is_none());
+    }
+
+    assert_endpoint_batch_fields_deserialize();
+}
+
+fn assert_endpoint_batch_fields_deserialize() {
+    let endpoint: OpenTelemetryEndpointConfig = serde_json::from_value(json!({
+        "type": "full",
+        "endpoint": "http://localhost:4318/v1/traces",
+        "max_queue_size": 4096,
+        "max_export_batch_size": 256,
+        "scheduled_delay_millis": 750,
+    }))
+    .unwrap();
+    assert_eq!(endpoint.max_queue_size, Some(4096));
+    assert_eq!(endpoint.max_export_batch_size, Some(256));
+    assert_eq!(endpoint.scheduled_delay_millis, Some(750));
 }
 
 fn assert_default_stream_sink_shape() {
@@ -537,6 +573,9 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             service_version: None,
             instrumentation_scope: default_otel_instrumentation_scope(),
             timeout_millis: default_timeout_millis(),
+            max_queue_size: None,
+            max_export_batch_size: None,
+            scheduled_delay_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
             resource_attributes: HashMap::new(),
@@ -561,6 +600,9 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        max_queue_size: None,
+        max_export_batch_size: None,
+        scheduled_delay_millis: None,
         headers: HashMap::new(),
         header_env: HashMap::new(),
         resource_attributes: HashMap::new(),
@@ -607,6 +649,39 @@ fn build_otel_config_rejects_each_activation_only_invalid_value() {
         .insert("authorization".to_string(), variable.to_string());
     assert!(build_otel_config(3, endpoint).is_err());
     unsafe { std::env::remove_var(variable) };
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(0);
+    assert!(build_otel_config(4, endpoint).is_err());
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_export_batch_size = Some(0);
+    assert!(build_otel_config(4, endpoint).is_err());
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.scheduled_delay_millis = Some(0);
+    assert!(build_otel_config(4, endpoint).is_err());
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(8);
+    endpoint.max_export_batch_size = Some(9);
+    assert!(build_otel_config(4, endpoint).is_err());
+}
+
+#[test]
+fn build_otel_config_carries_endpoint_batch_overrides() {
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(4096);
+    endpoint.max_export_batch_size = Some(256);
+    endpoint.scheduled_delay_millis = Some(750);
+    let config = build_otel_config(0, endpoint).unwrap();
+    assert_eq!(
+        config.batch_overrides(),
+        (Some(4096), Some(256), Some(Duration::from_millis(750)))
+    );
+
+    let config = build_otel_config(1, test_opentelemetry_endpoint()).unwrap();
+    assert_eq!(config.batch_overrides(), (None, None, None));
 }
 
 #[test]
@@ -649,6 +724,32 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         "endpoints[0].transport",
         "endpoints[0].header_env.empty",
         "endpoints[0].header_env.padded",
+    ] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.field.as_deref() == Some(field)),
+            "missing diagnostic for {field}: {diagnostics:?}"
+        );
+    }
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(0);
+    endpoint.max_export_batch_size = Some(2);
+    endpoint.scheduled_delay_millis = Some(0);
+    diagnostics.clear();
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &policy,
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            endpoints: vec![endpoint],
+        },
+    );
+    for field in [
+        "endpoints[0].max_queue_size",
+        "endpoints[0].max_export_batch_size",
+        "endpoints[0].scheduled_delay_millis",
     ] {
         assert!(
             diagnostics
@@ -826,6 +927,9 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
                 "mark_projection": "tool",
                 "mark_exclude_names": ["notification"],
                 "attribute_mappings": [{"key": "nemo_relay.model_name", "alias": "model.alias"}],
+                "max_queue_size": 4096,
+                "max_export_batch_size": 256,
+                "scheduled_delay_millis": 750,
                 "capture_content": true
             }]
         }
@@ -851,6 +955,9 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
             Some("endpoints[0].mark_projection")
                 | Some("endpoints[0].mark_exclude_names")
                 | Some("endpoints[0].attribute_mappings")
+                | Some("endpoints[0].max_queue_size")
+                | Some("endpoints[0].max_export_batch_size")
+                | Some("endpoints[0].scheduled_delay_millis")
         )
     }));
 }

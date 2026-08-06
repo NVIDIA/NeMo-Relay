@@ -39,6 +39,9 @@ type ObservabilityOpenTelemetryEndpointConfig struct {
 	ServiceVersion       string                 `json:"service_version,omitempty"`
 	InstrumentationScope string                 `json:"instrumentation_scope,omitempty"`
 	TimeoutMillis        uint64                 `json:"timeout_millis,omitempty"`
+	MaxQueueSize         *uint64                `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize   *uint64                `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis *uint64                `json:"scheduled_delay_millis,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.

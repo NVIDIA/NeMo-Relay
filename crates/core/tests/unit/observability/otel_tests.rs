@@ -3427,7 +3427,10 @@ fn provider_builders_cover_success_paths() {
             .with_header("authorization", "Bearer token")
             .with_resource_attribute("deployment.environment", "test")
             .with_service_namespace("agents")
-            .with_service_version("1.2.3"),
+            .with_service_version("1.2.3")
+            .with_max_queue_size(16)
+            .with_max_export_batch_size(4)
+            .with_scheduled_delay(Duration::from_millis(10)),
         None,
     )
     .unwrap();
