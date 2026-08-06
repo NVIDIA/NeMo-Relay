@@ -4170,6 +4170,7 @@ try:
     # terminal to the child without requiring a second `fg`.
     os.write(master, b"delay-next-continue\n")
     read_until("AGENT_DELAY_ARMED")
+    read_until("\n")
     os.write(master, b"\x1a")
     read_until("RELAY_SHELL> ")
     os.killpg(relay_group, signal.SIGCONT)
