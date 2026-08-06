@@ -25,7 +25,8 @@ fn gateway_bin() -> &'static str {
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
 const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
-const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(30);
+const CHILD_PROCESS_TIMEOUT_SECONDS: u64 = 5;
+const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
     let generation = temp.join("plugin/.nemo-relay-generation");
@@ -1466,7 +1467,7 @@ fn find_runtime_files_matching(
 }
 
 fn wait_child(child: &mut Child) -> ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(CHILD_PROCESS_TIMEOUT_SECONDS);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
@@ -1474,7 +1475,7 @@ fn wait_child(child: &mut Child) -> ExitStatus {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("child process did not exit within 10 seconds");
+            panic!("child process did not exit within {CHILD_PROCESS_TIMEOUT_SECONDS} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -1523,7 +1524,7 @@ fn wait_child_with_output(mut child: Child) -> Output {
 
     let stdout = read_pipe(child.stdout.take());
     let stderr = read_pipe(child.stderr.take());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(CHILD_PROCESS_TIMEOUT_SECONDS);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -1531,7 +1532,7 @@ fn wait_child_with_output(mut child: Child) -> Output {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("child process did not exit within 10 seconds");
+            panic!("child process did not exit within {CHILD_PROCESS_TIMEOUT_SECONDS} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -1607,7 +1608,7 @@ fn run_persistent_hook_with_token(
 }
 
 fn wait_for_port_closed(address: SocketAddr) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err() {
             return;
@@ -4341,7 +4342,7 @@ fn assert_non_tty_signal_forwarding(
 
 #[cfg(unix)]
 fn wait_for_agent_pid_file(relay: &mut std::process::Child, pids: &Path, signal_name: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !pids.is_file() {
         if Instant::now() >= deadline {
             // SAFETY: Relay's PID is live and owned by this test; SIGTERM exercises its registered
@@ -4593,7 +4594,7 @@ fn collect_replacement_requests(
     stopped: &AtomicBool,
     requests: &Mutex<Vec<String>>,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !stopped.load(Ordering::Relaxed) && Instant::now() < deadline {
         match listener.accept() {
             Ok((mut stream, _)) => {

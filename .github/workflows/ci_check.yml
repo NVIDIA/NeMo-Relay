@@ -44,18 +44,27 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - platform: linux-x86_64
             runner: ubuntu-latest
+            shell: sh
             run_mock_tests: true
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
+            shell: sh
             run_mock_tests: false
           - platform: macos-arm64
             runner: macos-15
+            shell: sh
             run_mock_tests: false
+          - platform: windows-x86_64
+            runner: windows-2022
+            shell: pwsh
+          - platform: windows-ARM64
+            runner: windows-11-arm
+            shell: pwsh
     permissions:
       contents: read
 
@@ -66,41 +75,22 @@ jobs:
           persist-credentials: false
 
       - name: Validate installer
+        if: ${{ matrix.shell == 'sh' }}
         run: |
           sh -n install.sh
           sh -n scripts/test-install.sh
           sh -n scripts/test-install-mocks.sh
 
       - name: Run live installer tests
+        if: ${{ matrix.shell == 'sh' }}
         run: sh scripts/test-install.sh
 
       - name: Run mock-only installer tests
-        if: ${{ matrix.run_mock_tests }}
+        if: ${{ matrix.shell == 'sh' && matrix.run_mock_tests }}
         run: sh scripts/test-install-mocks.sh
 
-  install-script-windows:
-    name: Install script (Windows ${{ matrix.architecture }})
-    if: ${{ inputs.run_installer }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: x86_64
-            runner: windows-2022
-          - architecture: ARM64
-            runner: windows-11-arm
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-        with:
-          persist-credentials: false
-
       - name: Validate PowerShell installer syntax
+        if: ${{ matrix.shell == 'pwsh' }}
         shell: pwsh
         run: |
           $scripts = @('install.ps1', 'scripts/test-install.ps1')
@@ -116,6 +106,7 @@ jobs:
           }
 
       - name: Run PowerShell installer tests
+        if: ${{ matrix.shell == 'pwsh' }}
         shell: pwsh
         run: ./scripts/test-install.ps1
 
@@ -164,7 +155,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
