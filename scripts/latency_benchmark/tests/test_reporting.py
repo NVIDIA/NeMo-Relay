@@ -16,7 +16,7 @@ class EnvironmentRecordTests(unittest.TestCase):
         version = SimpleNamespace(stdout="nemo-relay 0.1.0\n")
         with (
             mock.patch.object(reporting.subprocess, "run", return_value=version),
-            mock.patch.object(reporting, "_git_output", side_effect=["unknown", "unknown"]),
+            mock.patch.object(reporting, "_git_output", side_effect=["unknown", "abc123"]),
             mock.patch.object(reporting.platform, "platform", return_value="test-platform"),
             mock.patch.object(reporting.platform, "machine", return_value="test-machine"),
             mock.patch.object(reporting.platform, "processor", return_value="test-processor"),
@@ -24,7 +24,7 @@ class EnvironmentRecordTests(unittest.TestCase):
         ):
             environment = reporting.environment_record(Path("nemo-relay"))
 
-        self.assertEqual(environment["git_commit"], "unknown")
+        self.assertEqual(environment["git_commit"], "abc123")
         self.assertFalse(environment["git_dirty"])
 
 
