@@ -103,7 +103,6 @@ fn uses_configured_command_when_no_argv_is_supplied() {
     let agents = AgentConfigs {
         codex: AgentCommandConfig {
             command: Some("codex --full-auto".into()),
-            hooks_path: None,
         },
         ..AgentConfigs::default()
     };
@@ -123,33 +122,6 @@ fn uses_configured_command_when_no_argv_is_supplied() {
 
     assert_eq!(agent, CodingAgent::Codex);
     assert_eq!(argv, vec!["codex", "--full-auto"]);
-}
-
-#[test]
-fn uses_configured_hermes_command_when_no_argv_is_supplied() {
-    let agents = AgentConfigs {
-        hermes: AgentCommandConfig {
-            command: Some("hermes --yolo chat".into()),
-            hooks_path: None,
-        },
-        ..AgentConfigs::default()
-    };
-    let command = RunOverrides {
-        agent: Some(CodingAgent::Hermes),
-        config: None,
-        openai_base_url: None,
-        anthropic_base_url: None,
-        session_metadata: None,
-        plugin_config_path: None,
-        dry_run: false,
-        print: false,
-        command: vec![],
-    };
-
-    let (agent, argv) = resolve_agent_and_argv(&command, &agents).unwrap();
-
-    assert_eq!(agent, CodingAgent::Hermes);
-    assert_eq!(argv, vec!["hermes", "--yolo", "chat"]);
 }
 
 #[test]
@@ -177,7 +149,7 @@ fn inference_failure_has_actionable_message() {
 fn missing_command_without_agent_errors() {
     // Bare `nemo-relay run` (no command, no --agent) errors — we have nothing to spawn and no
     // argv[0] to infer an agent from. With --agent set, we fall back to the agent's default
-    // binary name (e.g., `hermes`), so that branch is exercised in the resolution test
+    // binary name (for example, `codex`), so that branch is exercised in the resolution test
     // below rather than here.
     let command = RunOverrides {
         agent: None,
@@ -200,10 +172,10 @@ fn missing_command_without_agent_errors() {
 
 #[test]
 fn agent_without_configured_command_falls_back_to_default_binary() {
-    // `--agent hermes` with no `[agents.hermes] command = "..."` override resolves to the
+    // `--agent codex` with no `[agents.codex] command = "..."` override resolves to the
     // default executable name on $PATH.
     let command = RunOverrides {
-        agent: Some(CodingAgent::Hermes),
+        agent: Some(CodingAgent::Codex),
         config: None,
         openai_base_url: None,
         anthropic_base_url: None,
@@ -215,8 +187,8 @@ fn agent_without_configured_command_falls_back_to_default_binary() {
     };
 
     let (agent, argv) = resolve_agent_and_argv(&command, &AgentConfigs::default()).unwrap();
-    assert_eq!(agent, CodingAgent::Hermes);
-    assert_eq!(argv, vec!["hermes"]);
+    assert_eq!(agent, CodingAgent::Codex);
+    assert_eq!(argv, vec!["codex"]);
 }
 
 #[test]
@@ -246,12 +218,10 @@ fn agent_with_passthrough_args_appends_to_configured_command() {
 fn default_and_configured_command_helpers_cover_empty_and_all_agents() {
     assert_eq!(default_command_for(CodingAgent::ClaudeCode), "claude");
     assert_eq!(default_command_for(CodingAgent::Codex), "codex");
-    assert_eq!(default_command_for(CodingAgent::Hermes), "hermes");
 
     let agents = AgentConfigs {
         codex: AgentCommandConfig {
             command: Some("   ".into()),
-            hooks_path: None,
         },
         ..AgentConfigs::default()
     };
@@ -689,7 +659,6 @@ fn invocation_resolves_wrapper_host_before_appending_pass_through_arguments() {
     let agents = AgentConfigs {
         codex: AgentCommandConfig {
             command: Some("wrapper -- codex".into()),
-            hooks_path: None,
         },
         ..AgentConfigs::default()
     };
@@ -728,7 +697,7 @@ fn version_probe_preserves_known_wrappers_and_validates_opaque_ones() {
     );
     assert_eq!(
         crate::process::version_probe_argv(
-            CodingAgent::Hermes,
+            CodingAgent::Codex,
             &["company-agent-wrapper".into(), "chat".into()],
         ),
         vec!["company-agent-wrapper", "chat", "--version"]
@@ -916,481 +885,6 @@ fn prepares_claude_dry_inserts_plugin_dir_after_authoritative_agent_executable()
     );
     assert_eq!(prepared.argv.last().map(String::as_str), Some("--resume"));
     assert!(prepared.temp_dirs.is_empty());
-}
-
-#[test]
-fn prepares_hermes_hook_environment() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hermes-home/config.yaml");
-    std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
-    std::fs::write(&hooks_path, "model:\n  default: test\n").unwrap();
-    let state = hooks_path.parent().unwrap().join("state.db");
-    std::fs::write(&state, "state").unwrap();
-    let cache = hooks_path.parent().unwrap().join("cache");
-    std::fs::create_dir(&cache).unwrap();
-    std::fs::write(cache.join("entry"), "cached").unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs {
-            hermes: AgentCommandConfig {
-                command: None,
-                hooks_path: Some(hooks_path.clone()),
-            },
-            ..AgentConfigs::default()
-        },
-        dynamic_plugins: Vec::new(),
-        ..ResolvedConfig::default()
-    };
-    let prepared = PreparedAgentLaunch::new(
-        CodingAgent::Hermes,
-        vec!["hermes".into(), "chat".into()],
-        "http://127.0.0.1:1234",
-        &resolved,
-        false,
-    )
-    .unwrap();
-
-    assert_eq!(prepared.argv, vec!["hermes", "chat"]);
-    assert!(prepared.env.contains(&(
-        "NEMO_RELAY_GATEWAY_URL".into(),
-        "http://127.0.0.1:1234".into()
-    )));
-    assert!(
-        prepared
-            .env
-            .contains(&("HERMES_ACCEPT_HOOKS".into(), "1".into()))
-    );
-    let overlay = prepared
-        .env
-        .iter()
-        .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
-        .expect("Hermes overlay path");
-    let hooks = std::fs::read_to_string(overlay.join("config.yaml")).unwrap();
-    let hooks: serde_json::Value = serde_yaml::from_str(&hooks).unwrap();
-    assert_eq!(hooks["model"]["provider"], json!("custom"));
-    assert_eq!(
-        hooks["model"]["api_key"],
-        json!(format!(
-            "${{{}}}",
-            crate::provider_auth::TRANSPARENT_PROXY_CREDENTIAL_ENV
-        ))
-    );
-    assert!(crate::hook_assertions::value_has_command_arguments(
-        &hooks,
-        &[
-            "hook-forward",
-            "hermes",
-            "--gateway-url",
-            "http://127.0.0.1:1234",
-            "--transparent-run",
-        ],
-    ));
-    assert!(overlay.join("state.db").exists());
-    assert_eq!(
-        std::fs::read_to_string(overlay.join("state.db")).unwrap(),
-        "state"
-    );
-    assert_eq!(
-        std::fs::read_to_string(overlay.join("cache/entry")).unwrap(),
-        "cached"
-    );
-    std::fs::write(overlay.join("cache/through-overlay"), "live").unwrap();
-    assert_eq!(
-        std::fs::read_to_string(cache.join("through-overlay")).unwrap(),
-        "live"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&hooks_path).unwrap(),
-        "model:\n  default: test\n"
-    );
-    assert!(prepared.notes[0].contains("isolated Hermes config overlay"));
-
-    prepared.restore().unwrap();
-    assert!(hooks_path.exists());
-    assert!(!overlay.exists());
-}
-
-#[test]
-fn sequential_hermes_runs_preserve_state_from_a_fresh_home() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let source_home = temp.path().join("hermes-home");
-    let hooks_path = source_home.join("config.yaml");
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs {
-            hermes: AgentCommandConfig {
-                command: None,
-                hooks_path: Some(hooks_path),
-            },
-            ..AgentConfigs::default()
-        },
-        dynamic_plugins: Vec::new(),
-        ..ResolvedConfig::default()
-    };
-    let prepare = || {
-        PreparedAgentLaunch::new(
-            CodingAgent::Hermes,
-            vec!["hermes".into(), "chat".into()],
-            "http://127.0.0.1:1234",
-            &resolved,
-            false,
-        )
-        .unwrap()
-    };
-    let overlay = |prepared: &PreparedAgentLaunch| {
-        prepared
-            .env
-            .iter()
-            .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
-            .expect("Hermes overlay path")
-    };
-
-    let first = prepare();
-    let first_overlay = overlay(&first);
-    std::fs::write(first_overlay.join("state.db"), "session state").unwrap();
-    std::fs::create_dir_all(first_overlay.join("sessions")).unwrap();
-    std::fs::write(
-        first_overlay.join("sessions/session.json"),
-        "session details",
-    )
-    .unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(source_home.join("state.db"))
-            .expect("state.db should be linked to the caller's Hermes home"),
-        "session state"
-    );
-    assert_eq!(
-        std::fs::read_to_string(source_home.join("sessions/session.json"))
-            .expect("sessions should be linked to the caller's Hermes home"),
-        "session details"
-    );
-
-    first.restore().unwrap();
-    assert!(!first_overlay.exists());
-
-    let second = prepare();
-    let second_overlay = overlay(&second);
-    assert_eq!(
-        std::fs::read_to_string(second_overlay.join("state.db")).unwrap(),
-        "session state"
-    );
-    assert_eq!(
-        std::fs::read_to_string(second_overlay.join("sessions/session.json")).unwrap(),
-        "session details"
-    );
-
-    second.restore().unwrap();
-    assert!(!second_overlay.exists());
-    assert!(source_home.join("state.db").exists());
-    assert!(source_home.join("sessions/session.json").exists());
-}
-
-#[test]
-fn rejects_state_db_directory_before_populating_hermes_overlay() {
-    let temp = tempfile::tempdir().unwrap();
-    let source_home = temp.path().join("hermes-home");
-    let state_db = source_home.join("state.db");
-    let hooks_path = source_home.join("config.yaml");
-    std::fs::create_dir_all(&state_db).unwrap();
-    let resolved = ResolvedConfig {
-        agents: AgentConfigs {
-            hermes: AgentCommandConfig {
-                hooks_path: Some(hooks_path.clone()),
-                ..AgentCommandConfig::default()
-            },
-            ..AgentConfigs::default()
-        },
-        ..ResolvedConfig::default()
-    };
-
-    let result = PreparedAgentLaunch::new(
-        CodingAgent::Hermes,
-        vec!["hermes".into(), "chat".into()],
-        "http://127.0.0.1:1234",
-        &resolved,
-        false,
-    );
-    let error = match result {
-        Ok(prepared) => {
-            prepared.restore().unwrap();
-            panic!("state.db directories must be rejected")
-        }
-        Err(error) => error,
-    };
-
-    assert!(matches!(error, CliError::Io(_)));
-    assert!(state_db.is_dir());
-    assert!(!hooks_path.exists());
-    assert!(std::fs::read_dir(temp.path()).unwrap().all(|entry| {
-        !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".nemo-relay-hermes-home")
-    }));
-}
-
-#[cfg(unix)]
-#[test]
-fn process_private_directories_are_owner_only() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let parent = tempfile::tempdir().unwrap();
-    let path = crate::filesystem::temp::private_temp_dir(parent.path(), "relay-private").unwrap();
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o700
-    );
-    std::fs::remove_dir(path).unwrap();
-}
-
-#[test]
-fn concurrent_hermes_runs_use_independent_overlays_without_mutating_user_config() {
-    let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("hermes/config.yaml");
-    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    let original = "model:\n  default: test\n";
-    std::fs::write(&config, original).unwrap();
-    let resolved = ResolvedConfig {
-        agents: AgentConfigs {
-            hermes: AgentCommandConfig {
-                hooks_path: Some(config.clone()),
-                ..AgentCommandConfig::default()
-            },
-            ..AgentConfigs::default()
-        },
-        ..ResolvedConfig::default()
-    };
-
-    let resolved = std::sync::Arc::new(resolved);
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
-    let spawn = |url: &'static str| {
-        let resolved = resolved.clone();
-        let barrier = barrier.clone();
-        std::thread::spawn(move || {
-            barrier.wait();
-            PreparedAgentLaunch::new(
-                CodingAgent::Hermes,
-                vec!["hermes".into()],
-                url,
-                &resolved,
-                false,
-            )
-            .unwrap()
-        })
-    };
-    let first = spawn("http://127.0.0.1:4001");
-    let second = spawn("http://127.0.0.1:4002");
-    barrier.wait();
-    let first = first.join().unwrap();
-    let second = second.join().unwrap();
-    let overlay = |run: &PreparedAgentLaunch| {
-        run.env
-            .iter()
-            .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
-            .unwrap()
-    };
-    let first_overlay = overlay(&first);
-    let second_overlay = overlay(&second);
-
-    assert_ne!(first_overlay, second_overlay);
-    let first_config: serde_json::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(first_overlay.join("config.yaml")).unwrap())
-            .unwrap();
-    let second_config: serde_json::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(second_overlay.join("config.yaml")).unwrap())
-            .unwrap();
-    assert!(crate::hook_assertions::value_has_command_arguments(
-        &first_config,
-        &[
-            "hook-forward",
-            "hermes",
-            "--gateway-url",
-            "http://127.0.0.1:4001",
-            "--transparent-run",
-        ],
-    ));
-    assert!(crate::hook_assertions::value_has_command_arguments(
-        &second_config,
-        &[
-            "hook-forward",
-            "hermes",
-            "--gateway-url",
-            "http://127.0.0.1:4002",
-            "--transparent-run",
-        ],
-    ));
-    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-
-    first.restore().unwrap();
-    assert!(!first_overlay.exists());
-    assert!(second_overlay.exists());
-    assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
-    second.restore().unwrap();
-}
-
-#[test]
-fn hermes_overlay_does_not_link_an_ancestor_entry_that_contains_it() {
-    let source_home = tempfile::tempdir().unwrap();
-    let source_config = source_home.path().join("config.yaml");
-    std::fs::write(&source_config, "model:\n  default: test\n").unwrap();
-    let overlay = source_home.path().join("overlay");
-    std::fs::create_dir(&overlay).unwrap();
-
-    crate::agents::hermes::launch::populate_overlay(
-        &overlay,
-        source_home.path(),
-        &source_config,
-        "http://127.0.0.1:1234",
-    )
-    .unwrap();
-
-    assert!(!overlay.join("overlay").exists());
-    assert!(overlay.join("config.yaml").exists());
-}
-
-#[test]
-fn prepares_hermes_dry_uses_home_path_without_writing_hooks() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let _env = EnvScope::set(&[
-        ("HERMES_HOME", None),
-        ("HOME", Some(temp.path().as_os_str())),
-        ("USERPROFILE", None),
-    ]);
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs::default(),
-        ..ResolvedConfig::default()
-    };
-
-    let prepared = PreparedAgentLaunch::new(
-        CodingAgent::Hermes,
-        vec!["hermes".into()],
-        "http://127.0.0.1:1234",
-        &resolved,
-        true,
-    )
-    .unwrap();
-
-    let hook_path = temp.path().join(".hermes/config.yaml");
-    assert!(prepared.notes[0].contains(".hermes"));
-    assert!(prepared.notes[0].contains("config.yaml"));
-    assert!(
-        prepared
-            .env
-            .contains(&("HERMES_ACCEPT_HOOKS".into(), "1".into()))
-    );
-    assert!(!hook_path.exists());
-}
-
-#[test]
-fn hermes_hooks_path_prefers_configured_then_env_then_home() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let configured = temp.path().join("configured.yaml");
-    assert_eq!(
-        crate::agents::hermes::launch::hooks_path_for_launch(Some(&configured)).unwrap(),
-        configured
-    );
-
-    let _env = EnvScope::set(&[
-        ("HERMES_HOME", Some(temp.path().as_os_str())),
-        ("HOME", None),
-        ("USERPROFILE", None),
-    ]);
-    assert_eq!(
-        crate::agents::hermes::launch::hooks_path_for_launch(None).unwrap(),
-        temp.path().join("config.yaml")
-    );
-
-    drop(_env);
-    let _env = EnvScope::set(&[
-        ("HERMES_HOME", None),
-        ("HOME", Some(temp.path().as_os_str())),
-        ("USERPROFILE", None),
-    ]);
-    assert_eq!(
-        crate::agents::hermes::launch::hooks_path_for_launch(None).unwrap(),
-        temp.path().join(".hermes/config.yaml")
-    );
-
-    drop(_env);
-    let _env = EnvScope::set(&[("HERMES_HOME", None), ("HOME", None), ("USERPROFILE", None)]);
-    let error = crate::agents::hermes::launch::hooks_path_for_launch(None)
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("could not resolve home directory"));
-}
-
-#[test]
-fn hermes_overlay_preserves_ambiguous_manual_mcp_and_original_file() {
-    let _guard = current_dir_lock().lock().unwrap();
-    let temp = tempfile::tempdir().unwrap();
-    let hooks_path = temp.path().join("hermes-home/config.yaml");
-    std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
-    let original = r#"mcp_servers:
-  nemo-relay:
-    command: nemo-relay
-    args: [mcp, --agent, hermes]
-  filesystem:
-    command: fs-mcp
-hooks:
-  PreToolUse: []
-"#;
-    std::fs::write(&hooks_path, original).unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs {
-            hermes: AgentCommandConfig {
-                command: None,
-                hooks_path: Some(hooks_path.clone()),
-            },
-            ..AgentConfigs::default()
-        },
-        ..ResolvedConfig::default()
-    };
-
-    let prepared = PreparedAgentLaunch::new(
-        CodingAgent::Hermes,
-        vec!["hermes".into(), "chat".into()],
-        "http://s",
-        &resolved,
-        false,
-    )
-    .unwrap();
-
-    let overlay = prepared
-        .env
-        .iter()
-        .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
-        .unwrap();
-    let patched = std::fs::read_to_string(overlay.join("config.yaml")).unwrap();
-    let patched_yaml: serde_json::Value = serde_yaml::from_str(&patched).unwrap();
-    assert!(crate::hook_assertions::value_has_command_arguments(
-        &patched_yaml,
-        &[
-            "hook-forward",
-            "hermes",
-            "--gateway-url",
-            "http://s",
-            "--transparent-run",
-        ],
-    ));
-    assert_eq!(
-        patched_yaml["mcp_servers"]["nemo-relay"]["args"],
-        json!(["mcp", "--agent", "hermes"])
-    );
-    assert_eq!(
-        patched_yaml["mcp_servers"]["filesystem"]["command"],
-        json!("fs-mcp")
-    );
-    assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
-    prepared.restore().unwrap();
-    assert!(!overlay.exists());
 }
 
 #[test]
@@ -2137,78 +1631,6 @@ async fn execute_live_run_reports_gateway_startup_error_when_health_check_fails(
 
     assert!(error.contains("ATOF mode"));
     assert!(!error.contains("gateway did not become ready"));
-}
-
-#[tokio::test]
-#[allow(clippy::await_holding_lock)]
-async fn execute_live_run_removes_hermes_overlay_when_health_check_fails() {
-    let _guard = crate::test_support::PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _cwd = crate::test_support::CwdTestScope::locked();
-    let temp = tempfile::tempdir().unwrap();
-    let _env = EnvScope::set(&[
-        (crate::bootstrap::state::BOOTSTRAP_STATE_DIR_ENV, None),
-        ("NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN", None),
-        (crate::configuration::BOOTSTRAP_FINGERPRINT_ENV, None),
-        ("HOME", Some(temp.path().as_os_str())),
-        ("XDG_CONFIG_HOME", Some(temp.path().join("xdg").as_os_str())),
-    ]);
-    let _ = nemo_relay::plugin::clear_plugin_configuration();
-    let hooks_path = temp.path().join("hermes-home/config.yaml");
-    std::fs::create_dir_all(hooks_path.parent().unwrap()).unwrap();
-    let original = "hooks:\n  PreToolUse: []\n";
-    std::fs::write(&hooks_path, original).unwrap();
-    let resolved = ResolvedConfig {
-        gateway: GatewayConfig::default(),
-        agents: AgentConfigs {
-            hermes: AgentCommandConfig {
-                command: None,
-                hooks_path: Some(hooks_path.clone()),
-            },
-            ..AgentConfigs::default()
-        },
-        ..ResolvedConfig::default()
-    };
-    let prepared = PreparedAgentLaunch::new(
-        CodingAgent::Hermes,
-        vec!["hermes".into(), "chat".into()],
-        "http://127.0.0.1:1234",
-        &resolved,
-        false,
-    )
-    .unwrap();
-    let overlay = prepared
-        .env
-        .iter()
-        .find_map(|(name, value)| (name == "HERMES_HOME").then(|| PathBuf::from(value)))
-        .unwrap();
-    let overlay_config: serde_json::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(overlay.join("config.yaml")).unwrap())
-            .unwrap();
-    assert!(crate::hook_assertions::value_has_command_arguments(
-        &overlay_config,
-        &[
-            "hook-forward",
-            "hermes",
-            "--gateway-url",
-            "http://127.0.0.1:1234",
-            "--transparent-run",
-        ],
-    ));
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let error = execute_live_run(
-        listener,
-        GatewayConfig::default(),
-        "http://127.0.0.1:1",
-        prepared,
-    )
-    .await
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("gateway did not become ready"), "{error}");
-    assert_eq!(std::fs::read_to_string(&hooks_path).unwrap(), original);
-    assert!(!overlay.exists());
 }
 
 #[cfg(unix)]

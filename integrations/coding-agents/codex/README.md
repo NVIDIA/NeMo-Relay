@@ -74,7 +74,7 @@ entries, 512 MiB, and a maximum directory traversal depth of 128. If startup
 reports an activation snapshot budget error, remove unrelated files from the
 manifest or load-target directory, flatten deeply nested directories, or reduce
 the managed Python environment before retrying. Concurrent Codex,
-Claude Code, and configured Hermes processes can share the gateway and
+Claude Code processes can share the gateway and
 heartbeat it every 30 seconds. The sidecar remains available for 300 idle
 seconds after the final client closes. If it dies while MCP remains open,
 overlapping MCP clients coordinate one restart for the endpoint. Persistent

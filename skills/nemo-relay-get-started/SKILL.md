@@ -18,8 +18,8 @@ Evaluate these paths in order. Use the first one that fits the user's stated
 goal and existing environment.
 
 1. **CLI try-now (default)**: choose this for a generic "try Relay" request or
-   when the user wants value without modifying application code. Run Codex,
-   Claude Code, or Hermes through the local CLI wrapper. Read
+   when the user wants value without modifying application code. Run Codex or
+   Claude Code through the local CLI wrapper. Read
    [CLI Try-Now](references/cli-try-now.md).
 2. **Built-in integrations try-now**: choose this when an existing LangChain,
    LangGraph, Deep Agents, or OpenClaw application owns the execution boundary.

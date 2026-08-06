@@ -307,7 +307,6 @@ pub(super) fn event_agent_kind(event: &NormalizedEvent) -> AgentKind {
         NormalizedEvent::SubagentStarted(event) | NormalizedEvent::SubagentEnded(event) => {
             event.agent_kind
         }
-        NormalizedEvent::LlmStarted(event) | NormalizedEvent::LlmEnded(event) => event.agent_kind,
         NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => event.agent_kind,
     }
 }

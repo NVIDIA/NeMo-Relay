@@ -107,7 +107,7 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
 ///
 /// Host adapters add only schema-specific activation and environment-forwarding fields. Keeping
 /// the command, arguments, fixed gateway bind, and generation fence here ensures Codex, Claude
-/// Code, and Hermes launch the same process.
+/// Code launch the same process.
 pub(crate) fn persistent_server(
     relay: &Path,
     generation_file: &Path,

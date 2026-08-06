@@ -41,7 +41,7 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::agents::shared::adapters::{claude_code, codex, hermes};
+use crate::agents::shared::adapters::{claude_code, codex};
 use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
 };
@@ -586,7 +586,6 @@ fn router_with_state(state: AppState) -> Router {
         .route("/bootstrap/shutdown", post(shutdown_bootstrap_sidecar))
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
-        .route("/hooks/hermes", post(hermes_hook))
         .route("/responses", post(gateway::passthrough))
         .route("/chat/completions", post(gateway::passthrough))
         .route("/models", get(gateway::models))
@@ -1201,23 +1200,6 @@ async fn claude_code_hook(
     state.touch();
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = claude_code::adapt(payload, &headers);
-    state
-        .sessions
-        .apply_events(&headers, outcome.events)
-        .await?;
-    Ok(Json(outcome.response))
-}
-
-// Handles Hermes hook payloads from persistent shell integration. The adapter returns a minimal
-// body because hook-forward owns the fail-open/fail-closed behavior for Hermes command execution.
-async fn hermes_hook(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    payload: Result<Json<Value>, JsonRejection>,
-) -> Result<Json<Value>, CliError> {
-    state.touch();
-    let Json(payload) = payload.map_err(hook_payload_rejection)?;
-    let outcome = hermes::adapt(payload, &headers);
     state
         .sessions
         .apply_events(&headers, outcome.events)

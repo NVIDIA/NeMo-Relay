@@ -8,7 +8,7 @@
     "expected_behavior": [
       "The agent recommends the CLI transparent-run path instead of beginning with a language binding or production setup",
       "The agent treats CLI, built-in integrations, and language-specific manual integration as increasing levels of complexity in that order",
-      "The agent checks nemo-relay availability and discovers Codex, Claude Code, or Hermes before selecting an agent",
+      "The agent checks nemo-relay availability and discovers Codex or Claude Code before selecting an agent",
       "The agent explains that CLI hooks and the local gateway provide instrumentation for the trial",
       "The agent includes both ATOF and ATIF local output in the first-value workflow",
       "The agent does not leak secrets, run destructive commands, or expose complete captured payloads"
@@ -146,16 +146,15 @@
   },
   {
     "id": "nemo-relay-get-started-011",
-    "question": "The ATOF file has scope and tool events, but I do not see LLM lifecycle events or an ATIF file yet after one Hermes prompt.",
+    "question": "Hermes Agent is installed. Do I also need to install NeMo Relay or enable its observability plugin?",
     "expected_skill": "nemo-relay-get-started",
     "expected_script": null,
-    "ground_truth": "The agent recognizes that instrumentation and ATOF export are working, checks Hermes provider-gateway routing for the missing LLM events, and asks the user to finalize or reset the Hermes session before treating ATIF as missing.",
+    "ground_truth": "The agent explains that NeMo Relay is built into Hermes Agent, requires no separate Relay installation or observability plugin, and states that Hermes Agent understands NeMo Relay plugin configurations.",
     "expected_behavior": [
-      "The agent identifies the existing ATOF scope and tool records as partial success",
-      "The agent checks whether Hermes model traffic traversed the Relay gateway",
-      "The agent accounts for Hermes finalize or reset timing before diagnosing ATIF failure",
-      "The agent distinguishes capture from export rather than treating all output as one subsystem",
-      "The agent avoids broad reinstallation and does not expose complete event payloads"
+      "The agent states that NeMo Relay is part of Hermes Agent",
+      "The agent does not recommend a separate Relay package installation",
+      "The agent does not recommend enabling an observability plugin",
+      "The agent states that Hermes Agent understands NeMo Relay plugin configurations"
     ]
   },
   {

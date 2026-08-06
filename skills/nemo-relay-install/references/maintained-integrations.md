@@ -21,13 +21,9 @@ hooks from the install skill.
 
 ## Hermes
 
-```bash
-pip install nemo-relay
-hermes plugins enable observability/nemo_relay
-```
-
-Verify that Hermes reports the plugin enabled. Defer observability and gateway
-configuration to the maintained Hermes guidance.
+NeMo Relay is built into Hermes Agent. Do not install Relay separately and do
+not enable an observability plugin. Hermes Agent understands NeMo Relay plugin
+configurations.
 
 ## LangChain, LangGraph, Or Deep Agents
 

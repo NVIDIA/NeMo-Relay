@@ -69,7 +69,7 @@ starts or reuses the shared gateway on `127.0.0.1:47632` immediately when the
 MCP process launches. The client verifies the gateway identity and effective
 persistent configuration, heartbeats it while MCP stdio remains open, and
 performs one coordinated restart if the gateway becomes unhealthy. Claude
-Code, Codex, and Hermes MCP clients share a compatible gateway, and the gateway
+Code and Codex MCP clients share a compatible gateway, and the gateway
 exits after the final client's idle timeout. The MCP server advertises no tools.
 
 The generated entry sets `alwaysLoad: true`, so Claude Code 2.1.121 or newer

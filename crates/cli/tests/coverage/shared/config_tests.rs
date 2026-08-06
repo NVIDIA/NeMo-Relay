@@ -544,7 +544,6 @@ fn session_config_uses_defaults_and_ignores_bad_json() {
 fn agent_and_gateway_mode_arguments_are_stable() {
     assert_eq!(CodingAgent::ClaudeCode.hook_path(), "/hooks/claude-code");
     assert_eq!(CodingAgent::Codex.hook_path(), "/hooks/codex");
-    assert_eq!(CodingAgent::Hermes.hook_path(), "/hooks/hermes");
     assert_eq!(GatewayMode::HookOnly.as_arg(), "hook-only");
     assert_eq!(GatewayMode::Passthrough.as_arg(), "passthrough");
     assert_eq!(GatewayMode::Required.as_arg(), "required");
@@ -558,7 +557,7 @@ fn agent_inference_uses_executable_basename() {
     );
     assert_eq!(CodingAgent::infer("codex"), Some(CodingAgent::Codex));
     assert_eq!(CodingAgent::infer("cursor-agent"), None);
-    assert_eq!(CodingAgent::infer("hermes"), Some(CodingAgent::Hermes));
+    assert_eq!(CodingAgent::infer("hermes"), None);
     assert_eq!(CodingAgent::infer("wrapper"), None);
 }
 
@@ -587,8 +586,6 @@ command = "claude"
 [agents.codex]
 command = "codex --approval-mode never"
 
-[agents.hermes]
-command = "hermes --yolo chat"
 "#,
     )
     .unwrap();
@@ -624,10 +621,6 @@ command = "hermes --yolo chat"
     assert_eq!(
         resolved.agents.codex.command.as_deref(),
         Some("codex --approval-mode never")
-    );
-    assert_eq!(
-        resolved.agents.hermes.command.as_deref(),
-        Some("hermes --yolo chat")
     );
 }
 
@@ -2179,57 +2172,6 @@ fn managed_bootstrap_environment_is_not_forwarded_from_codex() {
 
     assert!(!names.iter().any(|name| name.contains("BOOTSTRAP")));
 }
-
-#[test]
-fn mcp_environment_policy_handles_unresolved_values_and_historical_names_per_platform() {
-    assert!(
-        crate::mcp_environment::unresolved_self_placeholder_for_platform(
-            "AWS_ROLE_ARN",
-            "${AWS_ROLE_ARN}",
-            false,
-        )
-    );
-    assert!(
-        !crate::mcp_environment::unresolved_self_placeholder_for_platform(
-            "AWS_ROLE_ARN",
-            "${aws_role_arn}",
-            false,
-        )
-    );
-    assert!(
-        crate::mcp_environment::unresolved_self_placeholder_for_platform(
-            "AWS_ROLE_ARN",
-            "${aws_role_arn}",
-            true,
-        )
-    );
-    assert!(
-        !crate::mcp_environment::unresolved_self_placeholder_for_platform(
-            "AWS_ROLE_ARN",
-            "real-value",
-            true,
-        )
-    );
-
-    for allowed in ["AWS_PROFILE", "NEMO_RELAY_CUSTOM", "OTEL_CUSTOM"] {
-        assert!(
-            crate::mcp_environment::previously_forwardable_name_for_platform(allowed, false),
-            "rejected {allowed}"
-        );
-    }
-    assert!(crate::mcp_environment::previously_forwardable_name_for_platform("Aws_Custom", true,));
-    for rejected in [
-        "UNRELATED_SECRET",
-        "NEMO_RELAY_WORKER_TOKEN",
-        "NEMO_RELAY_TEST_CAPTURE",
-    ] {
-        assert!(
-            !crate::mcp_environment::previously_forwardable_name_for_platform(rejected, true),
-            "accepted {rejected}"
-        );
-    }
-}
-
 #[test]
 fn transparent_gateway_fingerprint_is_stable_and_endpoint_specific() {
     let first = transparent_gateway_fingerprint("http://127.0.0.1:41001");

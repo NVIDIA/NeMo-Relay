@@ -169,18 +169,6 @@ impl TransparentRun {
     }
 }
 
-// Starts the gateway, waits for readiness, runs the child command, restores temporary state, and then
-// maps the child process status to the launcher's exit code.
-#[cfg(test)]
-async fn execute_live_run(
-    listener: TcpListener,
-    gateway_config: GatewayConfig,
-    gateway_url: &str,
-    prepared: PreparedAgentLaunch,
-) -> Result<ExitCode, CliError> {
-    execute_live_run_with_dynamic(listener, gateway_config, Vec::new(), gateway_url, prepared).await
-}
-
 async fn execute_live_run_with_dynamic(
     listener: TcpListener,
     gateway_config: GatewayConfig,
@@ -281,7 +269,7 @@ fn resolve_agent_invocation(
     let argv = command.command.clone();
     let agent = CodingAgent::infer(&argv[0]).ok_or_else(|| {
         CliError::Launch(format!(
-            "could not infer coding agent from command {:?}; pass --agent claude, --agent codex, or --agent hermes",
+            "could not infer coding agent from command {:?}; pass --agent claude or --agent codex",
             argv[0]
         ))
     })?;
@@ -528,12 +516,6 @@ impl PreparedAgentLaunch {
     // reserves built-in provider IDs, so run mode installs a temporary provider alias instead of
     // overriding `model_providers.openai`. Uses `features.hooks=true` introduced in codex-cli
     // current supported Codex releases. The centralized host policy validates the version first.
-
-    // Hermes discovers hooks from `.hermes/config.yaml` instead of command-line flags. A
-    // process-private HERMES_HOME exposes dynamic hooks without rewriting user configuration.
-
-    // Records the Hermes hook file that would be patched during a real run without touching the
-    // filesystem, preserving dry-run as an inspection-only operation.
 
     // Spawns the prepared child process with injected environment.
     // Stdio is inherited by default so agent interaction remains unchanged in transparent mode.
@@ -906,9 +888,6 @@ fn path_with_transparent_hook_dir() -> Option<String> {
 // The invocation resolver determines this index before pass-through arguments are appended. Using
 // it here prevents a prompt token named `codex` or `claude` from becoming an accidental insertion
 // target while preserving configured wrapper prefixes.
-
-// Chooses the Hermes config used as the source for a transparent-run overlay. If setup recorded a
-// specific path, reuse it; otherwise fall back to the active Hermes home.
 
 // Converts JSON hook groups into inline TOML arrays for Codex `--config` flags. The function
 // preserves matchers when present and assumes generated hook groups contain one command hook.

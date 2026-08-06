@@ -36,7 +36,6 @@ directly:
 ```bash
 command -v codex && codex --version
 command -v claude && claude --version
-command -v hermes && hermes --version
 ```
 
 Use Codex CLI 0.129.0 or newer. Confirm that the selected agent is already
@@ -93,13 +92,11 @@ When an interactive TTY is available, use the built-in setup path:
 ```bash
 nemo-relay config codex
 nemo-relay config claude
-nemo-relay config hermes
 ```
 
 Run only the command for the selected agent. Choose project scope, continue to
 plugin configuration, enable the built-in `observability` component, and enable
-both ATOF and ATIF local file output. The Hermes path also installs or updates
-the hook configuration that its transparent run requires.
+both ATOF and ATIF local file output.
 
 When an interactive plugin editor is unavailable, add or merge the following
 component in `./.nemo-relay/plugins.toml` after confirmation. First determine
@@ -146,8 +143,6 @@ or:
 command = "claude"
 ```
 
-Do not hand-write Hermes hook paths. Use `nemo-relay config hermes` in a TTY.
-
 After the confirmed plugin change, create the configured local output
 directories so doctor can verify that they are writable:
 
@@ -162,7 +157,6 @@ Run doctor for the selected agent:
 ```bash
 nemo-relay doctor codex --json
 nemo-relay doctor claude --json
-nemo-relay doctor hermes --json
 ```
 
 Run only one command. Summarize failed checks and the remediation they report.
@@ -171,7 +165,6 @@ Then inspect the generated wrapper plan without launching the agent:
 ```bash
 nemo-relay run --agent codex --dry-run --print
 nemo-relay run --agent claude --dry-run --print
-nemo-relay run --agent hermes --dry-run --print
 ```
 
 Confirm that the plan uses a loopback gateway, the intended agent command, and
@@ -195,10 +188,6 @@ nemo-relay codex -- exec "Use a shell tool to print exactly relay-smoke-test, th
 ```bash
 nemo-relay claude -- "Use a shell tool to print exactly relay-smoke-test, then reply that the tool call completed. Do not inspect files, environment variables, processes, credentials, network resources, or system configuration."
 ```
-
-For Hermes, launch `nemo-relay hermes` and enter the same prompt in the agent
-session. Do not guess a one-shot Hermes invocation when its installed CLI shape
-is unknown.
 
 ## Verify Both Outputs
 
@@ -224,9 +213,7 @@ Parse only the minimum JSON needed to report:
 
 Do not paste complete event records or trajectories. Codex writes an ATIF
 snapshot after each completed turn. Claude Code normally writes the trajectory
-when the session ends. Hermes writes or updates it on its supported finalize or
-reset lifecycle, so close or finalize the session before declaring ATIF
-missing.
+when the session ends.
 
 ## Choose The Next Plugin
 
@@ -251,7 +238,7 @@ insufficient.
 - **Agent and tool events exist but LLM events do not**: confirm the launched
   agent's provider traffic is using the temporary gateway.
 - **No hook events**: confirm the agent loaded or approved the generated hooks.
-  Codex may require manual hook review; Hermes requires its hook setup.
+  Codex may require manual hook review.
 - **The wrapper does not launch**: inspect `--dry-run --print`, the selected
   agent command, authentication readiness, and doctor output.
 

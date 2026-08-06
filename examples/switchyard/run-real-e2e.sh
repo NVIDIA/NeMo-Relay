@@ -73,11 +73,11 @@ request() {
 request cold-request false >"$work_dir/cold.json"
 
 for payload in \
-  '{"hook_event_name":"on_session_start","session_id":"e2e-session"}' \
-  '{"hook_event_name":"pre_tool_call","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"extra":{"task_id":"task-1","tool_call_id":"call-1"}}' \
-  '{"hook_event_name":"post_tool_call","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"tool_response":{"output":"CUDA out of memory"},"extra":{"task_id":"task-1","tool_call_id":"call-1"}}'
+  '{"hook_event_name":"SessionStart","session_id":"e2e-session"}' \
+  '{"hook_event_name":"PreToolUse","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"tool_use_id":"call-1"}' \
+  '{"hook_event_name":"PostToolUse","session_id":"e2e-session","tool_name":"Bash","tool_input":{"command":"test"},"tool_response":{"output":"CUDA out of memory"},"tool_use_id":"call-1"}'
 do
-  curl --fail --silent http://127.0.0.1:4041/hooks/hermes \
+  curl --fail --silent http://127.0.0.1:4041/hooks/codex \
     -H 'content-type: application/json' --data-binary "$payload" >/dev/null
 done
 

@@ -50,7 +50,9 @@ Use these guide links to move from the overview into task-specific instructions.
 
 For coding-agent hook and LLM gateway observability, use
 [NeMo Relay CLI](/nemo-relay-cli/about). That section covers Claude Code,
-Codex, and Hermes Agent support.
+Codex support. Hermes Agent includes Relay as a native in-process integration
+and does not require the Relay CLI or a separate observability plugin. Hermes
+Agent understands NeMo Relay plugin configurations.
 
 Start by identifying the framework's stable tool and LLM boundaries. Prefer
 managed execution wrappers wherever the framework exposes a callback that NeMo
