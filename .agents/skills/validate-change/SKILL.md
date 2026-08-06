@@ -78,7 +78,6 @@ just test-node
 ```bash
 # Rust only
 just build-rust
-just build-test-plugin-fixtures
 just test-rust
 just ci=true test-rust
 cargo fmt --all

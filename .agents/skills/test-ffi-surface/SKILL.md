@@ -36,7 +36,6 @@ just build-go
 # Required Rust validation
 cargo fmt --all
 just test-rust
-just build-test-plugin-fixtures
 cargo test -p nemo-relay-ffi
 cargo clippy --workspace --all-targets -- -D warnings
 

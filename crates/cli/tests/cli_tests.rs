@@ -25,6 +25,7 @@ fn gateway_bin() -> &'static str {
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
 const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
+const CHILD_PROCESS_TIMEOUT_SECONDS: u64 = 5;
 const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
@@ -1466,7 +1467,7 @@ fn find_runtime_files_matching(
 }
 
 fn wait_child(child: &mut Child) -> ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(CHILD_PROCESS_TIMEOUT_SECONDS);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
@@ -1474,7 +1475,7 @@ fn wait_child(child: &mut Child) -> ExitStatus {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("child process did not exit within 10 seconds");
+            panic!("child process did not exit within {CHILD_PROCESS_TIMEOUT_SECONDS} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -1523,7 +1524,7 @@ fn wait_child_with_output(mut child: Child) -> Output {
 
     let stdout = read_pipe(child.stdout.take());
     let stderr = read_pipe(child.stderr.take());
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(CHILD_PROCESS_TIMEOUT_SECONDS);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -1531,7 +1532,7 @@ fn wait_child_with_output(mut child: Child) -> Output {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("child process did not exit within 10 seconds");
+            panic!("child process did not exit within {CHILD_PROCESS_TIMEOUT_SECONDS} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     };

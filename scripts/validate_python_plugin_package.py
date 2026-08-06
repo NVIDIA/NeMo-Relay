@@ -61,12 +61,13 @@ def _validate_package(repository_root: Path, temporary_root: Path) -> None:
     extracted_project = next(extraction_root.iterdir())
     wheel_dir = temporary_root / "wheel"
     _run(["uv", "build", "--wheel", "--out-dir", str(wheel_dir), str(extracted_project)])
-    _assert_wheel_contains_worker_bindings(next(wheel_dir.glob("*.whl")))
+    rebuilt_wheel = next(wheel_dir.glob("*.whl"))
+    _assert_wheel_contains_worker_bindings(rebuilt_wheel)
 
     venv = temporary_root / "venv"
     _run(["uv", "venv", "--python", sys.executable, str(venv)])
     python = venv / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-    _run(["uv", "pip", "install", "--python", str(python), "-e", str(extracted_project)])
+    _run(["uv", "pip", "install", "--python", str(python), str(rebuilt_wheel)])
     _run([str(python), "-c", "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"])
 
 
