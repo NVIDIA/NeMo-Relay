@@ -3126,18 +3126,23 @@ where
         return false;
     }
     let state = unsafe { &*user_data.cast::<AsyncNextStreamCallback<F>>() };
-    let terminal = done || !error.is_null();
-    let event = if !error.is_null() {
-        match read_host_string(&state.host, error) {
-            Ok(message) => AsyncLlmStreamEvent::Error(message),
-            Err(_) => AsyncLlmStreamEvent::Error("invalid downstream stream error".into()),
-        }
+    let (event, terminal) = if !error.is_null() {
+        (
+            match read_host_string(&state.host, error) {
+                Ok(message) => AsyncLlmStreamEvent::Error(message),
+                Err(_) => AsyncLlmStreamEvent::Error("invalid downstream stream error".into()),
+            },
+            true,
+        )
     } else if done {
-        AsyncLlmStreamEvent::Done
+        (AsyncLlmStreamEvent::Done, true)
     } else {
         match read_json_value(&state.host, chunk_json, "downstream LLM stream event") {
-            Ok(chunk) => AsyncLlmStreamEvent::Chunk(chunk),
-            Err(_) => AsyncLlmStreamEvent::Error("invalid downstream LLM stream event".into()),
+            Ok(chunk) => (AsyncLlmStreamEvent::Chunk(chunk), false),
+            Err(_) => (
+                AsyncLlmStreamEvent::Error("invalid downstream LLM stream event".into()),
+                true,
+            ),
         }
     };
     let control = catch_unwind(AssertUnwindSafe(|| {

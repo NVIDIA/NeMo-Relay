@@ -24,6 +24,7 @@ use nemo_relay::api::scope::{
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
 use nemo_relay::codec::response::AnnotatedLlmResponse;
+use nemo_relay::error::FlowError;
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, NativePluginLoadSpec, PluginHostActivation,
     load_native_plugins,
@@ -658,7 +659,7 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     activation.clear();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_v3_async_registration_supports_all_middleware_kinds() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
@@ -679,6 +680,46 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         *fixture_library
             .get::<unsafe extern "C" fn() -> bool>(b"nemo_relay_fixture_async_pending_entered\0")
             .expect("v3 async native fixture should export its pending-entry signal")
+    };
+    let typed_llm_entered = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> usize>(b"nemo_relay_fixture_typed_async_llm_entered\0")
+            .expect("v3 async native fixture should export its typed LLM entry count")
+    };
+    let typed_llm_cancellation_entered = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(
+                b"nemo_relay_fixture_typed_async_llm_cancellation_entered\0",
+            )
+            .expect("v3 async native fixture should export its typed LLM cancellation entry")
+    };
+    let typed_llm_cancelled = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(
+                b"nemo_relay_fixture_typed_async_llm_cancelled\0",
+            )
+            .expect("v3 async native fixture should export its typed LLM cancellation signal")
+    };
+    let typed_stream_cancellation_entered = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(
+                b"nemo_relay_fixture_typed_async_stream_cancellation_entered\0",
+            )
+            .expect("v3 async native fixture should export its typed stream cancellation entry")
+    };
+    let typed_stream_cancelled = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(
+                b"nemo_relay_fixture_typed_async_stream_cancelled\0",
+            )
+            .expect("v3 async native fixture should export its typed stream cancellation signal")
+    };
+    let typed_stream_backpressured = unsafe {
+        *fixture_library
+            .get::<unsafe extern "C" fn() -> bool>(
+                b"nemo_relay_fixture_typed_async_stream_backpressured\0",
+            )
+            .expect("v3 async native fixture should export its typed stream backpressure signal")
     };
     // This pointer remains valid only while `activation` keeps the fixture
     // library loaded; never call it after clearing the plugin configuration.
@@ -773,6 +814,182 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     );
     assert!(stream.next().await.is_none());
     flush_subscribers().expect("async native LLM stream events should flush");
+
+    let backpressure_chunks = Arc::new(Mutex::new(Vec::<Json>::new()));
+    let collected_backpressure_chunks = backpressure_chunks.clone();
+    let finalized_backpressure_chunks = backpressure_chunks.clone();
+    let mut backpressured_stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("async-typed-stream-backpressure")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({"prompt": "fill native async stream"}),
+            })
+            .func(Arc::new(|_request| {
+                let chunks = (0..128)
+                    .map(|index| Ok::<Json, FlowError>(json!({"index": index})))
+                    .collect::<Vec<_>>();
+                Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::iter(chunks))) })
+            }))
+            .collector(Box::new(move |chunk| {
+                collected_backpressure_chunks.lock().unwrap().push(chunk);
+                Ok(())
+            }))
+            .finalizer(Box::new(move || {
+                Json::Array(finalized_backpressure_chunks.lock().unwrap().clone())
+            }))
+            .build(),
+    )
+    .await
+    .expect("typed backpressure stream should start");
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !unsafe { typed_stream_backpressured() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("typed stream writes should report bounded-queue backpressure");
+    let observed_chunks = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        let mut observed = 0;
+        while let Some(chunk) = backpressured_stream.next().await {
+            chunk.expect("accepted chunks should remain valid");
+            observed += 1;
+        }
+        observed
+    })
+    .await
+    .expect("backpressured typed stream should terminate without blocking");
+    assert!(observed_chunks > 0);
+    assert!(observed_chunks < 128);
+
+    let baseline_entries = unsafe { typed_llm_entered() };
+    let slow_calls = (0..2)
+        .map(|_| {
+            tokio::spawn(async {
+                let request = LlmRequest {
+                    headers: Map::new(),
+                    content: json!({"prompt": "slow native async"}),
+                };
+                llm_call_execute(
+                    LlmCallExecuteParams::builder()
+                        .name("async-typed-slow")
+                        .request(request)
+                        .func(Arc::new(|_request| {
+                            Box::pin(async { Ok(json!({"content": "slow response"})) })
+                        }))
+                        .build(),
+                )
+                .await
+            })
+        })
+        .collect::<Vec<_>>();
+    tokio::time::timeout(std::time::Duration::from_millis(200), async {
+        while unsafe { typed_llm_entered() } < baseline_entries + slow_calls.len() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("typed callbacks should release both Relay workers before slow work completes");
+    let unrelated = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("unrelated-during-typed-async")
+                .args(json!({"input": true}))
+                .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+                .build(),
+        ),
+    )
+    .await
+    .expect("unrelated managed work should remain responsive")
+    .expect("unrelated managed work should succeed");
+    assert_eq!(unrelated["input"], true);
+    for slow_call in slow_calls {
+        assert_eq!(
+            slow_call
+                .await
+                .expect("slow typed callback task should not panic")
+                .expect("slow typed callback should settle")["content"],
+            "slow response"
+        );
+    }
+
+    let cancelled_llm = tokio::spawn(async {
+        let request = LlmRequest {
+            headers: Map::new(),
+            content: json!({"prompt": "cancel native async"}),
+        };
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("async-typed-cancel")
+                .request(request)
+                .func(Arc::new(|_request| Box::pin(std::future::pending())))
+                .build(),
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !unsafe { typed_llm_cancellation_entered() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("typed buffered callback should retain its completion");
+    cancelled_llm.abort();
+    assert!(
+        cancelled_llm
+            .await
+            .expect_err("buffered managed call should be cancelled")
+            .is_cancelled()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !unsafe { typed_llm_cancelled() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Relay cancellation should reach the typed buffered plugin task");
+
+    let cancelled_chunks = Arc::new(Mutex::new(Vec::<Json>::new()));
+    let collected_cancelled_chunks = cancelled_chunks.clone();
+    let finalized_cancelled_chunks = cancelled_chunks.clone();
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: json!({"prompt": "cancel native async stream"}),
+    };
+    let cancelled_stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("async-typed-stream-cancel")
+            .request(request)
+            .func(Arc::new(|_request| {
+                Box::pin(async move { Ok(LlmJsonStream::new(tokio_stream::empty())) })
+            }))
+            .collector(Box::new(move |chunk| {
+                collected_cancelled_chunks.lock().unwrap().push(chunk);
+                Ok(())
+            }))
+            .finalizer(Box::new(move || {
+                Json::Array(finalized_cancelled_chunks.lock().unwrap().clone())
+            }))
+            .build(),
+    )
+    .await
+    .expect("typed cancellation stream should start");
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !unsafe { typed_stream_cancellation_entered() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("typed stream callback should retain its output handle");
+    drop(cancelled_stream);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !unsafe { typed_stream_cancelled() } {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("Relay cancellation should reach the typed stream plugin task");
 
     let pending = tokio::spawn(async {
         tool_request_intercepts("async-pending", json!({"input": true})).await

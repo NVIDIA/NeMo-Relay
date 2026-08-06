@@ -4,7 +4,7 @@
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use nemo_relay_plugin::{
     AsyncLlmStream, AsyncLlmStreamEvent, AsyncStreamControl, AsyncStreamWrite, CategoryProfile,
@@ -22,10 +22,46 @@ use serde_json::{Map, json};
 struct FixtureNativePlugin;
 
 static ASYNC_PENDING_ENTERED: AtomicBool = AtomicBool::new(false);
+static TYPED_ASYNC_LLM_ENTERED: AtomicUsize = AtomicUsize::new(0);
+static TYPED_ASYNC_LLM_CANCELLATION_ENTERED: AtomicBool = AtomicBool::new(false);
+static TYPED_ASYNC_LLM_CANCELLED: AtomicBool = AtomicBool::new(false);
+static TYPED_ASYNC_STREAM_CANCELLATION_ENTERED: AtomicBool = AtomicBool::new(false);
+static TYPED_ASYNC_STREAM_CANCELLED: AtomicBool = AtomicBool::new(false);
+static TYPED_ASYNC_STREAM_BACKPRESSURED: AtomicBool = AtomicBool::new(false);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_fixture_async_pending_entered() -> bool {
     ASYNC_PENDING_ENTERED.swap(false, Ordering::AcqRel)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_typed_async_llm_entered() -> usize {
+    TYPED_ASYNC_LLM_ENTERED.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_typed_async_llm_cancellation_entered() -> bool {
+    TYPED_ASYNC_LLM_CANCELLATION_ENTERED.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_typed_async_llm_cancelled() -> bool {
+    TYPED_ASYNC_LLM_CANCELLED.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_typed_async_stream_cancellation_entered() -> bool {
+    TYPED_ASYNC_STREAM_CANCELLATION_ENTERED.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_typed_async_stream_cancelled() -> bool {
+    TYPED_ASYNC_STREAM_CANCELLED.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn nemo_relay_fixture_typed_async_stream_backpressured() -> bool {
+    TYPED_ASYNC_STREAM_BACKPRESSURED.load(Ordering::Acquire)
 }
 
 impl NativePlugin for FixtureNativePlugin {
@@ -712,9 +748,25 @@ impl NativePlugin for FixtureAsyncPlugin {
         ctx.register_async_llm_execution_intercept(
             "fixture_async_llm_execution",
             0,
-            |_name, request, output| {
+            |name, request, output| {
+                TYPED_ASYNC_LLM_ENTERED.fetch_add(1, Ordering::AcqRel);
+                if name == "async-typed-cancel" {
+                    TYPED_ASYNC_LLM_CANCELLATION_ENTERED.store(true, Ordering::Release);
+                    std::thread::spawn(move || {
+                        for _ in 0..5_000 {
+                            if output.is_cancelled() {
+                                TYPED_ASYNC_LLM_CANCELLED.store(true, Ordering::Release);
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        let _ = output.reject("timed out waiting for Relay cancellation");
+                    });
+                    return Ok(());
+                }
+                let delay = if name == "async-typed-slow" { 400 } else { 10 };
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
                     let _ = output.continue_with(request);
                 });
                 Ok(())
@@ -723,7 +775,24 @@ impl NativePlugin for FixtureAsyncPlugin {
         ctx.register_async_llm_stream_execution_intercept(
             "fixture_async_llm_stream",
             0,
-            |_name, request, output| forward_typed_async_stream(request, output),
+            |name, request, output| {
+                if name == "async-typed-stream-cancel" {
+                    TYPED_ASYNC_STREAM_CANCELLATION_ENTERED.store(true, Ordering::Release);
+                    std::thread::spawn(move || {
+                        for _ in 0..5_000 {
+                            if output.is_cancelled() {
+                                TYPED_ASYNC_STREAM_CANCELLED.store(true, Ordering::Release);
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        drop(output);
+                    });
+                    Ok(())
+                } else {
+                    forward_typed_async_stream(request, output)
+                }
+            },
         )?;
         Ok(())
     }
@@ -751,6 +820,10 @@ fn forward_typed_async_stream(
                     .try_push(&chunk)
                 {
                     Ok(AsyncStreamWrite::Accepted) => AsyncStreamControl::Continue,
+                    Ok(AsyncStreamWrite::Backpressured) => {
+                        TYPED_ASYNC_STREAM_BACKPRESSURED.store(true, Ordering::Release);
+                        AsyncStreamControl::Stop
+                    }
                     _ => AsyncStreamControl::Stop,
                 }
             }

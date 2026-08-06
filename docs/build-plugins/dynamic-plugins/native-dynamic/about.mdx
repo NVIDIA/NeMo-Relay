@@ -138,6 +138,48 @@ typed `NativePlugin` APIs continue to work unchanged. Raw ABI plugins can use
 later. The callback receives a JSON invocation, an optional continuation for
 execution intercepts, and a one-shot completion handle.
 
+### Choose Synchronous or Completion-Based Callbacks
+
+Use the existing synchronous typed registrations when the callback performs
+short, bounded work and can return immediately. Do not wait for network I/O,
+an external service, or a plugin-owned async runtime from a synchronous
+callback. Relay invokes the callback on the Tokio worker that is running the
+managed call, so blocking the callback also blocks that worker.
+
+Use `register_async_llm_execution_intercept` or
+`register_async_llm_stream_execution_intercept` when the plugin must wait for
+I/O. These typed Rust helpers wrap the ABI v3 completion and stream handles.
+Move the supplied operation into work scheduled by the plugin, then return
+from the registration callback. Relay continues the managed call when the
+plugin resolves, rejects, or continues the operation.
+
+```rust
+context.register_async_llm_execution_intercept(
+    "acme.route",
+    0,
+    |_name, request, operation| {
+        // A production plugin should submit this work to its existing async
+        // executor. This thread only illustrates transferring ownership.
+        std::thread::spawn(move || {
+            if !operation.is_cancelled() {
+                let _ = operation.continue_with(request);
+            }
+        });
+        Ok(())
+    },
+)?;
+```
+
+`AsyncLlmExecution` exposes `resolve`, `reject`, `continue_with`, and a
+borrowed cancellation probe. `AsyncLlmStream` exposes nonblocking `try_push`,
+`try_reject`, and `finish` operations. A full stream queue returns
+`AsyncStreamWrite::Backpressured`; retry from plugin-owned work after allowing
+the consumer to advance. Check cancellation during longer operations. Dropping
+an unsettled operation releases its host handles and attempts to terminate the
+managed call rather than leaving it pending.
+
+### Raw ABI Callbacks
+
 Return `Complete` after resolving or rejecting the completion before the
 callback returns. Return `Pending` only when retaining the completion; settle
 it exactly once, call `async_completion_release`, and release an async `next`
