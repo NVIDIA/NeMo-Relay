@@ -235,7 +235,7 @@ impl NativePlugin for FixtureNativePlugin {
                 ))
             },
         )?;
-        ctx.register_llm_execution_intercept(
+        ctx.register_sync_llm_execution_intercept(
             "fixture_llm_execution",
             0,
             |_name, request, next| {
@@ -246,7 +246,7 @@ impl NativePlugin for FixtureNativePlugin {
                 Ok(mark_json(response, "native_plugin_llm_execution"))
             },
         )?;
-        ctx.register_llm_stream_execution_intercept(
+        ctx.register_sync_llm_stream_execution_intercept(
             "fixture_llm_stream_execution",
             0,
             |_name, request, next| {
@@ -763,7 +763,7 @@ impl NativePlugin for FixtureAsyncPlugin {
                 return Err(format!("async registration failed: {status:?}"));
             }
         }
-        ctx.register_async_llm_execution_intercept(
+        ctx.register_llm_execution_intercept(
             "fixture_async_llm_execution",
             0,
             |name, request, output| {
@@ -791,7 +791,7 @@ impl NativePlugin for FixtureAsyncPlugin {
                 Ok(())
             },
         )?;
-        ctx.register_async_llm_stream_execution_intercept(
+        ctx.register_llm_stream_execution_intercept(
             "fixture_async_llm_stream",
             0,
             |name, request, output| {

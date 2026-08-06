@@ -274,7 +274,7 @@ impl NativePlugin for ExampleNativePlugin {
                 ))
             }
         })?;
-        ctx.register_llm_execution_intercept("example_llm_execution", 30, {
+        ctx.register_sync_llm_execution_intercept("example_llm_execution", 30, {
             let tag = config.tag.clone();
             move |_name, request, next| {
                 let request = tag_llm_request(request, "native_llm_execution_request", &tag);
@@ -282,7 +282,7 @@ impl NativePlugin for ExampleNativePlugin {
                 Ok(tag_json(response, "native_llm_execution_response", &tag))
             }
         })?;
-        ctx.register_llm_stream_execution_intercept("example_llm_stream_execution", 30, {
+        ctx.register_sync_llm_stream_execution_intercept("example_llm_stream_execution", 30, {
             let tag = config.tag;
             move |_name, request, next| {
                 let request = tag_llm_request(request, "native_llm_stream_execution_request", &tag);

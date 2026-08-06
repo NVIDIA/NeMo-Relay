@@ -377,6 +377,15 @@ The plugin manifest value remains `compat.native_api = "1"`. This manifest
 contract version is separate from the host ABI version; do not change it to
 `"2"`.
 
+Starting in 0.7.1, the typed Rust methods
+`register_llm_execution_intercept` and
+`register_llm_stream_execution_intercept` use completion-based callbacks. An
+existing synchronous callback must use
+`register_sync_llm_execution_intercept` or
+`register_sync_llm_stream_execution_intercept` when it is recompiled. This is
+a Rust SDK source change only. The native ABI and plugin manifest format are
+unchanged.
+
 Request and response callbacks now receive distinct context structures. Each
 structure contains structured codec identity and a borrowed directional codec
 handle. The request handle supports decode and encode host operations. The

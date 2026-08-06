@@ -3100,11 +3100,9 @@ fn typed_llm_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_execution_intercept(
-        "llm-exec",
-        0,
-        |_name, request, _next| Ok(request.content),
-    )
+    ctx.register_sync_llm_execution_intercept("llm-exec", 0, |_name, request, _next| {
+        Ok(request.content)
+    })
     .unwrap();
     let registration = take_llm_execution_registration();
     let name = host_string(&host, "llm");
@@ -3147,7 +3145,7 @@ fn typed_llm_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
+    ctx.register_sync_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
         Ok(Box::new(std::iter::empty()))
     })
     .unwrap();
@@ -3474,11 +3472,9 @@ fn typed_conditional_execution_and_llm_callbacks_report_invalid_json() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_execution_intercept(
-        "llm-exec",
-        0,
-        |_name, request, _next| Ok(request.content),
-    )
+    ctx.register_sync_llm_execution_intercept("llm-exec", 0, |_name, request, _next| {
+        Ok(request.content)
+    })
     .unwrap();
     let registration = take_llm_execution_registration();
     let name = host_string(&host, "llm");
@@ -3507,7 +3503,7 @@ fn typed_conditional_execution_and_llm_callbacks_report_invalid_json() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
+    ctx.register_sync_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
         Ok(Box::new(std::iter::empty()))
     })
     .unwrap();
@@ -3655,7 +3651,7 @@ fn typed_callbacks_map_additional_callback_errors() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_execution_intercept("llm-exec", 0, |_name, _request, _next| {
+    ctx.register_sync_llm_execution_intercept("llm-exec", 0, |_name, _request, _next| {
         Err("llm execution failed".into())
     })
     .unwrap();
@@ -3687,11 +3683,9 @@ fn typed_callbacks_map_additional_callback_errors() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_execution_intercept(
-        "llm-exec",
-        0,
-        |_name, request, _next| Ok(request.content),
-    )
+    ctx.register_sync_llm_execution_intercept("llm-exec", 0, |_name, request, _next| {
+        Ok(request.content)
+    })
     .unwrap();
     let registration = take_llm_execution_registration();
     let name = host_string(&host, "llm");
@@ -3718,7 +3712,7 @@ fn typed_callbacks_map_additional_callback_errors() {
     }
 
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
+    ctx.register_sync_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
         Err("llm stream failed".into())
     })
     .unwrap();
@@ -4581,7 +4575,7 @@ fn typed_llm_execution_surfaces_next_status_failures() {
     let host = test_host();
     let called = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
-    ctx.register_llm_execution_intercept("llm", 0, |_name, request, next: LlmNext<'_>| {
+    ctx.register_sync_llm_execution_intercept("llm", 0, |_name, request, next: LlmNext<'_>| {
         next.call(request)
     })
     .unwrap();
@@ -4625,7 +4619,7 @@ fn typed_llm_execution_surfaces_invalid_next_json() {
     let host = test_host();
     let called = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
-    ctx.register_llm_execution_intercept("llm", 0, |_name, request, next: LlmNext<'_>| {
+    ctx.register_sync_llm_execution_intercept("llm", 0, |_name, request, next: LlmNext<'_>| {
         next.call(request)
     })
     .unwrap();
@@ -4671,7 +4665,7 @@ fn typed_llm_execution_surfaces_null_next_output() {
     let host = test_host();
     let called = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
-    ctx.register_llm_execution_intercept("llm", 31, |_name, request, next: LlmNext<'_>| {
+    ctx.register_sync_llm_execution_intercept("llm", 31, |_name, request, next: LlmNext<'_>| {
         next.call(request)
     })
     .unwrap();
@@ -4719,7 +4713,7 @@ fn typed_llm_stream_execution_wraps_next_chunks() {
     let cancelled = Arc::new(AtomicUsize::new(0));
     let dropped = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept(
+    ctx.register_sync_llm_stream_execution_intercept(
         "llm-stream",
         31,
         |_name, request, next: LlmStreamNext<'_>| {
@@ -4820,7 +4814,7 @@ fn typed_llm_stream_drop_catches_stream_state_panics() {
     let _guard = begin_test();
     let host = test_host();
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
+    ctx.register_sync_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
         let stream: LlmJsonStream = Box::new(PanicIterator {
             _panic_on_drop: PanicOnDrop("LLM stream state drop panic"),
         });
@@ -4865,7 +4859,7 @@ fn typed_llm_stream_execution_surfaces_next_failures() {
     let cancelled = Arc::new(AtomicUsize::new(0));
     let dropped = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept(
+    ctx.register_sync_llm_stream_execution_intercept(
         "llm-stream",
         0,
         |_name, request, next: LlmStreamNext<'_>| {
@@ -4922,7 +4916,7 @@ fn typed_llm_stream_execution_surfaces_chunk_errors() {
     let _guard = begin_test();
     let host = test_host();
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
+    ctx.register_sync_llm_stream_execution_intercept("llm-stream", 0, |_name, _request, _next| {
         let stream: LlmJsonStream = Box::new(std::iter::once(Err("chunk failed".into())));
         Ok(stream)
     })
@@ -4971,7 +4965,7 @@ fn typed_llm_stream_execution_cancels_unconsumed_next_stream() {
     let cancelled = Arc::new(AtomicUsize::new(0));
     let dropped = Arc::new(AtomicUsize::new(0));
     let mut ctx = test_context(&host);
-    ctx.register_llm_stream_execution_intercept(
+    ctx.register_sync_llm_stream_execution_intercept(
         "llm-stream",
         0,
         |_name, request, next: LlmStreamNext<'_>| {

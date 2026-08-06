@@ -2505,8 +2505,12 @@ impl<'a> PluginContext<'a> {
         finish_typed_registration::<F>(self.host, status, user_data, "llm request intercept")
     }
 
-    /// Registers a typed LLM execution intercept.
-    pub fn register_llm_execution_intercept<F>(
+    /// Registers a synchronous typed LLM execution intercept.
+    ///
+    /// Prefer [`Self::register_llm_execution_intercept`] for work that may
+    /// wait on I/O. This callback runs on a Relay runtime worker until it
+    /// returns.
+    pub fn register_sync_llm_execution_intercept<F>(
         &mut self,
         name: &str,
         priority: i32,
@@ -2528,11 +2532,13 @@ impl<'a> PluginContext<'a> {
         finish_typed_registration::<F>(self.host, status, user_data, "llm execution intercept")
     }
 
-    /// Registers a typed LLM stream execution intercept.
+    /// Registers a synchronous typed LLM stream execution intercept.
     ///
     /// Native ABI v2 represents stream execution as one JSON result. The host
     /// wraps that result as a one-chunk stream.
-    pub fn register_llm_stream_execution_intercept<F>(
+    /// Prefer [`Self::register_llm_stream_execution_intercept`] for work that
+    /// may wait on I/O.
+    pub fn register_sync_llm_stream_execution_intercept<F>(
         &mut self,
         name: &str,
         priority: i32,
@@ -2567,7 +2573,7 @@ impl<'a> PluginContext<'a> {
     /// The callback must move the supplied operation to plugin-owned work or
     /// settle it before returning. Relay's runtime worker is released as soon
     /// as this callback returns.
-    pub fn register_async_llm_execution_intercept<F>(
+    pub fn register_llm_execution_intercept<F>(
         &mut self,
         name: &str,
         priority: i32,
@@ -2609,7 +2615,7 @@ impl<'a> PluginContext<'a> {
     /// The callback must move the supplied stream to plugin-owned work or
     /// settle it before returning. Stream writes are nonblocking and report
     /// bounded-queue backpressure through [`AsyncStreamWrite`].
-    pub fn register_async_llm_stream_execution_intercept<F>(
+    pub fn register_llm_stream_execution_intercept<F>(
         &mut self,
         name: &str,
         priority: i32,
