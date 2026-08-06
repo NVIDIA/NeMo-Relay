@@ -182,9 +182,9 @@ def test_phase2_environment_template_consolidates_secret_without_legacy_file() -
     assert ".env" in (EXAMPLE_ROOT / ".gitignore").read_text(encoding="utf-8")
 
 
-def test_phase2_readme_uses_admissions_instead_of_phase1_regressions() -> None:
+def test_readme_uses_admissions_instead_of_regression_smokes() -> None:
     readme = (EXAMPLE_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "run_phase1_regressions.sh" not in readme
+    assert "run_regression_smokes.sh" not in readme
     assert "PHASE1_EVIDENCE_ROOT" not in readme
     assert "INFERENCE_SECRETS_FILE" not in readme
     assert "all-89 no-token admission" in readme.lower()

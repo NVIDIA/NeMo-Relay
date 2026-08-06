@@ -25,20 +25,21 @@ tasks=(
 )
 
 for task in "${tasks[@]}"; do
-  echo "Running Phase 1 regression: $task"
+  echo "Running regression smoke: $task"
   run_root="$regression_root/$task"
   inject=false
   if [[ "$task" == "circuit-fibsqrt" ]]; then
     inject=true
   fi
   TASK_NAME="$task" \
-    PHOENIX_PROJECT="${PHOENIX_PROJECT:-harbor-hermes-switchyard-phase1}-$task" \
-    EVAL_COHORT="${EVAL_COHORT:-harbor-hermes-switchyard-phase1}-$task" \
+    PHOENIX_PROJECT="${PHOENIX_PROJECT:-harbor-hermes-switchyard-regression}-$task" \
+    EVAL_COHORT="${EVAL_COHORT:-harbor-hermes-switchyard-regression}-$task" \
+    EVAL_PHASE="regression" \
     INJECT_POST_RESPONSE_FAILURE="$inject" \
     "$example_root/run_terminal_bench.sh" "$run_root"
 done
 
-python_bin="${PHASE1_PYTHON:-python3}"
+python_bin="${EVAL_PYTHON:-python3}"
 "$python_bin" - "$regression_root" "${tasks[@]}" <<'PY'
 import json
 import pathlib
@@ -57,7 +58,7 @@ for task in tasks:
     summaries.append(summary)
 
 result = {
-    "schema_version": "harbor-hermes-switchyard.phase1-regressions.v1",
+    "schema_version": "harbor-hermes-switchyard.regression-smokes.v1",
     "status": "passed",
     "planned": len(tasks),
     "completed": len(summaries),

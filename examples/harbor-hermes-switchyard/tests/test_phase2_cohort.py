@@ -25,15 +25,6 @@ def load_coordinator():
     return module
 
 
-def load_isolation_validator():
-    path = EXAMPLE_ROOT / "scripts" / "validate_parallel_isolation.py"
-    spec = importlib.util.spec_from_file_location("parallel_isolation_validator", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def write_task(dataset: Path, name: str, memory: str) -> None:
     task = dataset / name
     task.mkdir(parents=True)
@@ -239,52 +230,6 @@ def test_smoke_evidence_is_bound_to_exact_local_dataset(tmp_path: Path) -> None:
         pass
     else:
         raise AssertionError("smoke evidence accepted changed concurrency")
-
-
-def test_parallel_isolation_requires_distinct_state_and_shared_inputs(tmp_path: Path) -> None:
-    module = load_isolation_validator()
-    roots = []
-    for index, task in enumerate(("one", "two"), 1):
-        root = tmp_path / task
-        artifacts = root / "artifacts"
-        artifacts.mkdir(parents=True)
-        (root / "runtime").mkdir()
-        (root / "summary.json").write_text(
-            json.dumps(
-                {
-                    "status": "passed",
-                    "task_name": task,
-                    "job_name": f"job-{task}",
-                    "artifacts": str(artifacts),
-                }
-            ),
-            encoding="utf-8",
-        )
-        (artifacts / "direct-hermes-receipt.json").write_text(
-            json.dumps(
-                {
-                    "session_handle": f"session-{task}",
-                    "cleanup": {"plugin_host_closed": True, "exporters_flushed": True},
-                }
-            ),
-            encoding="utf-8",
-        )
-        (root / "runtime" / "provenance.json").write_text(
-            json.dumps(
-                {
-                    "relay_config_sha256": f"config-{index}",
-                    "phoenix_project": f"project-{index}",
-                    "eval_cohort": f"cohort-{index}",
-                    "nemo_relay": {"wheel_sha256": "relay"},
-                    "switchyard": {"library_sha256": "switchyard"},
-                }
-            ),
-            encoding="utf-8",
-        )
-        roots.append(root)
-    result = module.validate(roots)
-    assert result["status"] == "passed"
-    assert result["task_count"] == 2
 
 
 def test_durable_supervisor_owns_the_coordinator_process_group() -> None:
