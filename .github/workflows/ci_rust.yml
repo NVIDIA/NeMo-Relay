@@ -195,6 +195,9 @@ jobs:
         env:
           MUSLLINUX_IMAGE: ${{ matrix.container_image }}
           NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
+          NEMO_RELAY_UV_VERSION: ${{ steps.ci-config.outputs.uv_version }}
+          NEMO_RELAY_JUST_VERSION: ${{ steps.ci-config.outputs.just_version }}
+          NEMO_RELAY_CARGO_NEXTEST_VERSION: ${{ steps.ci-config.outputs.cargo_nextest_version }}
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.cargo/registry" "$HOME/.cargo/git"
@@ -204,17 +207,31 @@ jobs:
             --volume "$HOME/.cargo/git:/root/.cargo/git" \
             --workdir "${NEMO_RELAY_CI_WORKSPACE}" \
             --env NEMO_RELAY_RUST_VERSION \
+            --env NEMO_RELAY_UV_VERSION \
+            --env NEMO_RELAY_JUST_VERSION \
+            --env NEMO_RELAY_CARGO_NEXTEST_VERSION \
             "$MUSLLINUX_IMAGE" \
             /bin/sh -ec '
-              apk add --no-cache build-base cmake curl git perl pkgconfig python3-dev
+              apk add --no-cache bash build-base cmake curl git perl pkgconfig python3-dev
               curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
+              host="$(rustc -vV | sed -n "s/^host: //p")"
+              curl --proto "=https" --tlsv1.2 --silent --show-error --fail --location \
+                "https://github.com/casey/just/releases/download/$NEMO_RELAY_JUST_VERSION/just-$NEMO_RELAY_JUST_VERSION-$host.tar.gz" | \
+                tar xzf - -C "$HOME/.cargo/bin" just
+              curl --proto "=https" --tlsv1.2 --silent --show-error --fail --location \
+                "https://get.nexte.st/$NEMO_RELAY_CARGO_NEXTEST_VERSION/$host.tar.gz" | \
+                tar xzf - -C "$HOME/.cargo/bin"
+              curl --proto "=https" --tlsv1.2 --silent --show-error --fail --location \
+                "https://astral.sh/uv/$NEMO_RELAY_UV_VERSION/install.sh" | \
+                env UV_INSTALL_DIR="$HOME/.cargo/bin" UV_NO_MODIFY_PATH=1 sh
               export RUSTFLAGS="-C target-feature=-crt-static"
-              export PYO3_PYTHON=/usr/bin/python3
+              export UV_PYTHON_DOWNLOADS=never
+              export UV_PYTHON=/usr/bin/python3
+              export PYO3_PYTHON="$UV_PYTHON"
               "$PYO3_PYTHON" -c "import sysconfig; assert sysconfig.get_config_var(\"Py_ENABLE_SHARED\") == 1, \"Alpine Python must provide a shared libpython for PyO3 tests\""
-              cargo test --locked --workspace --exclude nemo-relay-ffi
-              cargo test --locked -p nemo-relay-ffi -- --test-threads=1
+              just --set ci true --set output_dir "$PWD" test-rust
             '
 
       - name: Upload Rust coverage to Codecov

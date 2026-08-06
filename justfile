@@ -876,7 +876,7 @@ rust_source_coverage_supported() {
     local host
     host="$(rustc -vV | sed -n 's/^host: //p')"
     case "$host" in
-        aarch64-pc-windows-msvc)
+        aarch64-pc-windows-msvc|*-unknown-linux-musl)
             return 1
             ;;
         *)
@@ -1158,7 +1158,7 @@ test-rust:
         if rust_source_coverage_supported; then
             prepare_llvm_cov_workspace
         fi
-        cargo nextest run --workspace --profile ci --no-fail-fast
+        cargo nextest run --locked --workspace --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             cargo llvm-cov report \
