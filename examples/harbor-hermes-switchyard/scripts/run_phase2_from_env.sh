@@ -6,9 +6,9 @@ set -euo pipefail
 set +x
 
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-env_file="${PHASE2_ENV_FILE:-${1:-}}"
+env_file="${TERMINAL_BENCH_ENV_FILE:-${1:-}}"
 if [[ -z "$env_file" || "$env_file" != /* ]]; then
-  echo "PHASE2_ENV_FILE must be an absolute path" >&2
+  echo "TERMINAL_BENCH_ENV_FILE must be an absolute path" >&2
   exit 2
 fi
 
@@ -19,7 +19,7 @@ source "$env_file"
 set +a
 set +x
 
-mkdir -p "$PHASE2_RUN_ROOT"
-chmod 0700 "$PHASE2_RUN_ROOT"
-exec "$example_root/supervise_phase2_cohort.sh" "$PHASE2_RUN_ROOT" \
-  >>"$PHASE2_RUN_ROOT/supervisor.log" 2>&1
+mkdir -p "$TERMINAL_BENCH_RUN_ROOT"
+chmod 0700 "$TERMINAL_BENCH_RUN_ROOT"
+exec "$example_root/supervise_phase2_cohort.sh" "$TERMINAL_BENCH_RUN_ROOT" \
+  >>"$TERMINAL_BENCH_RUN_ROOT/supervisor.log" 2>&1

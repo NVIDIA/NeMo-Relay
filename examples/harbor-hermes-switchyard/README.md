@@ -43,8 +43,8 @@ while projecting the Relay configuration and plugin bundle.
 
 The two configuration files have deliberately different responsibilities:
 
-- `phase2-run.env.example` is copied to an untracked, mode-`0600`
-  `phase2-run.env`. It contains per-machine paths, the run identity, Phoenix
+- `terminal-bench-run.env.example` is copied to an untracked, mode-`0600`
+  `terminal-bench-run.env`. It contains per-machine paths, the run identity, Phoenix
   destination, manually selected capacity, and the real
   `SWITCHYARD_PROVIDER_AUTHORIZATION` header.
 - `config/plugins.toml.in` is checked in and non-secret. It is the only source
@@ -99,9 +99,9 @@ placeholder, including the complete provider Authorization header. Do not
 source this file into the interactive shell used to start `tmux`.
 
 ```bash
-cp phase2-run.env.example /absolute/private/phase2-run.env
-chmod 0600 /absolute/private/phase2-run.env
-./scripts/validate_phase2_environment.sh /absolute/private/phase2-run.env
+cp terminal-bench-run.env.example /absolute/private/terminal-bench-run.env
+chmod 0600 /absolute/private/terminal-bench-run.env
+./scripts/validate_phase2_environment.sh /absolute/private/terminal-bench-run.env
 ```
 
 The validator reports names and paths only. It rejects legacy secret-file
@@ -119,7 +119,7 @@ For the commands below, enter a short-lived shell with tracing disabled:
 ```bash
 set +x
 set -a
-source /absolute/private/phase2-run.env
+source /absolute/private/terminal-bench-run.env
 set +a
 set +x
 ```
@@ -131,8 +131,8 @@ verifiers, expands the complete Harbor job graph, denies registry/provider
 access, and renders the runtime. It starts neither Docker nor an agent.
 
 ```bash
-mkdir -p "$PHASE2_ADMISSION_ROOT"
-chmod 0700 "$PHASE2_ADMISSION_ROOT"
+mkdir -p "$TERMINAL_BENCH_ADMISSION_ROOT"
+chmod 0700 "$TERMINAL_BENCH_ADMISSION_ROOT"
 "$EVAL_PYTHON" "$EXAMPLE_ROOT/scripts/smoke_phase2_dataset.py" \
   --dataset-root "$TBENCH_DATASET_PATH" \
   --expected-count 89 \
@@ -142,7 +142,7 @@ chmod 0700 "$PHASE2_ADMISSION_ROOT"
   --relay-wheel "$RELAY_WHEEL" \
   --relay-architecture "$RELAY_ARCHITECTURE" \
   --plugin-config-template "$PLUGIN_CONFIG_TEMPLATE" \
-  --output "$PHASE2_SMOKE_EVIDENCE"
+  --output "$TERMINAL_BENCH_SMOKE_EVIDENCE"
 ```
 
 The passed evidence binds task names, task/instruction/verifier hashes,
@@ -155,7 +155,7 @@ model, URL, and routing values remain owned by `plugins.toml.in`; these flags
 exist only to point this closed offline test at its fake endpoints.
 
 ```bash
-OFFLINE_ROOT="$PHASE2_ADMISSION_ROOT/offline-runtime"
+OFFLINE_ROOT="$TERMINAL_BENCH_ADMISSION_ROOT/offline-runtime"
 "$EVAL_PYTHON" "$EXAMPLE_ROOT/scripts/prepare_runtime.py" \
   --run-root "$OFFLINE_ROOT" \
   --switchyard-bundle "$SWITCHYARD_BUNDLE" \
@@ -175,7 +175,7 @@ case "$RELAY_ARCHITECTURE" in
   *) echo "unsupported architecture" >&2; return 2 ;;
 esac
 "$EXAMPLE_ROOT/scripts/run_offline_compatibility_smoke.sh" \
-  "$OFFLINE_ROOT" "$PHASE2_OFFLINE_EVIDENCE"
+  "$OFFLINE_ROOT" "$TERMINAL_BENCH_OFFLINE_EVIDENCE"
 ```
 
 This performs real Hermes→Relay→Switchyard calls against local fake provider
@@ -190,7 +190,7 @@ The first command writes `plan.json`; any later invocation with different
 immutable inputs is refused. Choose concurrency before this point.
 
 ```bash
-"$EXAMPLE_ROOT/run_phase2_cohort.sh" "$PHASE2_RUN_ROOT" --plan-only
+"$EXAMPLE_ROOT/run_phase2_cohort.sh" "$TERMINAL_BENCH_RUN_ROOT" --plan-only
 ```
 
 `adaptive-rejection-sampler` is always first and serial. A passed validation
@@ -200,7 +200,7 @@ non-pass.
 ## 9. Check capacity and provider availability
 
 ```bash
-"$EXAMPLE_ROOT/run_phase2_cohort.sh" "$PHASE2_RUN_ROOT" --preflight-only
+"$EXAMPLE_ROOT/run_phase2_cohort.sh" "$TERMINAL_BENCH_RUN_ROOT" --preflight-only
 ```
 
 Preflight authenticates to each configured provider's model catalog and
@@ -228,7 +228,7 @@ disabled and persists output below the run root.
 ```bash
 exit  # only when returning from the short-lived admission shell above
 ./scripts/launch_phase2_tmux.sh \
-  /absolute/private/phase2-run.env \
+  /absolute/private/terminal-bench-run.env \
   harbor-hermes-switchyard-phase2-run-1
 ```
 
@@ -251,7 +251,7 @@ tmux send-keys -t harbor-hermes-switchyard-phase2-run-1 C-c
 
 # After the old session exits, resume the same immutable root.
 ./scripts/launch_phase2_tmux.sh \
-  /absolute/private/phase2-run.env \
+  /absolute/private/terminal-bench-run.env \
   harbor-hermes-switchyard-phase2-run-1
 ```
 

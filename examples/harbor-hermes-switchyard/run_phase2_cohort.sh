@@ -5,7 +5,7 @@
 set -euo pipefail
 
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-run_root="${1:-${PHASE2_RUN_ROOT:-}}"
+run_root="${1:-${TERMINAL_BENCH_RUN_ROOT:-}}"
 if [[ -z "$run_root" || "$run_root" != /* ]]; then
   echo "usage: $0 /absolute/phase2-run-root [coordinator options]" >&2
   exit 2
@@ -18,8 +18,8 @@ dataset_export_root="${TBENCH_DATASET_EXPORT_ROOT:-$(dirname "$run_root")/harbor
 dataset_root="${TBENCH_DATASET_PATH:-$dataset_export_root/$dataset_name}"
 harbor_bin="${HARBOR_BIN:-$example_root/.venv/bin/harbor}"
 python_bin="${EVAL_PYTHON:-$example_root/.venv/bin/python}"
-smoke_evidence="${PHASE2_SMOKE_EVIDENCE:-}"
-offline_evidence="${PHASE2_OFFLINE_EVIDENCE:-}"
+smoke_evidence="${TERMINAL_BENCH_SMOKE_EVIDENCE:-}"
+offline_evidence="${TERMINAL_BENCH_OFFLINE_EVIDENCE:-}"
 phoenix_url="${PHOENIX_BASE_URL:-}"
 phoenix_project="${PHOENIX_PROJECT:-}"
 eval_cohort="${EVAL_COHORT:-}"

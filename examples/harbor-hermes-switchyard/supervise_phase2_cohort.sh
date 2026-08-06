@@ -33,8 +33,8 @@ terminate() {
 }
 trap terminate INT TERM
 
-backoff_seconds="${PHASE2_SUPERVISOR_BACKOFF_SECONDS:-60}"
-maximum_backoff_seconds="${PHASE2_SUPERVISOR_MAX_BACKOFF_SECONDS:-900}"
+backoff_seconds="${TERMINAL_BENCH_SUPERVISOR_BACKOFF_SECONDS:-60}"
+maximum_backoff_seconds="${TERMINAL_BENCH_SUPERVISOR_MAX_BACKOFF_SECONDS:-900}"
 if [[ ! "$backoff_seconds" =~ ^[1-9][0-9]*$ || ! "$maximum_backoff_seconds" =~ ^[1-9][0-9]*$ ]]; then
   echo "Phase 2 supervisor backoffs must be positive integers" >&2
   exit 2

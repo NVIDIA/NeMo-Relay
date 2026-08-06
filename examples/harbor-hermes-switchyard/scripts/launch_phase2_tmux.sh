@@ -8,7 +8,7 @@ example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${1:-}"
 session="${2:-}"
 if [[ -z "$env_file" || "$env_file" != /* || -z "$session" ]]; then
-  echo "usage: $0 /absolute/phase2-run.env tmux-session-name" >&2
+  echo "usage: $0 /absolute/terminal-bench-run.env tmux-session-name" >&2
   exit 2
 fi
 if [[ ! "$session" =~ ^[A-Za-z0-9_.-]+$ ]]; then
@@ -25,6 +25,6 @@ fi
 # The caller must not source the protected file. Only its path is projected
 # into the detached session; run_phase2_from_env.sh sources it with xtrace off.
 tmux new-session -d -s "$session" \
-  -e "PHASE2_ENV_FILE=$env_file" \
+  -e "TERMINAL_BENCH_ENV_FILE=$env_file" \
   "$example_root/scripts/run_phase2_from_env.sh"
 echo "started tmux session: $session"
