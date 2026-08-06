@@ -845,10 +845,18 @@ fn test_streaming_preserves_text_part_metadata_from_empty_final_chunk() {
     .unwrap();
 
     let assembled = finalizer();
-    let part = &assembled["candidates"][0]["content"]["parts"][0];
-    assert_eq!(part["text"].as_str(), Some("answer"));
+    let parts = assembled["candidates"][0]["content"]["parts"]
+        .as_array()
+        .unwrap();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["text"].as_str(), Some("answer"));
+    assert!(
+        parts[0].get("thoughtSignature").is_none(),
+        "signature from the empty final chunk must not be merged onto the previous part"
+    );
+    assert_eq!(parts[1]["text"].as_str(), Some(""));
     assert_eq!(
-        part["thoughtSignature"].as_str(),
+        parts[1]["thoughtSignature"].as_str(),
         Some("sig_STREAM=="),
         "streamed text metadata must survive finalization"
     );
@@ -860,10 +868,13 @@ fn test_streaming_preserves_text_part_metadata_from_empty_final_chunk() {
     };
     assert!(matches!(
         &parts[0],
+        ContentPart::Text { text, extra } if text == "answer" && extra.is_empty()
+    ));
+    assert!(matches!(
+        &parts[1],
         ContentPart::Text { text, extra }
-            if text == "answer"
-                && extra.get("thoughtSignature").and_then(Json::as_str)
-                    == Some("sig_STREAM==")
+            if text.is_empty()
+                && extra.get("thoughtSignature").and_then(Json::as_str) == Some("sig_STREAM==")
     ));
 }
 
@@ -1569,6 +1580,17 @@ fn test_streaming_filters_thought_parts() {
     .unwrap();
 
     let assembled = finalizer();
+    let assembled_parts = assembled["candidates"][0]["content"]["parts"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        assembled_parts[0]["thought"].as_bool(),
+        Some(true),
+        "thought chunks must survive in the provider-native streaming aggregate"
+    );
+    assert_eq!(assembled_parts[0]["text"].as_str(), Some("reasoning"));
+    assert_eq!(assembled_parts[1]["text"].as_str(), Some("final answer"));
+
     let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
     assert_eq!(

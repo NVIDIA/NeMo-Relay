@@ -2726,7 +2726,8 @@ impl GeminiGenerateContentStreamingState {
             let current_has_metadata = !extra.is_empty();
             let previous_has_metadata = last_obj.keys().any(|k| k != "text");
             let can_merge = last_obj.get("text").is_some_and(Json::is_string)
-                && (text.is_empty() || (!current_has_metadata && !previous_has_metadata));
+                && !current_has_metadata
+                && !previous_has_metadata;
             if can_merge {
                 let Some(Json::String(existing)) = last_obj.get_mut("text") else {
                     return;
@@ -2796,8 +2797,10 @@ impl GeminiGenerateContentStreamingState {
                     }
                     let part_obj = part.as_object().unwrap();
                     let data_key = validate_single_gemini_part_data_field(part_obj, "streaming")?;
-                    // Skip thought parts before inspecting text, matching the non-streaming path.
+                    // Preserve thought parts in the provider-native aggregate; the response
+                    // decoder filters them out of the normalized message.
                     if part.get("thought").and_then(Json::as_bool) == Some(true) {
+                        self.parts.push(part.clone());
                         continue;
                     }
 
