@@ -1795,7 +1795,7 @@ fn validate_allows_llm_surfaces_without_codec() {
 }
 
 #[test]
-fn validate_accepts_legacy_gemini_codec_alias() {
+fn validate_rejects_ambiguous_gemini_codec_name() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
 
@@ -1812,7 +1812,12 @@ fn validate_accepts_legacy_gemini_codec_alias() {
         }
     })));
 
-    assert!(report.diagnostics.is_empty(), "{report:?}");
+    assert!(report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("codec")
+            && diag.message.contains("gemini_generate_content")
+            && !diag.message.contains("gemini,")
+            && !diag.message.ends_with("gemini")
+    }));
 }
 
 #[test]
@@ -4369,14 +4374,14 @@ async fn builtin_backend_removes_targeted_message_names_and_ignores_missing_norm
 }
 
 #[tokio::test]
-async fn builtin_backend_accepts_legacy_gemini_codec_alias() {
+async fn builtin_backend_sanitizes_gemini_generate_content_via_codec() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
     initialize_plugins(plugin_config(json!({
         "mode": "builtin",
-        "codec": "gemini",
+        "codec": "gemini_generate_content",
         "input": true,
         "output": false,
         "tool_input": false,
@@ -4391,17 +4396,17 @@ async fn builtin_backend_accepts_legacy_gemini_codec_alias() {
     .await
     .unwrap();
 
-    let events = capture_events("pii-redaction-gemini-legacy-alias");
+    let events = capture_events("pii-redaction-gemini-generate-content");
     let request = LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({
-            "contents": [{"role": "user", "parts": [{"text": "sk-legacy-secret"}]}],
+            "contents": [{"role": "user", "parts": [{"text": "sk-gemini-secret"}]}],
         }),
     };
 
     let _handle = llm_call(
         LlmCallParams::builder()
-            .name("gemini-legacy-alias")
+            .name("gemini-generate-content")
             .request(&request)
             .build(),
     )
@@ -4419,7 +4424,7 @@ async fn builtin_backend_accepts_legacy_gemini_codec_alias() {
         }))
     );
 
-    deregister_subscriber("pii-redaction-gemini-legacy-alias").unwrap();
+    deregister_subscriber("pii-redaction-gemini-generate-content").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

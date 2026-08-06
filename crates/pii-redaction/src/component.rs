@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names_with_aliases};
+use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names};
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
@@ -498,7 +498,7 @@ fn custom_mark_payload_policy_schema(
 
 #[cfg(feature = "schema")]
 fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-    let codec_names = supported_codec_names_with_aliases();
+    let codec_names = supported_codec_names();
     string_enum_schema(generator, &codec_names, None)
 }
 
@@ -1128,7 +1128,7 @@ fn validate_codec_requirements(
     };
 
     if ProviderSurface::from_codec_name(codec).is_none() {
-        let supported = supported_codec_names_with_aliases();
+        let supported = supported_codec_names();
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,

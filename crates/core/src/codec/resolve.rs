@@ -166,14 +166,10 @@ impl ProviderSurface {
         descriptor_for(self).codec_name
     }
 
-    /// Resolves a canonical codec name or compatibility alias to its surface, or
-    /// `None` when `name` is not a built-in provider codec. `"gemini"` is accepted
-    /// as a compatibility alias for the canonical `"gemini_generate_content"`.
+    /// Resolves a canonical codec name to its surface, or `None` when `name`
+    /// is not a built-in provider codec.
     #[must_use]
     pub fn from_codec_name(name: &str) -> Option<Self> {
-        if name == "gemini" {
-            return Some(Self::GeminiGenerateContent);
-        }
         BUILTIN_PROVIDER_SURFACES
             .iter()
             .find(|descriptor| descriptor.codec_name == name)
@@ -189,14 +185,6 @@ pub fn supported_codec_names() -> Vec<&'static str> {
         .iter()
         .map(|descriptor| descriptor.codec_name)
         .collect()
-}
-
-/// Codec names accepted at config boundaries, including compatibility aliases.
-#[must_use]
-pub fn supported_codec_names_with_aliases() -> Vec<&'static str> {
-    let mut names = supported_codec_names();
-    names.push("gemini");
-    names
 }
 
 /// Constructs the built-in bidirectional request codec ([`LlmCodec`]) for a surface.
