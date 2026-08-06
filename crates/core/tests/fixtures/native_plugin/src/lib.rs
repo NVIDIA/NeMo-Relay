@@ -3,7 +3,6 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -814,54 +813,48 @@ impl NativePlugin for FixtureAsyncPlugin {
 
 fn forward_typed_async_stream(
     request: LlmRequest,
-    output: AsyncLlmStream,
+    mut output: AsyncLlmStream,
 ) -> nemo_relay_plugin::Result<()> {
-    let output = Arc::new(Mutex::new(Some(output)));
-    let callback_output = Arc::clone(&output);
-    output
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .expect("typed async stream output is present")
-        .invoke_next(&request, move |event| match event {
-            AsyncLlmStreamEvent::Chunk(chunk) => {
-                let output = callback_output
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                match output
-                    .as_ref()
-                    .expect("typed async stream output is present")
-                    .try_push(&chunk)
-                {
-                    Ok(AsyncStreamWrite::Accepted) => AsyncStreamControl::Continue,
+    std::thread::spawn(move || {
+        let (event_tx, event_rx) = std::sync::mpsc::channel();
+        let invoke_result = output.invoke_next(&request, move |event| {
+            let terminal = matches!(
+                &event,
+                AsyncLlmStreamEvent::Error(_) | AsyncLlmStreamEvent::Done
+            );
+            if event_tx.send(event).is_err() || terminal {
+                AsyncStreamControl::Stop
+            } else {
+                AsyncStreamControl::Continue
+            }
+        });
+        if let Err(error) = invoke_result {
+            let _ = output.try_reject(&error);
+            return;
+        }
+
+        while let Ok(event) = event_rx.recv() {
+            match event {
+                AsyncLlmStreamEvent::Chunk(chunk) => match output.try_push(&chunk) {
+                    Ok(AsyncStreamWrite::Accepted) => {}
                     Ok(AsyncStreamWrite::Backpressured) => {
                         TYPED_ASYNC_STREAM_BACKPRESSURED.store(true, Ordering::Release);
-                        AsyncStreamControl::Stop
+                        return;
                     }
-                    _ => AsyncStreamControl::Stop,
-                }
-            }
-            AsyncLlmStreamEvent::Error(error) => {
-                if let Some(mut output) = callback_output
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take()
-                {
+                    _ => return,
+                },
+                AsyncLlmStreamEvent::Error(error) => {
                     let _ = output.try_reject(&error);
+                    return;
                 }
-                AsyncStreamControl::Stop
-            }
-            AsyncLlmStreamEvent::Done => {
-                if let Some(output) = callback_output
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take()
-                {
+                AsyncLlmStreamEvent::Done => {
                     let _ = output.finish();
+                    return;
                 }
-                AsyncStreamControl::Stop
             }
-        })
+        }
+    });
+    Ok(())
 }
 
 unsafe extern "C" fn raw_async_allow_callback(

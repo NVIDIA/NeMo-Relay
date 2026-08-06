@@ -74,7 +74,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-nemo-relay-plugin = "0.5.0"
+nemo-relay-plugin = "0.7.1"
 serde_json = "1"
 ```
 
@@ -161,6 +161,8 @@ short, bounded work and returns immediately. Do not wait for network I/O, an
 external service, or a plugin-owned async runtime from a synchronous callback.
 Relay invokes the callback on the Tokio worker that is running the managed
 call, so blocking the callback also blocks that worker.
+
+The following example registers a completion-based LLM execution intercept:
 
 ```rust
 context.register_llm_execution_intercept(

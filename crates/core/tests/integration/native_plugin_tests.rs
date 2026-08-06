@@ -893,8 +893,10 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     })
     .await
     .expect("typed callbacks should release both Relay workers before slow work completes");
+    // Keep this timeout below the fixture's 400 ms slow-branch delay so a
+    // blocked Relay worker still fails the responsiveness assertion.
     let unrelated = tokio::time::timeout(
-        std::time::Duration::from_millis(200),
+        std::time::Duration::from_millis(300),
         tool_call_execute(
             ToolCallExecuteParams::builder()
                 .name("unrelated-during-typed-async")
