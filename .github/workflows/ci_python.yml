@@ -136,6 +136,10 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
 
+      - name: Run latency benchmark tests
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: just test-latency-benchmark
+
       - name: Run Python plugin end-to-end test
         if: >-
           ${{ matrix.platform == 'linux-amd64' ||
