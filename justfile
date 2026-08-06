@@ -59,7 +59,11 @@ PY
 uv_python_executable() {
     (
         cd "$NEMO_RELAY_REPO_ROOT"
-        uv python find
+        if [[ -n "${UV_PYTHON:-}" ]]; then
+            uv python find "$UV_PYTHON"
+        else
+            uv python find
+        fi
     )
 }
 
