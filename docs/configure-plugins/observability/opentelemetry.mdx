@@ -188,9 +188,11 @@ Rerankers, marks, and unsupported scope types are omitted. Supported
 descendants remain attached to their nearest exported ancestor. This
 projection never emits `nemo_relay.*` fields. LLM spans include the
 `gen_ai.input.messages` and `gen_ai.output.messages` attributes as JSON strings
-that follow the OpenTelemetry GenAI message schemas. These attributes can
-contain sensitive prompt and response content; use event sanitizers to redact
-content before export. Tool payloads and retrieval content are not exported.
+that follow the OpenTelemetry GenAI message schemas. The input attribute is
+emitted only when the normalized request contains messages. The output
+attribute is emitted only when the normalized response contains content parts
+or tool calls. Redact sensitive content with an LLM or event sanitizer. Tool
+and retrieval payloads are not exported.
 
 ### Error Type Mapping
 

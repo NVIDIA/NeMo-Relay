@@ -430,16 +430,17 @@ fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    let finish_reason = response
-        .finish_reason
-        .as_ref()
-        .map_or("unknown", finish_reason);
-    serde_json::to_string(&[serde_json::json!({
-        "role": "assistant",
-        "parts": parts,
-        "finish_reason": finish_reason,
-    })])
-    .ok()
+    let mut object = Map::from_iter([
+        ("role".to_string(), Json::String("assistant".to_string())),
+        ("parts".to_string(), Json::Array(parts)),
+    ]);
+    if let Some(reason) = response.finish_reason.as_ref() {
+        object.insert(
+            "finish_reason".to_string(),
+            Json::String(finish_reason(reason).to_string()),
+        );
+    }
+    serde_json::to_string(&[Json::Object(object)]).ok()
 }
 
 fn content_parts(content: &MessageContent) -> Vec<Json> {
@@ -471,17 +472,15 @@ fn content_part(part: &ContentPart) -> Json {
             "response": content,
         }),
         ContentPart::ProviderNative { kind, value, .. } => generic_part(kind, value),
-        other => generic_part(
-            match other {
-                ContentPart::ImageUrl { .. } => "image_url",
-                ContentPart::Image { .. } => "image",
-                ContentPart::Audio { .. } => "audio",
-                ContentPart::File { .. } => "file",
-                _ => unreachable!(),
-            },
-            &serde_json::to_value(other).unwrap_or(Json::Null),
-        ),
+        ContentPart::ImageUrl { .. } => serialized_part("image_url", part),
+        ContentPart::Image { .. } => serialized_part("image", part),
+        ContentPart::Audio { .. } => serialized_part("audio", part),
+        ContentPart::File { .. } => serialized_part("file", part),
     }
+}
+
+fn serialized_part(kind: &str, part: &ContentPart) -> Json {
+    generic_part(kind, &serde_json::to_value(part).unwrap_or(Json::Null))
 }
 
 fn text_part(content: &str) -> Json {

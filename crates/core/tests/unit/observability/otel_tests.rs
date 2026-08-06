@@ -17,7 +17,7 @@ use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
-use crate::codec::request::MessageContent;
+use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
     Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -2095,6 +2095,33 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
         }])
     );
 
+    let response_without_finish_reason = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    message: Some(MessageContent::Text("still working".to_string())),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let response_attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &response_without_finish_reason,
+    ));
+    assert_eq!(
+        serde_json::from_str::<Json>(&response_attributes["gen_ai.output.messages"]).unwrap(),
+        json!([{
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "still working"}]
+        }])
+    );
+
     for (reason, expected) in [
         (FinishReason::Complete, "stop"),
         (FinishReason::Length, "length"),
@@ -2126,6 +2153,110 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
             Some(&format!("[\"{expected}\"]"))
         );
     }
+}
+
+#[test]
+fn gen_ai_projection_covers_message_variants_and_empty_input() {
+    let annotated_request = serde_json::from_value::<AnnotatedLlmRequest>(json!({
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": "{not-json"
+                    }
+                }]
+            },
+            {
+                "role": "tool",
+                "content": "result",
+                "tool_call_id": "call-1"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "provider_native",
+                        "provider": "example",
+                        "kind": "reasoning",
+                        "value": {"content": "provider payload"}
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"}
+                    }
+                ]
+            }
+        ]
+    }))
+    .unwrap();
+    let event = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(std::sync::Arc::new(annotated_request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.input.messages"]).unwrap(),
+        json!([
+            {
+                "role": "assistant",
+                "parts": [{
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "lookup",
+                    "arguments": "{not-json"
+                }]
+            },
+            {
+                "role": "tool",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "id": "call-1",
+                    "response": "result"
+                }]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {"type": "reasoning", "content": "provider payload"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"}
+                    }
+                ]
+            }
+        ])
+    );
+
+    let empty_event = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(std::sync::Arc::new(AnnotatedLlmRequest::default()))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &empty_event,
+    ));
+    assert!(!attributes.contains_key("gen_ai.input.messages"));
 }
 
 #[test]
