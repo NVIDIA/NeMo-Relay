@@ -33,18 +33,18 @@ const GEMINI_PROVIDER: &str = "gemini";
 // ---------------------------------------------------------------------------
 
 /// Built-in codec for the Gemini generateContent API.
-pub struct GeminiCodec;
+pub struct GeminiGenerateContentCodec;
 
 pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDescriptor {
-    surface: ProviderSurface::Gemini,
+    surface: ProviderSurface::GeminiGenerateContent,
     detect_request: |obj, _hint| obj.contains_key("contents"),
     detect_response: detect_gemini_response,
-    decode_request: |request| GeminiCodec.decode(request),
-    decode_response: |raw| GeminiCodec.decode_response(raw),
-    codec_name: "gemini",
-    request_codec: || std::sync::Arc::new(GeminiCodec),
-    response_codec: || std::sync::Arc::new(GeminiCodec),
-    streaming_codec: || Box::new(GeminiStreamingCodec::new()),
+    decode_request: |request| GeminiGenerateContentCodec.decode(request),
+    decode_response: |raw| GeminiGenerateContentCodec.decode_response(raw),
+    codec_name: "gemini_generate_content",
+    request_codec: || std::sync::Arc::new(GeminiGenerateContentCodec),
+    response_codec: || std::sync::Arc::new(GeminiGenerateContentCodec),
+    streaming_codec: || Box::new(GeminiGenerateContentStreamingCodec::new()),
 };
 
 // ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ pub(crate) const PROVIDER_SURFACE: ProviderSurfaceDescriptor = ProviderSurfaceDe
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
-struct RawGeminiResponse {
+struct RawGeminiGenerateContentResponse {
     candidates: Option<Vec<RawCandidate>>,
     #[serde(rename = "usageMetadata")]
     usage_metadata: Option<RawUsageMetadata>,
@@ -223,10 +223,10 @@ fn parse_optional_id(obj: &serde_json::Map<String, Json>, context: &str) -> Resu
         None => Ok(None),
         Some(Json::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
         Some(Json::String(_)) => Err(FlowError::InvalidArgument(format!(
-            "Gemini {context}.id must be a non-empty string"
+            "Gemini generateContent {context}.id must be a non-empty string"
         ))),
         Some(_) => Err(FlowError::InvalidArgument(format!(
-            "Gemini {context}.id must be a string"
+            "Gemini generateContent {context}.id must be a string"
         ))),
     }
 }
@@ -258,7 +258,7 @@ fn validate_single_gemini_part_data_field<'a>(
     let keys = gemini_part_data_keys(obj);
     if keys.len() > 1 {
         return Err(FlowError::InvalidArgument(format!(
-            "Gemini {context} part must not contain multiple data fields: {}",
+            "Gemini generateContent {context} part must not contain multiple data fields: {}",
             keys.join(", ")
         )));
     }
@@ -281,7 +281,9 @@ fn gemini_parts_to_message_content(
 
     for part in parts {
         let obj = part.as_object().ok_or_else(|| {
-            FlowError::InvalidArgument(format!("Gemini {context} parts entry must be an object"))
+            FlowError::InvalidArgument(format!(
+                "Gemini generateContent {context} parts entry must be an object"
+            ))
         })?;
         if obj.get("thought").and_then(Json::as_bool) == Some(true) {
             continue;
@@ -302,7 +304,7 @@ fn gemini_parts_to_message_content(
             "text" => {
                 let text = obj.get("text").and_then(Json::as_str).ok_or_else(|| {
                     FlowError::InvalidArgument(format!(
-                        "Gemini {context} parts[].text must be a string"
+                        "Gemini generateContent {context} parts[].text must be a string"
                     ))
                 })?;
                 let extra: serde_json::Map<String, Json> = obj
@@ -460,7 +462,7 @@ fn extract_parts_tool_calls(parts: &[Json]) -> Result<Option<Vec<ResponseToolCal
 /// Map Gemini `usageMetadata` to a normalized [`Usage`] and the raw thinking-token count.
 ///
 /// Returns `(usage, thoughts_token_count)`. The thoughts token count is kept
-/// separate because it belongs in `ApiSpecificResponse::Gemini`, not in the
+/// separate because it belongs in `ApiSpecificResponse::GeminiGenerateContent`, not in the
 /// provider-neutral `Usage` struct.
 fn map_usage(meta: Option<RawUsageMetadata>, model: Option<&str>) -> (Option<Usage>, Option<u64>) {
     let model_provider = infer_model_provider("google", model);
@@ -1047,7 +1049,7 @@ fn ensure_object_response(content_str: String) -> Json {
     }
 }
 
-struct GeminiFunctionResponsePayload {
+struct GeminiGenerateContentFunctionResponsePayload {
     response: Json,
     parts: Option<Vec<Json>>,
 }
@@ -1061,7 +1063,7 @@ fn provider_native_gemini_part_value(obj: &serde_json::Map<String, Json>) -> Res
     if provider != GEMINI_PROVIDER {
         return Err(FlowError::InvalidArgument(format!(
             "Gemini encoder: provider_native content part for provider \
-             '{provider}' cannot be encoded by the Gemini codec"
+             '{provider}' cannot be encoded by the Gemini generateContent codec"
         )));
     }
     match obj.get("kind") {
@@ -1103,9 +1105,9 @@ fn provider_native_gemini_part_value(obj: &serde_json::Map<String, Json>) -> Res
 
 fn function_response_payload_from_tool_content(
     content: &Json,
-) -> Result<GeminiFunctionResponsePayload> {
+) -> Result<GeminiGenerateContentFunctionResponsePayload> {
     match content {
-        Json::Null | Json::String(_) => Ok(GeminiFunctionResponsePayload {
+        Json::Null | Json::String(_) => Ok(GeminiGenerateContentFunctionResponsePayload {
             response: ensure_object_response(extract_content_text(content)),
             parts: None,
         }),
@@ -1154,7 +1156,7 @@ fn function_response_payload_from_tool_content(
                     }
                 }
             }
-            Ok(GeminiFunctionResponsePayload {
+            Ok(GeminiGenerateContentFunctionResponsePayload {
                 response: ensure_object_response(response_texts.join("\n")),
                 parts: Some(native_parts),
             })
@@ -1193,8 +1195,9 @@ fn insert_serialized<T: serde::Serialize>(
     value: &T,
     context: &str,
 ) -> Result<()> {
-    let json = serde_json::to_value(value)
-        .map_err(|e| FlowError::Internal(format!("Gemini {context} encode: {e}")))?;
+    let json = serde_json::to_value(value).map_err(|e| {
+        FlowError::Internal(format!("Gemini generateContent {context} encode: {e}"))
+    })?;
     obj.insert(key.into(), json);
     Ok(())
 }
@@ -1266,13 +1269,13 @@ fn take_matching_native_group(
 // LlmResponseCodec
 // ---------------------------------------------------------------------------
 
-impl LlmResponseCodec for GeminiCodec {
+impl LlmResponseCodec for GeminiGenerateContentCodec {
     fn codec_identity(&self) -> LlmCodecIdentity {
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::Gemini)
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
     }
 
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        let raw: RawGeminiResponse = serde_json::from_value(response.clone())
+        let raw: RawGeminiGenerateContentResponse = serde_json::from_value(response.clone())
             .map_err(|e| FlowError::Internal(format!("Gemini response decode: {e}")))?;
 
         let candidate = raw.candidates.as_ref().and_then(|c| c.first());
@@ -1311,13 +1314,15 @@ impl LlmResponseCodec for GeminiCodec {
                 let safety_ratings = extra.remove("safetyRatings");
                 let grounding_metadata = extra.remove("groundingMetadata");
                 let citation_metadata = extra.remove("citationMetadata");
-                Some(super::response::ApiSpecificResponse::Gemini {
-                    thoughts_tokens,
-                    safety_ratings,
-                    grounding_metadata,
-                    citation_metadata,
-                    extra,
-                })
+                Some(
+                    super::response::ApiSpecificResponse::GeminiGenerateContent {
+                        thoughts_tokens,
+                        safety_ratings,
+                        grounding_metadata,
+                        citation_metadata,
+                        extra,
+                    },
+                )
             }
         };
 
@@ -1339,9 +1344,9 @@ impl LlmResponseCodec for GeminiCodec {
 // LlmCodec
 // ---------------------------------------------------------------------------
 
-impl LlmCodec for GeminiCodec {
+impl LlmCodec for GeminiGenerateContentCodec {
     fn codec_identity(&self) -> LlmCodecIdentity {
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::Gemini)
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
     }
 
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
@@ -1801,7 +1806,7 @@ fn rebuild_gemini_system_parts(orig_parts: &[Json], text: String) -> Vec<Json> {
 }
 
 #[derive(Debug)]
-struct GeminiMessageAlignment {
+struct GeminiGenerateContentMessageAlignment {
     prefix_len: usize,
     ann_gap_end: usize,
     base_gap_end: usize,
@@ -1809,7 +1814,7 @@ struct GeminiMessageAlignment {
     base_gap_len: usize,
 }
 
-impl GeminiMessageAlignment {
+impl GeminiGenerateContentMessageAlignment {
     fn new(ann_non_sys: &[&Json], base_non_sys: &[&Json]) -> Self {
         let prefix_len = ann_non_sys
             .iter()
@@ -1916,7 +1921,7 @@ fn gemini_run_end(
     start: usize,
     ann_len: usize,
     orig_cidx: usize,
-    alignment: &GeminiMessageAlignment,
+    alignment: &GeminiGenerateContentMessageAlignment,
     content_idx_of_base_msg: &[usize],
 ) -> usize {
     let mut run_end = start + 1;
@@ -1933,7 +1938,7 @@ fn gemini_run_is_unchanged(
     start: usize,
     run_end: usize,
     expected_len: usize,
-    alignment: &GeminiMessageAlignment,
+    alignment: &GeminiGenerateContentMessageAlignment,
     ann_non_sys: &[&Json],
     base_non_sys: &[&Json],
 ) -> bool {
@@ -1978,7 +1983,7 @@ fn patch_gemini_non_system_contents(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let alignment = GeminiMessageAlignment::new(ann_non_sys, base_non_sys);
+    let alignment = GeminiGenerateContentMessageAlignment::new(ann_non_sys, base_non_sys);
     let content_idx_of_base_msg =
         gemini_content_idx_of_base_msg(&orig_contents, base_non_sys.len())?;
     let content_msg_count =
@@ -2106,7 +2111,7 @@ fn patch_changed_gemini_content(
 fn gemini_function_response_updates<'a>(
     ann_msgs: &'a [&Json],
 ) -> Result<(
-    HashMap<&'a str, GeminiFunctionResponsePayload>,
+    HashMap<&'a str, GeminiGenerateContentFunctionResponsePayload>,
     Vec<&'a str>,
 )> {
     let mut updates = HashMap::new();
@@ -2137,7 +2142,7 @@ fn function_response_call_id(fr: &Json) -> Option<&str> {
 fn build_gemini_function_response_part(
     call_id: &str,
     name: &str,
-    payload: GeminiFunctionResponsePayload,
+    payload: GeminiGenerateContentFunctionResponsePayload,
     original_fr: Option<&Json>,
 ) -> Json {
     let mut new_fr = original_fr
@@ -2641,30 +2646,32 @@ fn patch_extra_fields(
 // Streaming codec
 // ---------------------------------------------------------------------------
 
-/// Streaming counterpart to [`GeminiCodec`].
+/// Streaming counterpart to [`GeminiGenerateContentCodec`].
 ///
 /// Accumulates Gemini server-sent event chunks and assembles a complete response
-/// that [`GeminiCodec::decode_response`] can consume.
-pub struct GeminiStreamingCodec {
-    state: std::sync::Arc<std::sync::Mutex<GeminiStreamingState>>,
+/// that [`GeminiGenerateContentCodec::decode_response`] can consume.
+pub struct GeminiGenerateContentStreamingCodec {
+    state: std::sync::Arc<std::sync::Mutex<GeminiGenerateContentStreamingState>>,
 }
 
-impl GeminiStreamingCodec {
+impl GeminiGenerateContentStreamingCodec {
     /// Creates a fresh streaming codec with empty accumulator state.
     pub fn new() -> Self {
         Self {
-            state: std::sync::Arc::new(std::sync::Mutex::new(GeminiStreamingState::default())),
+            state: std::sync::Arc::new(std::sync::Mutex::new(
+                GeminiGenerateContentStreamingState::default(),
+            )),
         }
     }
 }
 
-impl Default for GeminiStreamingCodec {
+impl Default for GeminiGenerateContentStreamingCodec {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl super::streaming::StreamingCodec for GeminiStreamingCodec {
+impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
     fn collector(&self) -> crate::api::runtime::LlmCollectorFn {
         let state = std::sync::Arc::clone(&self.state);
         Box::new(move |event: Json| -> Result<()> {
@@ -2688,7 +2695,7 @@ impl super::streaming::StreamingCodec for GeminiStreamingCodec {
 }
 
 #[derive(Debug, Default)]
-struct GeminiStreamingState {
+struct GeminiGenerateContentStreamingState {
     parts: Vec<Json>,
     finish_reason: Option<String>,
     usage_metadata: Option<Json>,
@@ -2699,7 +2706,7 @@ struct GeminiStreamingState {
     candidate_extra: serde_json::Map<String, Json>,
 }
 
-impl GeminiStreamingState {
+impl GeminiGenerateContentStreamingState {
     fn push_text_part(&mut self, text: &str, part_obj: &serde_json::Map<String, Json>) {
         let mut extra: serde_json::Map<String, Json> = part_obj
             .iter()
@@ -2791,7 +2798,7 @@ impl GeminiStreamingState {
             }
             // Collect candidate-level metadata fields (safetyRatings, groundingMetadata,
             // citationMetadata, avgLogprobs, etc.) that non-streaming decode preserves
-            // in ApiSpecificResponse::Gemini.  Later chunks overwrite earlier ones for
+            // in ApiSpecificResponse::GeminiGenerateContent.  Later chunks overwrite earlier ones for
             // the same key (last-wins), matching the non-streaming behaviour.
             if let Some(cand_obj) = candidate.as_object() {
                 for (k, v) in cand_obj {
@@ -2838,7 +2845,7 @@ impl GeminiStreamingState {
         }
         candidate_obj.insert("index".into(), Json::from(0u32));
         // Merge accumulated candidate-level metadata so that decode_response can
-        // populate ApiSpecificResponse::Gemini with the same fields as non-streaming.
+        // populate ApiSpecificResponse::GeminiGenerateContent with the same fields as non-streaming.
         for (k, v) in self.candidate_extra {
             candidate_obj.entry(k).or_insert(v);
         }
@@ -2864,5 +2871,5 @@ impl GeminiStreamingState {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-#[path = "../../tests/unit/codec/gemini_tests.rs"]
+#[path = "../../tests/unit/codec/gemini_generate_content_tests.rs"]
 mod tests;

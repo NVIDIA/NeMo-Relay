@@ -163,7 +163,7 @@ class AnthropicMessagesCodec:
         """
         ...
 
-class GeminiCodec:
+class GeminiGenerateContentCodec:
     """Built-in codec for Gemini generateContent requests and responses."""
 
     def __init__(self) -> None: ...
@@ -204,7 +204,7 @@ class GeminiCodec:
 __all__ = [
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
-    "GeminiCodec",
+    "GeminiGenerateContentCodec",
     "LlmCodec",
     "LlmResponseCodec",
     "OpenAIChatCodec",

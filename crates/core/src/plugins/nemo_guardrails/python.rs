@@ -891,7 +891,7 @@ enum LocalGuardrailsCodec {
     OpenAIChat,
     OpenAIResponses,
     AnthropicMessages,
-    Gemini,
+    GeminiGenerateContent,
 }
 
 impl LocalGuardrailsCodec {
@@ -900,7 +900,7 @@ impl LocalGuardrailsCodec {
             Self::OpenAIChat => ProviderSurface::OpenAIChat,
             Self::OpenAIResponses => ProviderSurface::OpenAIResponses,
             Self::AnthropicMessages => ProviderSurface::AnthropicMessages,
-            Self::Gemini => ProviderSurface::Gemini,
+            Self::GeminiGenerateContent => ProviderSurface::GeminiGenerateContent,
         }
     }
 
@@ -909,7 +909,7 @@ impl LocalGuardrailsCodec {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
-            ProviderSurface::Gemini => Self::Gemini,
+            ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
         }
     }
 
@@ -1350,7 +1350,7 @@ fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<Stri
                 .filter(|text| !text.is_empty())
                 .map(str::to_string)
         }
-        LocalGuardrailsCodec::Gemini => {
+        LocalGuardrailsCodec::GeminiGenerateContent => {
             let candidates = chunk.get("candidates")?.as_array()?;
             let parts = candidates
                 .first()?

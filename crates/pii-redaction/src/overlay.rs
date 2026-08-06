@@ -12,7 +12,7 @@ pub(crate) enum BuiltinCodecName {
     OpenAIChat,
     OpenAIResponses,
     AnthropicMessages,
-    Gemini,
+    GeminiGenerateContent,
 }
 
 impl BuiltinCodecName {
@@ -21,7 +21,7 @@ impl BuiltinCodecName {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
-            ProviderSurface::Gemini => Self::Gemini,
+            ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
         }
     }
 
@@ -34,7 +34,7 @@ impl BuiltinCodecName {
             Self::OpenAIChat => overlay_openai_chat_response(payload, annotated),
             Self::OpenAIResponses => overlay_openai_responses_response(payload, annotated),
             Self::AnthropicMessages => overlay_anthropic_response(payload, annotated),
-            Self::Gemini => overlay_gemini_response(payload, annotated),
+            Self::GeminiGenerateContent => overlay_gemini_response(payload, annotated),
         }
     }
 }

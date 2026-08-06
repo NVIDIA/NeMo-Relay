@@ -971,7 +971,7 @@ struct FfiCodecHandle *nemo_relay_anthropic_messages_codec_new(void);
  * # Safety
  * Caller must free the returned handle via `nemo_relay_codec_free`.
  */
-struct FfiCodecHandle *nemo_relay_gemini_codec_new(void);
+struct FfiCodecHandle *nemo_relay_gemini_generate_content_codec_new(void);
 
 /**
  * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw

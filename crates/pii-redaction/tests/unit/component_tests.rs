@@ -4355,7 +4355,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_tools_via_codec() {
 
     initialize_plugins(plugin_config(json!({
         "mode": "builtin",
-        "codec": "gemini",
+        "codec": "gemini_generate_content",
         "input": true,
         "output": false,
         "tool_input": false,
@@ -4384,7 +4384,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_tools_via_codec() {
 
     let _handle = llm_call(
         LlmCallParams::builder()
-            .name("gemini")
+            .name("gemini_generate_content")
             .request(&request)
             .build(),
     )
@@ -4418,7 +4418,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_request_content_via_co
 
     initialize_plugins(plugin_config(json!({
         "mode": "builtin",
-        "codec": "gemini",
+        "codec": "gemini_generate_content",
         "input": true,
         "output": false,
         "tool_input": false,
@@ -4454,7 +4454,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_request_content_via_co
 
     let _handle = llm_call(
         LlmCallParams::builder()
-            .name("gemini")
+            .name("gemini_generate_content")
             .request(&request)
             .build(),
     )
@@ -4484,7 +4484,7 @@ async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_cod
 
     initialize_plugins(plugin_config(json!({
         "mode": "builtin",
-        "codec": "gemini",
+        "codec": "gemini_generate_content",
         "input": true,
         "output": false,
         "tool_input": false,
@@ -4529,7 +4529,7 @@ async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_cod
 
     let _handle = llm_call(
         LlmCallParams::builder()
-            .name("gemini")
+            .name("gemini_generate_content")
             .request(&request)
             .build(),
     )
@@ -4554,14 +4554,14 @@ async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_cod
 
 #[tokio::test]
 async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_codec() {
-    use crate::codec::gemini::GeminiCodec;
+    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
     initialize_plugins(plugin_config(json!({
         "mode": "builtin",
-        "codec": "gemini",
+        "codec": "gemini_generate_content",
         "input": false,
         "output": true,
         "tool_input": false,
@@ -4593,7 +4593,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_c
 
     let _ = llm_call_execute(
         LlmCallExecuteParams::builder()
-            .name("gemini")
+            .name("gemini_generate_content")
             .request(LlmRequest {
                 headers: serde_json::Map::new(),
                 content: json!({
@@ -4601,7 +4601,7 @@ async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_c
                 }),
             })
             .func(noop_openai_chat_exec_fn(response))
-            .response_codec(Arc::new(GeminiCodec))
+            .response_codec(Arc::new(GeminiGenerateContentCodec))
             .build(),
     )
     .await
@@ -5462,14 +5462,14 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
 
 #[tokio::test]
 async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
-    use crate::codec::gemini::GeminiCodec;
+    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
     setup_isolated_thread();
 
     initialize_plugins(plugin_config(json!({
         "mode": "builtin",
-        "codec": "gemini",
+        "codec": "gemini_generate_content",
         "input": false,
         "output": true,
         "tool_input": false,
@@ -5512,7 +5512,7 @@ async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
             })
             // noop_openai_chat_exec_fn is codec-agnostic: it returns whatever JSON is passed.
             .func(noop_openai_chat_exec_fn(response.clone()))
-            .response_codec(Arc::new(GeminiCodec))
+            .response_codec(Arc::new(GeminiGenerateContentCodec))
             .build(),
     )
     .await

@@ -6,9 +6,10 @@
 //! Each test builds the same logical scenario in the three OpenAI/Anthropic
 //! built-in provider schemas (OpenAI Chat Completions, Anthropic Messages,
 //! OpenAI Responses) and asserts that detection plus normalization produce
-//! agreeing output. Gemini-specific semantics (contents array, functionResponse
-//! role split, thinking tokens, etc.) are covered in gemini_tests.rs. Where
-//! the schemas legitimately diverge, the divergence is asserted explicitly:
+//! agreeing output. Gemini generateContent-specific semantics (contents array,
+//! functionResponse role split, thinking tokens, etc.) are covered in
+//! gemini_generate_content_tests.rs. Where the schemas legitimately diverge,
+//! the divergence is asserted explicitly:
 //! the asymmetry is part of the parity contract, and a change here means one
 //! codec drifted from the others.
 
@@ -606,7 +607,11 @@ fn test_request_unknown_hint_matches_hintless_normalization() {
     for body in &bodies {
         let request = req(body.clone());
         let baseline = normalize_request(&request).expect("canonical body decodes");
-        for hint in ["gemini", "not-a-provider", "anthropic.count_tokens"] {
+        for hint in [
+            "gemini_generate_content",
+            "not-a-provider",
+            "anthropic.count_tokens",
+        ] {
             assert_eq!(
                 normalize_request_with_hint(&request, Some(hint)).as_ref(),
                 Some(&baseline),

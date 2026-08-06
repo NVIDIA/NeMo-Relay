@@ -483,20 +483,24 @@ impl OpenAIResponsesCodec {
 /// Built-in codec for the Gemini generateContent API.
 ///
 /// Implements both request codec (decode/encode) and response codec
-/// (decodeResponse). Construct with `new GeminiCodec()`.
-#[napi(js_name = "GeminiCodec")]
-pub struct GeminiCodec {
+/// (decodeResponse). Construct with `new GeminiGenerateContentCodec()`.
+#[napi(js_name = "GeminiGenerateContentCodec")]
+pub struct GeminiGenerateContentCodec {
     pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
     pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
 }
 
 #[napi]
-impl GeminiCodec {
+impl GeminiGenerateContentCodec {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            inner_codec: std::sync::Arc::new(nemo_relay::codec::gemini::GeminiCodec),
-            inner_response_codec: std::sync::Arc::new(nemo_relay::codec::gemini::GeminiCodec),
+            inner_codec: std::sync::Arc::new(
+                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+            ),
+            inner_response_codec: std::sync::Arc::new(
+                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+            ),
         }
     }
 

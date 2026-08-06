@@ -83,7 +83,7 @@ fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
         // aggregate is a valid single native chunk. `replay_is_lossy` still
         // re-aggregates it and rejects shapes the streaming collector cannot
         // preserve exactly.
-        ProviderSurface::Gemini => vec![aggregate.clone()],
+        ProviderSurface::GeminiGenerateContent => vec![aggregate.clone()],
     })
 }
 

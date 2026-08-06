@@ -760,13 +760,13 @@ fn test_annotated_event_accessors_and_codec_handles() {
     let openai_chat = api::nemo_relay_openai_chat_codec_new();
     let openai_responses = api::nemo_relay_openai_responses_codec_new();
     let anthropic = api::nemo_relay_anthropic_messages_codec_new();
-    let gemini = api::nemo_relay_gemini_codec_new();
+    let gemini = api::nemo_relay_gemini_generate_content_codec_new();
     assert!(!openai_chat.is_null());
     assert!(!openai_responses.is_null());
     assert!(!anthropic.is_null());
     assert!(
         !gemini.is_null(),
-        "GeminiCodec FFI constructor must return a non-null handle"
+        "GeminiGenerateContentCodec FFI constructor must return a non-null handle"
     );
 
     unsafe {

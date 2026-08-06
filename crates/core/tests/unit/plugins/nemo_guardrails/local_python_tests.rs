@@ -689,7 +689,10 @@ fn local_codec_and_rewrite_helpers_cover_all_provider_surfaces() {
             LocalGuardrailsCodec::AnthropicMessages,
             ProviderSurface::AnthropicMessages,
         ),
-        (LocalGuardrailsCodec::Gemini, ProviderSurface::Gemini),
+        (
+            LocalGuardrailsCodec::GeminiGenerateContent,
+            ProviderSurface::GeminiGenerateContent,
+        ),
     ] {
         assert_eq!(codec.provider_surface(), surface);
         assert_eq!(
@@ -1078,7 +1081,7 @@ fn stream_text_extraction_handles_supported_codecs() {
     // Gemini: visible text parts reach the guardrail worker.
     assert_eq!(
         extract_stream_text(
-            LocalGuardrailsCodec::Gemini,
+            LocalGuardrailsCodec::GeminiGenerateContent,
             &json!({"candidates": [{"content": {"parts": [{"text": "visible"}]}, "index": 0}]})
         ),
         Some("visible".to_string())
@@ -1097,7 +1100,7 @@ fn stream_text_extraction_handles_supported_codecs() {
             LocalGuardrailsCodec::AnthropicMessages,
             json!({"type": "content_block_delta", "delta": {"type": "input_json_delta"}}),
         ),
-        (LocalGuardrailsCodec::Gemini, Json::Null),
+        (LocalGuardrailsCodec::GeminiGenerateContent, Json::Null),
     ] {
         assert_eq!(extract_stream_text(codec, &chunk), None);
     }
@@ -1108,7 +1111,7 @@ fn stream_text_extraction_gemini_skips_thought_parts() {
     // A thought chunk (thought: true) must NOT reach the guardrail worker.
     assert_eq!(
         extract_stream_text(
-            LocalGuardrailsCodec::Gemini,
+            LocalGuardrailsCodec::GeminiGenerateContent,
             &json!({"candidates": [{"content": {"parts": [{"thought": true, "text": "internal reasoning"}]}, "index": 0}]})
         ),
         None,
@@ -1117,7 +1120,7 @@ fn stream_text_extraction_gemini_skips_thought_parts() {
     // A chunk with both a thought part and a visible part: only the visible text is forwarded.
     assert_eq!(
         extract_stream_text(
-            LocalGuardrailsCodec::Gemini,
+            LocalGuardrailsCodec::GeminiGenerateContent,
             &json!({"candidates": [{"content": {"parts": [
                 {"thought": true, "text": "reasoning"},
                 {"text": "answer"}

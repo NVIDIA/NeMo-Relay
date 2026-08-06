@@ -191,15 +191,15 @@ fn default_cost_currency() -> String {
 ///
 /// Maps from provider-specific stop reasons:
 /// - **Complete**: OpenAI Chat `"stop"`, Anthropic `"end_turn"`, Responses `"completed"`,
-///   Gemini `"STOP"` (without function-call parts)
+///   Gemini generateContent `"STOP"` (without function-call parts)
 /// - **Length**: OpenAI Chat `"length"`, Anthropic `"max_tokens"`, Responses incomplete+max_output_tokens,
-///   Gemini `"MAX_TOKENS"`
+///   Gemini generateContent `"MAX_TOKENS"`
 /// - **ToolUse**: OpenAI Chat `"tool_calls"`, Anthropic `"tool_use"`,
-///   Gemini `"TOOL_CODE"` (unconditional) or `"STOP"` when function-call parts are present
+///   Gemini generateContent `"TOOL_CODE"` (unconditional) or `"STOP"` when function-call parts are present
 /// - **ContentFilter**: OpenAI Chat `"content_filter"`, Responses incomplete+content_filter,
-///   Gemini `"SAFETY"` / `"RECITATION"` / `"BLOCKLIST"` / `"PROHIBITED_CONTENT"` and other policy codes
+///   Gemini generateContent `"SAFETY"` / `"RECITATION"` / `"BLOCKLIST"` / `"PROHIBITED_CONTENT"` and other policy codes
 /// - **Unknown**: Forward-compatible catch-all for unrecognized reasons
-///   (e.g. Gemini `"MALFORMED_FUNCTION_CALL"`, `"UNEXPECTED_TOOL_CALL"`)
+///   (e.g. Gemini generateContent `"MALFORMED_FUNCTION_CALL"`, `"UNEXPECTED_TOOL_CALL"`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
@@ -234,7 +234,7 @@ impl FinishReason {
 /// Unlike the request-side `ToolCall` (which stores arguments as a JSON
 /// string per OpenAI convention), response tool calls store arguments as
 /// parsed [`Json`]. Codecs parse OpenAI's string arguments during decode;
-/// Anthropic's `input` and Gemini's `args` are already parsed JSON objects.
+/// Anthropic's `input` and Gemini generateContent `args` are already parsed JSON objects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseToolCall {
     /// Unique identifier for this tool call.
@@ -332,12 +332,12 @@ pub enum ApiSpecificResponse {
     },
 
     /// Gemini generateContent API-specific fields.
-    #[serde(rename = "gemini")]
-    Gemini {
-        /// Tokens consumed by the model's internal reasoning (Gemini thinking).
+    #[serde(rename = "gemini_generate_content")]
+    GeminiGenerateContent {
+        /// Tokens consumed by the model's internal reasoning (Gemini generateContent thinking).
         #[serde(skip_serializing_if = "Option::is_none")]
         thoughts_tokens: Option<u64>,
-        /// Candidate-level safety ratings from the Gemini response.
+        /// Candidate-level safety ratings from the Gemini generateContent response.
         #[serde(skip_serializing_if = "Option::is_none")]
         safety_ratings: Option<Json>,
         /// Grounding metadata (web search attribution, etc.).

@@ -473,7 +473,7 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	chatCodec := NewOpenAIChatCodec()
 	responsesCodec := NewOpenAIResponsesCodec()
 	anthropicCodec := NewAnthropicMessagesCodec()
-	geminiCodec := NewGeminiCodec()
+	geminiCodec := NewGeminiGenerateContentCodec()
 	if chatCodec == nil || responsesCodec == nil || anthropicCodec == nil || geminiCodec == nil {
 		t.Fatal("expected non-nil codec handles")
 	}
@@ -494,12 +494,12 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	}
 }
 
-func TestGeminiCodecFunctionCallID(t *testing.T) {
-	runTestWithScopeStack(t, testGeminiCodecFunctionCallID)
+func TestGeminiGenerateContentCodecFunctionCallID(t *testing.T) {
+	runTestWithScopeStack(t, testGeminiGenerateContentCodecFunctionCallID)
 }
 
-func testGeminiCodecFunctionCallID(t *testing.T) {
-	// Verify that NewGeminiCodec returns a usable handle and that,
+func testGeminiGenerateContentCodecFunctionCallID(t *testing.T) {
+	// Verify that NewGeminiGenerateContentCodec returns a usable handle and that,
 	// when processing a Gemini response with an explicit functionCall.id,
 	// the annotated response carries the actual id (not the function name).
 	geminiResp := json.RawMessage(`{
@@ -537,10 +537,10 @@ func testGeminiCodecFunctionCallID(t *testing.T) {
 			},
 		},
 		executor,
-		WithLLMResponseCodec(NewGeminiCodec()),
+		WithLLMResponseCodec(NewGeminiGenerateContentCodec()),
 	)
 	if err != nil {
-		t.Fatalf("LlmCallExecute with GeminiCodec failed: %v", err)
+		t.Fatalf("LlmCallExecute with GeminiGenerateContentCodec failed: %v", err)
 	}
 
 	events := capturedEvents()

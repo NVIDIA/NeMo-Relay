@@ -274,7 +274,7 @@ nemo_relay::editor_config! {
         codec => {
             label: "codec",
             kind: Enum,
-            values: ["openai_chat", "openai_responses", "anthropic_messages", "gemini"],
+            values: ["openai_chat", "openai_responses", "anthropic_messages", "gemini_generate_content"],
             optional: true,
         },
         profiles => { label: "profiles", kind: List, list: &PII_REDACTION_PROFILE_LIST_ITEM },
@@ -504,7 +504,7 @@ fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::s
             "openai_chat",
             "openai_responses",
             "anthropic_messages",
-            "gemini",
+            "gemini_generate_content",
         ],
         None,
     )

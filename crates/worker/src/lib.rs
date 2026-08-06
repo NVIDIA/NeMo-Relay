@@ -155,7 +155,7 @@ pub enum BuiltinLlmCodec {
     /// Anthropic Messages.
     AnthropicMessages,
     /// Gemini generateContent request and response payloads.
-    Gemini,
+    GeminiGenerateContent,
 }
 
 /// Per-call LLM codec identity supplied to worker sanitizers.
@@ -2159,7 +2159,9 @@ fn codec_identity_from_proto(
             Some("anthropic_messages") => {
                 LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
             }
-            Some("gemini") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::Gemini),
+            Some("gemini_generate_content") => {
+                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
+            }
             _ => LlmCodecIdentity::Opaque,
         },
         Some(LlmCodecKind::Runtime) => codec_id
@@ -2683,8 +2685,9 @@ fn rustc_version_runtime() -> String {
 mod tests {
     use super::*;
 
-    /// Verify that BuiltinLlmCodec has a Gemini variant and that codec_identity_from_proto
-    /// decodes the "gemini" id to the correct built-in identity (not Opaque).
+    /// Verify that BuiltinLlmCodec has a Gemini generateContent variant and that
+    /// codec_identity_from_proto decodes the "gemini_generate_content" id to the
+    /// correct built-in identity (not Opaque).
     #[test]
     fn test_gemini_codec_identity_decoded_as_builtin_not_opaque() {
         use nemo_relay_worker_proto::v1::LlmCodecIdentity as ProtoIdentity;
@@ -2692,13 +2695,13 @@ mod tests {
 
         let proto = ProtoIdentity {
             kind: LlmCodecKind::Builtin as i32,
-            id: Some("gemini".to_string()),
+            id: Some("gemini_generate_content".to_string()),
         };
         let identity = codec_identity_from_proto(Some(&proto));
         assert_eq!(
             identity,
-            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::Gemini),
-            "Gemini codec id must decode to BuiltIn(Gemini), not Opaque"
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent),
+            "Gemini generateContent codec id must decode to BuiltIn(GeminiGenerateContent), not Opaque"
         );
     }
 }

@@ -304,7 +304,9 @@ impl CompiledBuiltinBackend {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages) => {
                 Some(ProviderSurface::AnthropicMessages)
             }
-            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::Gemini) => Some(ProviderSurface::Gemini),
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent) => {
+                Some(ProviderSurface::GeminiGenerateContent)
+            }
             LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => None,
         }
     }
@@ -404,7 +406,7 @@ impl CompiledBuiltinBackend {
         // Gemini responses with multiple candidates: the normalized layer only projects
         // candidate[0], so candidate[1+] would survive in the raw payload unredacted.
         // Fail closed identically to the OpenAI Chat multi-choice guard.
-        if surface == ProviderSurface::Gemini
+        if surface == ProviderSurface::GeminiGenerateContent
             && payload
                 .get("candidates")
                 .and_then(Json::as_array)

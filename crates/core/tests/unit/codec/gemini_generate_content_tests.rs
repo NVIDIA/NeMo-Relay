@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for GeminiCodec in the NeMo Relay core crate.
+//! Unit tests for GeminiGenerateContentCodec in the NeMo Relay core crate.
 
 use super::*;
 use serde_json::json;
@@ -30,21 +30,21 @@ fn make_request(content: Json) -> LlmRequest {
 
 #[test]
 fn test_codec_identity_is_gemini_builtin() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     assert_eq!(
         LlmCodec::codec_identity(&codec),
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::Gemini),
-        "GeminiCodec must not return Opaque; PII sanitization depends on a known identity"
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent),
+        "GeminiGenerateContentCodec must not return Opaque; PII sanitization depends on a known identity"
     );
 }
 
 #[test]
 fn test_response_codec_identity_is_gemini_builtin() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     assert_eq!(
-        <GeminiCodec as LlmResponseCodec>::codec_identity(&codec),
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::Gemini),
-        "GeminiCodec response codec must not return Opaque"
+        <GeminiGenerateContentCodec as LlmResponseCodec>::codec_identity(&codec),
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent),
+        "GeminiGenerateContentCodec response codec must not return Opaque"
     );
 }
 
@@ -54,7 +54,7 @@ fn test_response_codec_identity_is_gemini_builtin() {
 
 #[test]
 fn test_decode_response_text() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -88,7 +88,7 @@ fn test_decode_response_text() {
 
 #[test]
 fn test_decode_response_native_part_as_provider_native_content() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -130,7 +130,7 @@ fn test_decode_response_native_part_as_provider_native_content() {
 
 #[test]
 fn test_decode_response_response_id() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{"content": {"role": "model", "parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
         "responseId": "resp-abc-123",
@@ -146,7 +146,7 @@ fn test_decode_response_response_id() {
 
 #[test]
 fn test_decode_response_function_call() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -182,7 +182,7 @@ fn test_decode_response_function_call() {
 
 #[test]
 fn test_decode_response_finish_reason_table() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
 
     // (finishReason string, expected FinishReason)
     // NOTE: these cases have no functionCall parts in the response, so has_tool_calls = false.
@@ -242,7 +242,7 @@ fn test_decode_response_finish_reason_table() {
 
 #[test]
 fn test_decode_response_prompt_feedback_block_reason_content_filter() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "promptFeedback": {
             "blockReason": "SAFETY",
@@ -268,7 +268,7 @@ fn test_decode_response_prompt_feedback_block_reason_content_filter() {
 
 #[test]
 fn test_decode_response_prompt_feedback_block_reason_must_be_string() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "promptFeedback": {"blockReason": 123}
     });
@@ -282,7 +282,7 @@ fn test_decode_response_prompt_feedback_block_reason_must_be_string() {
 
 #[test]
 fn test_decode_response_cached_content_token_count() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {"role": "model", "parts": [{"text": "cached response"}]},
@@ -307,7 +307,7 @@ fn test_decode_response_cached_content_token_count() {
 
 #[test]
 fn test_decode_response_no_candidates() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 0, "totalTokenCount": 5}
@@ -321,7 +321,7 @@ fn test_decode_response_no_candidates() {
 
 #[test]
 fn test_decode_response_extra_fields_preserved() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {"role": "model", "parts": [{"text": "hi"}]},
@@ -342,7 +342,7 @@ fn test_decode_response_extra_fields_preserved() {
 
 #[test]
 fn test_decode_contents_with_system_instruction() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "Hello"}]},
@@ -373,7 +373,7 @@ fn test_decode_contents_with_system_instruction() {
 
 #[test]
 fn test_decode_function_declarations() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{
@@ -408,7 +408,7 @@ fn test_decode_function_declarations() {
 
 #[test]
 fn test_decode_function_declaration_preserves_provider_fields() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{
@@ -449,7 +449,7 @@ fn test_decode_function_declaration_preserves_provider_fields() {
 
 #[test]
 fn test_decode_generation_config() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {
@@ -473,7 +473,7 @@ fn test_decode_generation_config() {
 
 #[test]
 fn test_decode_extra_fields_captured() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "safetySettings": [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}],
@@ -492,7 +492,7 @@ fn test_decode_extra_fields_captured() {
 
 #[test]
 fn test_encode_round_trip_preserves_extra_fields() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original_json = json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "safetySettings": [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
@@ -509,7 +509,7 @@ fn test_encode_round_trip_preserves_extra_fields() {
 /// is encoded (not decoded from an existing Gemini request).
 #[test]
 fn test_encode_role_assistant_becomes_model() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     // Decode a single-user-turn request to get a valid baseline.
     let original_json = json!({
         "contents": [{"role": "user", "parts": [{"text": "Hello"}]}]
@@ -539,7 +539,7 @@ fn test_encode_role_assistant_becomes_model() {
 /// Decode-then-encode preserves systemInstruction when unchanged.
 #[test]
 fn test_encode_preserves_system_instruction_when_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original_json = json!({
         "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
         "systemInstruction": {"parts": [{"text": "You are an assistant."}]}
@@ -560,7 +560,7 @@ fn test_encode_preserves_system_instruction_when_unchanged() {
 /// Decode-then-encode preserves tools when unchanged (round-trip).
 #[test]
 fn test_encode_preserves_tools_when_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original_json = json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{
@@ -591,7 +591,7 @@ fn test_encode_preserves_tools_when_unchanged() {
 /// Decode-then-encode preserves generationConfig when unchanged (round-trip).
 #[test]
 fn test_encode_preserves_generation_config_when_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original_json = json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {
@@ -612,7 +612,7 @@ fn test_encode_preserves_generation_config_when_unchanged() {
 /// Interceptor can edit the system message; the new text appears in the output.
 #[test]
 fn test_encode_system_instruction_edit() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original_json = json!({
         "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
         "systemInstruction": {"parts": [{"text": "old prompt"}]}
@@ -645,7 +645,7 @@ fn test_encode_system_instruction_edit() {
 
 #[test]
 fn test_streaming_two_chunks_accumulated() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -674,7 +674,7 @@ fn test_streaming_two_chunks_accumulated() {
 
     let assembled = finalizer();
 
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
     assert_eq!(
         resp.message,
@@ -690,7 +690,7 @@ fn test_streaming_two_chunks_accumulated() {
 
 #[test]
 fn test_streaming_preserves_text_part_metadata_from_empty_final_chunk() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -723,7 +723,7 @@ fn test_streaming_preserves_text_part_metadata_from_empty_final_chunk() {
         "streamed text metadata must survive finalization"
     );
 
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
     let Some(MessageContent::Parts(parts)) = resp.message else {
         panic!("metadata-bearing streamed text must decode as content parts");
@@ -739,7 +739,7 @@ fn test_streaming_preserves_text_part_metadata_from_empty_final_chunk() {
 
 #[test]
 fn test_streaming_keeps_non_empty_signed_text_part_separate_from_plain_text() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -779,7 +779,7 @@ fn test_streaming_keeps_non_empty_signed_text_part_separate_from_plain_text() {
 
 #[test]
 fn test_streaming_finalize_valid_response_shape() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -807,7 +807,7 @@ fn test_streaming_finalize_valid_response_shape() {
         Some("gemini-1.5-pro")
     );
 
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
     assert_eq!(resp.finish_reason, Some(FinishReason::Length));
     assert_eq!(resp.model, Some("gemini-1.5-pro".into()));
@@ -815,7 +815,7 @@ fn test_streaming_finalize_valid_response_shape() {
 
 #[test]
 fn test_streaming_last_usage_metadata_wins() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -832,7 +832,7 @@ fn test_streaming_last_usage_metadata_wins() {
     .unwrap();
 
     let assembled = finalizer();
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
 
     let usage = resp.usage.unwrap();
@@ -843,7 +843,7 @@ fn test_streaming_last_usage_metadata_wins() {
 
 #[test]
 fn test_streaming_preserves_native_response_parts() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -863,7 +863,7 @@ fn test_streaming_preserves_native_response_parts() {
     .unwrap();
 
     let assembled = finalizer();
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
     let Some(MessageContent::Parts(parts)) = resp.message else {
         panic!("expected streamed native Gemini part to survive finalization");
@@ -892,7 +892,7 @@ fn test_streaming_preserves_native_response_parts() {
 
 #[test]
 fn test_streaming_preserves_native_before_text_order() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -925,7 +925,7 @@ fn test_streaming_preserves_native_before_text_order() {
 
 #[test]
 fn test_streaming_does_not_merge_text_across_native_part() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -960,7 +960,7 @@ fn test_streaming_does_not_merge_text_across_native_part() {
 
 #[test]
 fn test_streaming_preserves_adjacent_signed_text_parts() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -995,7 +995,7 @@ fn test_streaming_preserves_adjacent_signed_text_parts() {
 
 #[test]
 fn test_encode_lossless_when_messages_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {
@@ -1030,7 +1030,7 @@ fn test_encode_lossless_when_messages_unchanged() {
 
 #[test]
 fn test_encode_thought_signature_preserved_when_system_message_changes() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "call something"}]},
@@ -1078,7 +1078,7 @@ fn test_encode_thought_signature_preserved_when_system_message_changes() {
 /// the correct id, name, and response fields.
 #[test]
 fn test_encode_thought_signature_preserved_in_multi_turn_continuation() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "call the tool"}]},
@@ -1163,7 +1163,7 @@ fn test_encode_thought_signature_preserved_in_multi_turn_continuation() {
 /// edits the function call arguments (triggers the rebuild path).
 #[test]
 fn test_encode_thought_signature_on_function_call_part_survives_edit() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "run the tool"}]},
@@ -1222,7 +1222,7 @@ fn test_encode_thought_signature_on_function_call_part_survives_edit() {
 
 #[test]
 fn test_encode_inline_data_preserved_when_messages_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ==";
     let original = make_request(json!({
         "contents": [
@@ -1262,7 +1262,7 @@ fn test_encode_inline_data_preserved_when_messages_unchanged() {
 
 #[test]
 fn test_encode_inline_data_preserved_when_text_changes() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let image_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ==";
     let original = make_request(json!({
         "contents": [{
@@ -1308,7 +1308,7 @@ fn test_encode_inline_data_preserved_when_text_changes() {
 
 #[test]
 fn test_decode_inline_data_as_provider_native_content_part() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{
             "role": "user",
@@ -1352,7 +1352,7 @@ fn test_decode_inline_data_as_provider_native_content_part() {
 
 #[test]
 fn test_encode_patches_provider_native_inline_data_content_part() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{
             "role": "user",
@@ -1392,7 +1392,7 @@ fn test_encode_patches_provider_native_inline_data_content_part() {
 
 #[test]
 fn test_decode_response_filters_thought_parts() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -1416,7 +1416,7 @@ fn test_decode_response_filters_thought_parts() {
 
 #[test]
 fn test_streaming_filters_thought_parts() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -1439,7 +1439,7 @@ fn test_streaming_filters_thought_parts() {
     .unwrap();
 
     let assembled = finalizer();
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
     assert_eq!(
         resp.message,
@@ -1453,7 +1453,7 @@ fn test_streaming_filters_thought_parts() {
 /// Message::Assistant.content. Only visible (non-thought) text should appear.
 #[test]
 fn test_decode_request_thought_text_does_not_leak_into_assistant_content() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "search for it"}]},
@@ -1492,7 +1492,7 @@ fn test_decode_request_thought_text_does_not_leak_into_assistant_content() {
 /// content, thought text does not.
 #[test]
 fn test_decode_request_visible_text_survives_when_thought_present() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{
             "role": "model",
@@ -1528,7 +1528,7 @@ fn test_decode_request_visible_text_survives_when_thought_present() {
 
 #[test]
 fn test_encode_preserves_native_tool_groups_when_tools_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [
@@ -1579,7 +1579,7 @@ fn test_encode_preserves_native_tool_groups_when_tools_unchanged() {
 
 #[test]
 fn test_decode_native_only_tool_group_as_provider_native() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{"googleSearch": {"apiKey": "sk-tool-secret"}}]
@@ -1607,7 +1607,7 @@ fn test_decode_native_only_tool_group_as_provider_native() {
 
 #[test]
 fn test_decode_mixed_tool_group_exposes_native_siblings() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{
@@ -1639,7 +1639,7 @@ fn test_decode_mixed_tool_group_exposes_native_siblings() {
 
 #[test]
 fn test_encode_preserves_native_tool_groups_when_functions_change() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [
@@ -1685,7 +1685,7 @@ fn test_encode_preserves_native_tool_groups_when_functions_change() {
 /// response, behavior) must survive a decode → edit description → encode round-trip.
 #[test]
 fn test_encode_preserves_provider_tool_fields_when_description_changes() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{
@@ -1746,7 +1746,7 @@ fn test_encode_preserves_provider_tool_fields_when_description_changes() {
 
 #[test]
 fn test_encode_patches_gemini_provider_native_tool_group() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{"googleSearch": {"apiKey": "sk-tool-secret"}}]
@@ -1770,7 +1770,7 @@ fn test_encode_patches_gemini_provider_native_tool_group() {
 
 #[test]
 fn test_encode_patches_mixed_gemini_provider_native_tool_group() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{
@@ -1800,7 +1800,7 @@ fn test_encode_patches_mixed_gemini_provider_native_tool_group() {
 
 #[test]
 fn test_encode_deleting_mixed_native_sibling_does_not_rehome_later_native_group() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [
@@ -1839,7 +1839,7 @@ fn test_encode_deleting_mixed_native_sibling_does_not_rehome_later_native_group(
 
 #[test]
 fn test_decode_response_function_call_uses_id_field() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -1865,7 +1865,7 @@ fn test_decode_response_function_call_uses_id_field() {
 
 #[test]
 fn test_decode_response_function_call_fallback_to_name_when_no_id() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -1888,7 +1888,7 @@ fn test_decode_response_function_call_fallback_to_name_when_no_id() {
 /// Two simultaneous calls to the same function must have distinct IDs.
 #[test]
 fn test_decode_response_multi_call_same_function_distinct_ids() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -1920,7 +1920,7 @@ fn test_decode_response_multi_call_same_function_distinct_ids() {
 /// the function name) in the `id` field, and the correct function name in `name`.
 #[test]
 fn test_encode_function_response_id_not_name() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     // A multi-turn request where Gemini provided a functionCall with an explicit id.
     let original = make_request(json!({
         "contents": [
@@ -1980,7 +1980,7 @@ fn test_encode_function_response_id_not_name() {
 /// (not the name) is stored in tool_call_id.
 #[test]
 fn test_decode_function_response_uses_id_not_name() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "hi"}]},
@@ -2013,7 +2013,7 @@ fn test_decode_function_response_uses_id_not_name() {
 /// original contents items are left untouched.
 #[test]
 fn test_encode_system_message_added_leaves_contents_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "original user"}]},
@@ -2052,7 +2052,7 @@ fn test_encode_system_message_added_leaves_contents_unchanged() {
 /// normalized_to_gemini_content (not a wrong original as base).
 #[test]
 fn test_encode_new_user_message_appended_encodes_correctly() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "hello"}]},
@@ -2103,7 +2103,7 @@ fn test_encode_new_user_message_appended_encodes_correctly() {
 
 #[test]
 fn test_streaming_accumulates_function_call_parts() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -2128,7 +2128,7 @@ fn test_streaming_accumulates_function_call_parts() {
     .unwrap();
 
     let assembled = finalizer();
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
 
     assert_eq!(resp.finish_reason, Some(FinishReason::ToolUse));
@@ -2144,7 +2144,7 @@ fn test_streaming_accumulates_function_call_parts() {
 /// both encoded parts with the second part's signature.
 #[test]
 fn test_encode_thought_signature_preserved_for_parallel_same_function_calls() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "run two searches"}]},
@@ -2219,7 +2219,7 @@ fn test_encode_thought_signature_preserved_for_parallel_same_function_calls() {
 /// falling back to name only for provider payloads that omitted an ID.
 #[test]
 fn test_encode_reordered_same_name_function_calls_match_signatures_by_id() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "run two searches"}]},
@@ -2282,7 +2282,7 @@ fn test_encode_reordered_same_name_function_calls_match_signatures_by_id() {
 /// index 1; only the message-list index changes from 1 to 2.
 #[test]
 fn test_encode_insertion_does_not_bleed_thought_signature() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "user message"}]},
@@ -2387,7 +2387,7 @@ fn test_encode_insertion_does_not_bleed_thought_signature() {
 /// and model turns must be preserved byte-identically.
 #[test]
 fn test_encode_prepend_user_message_preserves_thought_signature() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "original question"}]},
@@ -2473,7 +2473,7 @@ fn test_encode_prepend_user_message_preserves_thought_signature() {
 /// must have that signature preserved when an interceptor edits the text.
 #[test]
 fn test_encode_thought_signature_on_text_part_survives_edit() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "say hello"}]},
@@ -2523,7 +2523,7 @@ fn test_encode_thought_signature_on_text_part_survives_edit() {
 /// per part — not collapse to just the first.
 #[test]
 fn test_decode_multiple_function_responses_in_one_turn() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "run two tools"}]},
@@ -2580,7 +2580,7 @@ fn test_decode_multiple_function_responses_in_one_turn() {
 
 #[test]
 fn test_decode_function_response_with_native_sibling_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{
             "role": "user",
@@ -2599,7 +2599,7 @@ fn test_decode_function_response_with_native_sibling_errors() {
 
 #[test]
 fn test_function_response_nested_parts_are_exposed_and_patchable() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "show my ordered instrument"}]},
@@ -2670,7 +2670,7 @@ fn test_function_response_nested_parts_are_exposed_and_patchable() {
 
 #[test]
 fn test_decode_rejects_missing_contents() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({"model": "gemini-2.0-flash"}));
     assert!(
         codec.decode(&request).is_err(),
@@ -2680,7 +2680,7 @@ fn test_decode_rejects_missing_contents() {
 
 #[test]
 fn test_decode_rejects_non_array_contents() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({"contents": "not an array"}));
     assert!(
         codec.decode(&request).is_err(),
@@ -2690,7 +2690,7 @@ fn test_decode_rejects_non_array_contents() {
 
 #[test]
 fn test_decode_rejects_non_object_generation_config() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": "not an object"
@@ -2703,7 +2703,7 @@ fn test_decode_rejects_non_object_generation_config() {
 
 #[test]
 fn test_decode_rejects_invalid_stop_sequences() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {"stopSequences": "not an array"}
@@ -2716,7 +2716,7 @@ fn test_decode_rejects_invalid_stop_sequences() {
 
 #[test]
 fn test_decode_rejects_non_array_tools() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": "not an array"
@@ -2729,7 +2729,7 @@ fn test_decode_rejects_non_array_tools() {
 
 #[test]
 fn test_decode_rejects_function_declaration_without_name() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{"functionDeclarations": [{"description": "no name"}]}]
@@ -2748,7 +2748,7 @@ fn test_decode_rejects_function_declaration_without_name() {
 /// must return an error — silently dropping it would be data loss.
 #[test]
 fn test_encode_unsupported_role_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
     }));
@@ -2772,7 +2772,7 @@ fn test_encode_unsupported_role_returns_error() {
 /// functionResponse content item — not resurrect the deleted result.
 #[test]
 fn test_encode_delete_one_parallel_tool_response() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "run two tools"}]},
@@ -2860,7 +2860,7 @@ fn test_encode_delete_one_parallel_tool_response() {
 /// not duplicate or resurrect the original item.
 #[test]
 fn test_encode_insert_between_parallel_tool_responses() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "run two tools"}]},
@@ -2944,13 +2944,13 @@ fn test_encode_insert_between_parallel_tool_responses() {
 // thoughtsTokenCount accounting
 // ===================================================================
 
-/// thoughtsTokenCount must be stored in ApiSpecificResponse::Gemini and
+/// thoughtsTokenCount must be stored in ApiSpecificResponse::GeminiGenerateContent and
 /// must be included in the fallback total_tokens calculation.
 #[test]
 fn test_decode_response_thoughts_token_count() {
     use super::super::response::ApiSpecificResponse;
 
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {"role": "model", "parts": [{"text": "let me think..."}]},
@@ -2976,9 +2976,9 @@ fn test_decode_response_thoughts_token_count() {
         "fallback total_tokens must include thoughtsTokenCount"
     );
 
-    // thoughts_tokens must be in ApiSpecificResponse::Gemini.
+    // thoughts_tokens must be in ApiSpecificResponse::GeminiGenerateContent.
     match resp.api_specific {
-        Some(ApiSpecificResponse::Gemini {
+        Some(ApiSpecificResponse::GeminiGenerateContent {
             thoughts_tokens, ..
         }) => {
             assert_eq!(
@@ -2987,14 +2987,14 @@ fn test_decode_response_thoughts_token_count() {
                 "thoughtsTokenCount must be in api_specific"
             );
         }
-        other => panic!("expected ApiSpecificResponse::Gemini, got: {other:?}"),
+        other => panic!("expected ApiSpecificResponse::GeminiGenerateContent, got: {other:?}"),
     }
 }
 
 // Roleless contents decode to user messages (Google allows omitting role).
 #[test]
 fn test_decode_roleless_content_treated_as_user() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [
             {"parts": [{"text": "hello without a role"}]},
@@ -3024,7 +3024,7 @@ fn test_decode_roleless_content_treated_as_user() {
 // Wrong numeric types in generationConfig must return an error.
 #[test]
 fn test_decode_rejects_non_numeric_temperature() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {"temperature": "hot"}
@@ -3037,7 +3037,7 @@ fn test_decode_rejects_non_numeric_temperature() {
 
 #[test]
 fn test_decode_rejects_non_numeric_max_output_tokens() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {"maxOutputTokens": "a lot"}
@@ -3051,7 +3051,7 @@ fn test_decode_rejects_non_numeric_max_output_tokens() {
 // Streaming finalizer must propagate responseId when present.
 #[test]
 fn test_streaming_propagates_response_id() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -3075,7 +3075,7 @@ fn test_streaming_propagates_response_id() {
         "streaming finalizer must propagate responseId from SSE events"
     );
 
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
     assert_eq!(
         resp.id.as_deref(),
@@ -3088,7 +3088,7 @@ fn test_streaming_propagates_response_id() {
 // Explicit reasons must not be overridden by the tool-call presence heuristic.
 #[test]
 fn test_decode_response_max_tokens_with_function_call_is_length_not_tool_use() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -3111,7 +3111,7 @@ fn test_decode_response_max_tokens_with_function_call_is_length_not_tool_use() {
 // SAFETY + functionCall parts → ContentFilter, not ToolUse.
 #[test]
 fn test_decode_response_safety_with_function_call_is_content_filter_not_tool_use() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -3134,7 +3134,7 @@ fn test_decode_response_safety_with_function_call_is_content_filter_not_tool_use
 // STOP + functionCall parts → ToolUse (unchanged behaviour).
 #[test]
 fn test_decode_response_stop_with_function_call_is_tool_use() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {
@@ -3158,7 +3158,7 @@ fn test_decode_response_stop_with_function_call_is_tool_use() {
 // be silently dropped by patch_changed_gemini_content.
 #[test]
 fn test_encode_roleless_original_item_survives_edit() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     // A Gemini request whose user content item has no "role" field.
     let original = make_request(json!({
         "contents": [{"parts": [{"text": "original text"}]}]
@@ -3197,7 +3197,7 @@ fn test_encode_roleless_original_item_survives_edit() {
 // Multiple system messages must be merged into one systemInstruction.
 #[test]
 fn test_encode_multiple_system_messages_merged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -3237,7 +3237,7 @@ fn test_encode_multiple_system_messages_merged() {
 // Encoding unsupported fields must error, not silently ignore.
 #[test]
 fn test_encode_unsupported_field_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -3254,7 +3254,7 @@ fn test_encode_unsupported_field_returns_error() {
 // Unparsable tool-call arguments must return an error rather than becoming {}.
 #[test]
 fn test_encode_invalid_tool_call_arguments_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -3281,7 +3281,7 @@ fn test_encode_invalid_tool_call_arguments_returns_error() {
 // Thinking-only partial usage (no candidatesTokenCount).
 #[test]
 fn test_decode_response_thoughts_only_usage_computes_fallback_total() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {"role": "model", "parts": []},
@@ -3309,7 +3309,7 @@ fn test_decode_response_thoughts_only_usage_computes_fallback_total() {
 // Decode validation: table-driven negative tests for malformed contents items.
 #[test]
 fn test_decode_contents_item_validation() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
 
     let cases: &[(&str, Json)] = &[
         (
@@ -3367,7 +3367,7 @@ fn test_decode_contents_item_validation() {
 // Valid roleless contents item must decode successfully as a user message.
 #[test]
 fn test_decode_roleless_contents_item_is_valid() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"parts": [{"text": "hello"}]}]
     }));
@@ -3381,7 +3381,7 @@ fn test_decode_roleless_contents_item_is_valid() {
 // Encoding a normalized message whose content has non-text parts must error.
 #[test]
 fn test_encode_non_text_content_part_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -3405,7 +3405,7 @@ fn test_encode_non_text_content_part_returns_error() {
 // Encoding a newly-inserted user message with non-text content must also error.
 #[test]
 fn test_encode_inserted_non_text_content_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "original"}]}]
     }));
@@ -3430,7 +3430,7 @@ fn test_encode_inserted_non_text_content_returns_error() {
 // groups must return an error rather than silently collapsing them.
 #[test]
 fn test_encode_multiple_fn_decl_groups_error_on_edit() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [
@@ -3460,7 +3460,7 @@ fn test_encode_multiple_fn_decl_groups_error_on_edit() {
 // Streaming: candidate metadata (safetyRatings, groundingMetadata) must survive finalization.
 #[test]
 fn test_streaming_candidate_extras_survive_finalize() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let finalizer = streaming_codec.finalizer();
 
@@ -3480,33 +3480,33 @@ fn test_streaming_candidate_extras_survive_finalize() {
 
     let assembled = finalizer();
 
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
 
     use super::super::response::ApiSpecificResponse;
     match &resp.api_specific {
-        Some(ApiSpecificResponse::Gemini {
+        Some(ApiSpecificResponse::GeminiGenerateContent {
             safety_ratings,
             grounding_metadata,
             ..
         }) => {
             assert!(
                 safety_ratings.is_some(),
-                "safetyRatings from streaming must survive in ApiSpecificResponse::Gemini"
+                "safetyRatings from streaming must survive in ApiSpecificResponse::GeminiGenerateContent"
             );
             assert!(
                 grounding_metadata.is_some(),
-                "groundingMetadata from streaming must survive in ApiSpecificResponse::Gemini"
+                "groundingMetadata from streaming must survive in ApiSpecificResponse::GeminiGenerateContent"
             );
         }
-        other => panic!("expected ApiSpecificResponse::Gemini, got: {other:?}"),
+        other => panic!("expected ApiSpecificResponse::GeminiGenerateContent, got: {other:?}"),
     }
 }
 
 // Present-but-non-string role must error.
 #[test]
 fn test_decode_non_string_role_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     for bad_role in [json!(123), json!(null), json!(true), json!([])] {
         let req = make_request(json!({
             "contents": [{"role": bad_role, "parts": [{"text": "hi"}]}]
@@ -3521,7 +3521,7 @@ fn test_decode_non_string_role_errors() {
 // functionResponse.response is required; missing must error.
 #[test]
 fn test_decode_function_response_missing_response_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"role": "user", "parts": [
             {"functionResponse": {"id": "c1", "name": "fn"}}
@@ -3536,7 +3536,7 @@ fn test_decode_function_response_missing_response_errors() {
 // functionResponse.response must be an object.
 #[test]
 fn test_decode_function_response_non_object_response_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     for bad in [json!("string"), json!([1, 2]), json!(42)] {
         let req = make_request(json!({
             "contents": [{"role": "user", "parts": [
@@ -3553,7 +3553,7 @@ fn test_decode_function_response_non_object_response_errors() {
 // Tool encode: non-object content is wrapped in {"output": ...}.
 #[test]
 fn test_encode_tool_content_non_object_is_wrapped() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "go"}]},
@@ -3578,7 +3578,7 @@ fn test_encode_tool_content_non_object_is_wrapped() {
 // System message with non-text content must error.
 #[test]
 fn test_encode_system_message_non_text_content_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -3600,7 +3600,7 @@ fn test_encode_system_message_non_text_content_errors() {
 // Tool message with non-text normalized content must error.
 #[test]
 fn test_encode_tool_message_non_text_content_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "go"}]},
@@ -3626,7 +3626,7 @@ fn test_encode_tool_message_non_text_content_errors() {
 // Refusal content must error (not silently drop).
 #[test]
 fn test_encode_refusal_content_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -3647,7 +3647,7 @@ fn test_encode_refusal_content_errors() {
 // tools[] validation negative cases.
 #[test]
 fn test_decode_tools_validation_negative() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let cases: &[(&str, Json)] = &[
         (
             "tools entry not an object",
@@ -3681,7 +3681,7 @@ fn test_decode_tools_validation_negative() {
 // functionCall.args must be an object on request decode.
 #[test]
 fn test_decode_function_call_non_object_args_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     for bad in [json!([1, 2]), json!("string"), json!(42)] {
         let req = make_request(json!({
             "contents": [{
@@ -3699,7 +3699,7 @@ fn test_decode_function_call_non_object_args_errors() {
 // functionCall arguments must be a JSON object on encode.
 #[test]
 fn test_encode_function_call_non_object_args_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({"contents": [{"role": "user", "parts": [{"text": "go"}]}]}));
     let mut annotated = codec.decode(&original).unwrap();
     annotated.messages.push(Message::Assistant {
@@ -3723,7 +3723,7 @@ fn test_encode_function_call_non_object_args_errors() {
 // Unchanged payload with native inlineData round-trips byte-identically.
 #[test]
 fn test_encode_native_inline_data_round_trips_unchanged() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ==";
     let original = make_request(json!({
         "contents": [{
@@ -3746,7 +3746,7 @@ fn test_encode_native_inline_data_round_trips_unchanged() {
 // generationConfig unmodeled keys are preserved when params are cleared.
 #[test]
 fn test_encode_clearing_params_preserves_unmodeled_gen_config_fields() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {
@@ -3781,7 +3781,7 @@ fn test_encode_clearing_params_preserves_unmodeled_gen_config_fields() {
 // All modeled keys cleared, empty generationConfig is removed.
 #[test]
 fn test_encode_clearing_params_removes_empty_gen_config() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {"temperature": 0.5, "maxOutputTokens": 256}
@@ -3798,7 +3798,7 @@ fn test_encode_clearing_params_removes_empty_gen_config() {
 // Response decode: malformed functionCall parts error rather than silently drop.
 #[test]
 fn test_decode_response_malformed_function_call_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let cases: &[(&str, Json)] = &[
         (
             "functionCall is non-object",
@@ -3854,7 +3854,7 @@ fn test_decode_response_malformed_function_call_errors() {
 // STOP + malformed functionCall must error, not return Complete.
 #[test]
 fn test_decode_response_stop_with_malformed_function_call_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{"content": {"role": "model",
             "parts": [{"functionCall": {"name": "", "args": {}}}]},
@@ -3870,7 +3870,7 @@ fn test_decode_response_stop_with_malformed_function_call_errors() {
 // Request decode: present functionCall.id must be a non-empty string.
 #[test]
 fn test_decode_request_function_call_id_validation() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let cases: &[(&str, Json)] = &[
         (
             "functionCall.id non-string",
@@ -3898,7 +3898,7 @@ fn test_decode_request_function_call_id_validation() {
 // Request decode: present functionResponse.id must be a non-empty string.
 #[test]
 fn test_decode_request_function_response_id_validation() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let cases: &[(&str, Json)] = &[
         (
             "functionResponse.id non-string",
@@ -3926,7 +3926,7 @@ fn test_decode_request_function_response_id_validation() {
 // systemInstruction validation.
 #[test]
 fn test_decode_system_instruction_validation() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let base_contents = json!([{"role": "user", "parts": [{"text": "hi"}]}]);
     let cases: &[(&str, Json)] = &[
         (
@@ -3978,7 +3978,7 @@ fn test_decode_system_instruction_validation() {
 // model must be a string when present.
 #[test]
 fn test_decode_non_string_model_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "model": 42
@@ -3989,7 +3989,7 @@ fn test_decode_non_string_model_errors() {
 // Encode: empty tool-call name must error.
 #[test]
 fn test_encode_empty_tool_call_name_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}));
     let mut annotated = codec.decode(&original).unwrap();
     annotated.messages.push(Message::Assistant {
@@ -4013,7 +4013,7 @@ fn test_encode_empty_tool_call_name_errors() {
 // Encode: empty tool_call_id must error.
 #[test]
 fn test_encode_empty_tool_call_id_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "go"}]},
@@ -4038,7 +4038,7 @@ fn test_encode_empty_tool_call_id_errors() {
 // Encode: empty FunctionDefinition.name must error.
 #[test]
 fn test_encode_empty_function_definition_name_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{"functionDeclarations": [{"name": "good_fn"}]}]
@@ -4061,7 +4061,7 @@ fn test_encode_empty_function_definition_name_errors() {
 // Encode: FunctionDefinition.strict must error when set.
 #[test]
 fn test_encode_function_definition_strict_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{"functionDeclarations": [{"name": "fn"}]}]
@@ -4084,7 +4084,7 @@ fn test_encode_function_definition_strict_errors() {
 // Decode: non-string description in functionDeclaration must error.
 #[test]
 fn test_decode_function_declaration_non_string_description_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "tools": [{"functionDeclarations": [{"name": "fn", "description": 42}]}]
@@ -4098,7 +4098,7 @@ fn test_decode_function_declaration_non_string_description_errors() {
 // Encode: systemInstruction sibling fields are preserved when text changes.
 #[test]
 fn test_encode_system_instruction_preserves_sibling_fields() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "systemInstruction": {
@@ -4149,7 +4149,7 @@ fn test_extract_content_text_treats_missing_part_type_as_text() {
 // systemInstruction.role non-string must error on decode (validated in validate_system_instruction).
 #[test]
 fn test_decode_system_instruction_non_string_role_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "systemInstruction": {"role": 123, "parts": [{"text": "system"}]}
@@ -4163,7 +4163,7 @@ fn test_decode_system_instruction_non_string_role_errors() {
 // Mixed functionResponse + functionCall in one content item must error.
 #[test]
 fn test_decode_mixed_fr_and_fc_parts_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{
             "role": "user",
@@ -4182,7 +4182,7 @@ fn test_decode_mixed_fr_and_fc_parts_errors() {
 // Non-numeric topP must error.
 #[test]
 fn test_decode_rejects_non_numeric_top_p() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let request = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {"topP": "high"}
@@ -4196,7 +4196,7 @@ fn test_decode_rejects_non_numeric_top_p() {
 // ProviderNative tool variants owned by a different provider must error on encode.
 #[test]
 fn test_encode_mismatched_provider_native_tool_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -4214,7 +4214,7 @@ fn test_encode_mismatched_provider_native_tool_returns_error() {
 
 #[test]
 fn test_encode_provider_native_tool_with_function_declarations_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -4232,7 +4232,7 @@ fn test_encode_provider_native_tool_with_function_declarations_returns_error() {
 
 #[test]
 fn test_encode_system_message_name_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "systemInstruction": {"parts": [{"text": "be helpful"}]},
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
@@ -4251,7 +4251,7 @@ fn test_encode_system_message_name_returns_error() {
 
 #[test]
 fn test_encode_user_message_name_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
     }));
@@ -4267,7 +4267,7 @@ fn test_encode_user_message_name_returns_error() {
 
 #[test]
 fn test_encode_assistant_message_name_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "hi"}]},
@@ -4288,7 +4288,7 @@ fn test_encode_assistant_message_name_returns_error() {
 
 #[test]
 fn test_encode_assistant_tool_call_message_name_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [
             {"role": "user", "parts": [{"text": "use a tool"}]},
@@ -4312,7 +4312,7 @@ fn test_encode_assistant_tool_call_message_name_returns_error() {
 
 #[test]
 fn test_encode_previous_response_id_returns_error() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}));
     let mut annotated = codec.decode(&original).unwrap();
     annotated.previous_response_id = Some("prev-123".into());
@@ -4324,7 +4324,7 @@ fn test_encode_previous_response_id_returns_error() {
 
 #[test]
 fn test_decode_non_string_text_part_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": 42}]}]
     }));
@@ -4337,7 +4337,7 @@ fn test_decode_non_string_text_part_errors() {
 // functionResponse on model-role content must error.
 #[test]
 fn test_decode_function_response_on_model_role_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{
             "role": "model",
@@ -4353,7 +4353,7 @@ fn test_decode_function_response_on_model_role_errors() {
 // functionCall on user-role content must error.
 #[test]
 fn test_decode_function_call_on_user_role_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{
             "role": "user",
@@ -4369,7 +4369,7 @@ fn test_decode_function_call_on_user_role_errors() {
 // functionResponse mixed with visible text parts must error.
 #[test]
 fn test_decode_function_response_mixed_with_text_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{
             "role": "user",
@@ -4388,7 +4388,7 @@ fn test_decode_function_response_mixed_with_text_errors() {
 // Response decode: non-string text value must error.
 #[test]
 fn test_decode_response_non_string_text_part_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{
             "content": {"role": "model", "parts": [{"text": 42}]},
@@ -4405,7 +4405,7 @@ fn test_decode_response_non_string_text_part_errors() {
 // systemInstruction part-level metadata is preserved when text changes.
 #[test]
 fn test_encode_system_instruction_part_metadata_preserved() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "systemInstruction": {
@@ -4431,7 +4431,7 @@ fn test_encode_system_instruction_part_metadata_preserved() {
 // Unknown sibling fields on a known text part are metadata, not additional data-union fields.
 #[test]
 fn test_encode_text_part_unknown_metadata_preserved() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{
             "role": "user",
@@ -4459,7 +4459,7 @@ fn test_encode_text_part_unknown_metadata_preserved() {
 // Request decode: part with both text and functionResponse must error.
 #[test]
 fn test_decode_part_with_text_and_function_response_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"role": "user", "parts": [
             {"text": "visible", "functionResponse": {"name": "fn", "response": {}}}
@@ -4474,7 +4474,7 @@ fn test_decode_part_with_text_and_function_response_errors() {
 // Request decode: part with both text and functionCall must error.
 #[test]
 fn test_decode_part_with_text_and_function_call_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let req = make_request(json!({
         "contents": [{"role": "model", "parts": [
             {"text": "visible", "functionCall": {"name": "fn", "args": {}}}
@@ -4489,7 +4489,7 @@ fn test_decode_part_with_text_and_function_call_errors() {
 // Response decode: non-object part must error.
 #[test]
 fn test_decode_response_non_object_part_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{"content": {"role": "model", "parts": ["not an object"]}, "finishReason": "STOP"}],
         "usageMetadata": {"promptTokenCount": 1}
@@ -4503,7 +4503,7 @@ fn test_decode_response_non_object_part_errors() {
 // Response decode: part with both text and functionCall must error.
 #[test]
 fn test_decode_response_part_text_and_function_call_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let response = json!({
         "candidates": [{"content": {"role": "model", "parts": [
             {"text": "hello", "functionCall": {"name": "fn", "args": {}}}
@@ -4519,7 +4519,7 @@ fn test_decode_response_part_text_and_function_call_errors() {
 // Streaming: part with both text and functionCall must error via collector.
 #[test]
 fn test_streaming_part_text_and_function_call_errors() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
 
     let result = collector(json!({
@@ -4539,7 +4539,7 @@ fn test_streaming_part_text_and_function_call_errors() {
 // Streaming: non-object part must error.
 #[test]
 fn test_streaming_non_object_part_errors() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let result = collector(json!({
         "candidates": [{"content": {"role": "model", "parts": ["not an object"]}, "index": 0}]
@@ -4553,7 +4553,7 @@ fn test_streaming_non_object_part_errors() {
 // Streaming: non-string text value must error.
 #[test]
 fn test_streaming_non_string_text_errors() {
-    let streaming_codec = GeminiStreamingCodec::new();
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
     let mut collector = streaming_codec.collector();
     let result = collector(json!({
         "candidates": [{"content": {"role": "model", "parts": [{"text": 42}]}, "index": 0}]
@@ -4567,7 +4567,7 @@ fn test_streaming_non_string_text_errors() {
 // systemInstruction with multiple text parts must error on edit.
 #[test]
 fn test_encode_system_instruction_multiple_text_parts_edit_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "systemInstruction": {
@@ -4589,7 +4589,7 @@ fn test_encode_system_instruction_multiple_text_parts_edit_errors() {
 // systemInstruction with a native non-text part must error on decode.
 #[test]
 fn test_decode_system_instruction_non_text_part_errors() {
-    let codec = GeminiCodec;
+    let codec = GeminiGenerateContentCodec;
     let original = make_request(json!({
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "systemInstruction": {

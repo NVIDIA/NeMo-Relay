@@ -1023,24 +1023,28 @@ impl PyAnthropicMessagesCodec {
 ///
 /// Example:
 /// ```python
-/// from nemo_relay.codecs import GeminiCodec
-/// codec = GeminiCodec()
+/// from nemo_relay.codecs import GeminiGenerateContentCodec
+/// codec = GeminiGenerateContentCodec()
 /// annotated_req = codec.decode(request)
 /// annotated_resp = codec.decode_response(response)
 /// ```
-#[pyclass(name = "GeminiCodec")]
-pub struct PyGeminiCodec {
+#[pyclass(name = "GeminiGenerateContentCodec")]
+pub struct PyGeminiGenerateContentCodec {
     pub(crate) inner_codec: Arc<dyn LlmCodec>,
     pub(crate) inner_response_codec: Arc<dyn LlmResponseCodec>,
 }
 
 #[pymethods]
-impl PyGeminiCodec {
+impl PyGeminiGenerateContentCodec {
     #[new]
     pub(crate) fn new() -> Self {
         Self {
-            inner_codec: Arc::new(nemo_relay::codec::gemini::GeminiCodec),
-            inner_response_codec: Arc::new(nemo_relay::codec::gemini::GeminiCodec),
+            inner_codec: Arc::new(
+                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+            ),
+            inner_response_codec: Arc::new(
+                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+            ),
         }
     }
 
@@ -1077,6 +1081,6 @@ impl PyGeminiCodec {
     }
 
     pub(crate) fn __repr__(&self) -> &'static str {
-        "<GeminiCodec>"
+        "<GeminiGenerateContentCodec>"
     }
 }

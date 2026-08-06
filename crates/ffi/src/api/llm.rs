@@ -380,10 +380,12 @@ pub extern "C" fn nemo_relay_anthropic_messages_codec_new() -> *mut FfiCodecHand
 /// # Safety
 /// Caller must free the returned handle via `nemo_relay_codec_free`.
 #[unsafe(no_mangle)]
-pub extern "C" fn nemo_relay_gemini_codec_new() -> *mut FfiCodecHandle {
+pub extern "C" fn nemo_relay_gemini_generate_content_codec_new() -> *mut FfiCodecHandle {
     Box::into_raw(Box::new(FfiCodecHandle {
-        codec: Arc::new(nemo_relay::codec::gemini::GeminiCodec),
-        response_codec: Arc::new(nemo_relay::codec::gemini::GeminiCodec),
+        codec: Arc::new(nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec),
+        response_codec: Arc::new(
+            nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+        ),
     }))
 }
 

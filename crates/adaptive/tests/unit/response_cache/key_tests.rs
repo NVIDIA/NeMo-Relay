@@ -600,8 +600,8 @@ fn gemini_shaped_requests_key_on_the_detected_decode() {
         "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
         "generationConfig": {"temperature": 0.0}
     }));
-    let (body, effective_codec) = resolved_body("gemini", &request);
-    assert_eq!(effective_codec, Some("gemini"));
+    let (body, effective_codec) = resolved_body("gemini_generate_content", &request);
+    assert_eq!(effective_codec, Some("gemini_generate_content"));
     assert_ne!(
         body, request.content,
         "Gemini requests must use the normalized decode when it is lossless"

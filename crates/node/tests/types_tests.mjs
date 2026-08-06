@@ -23,7 +23,7 @@ describe('Type constants', () => {
     assert.equal(typeof lib.OpenAIChatCodec, 'function');
     assert.equal(typeof lib.OpenAIResponsesCodec, 'function');
     assert.equal(typeof lib.AnthropicMessagesCodec, 'function');
-    assert.equal(typeof lib.GeminiCodec, 'function');
+    assert.equal(typeof lib.GeminiGenerateContentCodec, 'function');
   });
 
   it('scope type enum values', () => {
@@ -82,19 +82,19 @@ describe('ScopeStack', () => {
 });
 
 // ===========================================================================
-// GeminiCodec
+// GeminiGenerateContentCodec
 // ===========================================================================
 
-describe('GeminiCodec', () => {
-  const { GeminiCodec } = lib;
+describe('GeminiGenerateContentCodec', () => {
+  const { GeminiGenerateContentCodec } = lib;
 
   it('instantiates', () => {
-    const codec = new GeminiCodec();
-    assert.ok(codec instanceof GeminiCodec);
+    const codec = new GeminiGenerateContentCodec();
+    assert.ok(codec instanceof GeminiGenerateContentCodec);
   });
 
   it('decode returns an AnnotatedLLMRequest with messages and no params', () => {
-    const codec = new GeminiCodec();
+    const codec = new GeminiGenerateContentCodec();
     const req = new LlmRequest({}, {
       contents: [
         { role: 'user', parts: [{ text: 'hello' }] },
@@ -111,7 +111,7 @@ describe('GeminiCodec', () => {
   });
 
   it('decode captures generationConfig into params', () => {
-    const codec = new GeminiCodec();
+    const codec = new GeminiGenerateContentCodec();
     const req = new LlmRequest({}, {
       contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
       generationConfig: { temperature: 0.5, maxOutputTokens: 256 },
@@ -124,7 +124,7 @@ describe('GeminiCodec', () => {
   });
 
   it('encode round-trips extra fields', () => {
-    const codec = new GeminiCodec();
+    const codec = new GeminiGenerateContentCodec();
     const req = new LlmRequest({}, {
       contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
       safetySettings: [{ category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' }],
@@ -138,7 +138,7 @@ describe('GeminiCodec', () => {
   });
 
   it('decodeResponse extracts text and finish reason', () => {
-    const codec = new GeminiCodec();
+    const codec = new GeminiGenerateContentCodec();
     const raw = {
       candidates: [{
         content: { role: 'model', parts: [{ text: 'Hello!' }] },
@@ -159,7 +159,7 @@ describe('GeminiCodec', () => {
   });
 
   it('decodeResponse maps functionCall id correctly', () => {
-    const codec = new GeminiCodec();
+    const codec = new GeminiGenerateContentCodec();
     const raw = {
       candidates: [{
         content: {

@@ -1157,7 +1157,7 @@ class AnthropicMessagesCodec:
         """Decode an Anthropic response into a normalized response view."""
         ...
 
-class GeminiCodec:
+class GeminiGenerateContentCodec:
     """Built-in codec for Gemini generateContent requests and responses.
 
     Summary:
@@ -1165,7 +1165,7 @@ class GeminiCodec:
     """
 
     def __init__(self) -> None:
-        """Create a Gemini codec."""
+        """Create a Gemini generateContent codec."""
         ...
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         """Decode a Gemini generateContent request into a normalized request view."""

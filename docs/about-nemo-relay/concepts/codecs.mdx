@@ -90,7 +90,7 @@ changing a key overlays it.
 - `api_specific` is a tagged, mutable surface for modeled Anthropic Messages,
   OpenAI Chat Completions, or OpenAI Responses request controls. Response
   annotations use the same pattern for provider-only metadata, including Gemini
-  thinking tokens.
+  generateContent thinking tokens.
 - Provider-only messages, content blocks, input items, tools, and tool choices
   use `{ provider, kind, value }`, where `value` is the exact native JSON.
 - Top-level `extra` is reserved for unknown future fields.

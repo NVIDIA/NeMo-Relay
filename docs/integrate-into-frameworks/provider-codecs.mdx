@@ -91,7 +91,7 @@ Use the built-in provider codecs when the framework payload already matches a su
 - `OpenAIChatCodec`: OpenAI Chat Completions-compatible requests and responses.
 - `OpenAIResponsesCodec`: OpenAI Responses-compatible requests and responses.
 - `AnthropicMessagesCodec`: Anthropic Messages-compatible requests and responses.
-- `GeminiCodec`: Gemini generateContent-compatible requests and responses.
+- `GeminiGenerateContentCodec`: Gemini generateContent-compatible requests and responses.
 
 ## Provider Codec Roles
 
@@ -107,7 +107,7 @@ The built-in provider codecs expose the same core methods:
 | OpenAI Chat | `nemo_relay.codecs.OpenAIChatCodec` | `OpenAIChatCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 | OpenAI Responses | `nemo_relay.codecs.OpenAIResponsesCodec` | `OpenAIResponsesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 | Anthropic Messages | `nemo_relay.codecs.AnthropicMessagesCodec` | `AnthropicMessagesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
-| Gemini | `nemo_relay.codecs.GeminiCodec` | `GeminiCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| Gemini generateContent | `nemo_relay.codecs.GeminiGenerateContentCodec` | `GeminiGenerateContentCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 
 Choose the provider codec that matches the payload shape the framework already sends to the provider. Do not translate to a different provider shape only to make the codec fit.
 

@@ -403,7 +403,7 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
             "openai_chat",
             "openai_responses",
             "anthropic_messages",
-            "gemini"
+            "gemini_generate_content"
         ]
     ));
     assert!(schema_property_has_default(

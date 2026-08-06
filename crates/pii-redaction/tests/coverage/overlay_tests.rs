@@ -165,7 +165,8 @@ fn gemini_overlay_redacts_candidate_text() {
     });
 
     let annotated = gemini_annotated(Some("[REDACTED]"), None, None, None);
-    let result = BuiltinCodecName::Gemini.overlay_response_payload(payload, &annotated);
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
 
     let text = result["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
@@ -212,7 +213,8 @@ fn gemini_overlay_redacts_provider_native_candidate_part() {
         ..Default::default()
     };
 
-    let result = BuiltinCodecName::Gemini.overlay_response_payload(payload, &annotated);
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
     assert_eq!(
         result["candidates"][0]["content"]["parts"][1]["codeExecutionResult"]["output"],
         json!("[REDACTED]"),
@@ -245,7 +247,8 @@ fn gemini_overlay_updates_tool_call_args() {
         None,
         None,
     );
-    let result = BuiltinCodecName::Gemini.overlay_response_payload(payload, &annotated);
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
 
     let args = &result["candidates"][0]["content"]["parts"][0]["functionCall"]["args"];
     assert_eq!(
@@ -269,7 +272,8 @@ fn gemini_overlay_updates_response_id_and_model_version() {
 
     // Annotated view carries the sanitizer-approved id/model.
     let annotated = gemini_annotated(Some("hi"), None, Some("resp-abc"), Some("gemini-2.0-flash"));
-    let result = BuiltinCodecName::Gemini.overlay_response_payload(payload, &annotated);
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
 
     assert_eq!(
         result["responseId"],
@@ -304,7 +308,8 @@ fn gemini_overlay_does_not_overwrite_finish_reason() {
         ..Default::default()
     };
 
-    let result = BuiltinCodecName::Gemini.overlay_response_payload(payload, &annotated);
+    let result =
+        BuiltinCodecName::GeminiGenerateContent.overlay_response_payload(payload, &annotated);
 
     assert_eq!(
         result["candidates"][0]["finishReason"].as_str(),
