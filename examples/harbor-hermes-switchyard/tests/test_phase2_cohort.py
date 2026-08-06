@@ -93,6 +93,17 @@ def test_task_discovery_places_explicit_canary_before_lexical_lane(tmp_path: Pat
     ]
 
 
+def test_task_discovery_without_a_canary_preserves_dataset_order(tmp_path: Path) -> None:
+    module = load_coordinator()
+    write_task(tmp_path, "task-z", "4G")
+    write_task(tmp_path, "task-a", "2G")
+    tasks = module.discover_tasks(tmp_path, 2, set(), None)
+    assert [(task.index, task.name, task.memory_gb) for task in tasks] == [
+        (1, "task-a", 2),
+        (2, "task-z", 4),
+    ]
+
+
 def test_failed_attempt_is_preserved_and_passed_attempt_wins(tmp_path: Path) -> None:
     module = load_coordinator()
     task = module.Task(1, "task", 2)

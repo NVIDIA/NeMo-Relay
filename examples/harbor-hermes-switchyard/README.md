@@ -193,9 +193,23 @@ immutable inputs is refused. Choose concurrency before this point.
 "$EXAMPLE_ROOT/run_phase2_cohort.sh" "$TERMINAL_BENCH_RUN_ROOT" --plan-only
 ```
 
-`adaptive-rejection-sampler` is always first and serial. A passed validation
-and upload result opens the parallel lane even when its benchmark reward is a
-non-pass.
+**Optional canary-first scheduling.**
+
+The default `TBENCH_CANARY_TASK=adaptive-rejection-sampler` runs that one real
+task first. A passed validation and upload result opens the parallel lane even
+when its benchmark reward is a non-pass. This is a conservative production
+check, not a separate command: launching the full cohort on a fresh run root
+automatically starts the canary and then continues with the remaining tasks.
+
+To skip that one-task checkpoint, set an explicitly blank value in `.env`:
+
+```bash
+TBENCH_CANARY_TASK=
+```
+
+With the canary disabled, the full cohort starts immediately. Task 1 remains
+the first selected task, but it is scheduled in the normal parallel or serial
+lane rather than running alone first.
 
 ## 9. Check capacity and provider availability
 

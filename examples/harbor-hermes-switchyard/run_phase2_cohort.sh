@@ -28,7 +28,9 @@ relay_wheel="${RELAY_WHEEL:-}"
 relay_architecture="${RELAY_ARCHITECTURE:-x86_64}"
 plugin_config_template="${PLUGIN_CONFIG_TEMPLATE:-$example_root/config/plugins.toml.in}"
 sample_count="${TBENCH_SAMPLE_COUNT:-89}"
-canary_task="${TBENCH_CANARY_TASK:-adaptive-rejection-sampler}"
+# An explicitly blank value disables canary-first scheduling. An unset value
+# keeps the conservative default.
+canary_task="${TBENCH_CANARY_TASK-adaptive-rejection-sampler}"
 concurrency="${TBENCH_CONCURRENCY:-4}"
 parallel_memory_gb="${TBENCH_PARALLEL_MAX_MEMORY_GB:-2}"
 docker_memory_reserve_gb="${TBENCH_DOCKER_MEMORY_RESERVE_GB:-4}"

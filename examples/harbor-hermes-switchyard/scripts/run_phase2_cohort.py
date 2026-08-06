@@ -105,7 +105,7 @@ def parse_memory_gb(value: object, task_name: str) -> int:
     return int(match.group(1))
 
 
-def discover_tasks(dataset_root: Path, sample_count: int, excluded: set[str], canary_task: str) -> list[Task]:
+def discover_tasks(dataset_root: Path, sample_count: int, excluded: set[str], canary_task: str | None) -> list[Task]:
     if not dataset_root.is_dir():
         raise ValueError(f"dataset root is not a directory: {dataset_root}")
     discovered: list[tuple[str, int]] = []
@@ -122,10 +122,13 @@ def discover_tasks(dataset_root: Path, sample_count: int, excluded: set[str], ca
     selected = discovered[:sample_count]
     if len(selected) != sample_count:
         raise ValueError(f"dataset contains {len(selected)} selectable tasks; requested {sample_count}")
-    canaries = [item for item in selected if item[0] == canary_task]
-    if len(canaries) != 1:
-        raise ValueError(f"canary task is not uniquely selectable: {canary_task}")
-    ordered = canaries + [item for item in selected if item[0] != canary_task]
+    if canary_task:
+        canaries = [item for item in selected if item[0] == canary_task]
+        if len(canaries) != 1:
+            raise ValueError(f"canary task is not uniquely selectable: {canary_task}")
+        ordered = canaries + [item for item in selected if item[0] != canary_task]
+    else:
+        ordered = selected
     return [Task(index, name, memory) for index, (name, memory) in enumerate(ordered, 1)]
 
 
@@ -779,11 +782,14 @@ class CohortRunner:
         preflight = shared_preflight(self.args, self.tasks)
         write_json(self.args.run_root / "preflight.json", {"status": "passed", **preflight})
         await self.refresh_summary()
-        first = self.tasks[0]
-        if not await self.run_task(first):
-            return False
-        parallel = [task for task in self.tasks[1:] if task.memory_gb <= self.args.parallel_max_memory_gb]
-        serial = [task for task in self.tasks[1:] if task.memory_gb > self.args.parallel_max_memory_gb]
+        remaining = self.tasks
+        if self.args.canary_task:
+            first = self.tasks[0]
+            if not await self.run_task(first):
+                return False
+            remaining = self.tasks[1:]
+        parallel = [task for task in remaining if task.memory_gb <= self.args.parallel_max_memory_gb]
+        serial = [task for task in remaining if task.memory_gb > self.args.parallel_max_memory_gb]
         if not await self.run_parallel_lane(parallel):
             return False
         for task in serial:
@@ -801,7 +807,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--sample-count", type=int, default=89)
     parser.add_argument("--exclude-task", action="append", default=[])
-    parser.add_argument("--canary-task", default="adaptive-rejection-sampler")
+    parser.add_argument(
+        "--canary-task",
+        default="",
+        help="task to run alone before the cohort; pass an empty value to disable the canary",
+    )
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--parallel-max-memory-gb", type=int, default=2)
     parser.add_argument("--docker-memory-reserve-gb", type=int, default=4)
@@ -862,6 +872,7 @@ def main() -> int:
         args.switchyard_bundle,
         args.plugin_config_template,
     )
+    args.canary_task = args.canary_task or None
     tasks = discover_tasks(args.dataset_root, args.sample_count, set(args.exclude_task), args.canary_task)
     args.run_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_path = args.run_root / ".phase2.lock"
