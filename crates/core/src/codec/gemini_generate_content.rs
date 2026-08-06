@@ -2705,6 +2705,7 @@ impl super::streaming::StreamingCodec for GeminiGenerateContentStreamingCodec {
 #[derive(Debug, Default)]
 struct GeminiGenerateContentStreamingState {
     parts: Vec<Json>,
+    candidate_index: Option<u64>,
     finish_reason: Option<String>,
     usage_metadata: Option<Json>,
     model_version: Option<String>,
@@ -2747,7 +2748,43 @@ impl GeminiGenerateContentStreamingState {
         if let Some(candidates) = event.get("candidates").and_then(Json::as_array)
             && let Some(candidate) = candidates.first()
         {
-            if let Some(parts) = candidate
+            if candidates.len() > 1 {
+                return Err(FlowError::InvalidArgument(
+                    "Gemini streaming chunks with multiple candidates are not supported".into(),
+                ));
+            }
+            let candidate_obj = candidate.as_object().ok_or_else(|| {
+                FlowError::InvalidArgument("Gemini streaming candidate must be an object".into())
+            })?;
+            let index = candidate_obj
+                .get("index")
+                .ok_or_else(|| {
+                    FlowError::InvalidArgument(
+                        "Gemini streaming candidate index is required".into(),
+                    )
+                })?
+                .as_u64()
+                .ok_or_else(|| {
+                    FlowError::InvalidArgument(
+                        "Gemini streaming candidate index must be an unsigned integer".into(),
+                    )
+                })?;
+            if let Some(previous_index) = self.candidate_index {
+                if previous_index != index {
+                    return Err(FlowError::InvalidArgument(
+                        "Gemini streaming candidate index changed across chunks".into(),
+                    ));
+                }
+            } else {
+                if index != 0 {
+                    return Err(FlowError::InvalidArgument(
+                        "Gemini streaming only supports candidate index 0".into(),
+                    ));
+                }
+                self.candidate_index = Some(index);
+            }
+
+            if let Some(parts) = candidate_obj
                 .get("content")
                 .and_then(|c| c.get("parts"))
                 .and_then(Json::as_array)
@@ -2808,11 +2845,9 @@ impl GeminiGenerateContentStreamingState {
             // citationMetadata, avgLogprobs, etc.) that non-streaming decode preserves
             // in ApiSpecificResponse::GeminiGenerateContent.  Later chunks overwrite earlier ones for
             // the same key (last-wins), matching the non-streaming behaviour.
-            if let Some(cand_obj) = candidate.as_object() {
-                for (k, v) in cand_obj {
-                    if !matches!(k.as_str(), "content" | "finishReason" | "index") {
-                        self.candidate_extra.insert(k.clone(), v.clone());
-                    }
+            for (k, v) in candidate_obj {
+                if !matches!(k.as_str(), "content" | "finishReason" | "index") {
+                    self.candidate_extra.insert(k.clone(), v.clone());
                 }
             }
         }
@@ -2851,7 +2886,10 @@ impl GeminiGenerateContentStreamingState {
         if let Some(reason) = self.finish_reason {
             candidate_obj.insert("finishReason".into(), Json::String(reason));
         }
-        candidate_obj.insert("index".into(), Json::from(0u32));
+        candidate_obj.insert(
+            "index".into(),
+            Json::from(self.candidate_index.unwrap_or(0)),
+        );
         // Merge accumulated candidate-level metadata so that decode_response can
         // populate ApiSpecificResponse::GeminiGenerateContent with the same fields as non-streaming.
         for (k, v) in self.candidate_extra {

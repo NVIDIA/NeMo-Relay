@@ -695,6 +695,7 @@ fn test_streaming_two_chunks_accumulated() {
     .unwrap();
 
     let assembled = finalizer();
+    assert_eq!(assembled["candidates"][0]["index"].as_u64(), Some(0));
 
     let codec = GeminiGenerateContentCodec;
     let resp = codec.decode_response(&assembled).unwrap();
@@ -708,6 +709,96 @@ fn test_streaming_two_chunks_accumulated() {
     assert_eq!(usage.prompt_tokens, Some(5));
     assert_eq!(usage.completion_tokens, Some(3));
     assert_eq!(usage.total_tokens, Some(8));
+}
+
+#[test]
+fn test_streaming_rejects_missing_candidate_index() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+
+    let err = collector(json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "orphan"}]}
+        }]
+    }))
+    .expect_err("candidate index is required to avoid corrupt streaming aggregates");
+
+    assert!(
+        err.to_string().contains("candidate index is required"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_streaming_rejects_nonzero_candidate_index() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+
+    let err = collector(json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "second"}]},
+            "index": 1
+        }]
+    }))
+    .expect_err("nonzero candidate indexes cannot be reassembled losslessly");
+
+    assert!(
+        err.to_string().contains("only supports candidate index 0"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_streaming_rejects_candidate_index_change() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+
+    collector(json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "first"}]},
+            "index": 0
+        }]
+    }))
+    .unwrap();
+
+    let err = collector(json!({
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": "second"}]},
+            "index": 1
+        }]
+    }))
+    .expect_err("candidate index changes must not be merged into candidate 0");
+
+    assert!(
+        err.to_string()
+            .contains("candidate index changed across chunks"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_streaming_rejects_multiple_candidates_in_one_chunk() {
+    let streaming_codec = GeminiGenerateContentStreamingCodec::new();
+    let mut collector = streaming_codec.collector();
+
+    let err = collector(json!({
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "first"}]},
+                "index": 0
+            },
+            {
+                "content": {"role": "model", "parts": [{"text": "second"}]},
+                "index": 1
+            }
+        ]
+    }))
+    .expect_err("multi-candidate chunks cannot be reassembled by the single-candidate state");
+
+    assert!(
+        err.to_string().contains("multiple candidates"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
