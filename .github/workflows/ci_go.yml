@@ -24,7 +24,7 @@ jobs:
   Test:
     name: Test (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 30
     continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
     permissions:
       contents: read

@@ -1628,12 +1628,12 @@ fn http_endpoint_worker_acknowledges_flush_close_and_logs_http_errors() {
     let (flush_tx, flush_rx) = std::sync::mpsc::channel();
     tx.send(EndpointMessage::Flush(flush_tx)).unwrap();
     flush_rx
-        .recv_timeout(std::time::Duration::from_secs(10))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap();
     let (close_tx, close_rx) = std::sync::mpsc::channel();
     tx.send(EndpointMessage::Close(close_tx)).unwrap();
     close_rx
-        .recv_timeout(std::time::Duration::from_secs(10))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .unwrap();
     worker.join().unwrap();
     server.join().unwrap();
