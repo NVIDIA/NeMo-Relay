@@ -86,6 +86,21 @@ fn read_jsonl_records(path: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn read_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
+    read_jsonl_records(path)
+        .into_iter()
+        .find(|record| record["event"] == event)
+        .unwrap_or_else(|| panic!("missing {event} record in {}", path.display()))
+}
+
+fn quoted_redacted_arguments() -> &'static str {
+    if cfg!(windows) {
+        "\"<arguments redacted>\""
+    } else {
+        "'<arguments redacted>'"
+    }
+}
+
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
     write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin_worker"], None);
 }
@@ -3817,6 +3832,7 @@ command = "hermes --yolo chat"
 #[test]
 fn invocation_diagnostic_cli_warns_without_rewriting_the_command() {
     let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
     let config = temp.path().join("config.toml");
     std::fs::write(
         &config,
@@ -3832,6 +3848,8 @@ anthropic_base_url = "http://127.0.0.1:1"
         .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
         .args([
             "--config",
             config.to_str().unwrap(),
@@ -3862,6 +3880,13 @@ anthropic_base_url = "http://127.0.0.1:1"
         stdout.contains("/opt/bin/claude-code.exe -p synthetic prompt"),
         "{stdout}"
     );
+
+    let diagnostic = read_jsonl_event(&log_path, "agent_invocation_warning");
+    assert_eq!(diagnostic["fields"]["agent"], "claude");
+    assert_eq!(diagnostic["fields"]["duplicate_executable"], "claude");
+    let diagnostic = diagnostic.to_string();
+    assert!(!diagnostic.contains("/opt/bin/claude-code.exe"));
+    assert!(!diagnostic.contains("synthetic prompt"));
 }
 
 #[test]
@@ -3947,6 +3972,7 @@ fn invocation_diagnostic_cli_doctor_requires_opt_in_for_full_output() {
 #[test]
 fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
     let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
@@ -3956,6 +3982,8 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", &xdg)
         .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
         .args(["claude", "--", "claude", "-p", "private synthetic value"])
         .output()
         .unwrap();
@@ -3967,11 +3995,17 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
         "{stderr}"
     );
     assert!(
-        stderr.contains("Observed: nemo-relay claude -- claude '<arguments redacted>'"),
+        stderr.contains(&format!(
+            "Observed: nemo-relay claude -- claude {}",
+            quoted_redacted_arguments()
+        )),
         "{stderr}"
     );
     assert!(
-        stderr.contains("Recommended: nemo-relay claude -- '<arguments redacted>'"),
+        stderr.contains(&format!(
+            "Recommended: nemo-relay claude -- {}",
+            quoted_redacted_arguments()
+        )),
         "{stderr}"
     );
     assert!(
@@ -3982,6 +4016,9 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
     );
     assert!(stderr.contains("setup requires a TTY"), "{stderr}");
     assert!(!stderr.contains("private synthetic value"), "{stderr}");
+
+    let diagnostic = read_jsonl_event(&log_path, "agent_invocation_warning").to_string();
+    assert!(!diagnostic.contains("private synthetic value"));
 }
 
 #[test]

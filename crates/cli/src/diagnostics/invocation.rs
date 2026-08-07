@@ -14,23 +14,23 @@ pub(crate) enum InvocationForm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DuplicateAgentExecutable {
+pub(crate) struct DuplicateAgentExecutable<'a> {
     agent: CodingAgent,
     form: InvocationForm,
-    command: Vec<String>,
+    command: &'a [String],
 }
 
-impl DuplicateAgentExecutable {
+impl<'a> DuplicateAgentExecutable<'a> {
     pub(crate) fn detect(
         agent: CodingAgent,
-        command: &[String],
+        command: &'a [String],
         form: InvocationForm,
     ) -> Option<Self> {
         let executable = command.first()?;
-        (CodingAgent::infer(executable) == Some(agent)).then(|| Self {
+        (CodingAgent::infer(executable) == Some(agent)).then_some(Self {
             agent,
             form,
-            command: command.to_vec(),
+            command,
         })
     }
 

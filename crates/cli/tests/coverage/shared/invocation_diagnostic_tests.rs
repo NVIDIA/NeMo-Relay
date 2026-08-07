@@ -11,9 +11,14 @@ fn argv(values: &[&str]) -> Vec<String> {
 fn invocation_diagnostic_detects_supported_agent_names_aliases_and_paths() {
     let cases = [
         (CodingAgent::ClaudeCode, "claude"),
+        (CodingAgent::ClaudeCode, "claude-code"),
+        (CodingAgent::ClaudeCode, "/opt/bin/claude"),
         (CodingAgent::ClaudeCode, "/opt/bin/claude-code.exe"),
+        (CodingAgent::Codex, "codex"),
         (CodingAgent::Codex, r"C:\\tools\\CODEX.CMD"),
+        (CodingAgent::Hermes, "hermes"),
         (CodingAgent::Hermes, "hermes-agent"),
+        (CodingAgent::Hermes, "/opt/bin/hermes-agent.bat"),
     ];
 
     for (agent, executable) in cases {
@@ -51,12 +56,10 @@ fn invocation_diagnostic_only_inspects_the_first_post_boundary_token() {
 
 #[test]
 fn invocation_diagnostic_doctor_redacts_arguments_unless_explicitly_requested() {
-    let diagnostic = DuplicateAgentExecutable::detect(
-        CodingAgent::ClaudeCode,
-        &argv(&["/opt/bin/claude-code", "-p", "private synthetic value"]),
-        InvocationForm::Run,
-    )
-    .unwrap();
+    let command = argv(&["/opt/bin/claude-code", "-p", "private synthetic value"]);
+    let diagnostic =
+        DuplicateAgentExecutable::detect(CodingAgent::ClaudeCode, &command, InvocationForm::Run)
+            .unwrap();
 
     let safe = diagnostic.format_doctor(false);
     assert!(safe.contains("code = possible_duplicate_agent_executable"));
@@ -73,14 +76,14 @@ fn invocation_diagnostic_doctor_redacts_arguments_unless_explicitly_requested() 
 
 #[test]
 fn invocation_diagnostic_uses_the_shortcut_command_shape() {
-    let diagnostic = DuplicateAgentExecutable::detect(
-        CodingAgent::Hermes,
-        &argv(&["hermes-agent", "chat"]),
-        InvocationForm::Shortcut,
-    )
-    .unwrap();
+    let command = argv(&["hermes-agent", "chat"]);
+    let diagnostic =
+        DuplicateAgentExecutable::detect(CodingAgent::Hermes, &command, InvocationForm::Shortcut)
+            .unwrap();
 
     let output = diagnostic.format_doctor(false);
+    let redacted =
+        crate::process::shell_quote_arg_for_platform("<arguments redacted>", cfg!(windows));
     assert!(output.contains("observed = nemo-relay hermes -- hermes"));
-    assert!(output.contains("recommended = nemo-relay hermes -- '<arguments redacted>'"));
+    assert!(output.contains(&format!("recommended = nemo-relay hermes -- {redacted}")));
 }
