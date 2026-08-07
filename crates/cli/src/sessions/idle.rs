@@ -93,13 +93,19 @@ async fn close_idle_turns(idle_sessions: Vec<(String, Session)>, reason: &str) -
             .scope(stack, async { session.close_turn_for_reason(reason).await })
             .await
         {
-            Ok(subagent_ids) => {
+            Ok((subagent_ids, subscriber_delivery)) => {
                 closed_turns += 1;
                 closed_subagents.extend(
                     subagent_ids
                         .into_iter()
                         .map(|subagent_id| (session_id.clone(), subagent_id)),
                 );
+                if let Some(subscriber_delivery) = subscriber_delivery
+                    && let Err(error) = subscriber_delivery.wait().await
+                    && first_error.is_none()
+                {
+                    first_error = Some(error.into());
+                }
             }
             Err(error) if first_error.is_none() => first_error = Some(error),
             Err(_) => {}

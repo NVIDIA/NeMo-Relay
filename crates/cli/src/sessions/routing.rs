@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use nemo_relay::api::runtime::SubscriberDelivery;
 use serde_json::Value;
 
 use crate::agents::shared::alignment::{
@@ -55,7 +56,7 @@ pub(super) async fn apply_event_to_session(
     event_kind: AgentKind,
     config: SessionConfig,
     is_agent_started: bool,
-) -> Result<bool, CliError> {
+) -> Result<(bool, Option<SubscriberDelivery>), CliError> {
     let session = sessions
         .entry(session_id.to_string())
         .or_insert_with(|| Session::new(session_id.to_string(), event_kind, config));
@@ -65,8 +66,8 @@ pub(super) async fn apply_event_to_session(
     {
         session.agent_kind = event_kind;
     }
-    session.apply(event).await?;
-    Ok(session.is_empty())
+    let subscriber_delivery = session.apply(event).await?;
+    Ok((session.is_empty(), subscriber_delivery))
 }
 
 pub(super) async fn promote_pending_subagents_for_parent(
@@ -109,7 +110,7 @@ pub(super) async fn promote_pending_subagent(
             Session::new(parent_session_id.clone(), pending.event.agent_kind, config)
         });
     if !parent_session.session_started && parent_session.agent_scope.is_none() {
-        parent_session
+        let _ = parent_session
             .apply(NormalizedEvent::AgentStarted(SessionEvent {
                 session_id: parent_session_id,
                 agent_kind: pending.event.agent_kind,
@@ -119,7 +120,7 @@ pub(super) async fn promote_pending_subagent(
             }))
             .await?;
     }
-    parent_session
+    let _ = parent_session
         .apply(NormalizedEvent::SubagentStarted(
             pending.subagent_start_event(),
         ))

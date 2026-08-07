@@ -29,6 +29,13 @@ the payload in a shared gateway envelope.
 - `POST /hooks/hermes` accepts Hermes shell hook JSON and returns the empty JSON
   object expected by Hermes hook commands.
 
+When a hook closes a turn, subagent, or session scope, Relay returns the hook
+response after subscribers finish processing that scope-end event. This makes
+synchronous outputs such as the final ATIF trajectory visible at the hook
+boundary without draining subscriber work queued later by another session.
+Full gateway shutdown uses a process-wide flush after closing all remaining
+sessions and before clearing plugins.
+
 The adapters preserve vendor fields such as session IDs, working directories,
 transcript paths, model names, tool payloads, shell payloads, MCP payloads, file
 payloads, user identity, and subagent metadata in NeMo Relay event metadata.

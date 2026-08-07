@@ -32,4 +32,6 @@ pub use scope_stack::{
     task_scope_top, with_active_event_uuid, with_scope_stack,
 };
 pub use state::NemoRelayContextState;
+#[doc(hidden)]
+pub use subscriber_dispatcher::SubscriberDelivery;
 pub use subscriber_dispatcher::flush_subscribers;
