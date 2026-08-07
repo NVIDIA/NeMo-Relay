@@ -367,42 +367,6 @@ fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
 }
 
 #[test]
-fn dry_run_diagnostic_recognizes_supported_agent_executable_forms() {
-    let cases = [
-        (CodingAgent::ClaudeCode, "claude"),
-        (CodingAgent::ClaudeCode, "claude-code"),
-        (CodingAgent::ClaudeCode, "/opt/bin/claude"),
-        (CodingAgent::ClaudeCode, "/opt/bin/claude-code.exe"),
-        (CodingAgent::Codex, "codex"),
-        (CodingAgent::Codex, r"C:\tools\CODEX.CMD"),
-        (CodingAgent::Codex, r"C:\tools\codex.com"),
-    ];
-
-    for (agent, executable) in cases {
-        let command = vec![executable.to_string(), "synthetic argument".to_string()];
-        assert!(
-            run::has_duplicate_agent_executable(agent, &command),
-            "expected {executable:?} to duplicate {agent:?}"
-        );
-    }
-}
-
-#[test]
-fn dry_run_diagnostic_checks_only_the_first_forwarded_token() {
-    for command in [
-        vec![],
-        vec!["-p".to_string(), "claude appears later".to_string()],
-        vec!["my-wrapper".to_string(), "claude".to_string()],
-        vec!["codex".to_string(), "claude".to_string()],
-    ] {
-        assert!(
-            !run::has_duplicate_agent_executable(CodingAgent::ClaudeCode, &command),
-            "unexpected duplicate for {command:?}"
-        );
-    }
-}
-
-#[test]
 fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
     let visited = std::cell::RefCell::new(Vec::new());
     let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {

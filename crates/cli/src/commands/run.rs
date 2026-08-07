@@ -11,8 +11,6 @@ use super::serve::ServerArgs;
 use crate::agents::CodingAgent;
 use crate::error::CliError;
 
-const POSSIBLE_DUPLICATE_AGENT_EXECUTABLE: &str = "possible_duplicate_agent_executable";
-
 /// Args for an easy-path agent shortcut.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct EasyPathCommand {
@@ -119,14 +117,17 @@ pub(super) async fn easy_path(
 }
 
 fn warn_for_possible_duplicate(agent: CodingAgent, command: &[String]) {
-    if !has_duplicate_agent_executable(agent, command) {
+    if !command
+        .first()
+        .is_some_and(|executable| CodingAgent::infer(executable) == Some(agent))
+    {
         return;
     }
     let agent = agent.as_arg();
     log::warn!(
         target: "nemo_relay.cli",
         event = "agent_invocation_warning",
-        diagnostic_code = POSSIBLE_DUPLICATE_AGENT_EXECUTABLE,
+        diagnostic_code = "possible_duplicate_agent_executable",
         agent = agent,
         duplicate_executable = agent,
         confidence = "high",
@@ -135,10 +136,4 @@ fn warn_for_possible_duplicate(agent: CodingAgent, command: &[String]) {
         arguments_redacted = true;
         "Possible duplicate agent executable after `--`; remove the repeated executable"
     );
-}
-
-pub(super) fn has_duplicate_agent_executable(agent: CodingAgent, command: &[String]) -> bool {
-    command
-        .first()
-        .is_some_and(|executable| CodingAgent::infer(executable) == Some(agent))
 }

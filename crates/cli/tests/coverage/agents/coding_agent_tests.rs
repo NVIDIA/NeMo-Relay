@@ -85,6 +85,14 @@ fn agent_inference_accepts_supported_binary_aliases() {
         CodingAgent::infer(r"C:\\tools\\codex.cmd"),
         Some(CodingAgent::Codex)
     );
+    assert_eq!(
+        CodingAgent::infer(r"C:\\tools\\codex.bat"),
+        Some(CodingAgent::Codex)
+    );
+    assert_eq!(
+        CodingAgent::infer(r"C:\\tools\\codex.com"),
+        Some(CodingAgent::Codex)
+    );
     assert_eq!(CodingAgent::infer("@openai/codex"), None);
     assert_eq!(CodingAgent::infer("hermes"), None);
     assert_eq!(CodingAgent::infer("hermes-agent"), None);
