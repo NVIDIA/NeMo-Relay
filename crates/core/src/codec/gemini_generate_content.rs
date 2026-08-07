@@ -2608,32 +2608,16 @@ fn rebuild_gemini_tool_groups(
     let mut fn_group_placed = false;
     let mut native_used = vec![false; native_groups.len()];
     for orig_group in orig_tools {
-        if orig_group.get("functionDeclarations").is_some() {
-            if !fn_group_placed {
-                let mut group = serde_json::Map::new();
-                if !fn_declarations.is_empty() {
-                    group.insert(
-                        "functionDeclarations".into(),
-                        Json::Array(fn_declarations.to_vec()),
-                    );
-                }
-                merge_gemini_native_sibling_group(
-                    orig_group,
-                    native_groups,
-                    &mut native_used,
-                    &mut group,
-                );
-                if !group.is_empty() {
-                    new_groups.push(Json::Object(group));
-                }
-                fn_group_placed = true;
-            }
-        } else if let Some(native_group) = take_matching_native_group(
+        let (placed, group) = rebuild_gemini_tool_group(
+            orig_group,
+            fn_declarations,
             native_groups,
             &mut native_used,
-            &gemini_native_tool_keys(orig_group),
-        ) {
-            new_groups.push(native_group);
+            fn_group_placed,
+        );
+        fn_group_placed |= placed;
+        if let Some(group) = group {
+            new_groups.push(group);
         }
     }
     if !fn_group_placed && !fn_declarations.is_empty() {
@@ -2647,6 +2631,35 @@ fn rebuild_gemini_tool_groups(
             .map(|(_, group)| group.clone()),
     );
     new_groups
+}
+
+fn rebuild_gemini_tool_group(
+    orig_group: &Json,
+    fn_declarations: &[Json],
+    native_groups: &[Json],
+    native_used: &mut [bool],
+    fn_group_placed: bool,
+) -> (bool, Option<Json>) {
+    if orig_group.get("functionDeclarations").is_some() {
+        if fn_group_placed {
+            return (false, None);
+        }
+        let mut group = serde_json::Map::new();
+        if !fn_declarations.is_empty() {
+            group.insert(
+                "functionDeclarations".into(),
+                Json::Array(fn_declarations.to_vec()),
+            );
+        }
+        merge_gemini_native_sibling_group(orig_group, native_groups, native_used, &mut group);
+        return (true, (!group.is_empty()).then_some(Json::Object(group)));
+    }
+    let group = take_matching_native_group(
+        native_groups,
+        native_used,
+        &gemini_native_tool_keys(orig_group),
+    );
+    (false, group)
 }
 
 fn merge_gemini_native_sibling_group(
