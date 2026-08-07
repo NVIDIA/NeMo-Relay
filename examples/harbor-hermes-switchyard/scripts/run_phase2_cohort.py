@@ -50,6 +50,7 @@ INFRASTRUCTURE_PATTERNS = (
     "network is unreachable",
     "no space left on device",
     "phoenix upload",
+    "provider has been unresponsive",
     "registry-1.docker.io",
     "temporary failure in name resolution",
     "tls handshake timeout",

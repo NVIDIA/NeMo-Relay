@@ -146,6 +146,12 @@ def test_failure_classifier_retries_only_known_infrastructure_failures() -> None
     assert module.classify_failure("TLS handshake timeout contacting registry-1.docker.io") == "infrastructure"
     assert module.classify_failure("ConnectError: Error getting dataset terminal-bench@2.0") == "infrastructure"
     assert module.classify_failure("Command failed (exit 100): apt-get update && apt-get install") == "infrastructure"
+    assert (
+        module.classify_failure(
+            "Provider has been unresponsive (no response received) for 11 consecutive stale attempts"
+        )
+        == "infrastructure"
+    )
     assert module.classify_failure("receipt did not prove plugin close") == "harness_or_integration"
 
 
