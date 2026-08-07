@@ -29,6 +29,7 @@ const OPERATION_TEXT_COMPLETION: &str = "text_completion";
 const GEN_AI_PROVIDER_NAME: &str = "gen_ai.provider.name";
 const GEN_AI_INPUT_MESSAGES: &str = "gen_ai.input.messages";
 const GEN_AI_OUTPUT_MESSAGES: &str = "gen_ai.output.messages";
+const GEN_AI_SYSTEM_INSTRUCTIONS: &str = "gen_ai.system_instructions";
 const GEN_AI_RETRIEVAL_TOP_K: &str = "gen_ai.retrieval.top_k";
 const GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "gen_ai.usage.cache_creation.input_tokens";
 const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
@@ -227,6 +228,13 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     if request.stream == Some(true) {
         attributes.push(KeyValue::new("gen_ai.request.stream", true));
     }
+    if let Some(instructions) = request
+        .instructions
+        .as_ref()
+        .and_then(system_instructions_json)
+    {
+        attributes.push(KeyValue::new(GEN_AI_SYSTEM_INSTRUCTIONS, instructions));
+    }
     if let Some(messages) = input_messages_json(&request.messages) {
         attributes.push(KeyValue::new(GEN_AI_INPUT_MESSAGES, messages));
     }
@@ -318,6 +326,14 @@ fn input_messages_json(messages: &[Message]) -> Option<String> {
     }
     let messages = messages.iter().map(input_message).collect::<Vec<_>>();
     serde_json::to_string(&messages).ok()
+}
+
+fn system_instructions_json(instructions: &MessageContent) -> Option<String> {
+    let parts = content_parts(instructions);
+    if parts.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&parts).ok()
 }
 
 fn input_message(message: &Message) -> Json {
@@ -430,16 +446,20 @@ fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    let mut object = Map::from_iter([
+    let object = Map::from_iter([
         ("role".to_string(), Json::String("assistant".to_string())),
         ("parts".to_string(), Json::Array(parts)),
-    ]);
-    if let Some(reason) = response.finish_reason.as_ref() {
-        object.insert(
+        (
             "finish_reason".to_string(),
-            Json::String(finish_reason(reason).to_string()),
-        );
-    }
+            Json::String(
+                response
+                    .finish_reason
+                    .as_ref()
+                    .map_or("unknown", finish_reason)
+                    .to_string(),
+            ),
+        ),
+    ]);
     serde_json::to_string(&[Json::Object(object)]).ok()
 }
 
@@ -537,7 +557,7 @@ fn finish_reason(reason: &FinishReason) -> &str {
     match reason {
         FinishReason::Complete => "stop",
         FinishReason::Length => "length",
-        FinishReason::ToolUse => "tool_calls",
+        FinishReason::ToolUse => "tool_call",
         FinishReason::ContentFilter => "content_filter",
         FinishReason::Unknown(value) => value,
     }

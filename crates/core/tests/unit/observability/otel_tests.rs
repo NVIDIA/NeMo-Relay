@@ -20,7 +20,7 @@ use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
-    Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
@@ -2118,13 +2118,15 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
         serde_json::from_str::<Json>(&response_attributes["gen_ai.output.messages"]).unwrap(),
         json!([{
             "role": "assistant",
-            "parts": [{"type": "text", "content": "still working"}]
+            "parts": [{"type": "text", "content": "still working"}],
+            "finish_reason": "unknown"
         }])
     );
 
     for (reason, expected) in [
         (FinishReason::Complete, "stop"),
         (FinishReason::Length, "length"),
+        (FinishReason::ToolUse, "tool_call"),
         (FinishReason::ContentFilter, "content_filter"),
         (
             FinishReason::Unknown("provider_reason".to_string()),
@@ -2158,6 +2160,7 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
 #[test]
 fn gen_ai_projection_covers_message_variants_and_empty_input() {
     let annotated_request = serde_json::from_value::<AnnotatedLlmRequest>(json!({
+        "instructions": "Be concise.",
         "messages": [
             {
                 "role": "assistant",
@@ -2208,6 +2211,10 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
     );
     let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
     assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.system_instructions"]).unwrap(),
+        json!([{"type": "text", "content": "Be concise."}])
+    );
+    assert_eq!(
         serde_json::from_str::<Json>(&attributes["gen_ai.input.messages"]).unwrap(),
         json!([
             {
@@ -2257,6 +2264,66 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
         &empty_event,
     ));
     assert!(!attributes.contains_key("gen_ai.input.messages"));
+    assert!(!attributes.contains_key("gen_ai.system_instructions"));
+}
+
+#[test]
+fn gen_ai_projection_covers_output_tool_calls_and_empty_output() {
+    let tool_call_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    tool_calls: Some(vec![ResponseToolCall {
+                        id: "call-1".to_string(),
+                        name: "lookup".to_string(),
+                        arguments: json!({"city": "Paris"}),
+                    }]),
+                    finish_reason: Some(FinishReason::ToolUse),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &tool_call_event,
+    ));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.output.messages"]).unwrap(),
+        json!([{
+            "role": "assistant",
+            "parts": [{
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "lookup",
+                "arguments": {"city": "Paris"}
+            }],
+            "finish_reason": "tool_call"
+        }])
+    );
+
+    let empty_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(empty_annotated_response()))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &empty_event,
+    ));
+    assert!(!attributes.contains_key("gen_ai.output.messages"));
 }
 
 #[test]
