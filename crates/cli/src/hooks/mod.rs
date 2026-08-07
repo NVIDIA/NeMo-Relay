@@ -20,7 +20,7 @@ pub(crate) use delivery::{gateway_headers, insert_header, read_hook_payload_from
 pub(crate) use destination::{
     HookGatewayLifecycle, resolve_hook_destination, transparent_gateway_spec,
 };
-#[cfg(any(windows, test))]
+#[cfg(test)]
 pub(crate) use encoding::decode_windows_hook_command;
 #[cfg(all(test, windows))]
 pub(crate) use encoding::windows_powershell_path;
