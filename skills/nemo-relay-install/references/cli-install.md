@@ -22,8 +22,8 @@ Confirm these prerequisites before selecting an installation command:
 - Confirm the operating system and architecture have a published CLI asset.
 - Use Cargo when the user prefers a source build or needs an unsupported
   platform.
-- For a transparent run, confirm the selected `codex` or `claude`
-  command is already on `PATH`.
+- For a transparent run, confirm that the selected agent command is already on
+  `PATH`. Common examples are `codex` and `claude`.
 
 ## Install
 

@@ -288,8 +288,9 @@ If you configured an opaque wrapper, its `--version` output must identify the
 selected host.
 
 The MCP bootstrap is host-neutral. Generated Codex and Claude Code
-configuration invokes `nemo-relay mcp`; the removed `--agent` option no longer
-parses. Existing fenced installations can be refreshed with
+configuration invokes `nemo-relay mcp`; Hermes-specific `--agent hermes`
+selections no longer parse. The `--agent` option remains supported for Claude
+Code and Codex `run` flows. Existing fenced installations can be refreshed with
 `nemo-relay install <host> --force`. Relay refuses to replace an older MCP
 installation without a valid generation marker because a cached host process
 might still be running. In that case, follow the manual cleanup steps in the

@@ -22,9 +22,13 @@ goal and existing environment.
    Claude Code through the local CLI wrapper. Read
    [CLI Try-Now](references/cli-try-now.md).
 2. **Built-in integrations try-now**: choose this when an existing LangChain,
-   LangGraph, Deep Agents, or OpenClaw application owns the execution boundary.
-   Prefer the maintained supported integration over manual wrapping. Read
-   [Built-In Integrations Try-Now](references/built-in-integrations-try-now.md).
+   LangGraph, Deep Agents, or OpenClaw application or Hermes Agent owns the
+   execution boundary. Prefer the maintained supported integration over manual
+   wrapping. For Hermes Agent, explain that NeMo Relay is built in, requires no
+   separate Relay installation, observability plugin, or Relay CLI setup, and
+   that Hermes Agent understands NeMo Relay plugin configurations. Do not
+   provide install or observability-configuration instructions. For the other
+   integrations, read [Built-In Integrations Try-Now](references/built-in-integrations-try-now.md).
 3. **Language-specific manual try-now**: choose this when the user's Python,
    Node.js, or Rust application directly owns its tool or LLM call sites and no
    maintained integration is the better boundary. Read

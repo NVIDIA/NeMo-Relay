@@ -65,11 +65,12 @@ for destination paths and explicit-file alternatives.
 
 ### Breaking Changes in 0.8
 
-- Removed Hermes Agent support from the NeMo Relay CLI, including the `hermes`
-  shortcut, `run --agent hermes`, install, uninstall, doctor, configuration,
-  MCP selection, and `/hooks/hermes` endpoint. NeMo Relay is built into Hermes
-  Agent, and Hermes Agent understands NeMo Relay plugin configurations. No
-  separate observability plugin or Relay CLI setup is required.
+- Removed Hermes-specific support from the NeMo Relay CLI, including the
+  `hermes` shortcut, `run --agent hermes`, and Hermes-specific install,
+  uninstall, doctor, configuration, MCP selection, and `/hooks/hermes` paths.
+  NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay
+  plugin configurations. No separate observability plugin or Relay CLI setup is
+  required.
 
 ## Known Issues in 0.8
 

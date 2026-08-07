@@ -6,8 +6,10 @@ SPDX-License-Identifier: Apache-2.0
 # Maintained Integration Installation
 
 Use this path only when the target already uses the named framework or agent
-harness. Install the maintained integration package, verify it through that
-surface's package or plugin manager, and defer wiring to its integration guide.
+harness. For package-backed integrations, install the maintained integration
+package, verify it through that surface's package or plugin manager, and defer
+wiring to its integration guide. Hermes Agent includes NeMo Relay and does not
+require a separate package.
 
 ## OpenClaw
 

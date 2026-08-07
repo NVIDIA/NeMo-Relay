@@ -74,6 +74,7 @@ struct FileUpstreamConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileAgentsConfig {
     // Keys match the agent's CLI invocation name (`claude`, `codex`) — the
     // word the user types at the shell — not the product name ("Claude Code") or the internal

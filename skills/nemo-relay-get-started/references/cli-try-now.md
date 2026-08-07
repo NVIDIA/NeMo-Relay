@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # CLI Try-Now Reference
 
 Use this reference only for the default coding-agent trial. Keep the first run
-local, project-scoped, read-only, and limited to the built-in Observability
+local, user-scoped, read-only, and limited to the built-in Observability
 plugin.
 
 ## Contents
@@ -71,19 +71,19 @@ configuration.
 
 ## Inspect Configuration Before Editing
 
-Inspect these sources when they exist:
+Resolve the user configuration directory from `$XDG_CONFIG_HOME/nemo-relay`,
+falling back to `$HOME/.config/nemo-relay`. Inspect these files when they exist:
 
 ```text
-./.nemo-relay/config.toml
-./.nemo-relay/plugins.toml
-~/.config/nemo-relay/config.toml
-~/.config/nemo-relay/plugins.toml
+${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/config.toml
+${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/plugins.toml
 ```
 
-Project configuration is the default for this trial. User configuration has
-higher precedence, so identify inherited or overriding plugin settings before
-changing a project file. Show the proposed change and obtain confirmation.
-Merge with an existing plugin document; do not replace unrelated components.
+Repository-local `.nemo-relay` files are ignored unless the user selects them
+explicitly. Do not edit an ignored project file for the default trial. Account
+for higher-precedence system policy, show the proposed user-file change, and
+obtain confirmation. Merge with an existing plugin document; do not replace
+unrelated components.
 
 ## Configure The Agent And Observability
 
@@ -94,14 +94,14 @@ nemo-relay config codex
 nemo-relay config claude
 ```
 
-Run only the command for the selected agent. Choose project scope, continue to
-plugin configuration, enable the built-in `observability` component, and enable
-both ATOF and ATIF local file output.
+Run only the command for the selected agent. Setup writes the XDG user
+configuration. Continue to plugin configuration, enable the built-in
+`observability` component, and enable both ATOF and ATIF local file output.
 
 When an interactive plugin editor is unavailable, add or merge the following
-component in `./.nemo-relay/plugins.toml` after confirmation. First determine
-the installed NeMo Relay version: use observability configuration version 2
-with Relay 0.6 and version 3 with Relay 0.7.
+component in the XDG user `plugins.toml` after confirmation. Resolve the user
+configuration directory and replace `<relay-user-config-dir>` below with its
+absolute path.
 
 ```toml
 version = 1
@@ -111,20 +111,20 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 2 # Use 3 with NeMo Relay 0.7.
+version = 3
 
 [components.config.atof]
 enabled = true
 
 [[components.config.atof.sinks]]
 type = "file"
-output_directory = ".nemo-relay/atof"
+output_directory = "<relay-user-config-dir>/atof"
 filename = "events.jsonl"
 mode = "append"
 
 [components.config.atif]
 enabled = true
-output_directory = ".nemo-relay/atif"
+output_directory = "<relay-user-config-dir>/atif"
 filename_template = "{session_id}.atif.json"
 ```
 
@@ -143,11 +143,12 @@ or:
 command = "claude"
 ```
 
-After the confirmed plugin change, create the configured local output
-directories so doctor can verify that they are writable:
+After the confirmed plugin change, create the configured user output directories
+so doctor can verify that they are writable:
 
 ```bash
-mkdir -p .nemo-relay/atof .nemo-relay/atif
+relay_user_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay"
+mkdir -p "$relay_user_dir/atof" "$relay_user_dir/atif"
 ```
 
 ## Validate And Preview
@@ -168,7 +169,7 @@ nemo-relay run --agent claude --dry-run --print
 ```
 
 Confirm that the plan uses a loopback gateway, the intended agent command, and
-the expected project plugin configuration. Show this summary and obtain user
+the expected user plugin configuration. Show this summary and obtain user
 confirmation before the live run.
 
 ## Run A Safe Trial
@@ -194,14 +195,16 @@ nemo-relay claude -- "Use a shell tool to print exactly relay-smoke-test, then r
 Check that ATOF output exists and is non-empty:
 
 ```bash
-test -s .nemo-relay/atof/events.jsonl
-wc -l .nemo-relay/atof/events.jsonl
+relay_user_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay"
+test -s "$relay_user_dir/atof/events.jsonl"
+wc -l "$relay_user_dir/atof/events.jsonl"
 ```
 
 Find non-empty ATIF trajectories:
 
 ```bash
-find .nemo-relay/atif -type f -name '*.json' -size +0c -print
+relay_user_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay"
+find "$relay_user_dir/atif" -type f -name '*.json' -size +0c -print
 ```
 
 Parse only the minimum JSON needed to report:
