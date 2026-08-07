@@ -127,6 +127,8 @@ class PathChange:
 
 @dataclass(frozen=True)
 class LegacyProjectConfig:
+    """Project-local NeMo Flow configuration that must not be renamed blindly."""
+
     path: Path
 
 
@@ -167,6 +169,7 @@ def should_scan_file(path: Path, include_lockfiles: bool) -> bool:
 
 
 def is_legacy_project_config(path: Path) -> bool:
+    """Return whether path is a legacy project-local configuration file."""
     return path.parent.name == ".nemo-flow" and path.name in LEGACY_PROJECT_CONFIG_FILENAMES
 
 
@@ -319,6 +322,7 @@ def iter_files(root: Path, include_lockfiles: bool, include_generated: bool):
 
 
 def collect_legacy_project_configs(root: Path, include_generated: bool) -> list[LegacyProjectConfig]:
+    """Find project-local NeMo Flow config files that need manual migration."""
     configs: list[LegacyProjectConfig] = []
     for path in iter_files(root, include_lockfiles=True, include_generated=include_generated):
         if is_legacy_project_config(path):
@@ -397,6 +401,7 @@ def updated_name(name: str) -> str:
 
 
 def is_blocked_legacy_config_path(path: Path, legacy_configs: list[LegacyProjectConfig]) -> bool:
+    """Return whether renaming path would move legacy project configuration."""
     return any(path == config.path or path in config.path.parents for config in legacy_configs)
 
 
@@ -405,6 +410,7 @@ def collect_path_changes(
     include_generated: bool,
     legacy_configs: list[LegacyProjectConfig],
 ) -> list[PathChange]:
+    """Collect safe path renames without moving legacy project configuration."""
     changes: list[PathChange] = []
     paths: list[Path] = []
     for current_root, dirs, files in os.walk(root):
