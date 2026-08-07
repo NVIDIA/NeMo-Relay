@@ -165,3 +165,41 @@ def decode_response(response: Json) -> AnnotatedLLMResponse
 
 Decode an Anthropic Messages response.
 
+### `GeminiGenerateContentCodec`
+
+Built-in codec for Gemini generateContent requests and responses.
+
+#### Methods
+
+##### `GeminiGenerateContentCodec`
+
+```python
+def GeminiGenerateContentCodec() -> None
+```
+
+Create an instance.
+
+##### `decode`
+
+```python
+def decode(request: LLMRequest) -> AnnotatedLLMRequest
+```
+
+Decode a Gemini generateContent request.
+
+##### `encode`
+
+```python
+def encode(annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest
+```
+
+Encode a normalized request back into generateContent format.
+
+##### `decode_response`
+
+```python
+def decode_response(response: Json) -> AnnotatedLLMResponse
+```
+
+Decode a Gemini generateContent response.
+

@@ -104,7 +104,9 @@ changing a key overlays it.
 - `messages`, content parts, function calls and results, tools, and tool choice
   expose portable components when the provider formats have equivalent meaning.
 - `api_specific` is a tagged, mutable field for modeled Anthropic Messages,
-  OpenAI Chat Completions, or OpenAI Responses controls.
+  OpenAI Chat Completions, OpenAI Responses, or Gemini `generateContent`
+  controls. Response annotations use the same pattern for provider-only
+  metadata, including Gemini `generateContent` thinking tokens.
 - Provider-only messages, content blocks, input items, tools, and tool choices
   use `{ provider, kind, value }`, where `value` is the exact native JSON.
 - Top-level `extra` preserves unknown or unmodeled fields.
@@ -155,9 +157,9 @@ reused without changing public binding APIs.
 ### Provider Schema Extraction
 
 Provider codecs extract provider schema fields. The built-in codecs for OpenAI
-Chat Completions, OpenAI Responses, and Anthropic Messages recognize their
-request and response payloads and map them into `AnnotatedLlmRequest` or
-`AnnotatedLlmResponse`.
+Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini
+`generateContent` recognize their request and response payloads and map them
+into `AnnotatedLlmRequest` or `AnnotatedLlmResponse`.
 
 When a managed LLM event already has an annotation, subscribers and exporters
 consume that annotation. When an event has only raw provider JSON, best-effort
@@ -201,12 +203,15 @@ hints let Anthropic Messages requests without a top-level `system` field decode
 through the Anthropic codec instead of being inferred as OpenAI Chat payloads
 from their fields alone.
 
-The `nemo-relay` gateway always enables matching request codecs for
-`/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, for both buffered
-and streaming execution. Count-token, model, probe, and non-LLM passthrough
-routes do not enable request codecs. Gateway request intercepts must therefore
-edit generation bodies through `annotated_request`; raw `request.content`
-remains writable on routes without a request codec.
+The `nemo-relay` gateway always enables matching OpenAI Chat, OpenAI Responses,
+and Anthropic Messages request codecs for the provider generation routes it
+proxies: `/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, for both
+buffered and streaming execution. Gemini `generateContent` does not yet have a
+gateway route, so `GeminiGenerateContentCodec` is available for direct framework
+use rather than gateway auto-selection. Count-token, model, probe, and non-LLM
+passthrough routes do not enable request codecs automatically. Gateway request
+intercepts must therefore edit generation bodies through `annotated_request`;
+raw `request.content` remains writable on routes without a request codec.
 
 ### Agent Payload Extraction
 

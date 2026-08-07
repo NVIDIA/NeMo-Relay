@@ -15,11 +15,11 @@ Normalized reason why the model stopped generating.
 
 Maps from provider-specific stop reasons:
 
-- **Complete**: OpenAI Chat `"stop"`, Anthropic `"end_turn"`, Responses `"completed"`
-- **Length**: OpenAI Chat `"length"`, Anthropic `"max_tokens"`, Responses incomplete+max_output_tokens
-- **ToolUse**: OpenAI Chat `"tool_calls"`, Anthropic `"tool_use"`
-- **ContentFilter**: OpenAI Chat `"content_filter"`, Responses incomplete+content_filter
-- **Unknown**: Forward-compatible catch-all for unrecognized reasons
+- **Complete**: OpenAI Chat `"stop"`, Anthropic `"end_turn"`, Responses `"completed"`, Gemini generateContent `"STOP"` (without function-call parts)
+- **Length**: OpenAI Chat `"length"`, Anthropic `"max_tokens"`, Responses incomplete+max_output_tokens, Gemini generateContent `"MAX_TOKENS"`
+- **ToolUse**: OpenAI Chat `"tool_calls"`, Anthropic `"tool_use"`, Gemini generateContent `"TOOL_CODE"` (unconditional) or `"STOP"` when function-call parts are present
+- **ContentFilter**: OpenAI Chat `"content_filter"`, Responses incomplete+content_filter, Gemini generateContent `"SAFETY"` / `"RECITATION"` / `"BLOCKLIST"` / `"PROHIBITED_CONTENT"` and other policy codes
+- **Unknown**: Forward-compatible catch-all for unrecognized reasons (e.g. Gemini generateContent `"MALFORMED_FUNCTION_CALL"`, `"UNEXPECTED_TOOL_CALL"`)
 
 ## Variants
 

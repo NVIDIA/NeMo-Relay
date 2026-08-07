@@ -422,6 +422,24 @@ export declare class OpenAIResponsesCodec {
 }
 ```
 
+### `GeminiGenerateContentCodec`
+
+Built-in codec for the Gemini generateContent API.
+
+Implements both request codec (decode/encode) and response codec (decodeResponse). Construct with `new GeminiGenerateContentCodec()`.
+
+```ts
+export declare class GeminiGenerateContentCodec {
+  constructor()
+  /** Decode an opaque LLM request into structured form. */
+  decode(request: Json): Json
+  /** Encode structured changes back into an opaque LLM request. */
+  encode(annotated: Json, original: Json): Json
+  /** Decode a raw LLM response into structured form. */
+  decodeResponse(response: Json): Json
+}
+```
+
 ### `AnthropicMessagesCodec`
 
 Built-in codec for the Anthropic Messages API.

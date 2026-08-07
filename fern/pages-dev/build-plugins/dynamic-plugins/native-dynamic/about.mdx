@@ -223,7 +223,7 @@ by `NemoRelayNativeLlmSanitizeRequestContext` or
 `NemoRelayNativeLlmSanitizeResponseContext`. Each context contains structured
 codec identity and a borrowed, callback-lifetime codec handle. `codec_kind` is
 `None`, `BuiltIn`, `Runtime`, or `Opaque`. `codec_id` is present for `BuiltIn`
-(one of `openai_chat`, `openai_responses`, or `anthropic_messages`) and
+(one of `openai_chat`, `openai_responses`, `anthropic_messages`, or `gemini_generate_content`) and
 `Runtime`, and null for `None` and `Opaque`.
 
 The request handle supports host operations to decode an `LlmRequest` into an

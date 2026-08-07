@@ -638,7 +638,7 @@ Codec identity available while a managed LLM event is sanitized.
 ```ts
 export type LlmCodecIdentity =
   | { kind: 'none' }
-  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' }
+  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'gemini_generate_content' }
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };
 ```

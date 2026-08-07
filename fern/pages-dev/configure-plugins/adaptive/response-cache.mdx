@@ -308,14 +308,15 @@ Only complete, replayable answers are stored:
   the consumer while being assembled into one aggregate response — the same
   shape a buffered call stores, so buffered and streaming calls share one
   keyspace. On a hit the stored answer is replayed as provider-native chunks
-  (OpenAI Chat deltas, OpenAI Responses lifecycle events, or Anthropic
-  Messages events), so strict streaming clients parse it like a live stream.
+  (OpenAI Chat deltas, OpenAI Responses lifecycle events, Anthropic Messages
+  events, or Gemini `generateContent` response chunks), so strict streaming
+  clients parse it like a live stream.
   Provider-terminal token-limited Chat (`finish_reason = "length"`) and
   Anthropic (`stop_reason = "max_tokens"`) answers can be stored. OpenAI
   Responses answers with `status = "incomplete"`, streams without a terminal
-  event, and streams whose content cannot be replayed faithfully (for example
-  thinking blocks) are never stored. A streaming request whose surface cannot
-  be inferred runs live, uncached.
+  event, and streams whose content cannot be replayed faithfully are never
+  stored. A streaming request whose surface cannot be inferred runs live,
+  uncached.
 
 Streaming publication is write-behind: Relay can report end-of-stream before
 the backend write finishes. `wait_for_idle()` does not wait for cache writes.

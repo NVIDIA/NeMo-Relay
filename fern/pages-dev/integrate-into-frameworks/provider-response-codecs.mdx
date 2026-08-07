@@ -361,13 +361,15 @@ Relay does not model are dropped.
 
 Built-in codecs normalize provider field names as follows:
 
-| Normalized field | OpenAI Chat | OpenAI Responses | Anthropic Messages |
-|---|---|---|---|
-| `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` |
-| `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` |
-| `total_tokens` | `total_tokens` | `total_tokens` | computed |
-| `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` |
-| `cache_write_tokens` | — | — | `cache_creation_input_tokens` |
+| Normalized Field | OpenAI Chat | OpenAI Responses | Anthropic Messages | Gemini `generateContent` |
+|---|---|---|---|---|
+| `prompt_tokens` | `prompt_tokens` | `input_tokens` | `input_tokens` | `promptTokenCount` |
+| `completion_tokens` | `completion_tokens` | `output_tokens` | `output_tokens` | `candidatesTokenCount` |
+| `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokenCount` (or computed as prompt + candidates + thinking) |
+| `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `cachedContentTokenCount` |
+| `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — |
+
+Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
 
 Built-in codecs preserve only modeled provider-specific usage details under
 `api_specific`; other usage fields are dropped. For example, OpenAI Responses
@@ -440,9 +442,10 @@ The following behaviors are intentional in this release but can change later:
 
 The built-in provider codecs also implement response decoding:
 
-- `OpenAIChatCodec`
-- `OpenAIResponsesCodec`
-- `AnthropicMessagesCodec`
+- `OpenAIChatCodec` — OpenAI Chat Completions API
+- `OpenAIResponsesCodec` — OpenAI Responses API
+- `AnthropicMessagesCodec` — Anthropic Messages API
+- `GeminiGenerateContentCodec` — Google Gemini `generateContent` API
 
 Choose the codec that matches the actual provider response shape. For example, do not use `OpenAIChatCodec` for an OpenAI Responses API payload only because both came from an OpenAI-compatible provider.
 

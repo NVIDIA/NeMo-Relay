@@ -13,7 +13,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 A tool call requested by the model in its response.
 
-Unlike the request-side `ToolCall` (which stores arguments as a JSON string per OpenAI convention), response tool calls store arguments as parsed [`Json`](/reference/api/rust-library-reference/nemo-relay-types/type-json). Codecs parse OpenAI's string arguments during decode; Anthropic's `input` is already parsed JSON.
+Unlike the request-side `ToolCall` (which stores arguments as a JSON string per OpenAI convention), response tool calls store arguments as parsed [`Json`](/reference/api/rust-library-reference/nemo-relay-types/type-json). Codecs parse OpenAI's string arguments during decode; Anthropic's `input` and Gemini generateContent `args` are already parsed JSON objects.
 
 ## Fields
 

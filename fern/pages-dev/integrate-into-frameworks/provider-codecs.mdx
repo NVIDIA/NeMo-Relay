@@ -91,6 +91,7 @@ Use the built-in provider codecs when the framework payload already matches a su
 - `OpenAIChatCodec`: OpenAI Chat Completions-compatible requests and responses.
 - `OpenAIResponsesCodec`: OpenAI Responses-compatible requests and responses.
 - `AnthropicMessagesCodec`: Anthropic Messages-compatible requests and responses.
+- `GeminiGenerateContentCodec`: Gemini `generateContent`-compatible requests and responses.
 
 ## Provider Codec Roles
 
@@ -106,13 +107,17 @@ The built-in provider codecs expose the same core methods:
 | OpenAI Chat | `nemo_relay.codecs.OpenAIChatCodec` | `OpenAIChatCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 | OpenAI Responses | `nemo_relay.codecs.OpenAIResponsesCodec` | `OpenAIResponsesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 | Anthropic Messages | `nemo_relay.codecs.AnthropicMessagesCodec` | `AnthropicMessagesCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
+| Gemini `generateContent` | `nemo_relay.codecs.GeminiGenerateContentCodec` | `GeminiGenerateContentCodec` from `nemo-relay-node` | `decode`, `encode`, `decode_response` / `decodeResponse` |
 
 Choose the provider codec that matches the payload shape the framework already sends to the provider. Do not translate to a different provider shape only to make the codec fit.
 
-The `nemo-relay` gateway selects these request codecs automatically for
-`/v1/messages`, `/v1/chat/completions`, and `/v1/responses`, for both buffered
-and streaming calls. Count-token, model, probe, and non-LLM passthrough routes
-do not use request codecs.
+The `nemo-relay` gateway selects the matching request codec automatically on the
+provider generation routes it proxies: `/v1/messages`, `/v1/chat/completions`,
+and `/v1/responses`, for both buffered and streaming calls. Gemini
+`generateContent` does not yet have a gateway route, so use
+`GeminiGenerateContentCodec` directly when a framework sends
+`generateContent`-shaped payloads. Count-token, model, probe, and non-LLM
+passthrough routes do not use request codecs.
 
 ## Example: Add a System Message with a Provider Codec
 
