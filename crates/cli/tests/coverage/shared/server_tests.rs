@@ -1021,6 +1021,94 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     );
 }
 
+#[tokio::test]
+async fn serve_listener_observability_plugin_records_supported_agent_hooks() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atof_dir = temp.path().join("atof");
+    std::fs::create_dir_all(&atof_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [
+            {
+                "kind": "observability",
+                "enabled": true,
+                "config": {
+                    "version": 3,
+                    "atof": {
+                        "enabled": true,
+                        "sinks": [{
+                            "type": "file",
+                            "output_directory": atof_dir,
+                            "filename": "events.jsonl",
+                            "mode": "overwrite"
+                        }]
+                    }
+                }
+            }
+        ]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+    for (path, session_id, start_event, end_event) in [
+        (
+            "/hooks/codex",
+            "codex-plugin-session",
+            "sessionStart",
+            "sessionEnd",
+        ),
+        (
+            "/hooks/claude-code",
+            "claude-plugin-session",
+            "SessionStart",
+            "SessionEnd",
+        ),
+    ] {
+        for hook_event_name in [start_event, "UserPromptSubmit", end_event] {
+            let response = client
+                .post(format!("{url}{path}"))
+                .json(&json!({
+                    "session_id": session_id,
+                    "hook_event_name": hook_event_name
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
+    assert!(nemo_relay::plugin::active_plugin_report().is_none());
+
+    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
+    let turn_starts = events
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| {
+            event["kind"] == "scope"
+                && event["scope_category"] == "start"
+                && event["metadata"]["nemo_relay_scope_role"] == "turn"
+        })
+        .filter_map(|event| event["name"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    assert!(turn_starts.contains(&"codex-turn".to_string()));
+    assert!(turn_starts.contains(&"claude-code-turn".to_string()));
+    assert!(!turn_starts.contains(&"claude-code".to_string()));
+}
+
 fn atif_matches_session(trajectory: &Value, session_id: &str) -> bool {
     trajectory["session_id"] == json!(session_id)
         || trajectory["extra"]["observed_events"]

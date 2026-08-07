@@ -21,6 +21,11 @@ configuration, MCP selection, hook forwarding, and `/hooks/hermes` endpoint are
 no longer supported. Relay configuration under `[agents.hermes]` is also
 unsupported.
 
+Remove the `[agents.hermes]` section from every Relay configuration file before
+upgrading. If the section remains, Relay rejects the configuration and prevents
+configuration-resolving commands, including Claude Code and Codex runs, from
+starting.
+
 NeMo Relay is built into Hermes Agent. Do not install Relay separately or
 enable an observability plugin. Hermes Agent understands NeMo Relay plugin
 configurations.

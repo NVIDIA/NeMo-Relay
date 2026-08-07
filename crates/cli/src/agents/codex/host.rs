@@ -17,7 +17,6 @@ use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey,
 #[cfg(test)]
 use crate::hooks::generated_hooks;
 #[cfg(test)]
-#[cfg(test)]
 use crate::hooks::merge_hooks;
 
 use super::app_server::{CodexAppServerClient, CodexHookMetadata, CodexHooksClient};
