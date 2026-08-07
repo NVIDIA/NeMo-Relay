@@ -93,14 +93,6 @@ fn read_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
         .unwrap_or_else(|| panic!("missing {event} record in {}", path.display()))
 }
 
-fn quoted_redacted_arguments() -> &'static str {
-    if cfg!(windows) {
-        "\"<arguments redacted>\""
-    } else {
-        "'<arguments redacted>'"
-    }
-}
-
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
     write_dynamic_plugin_manifest_with_options(dir, plugin_id, &["plugin_worker"], None);
 }
@@ -3871,7 +3863,6 @@ anthropic_base_url = "http://127.0.0.1:1"
         stderr.contains("possible_duplicate_agent_executable"),
         "{stderr}"
     );
-    assert!(stderr.contains("Dry-run validation will continue without launching the agent"));
     assert!(!stderr.contains("/opt/bin/claude-code.exe"));
     assert!(!stderr.contains("synthetic prompt"));
 
@@ -3998,20 +3989,6 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("possible_duplicate_agent_executable"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!(
-            "Observed: nemo-relay claude --dry-run -- claude {}",
-            quoted_redacted_arguments()
-        )),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains(&format!(
-            "Recommended: nemo-relay claude --dry-run -- {}",
-            quoted_redacted_arguments()
-        )),
         "{stderr}"
     );
     assert!(!stderr.contains("private synthetic value"), "{stderr}");

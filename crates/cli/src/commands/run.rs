@@ -13,12 +13,6 @@ use crate::error::CliError;
 
 const POSSIBLE_DUPLICATE_AGENT_EXECUTABLE: &str = "possible_duplicate_agent_executable";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum InvocationForm {
-    Run,
-    Shortcut,
-}
-
 /// Args for an easy-path agent shortcut.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct EasyPathCommand {
@@ -74,9 +68,10 @@ pub(super) async fn execute(
     if command.dry_run
         && let Some(agent) = command.agent.map(Into::into)
     {
-        warn_for_possible_duplicate(agent, &command.command, InvocationForm::Run);
+        warn_for_possible_duplicate(agent, &command.command);
     }
     let inherited = server.to_runtime();
+    // The launcher prints the plan and returns before gateway or child execution for dry runs.
     crate::process::launcher::run(command.into_runtime(), Some(&inherited)).await
 }
 
@@ -96,7 +91,7 @@ pub(super) async fn easy_path(
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
     if command.dry_run {
-        warn_for_possible_duplicate(agent, &command.command, InvocationForm::Shortcut);
+        warn_for_possible_duplicate(agent, &command.command);
     }
     let inherited = server.to_runtime();
     // An explicit config path is the user's contract. Without one, setup is required only when
@@ -119,13 +114,14 @@ pub(super) async fn easy_path(
         print: false,
         command: command.command,
     };
+    // The launcher prints the plan and returns before gateway or child execution for dry runs.
     crate::process::launcher::run(runtime, Some(&inherited)).await
 }
 
-fn warn_for_possible_duplicate(agent: CodingAgent, command: &[String], form: InvocationForm) {
-    let Some(warning) = possible_duplicate_agent_warning(agent, command, form) else {
+fn warn_for_possible_duplicate(agent: CodingAgent, command: &[String]) {
+    if !has_duplicate_agent_executable(agent, command) {
         return;
-    };
+    }
     let agent = agent.as_arg();
     log::warn!(
         target: "nemo_relay.cli",
@@ -134,65 +130,15 @@ fn warn_for_possible_duplicate(agent: CodingAgent, command: &[String], form: Inv
         agent = agent,
         duplicate_executable = agent,
         confidence = "high",
-        action = "dry_run_warning",
+        action = "remove_duplicate_executable",
         command_modified = false,
         arguments_redacted = true;
-        "Possible duplicate agent executable during dry-run validation"
+        "Possible duplicate agent executable after `--`; remove the repeated executable"
     );
-    super::print_invocation_warning(&warning);
 }
 
-pub(super) fn possible_duplicate_agent_warning(
-    agent: CodingAgent,
-    command: &[String],
-    form: InvocationForm,
-) -> Option<String> {
-    let executable = command.first()?;
-    if CodingAgent::infer(executable) != Some(agent) {
-        return None;
-    }
-
-    let mut observed = relay_prefix(agent, form);
-    observed.extend(["--dry-run".into(), "--".into(), agent.as_arg().into()]);
-    if command.len() > 1 {
-        observed.push("<arguments redacted>".into());
-    }
-
-    let mut recommended = relay_prefix(agent, form);
-    recommended.extend(["--dry-run".into(), "--".into()]);
-    if command.len() > 1 {
-        recommended.push("<arguments redacted>".into());
-    }
-
-    Some(format!(
-        "WARNING: Possible duplicate agent executable after `--`.\n\
-         Diagnostic: {POSSIBLE_DUPLICATE_AGENT_EXECUTABLE}\n\
-         Duplicate executable: {}\n\
-         Observed: {}\n\
-         Recommended: {}\n\
-         Dry-run validation will continue without launching the agent.",
-        agent.as_arg(),
-        render_command(&observed),
-        render_command(&recommended),
-    ))
-}
-
-fn relay_prefix(agent: CodingAgent, form: InvocationForm) -> Vec<String> {
-    match form {
-        InvocationForm::Run => vec![
-            "nemo-relay".into(),
-            "run".into(),
-            "--agent".into(),
-            agent.as_arg().into(),
-        ],
-        InvocationForm::Shortcut => vec!["nemo-relay".into(), agent.as_arg().into()],
-    }
-}
-
-fn render_command(command: &[String]) -> String {
+pub(super) fn has_duplicate_agent_executable(agent: CodingAgent, command: &[String]) -> bool {
     command
-        .iter()
-        .map(|argument| crate::process::shell_quote_arg_for_platform(argument, cfg!(windows)))
-        .collect::<Vec<_>>()
-        .join(" ")
+        .first()
+        .is_some_and(|executable| CodingAgent::infer(executable) == Some(agent))
 }

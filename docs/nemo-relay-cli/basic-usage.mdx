@@ -83,8 +83,8 @@ nemo-relay run --agent claude -- -p "Review this change"
 
 Add `--dry-run` before `--` to validate and inspect the resolved launch plan
 without running setup, starting the gateway, or launching the agent. During
-dry-run validation, Relay warns when the selected executable is repeated after
-`--`:
+dry-run validation, Relay logs a warning when the selected executable is
+repeated after `--`:
 
 ```bash
 nemo-relay run --agent claude --dry-run -- claude
