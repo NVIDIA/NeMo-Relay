@@ -197,10 +197,12 @@ immutable inputs is refused. Choose concurrency before this point.
 **Optional canary-first scheduling.**
 
 The default `TBENCH_CANARY_TASK=adaptive-rejection-sampler` runs that one real
-task first. A passed validation and upload result opens the parallel lane even
-when its benchmark reward is a non-pass. This is a conservative production
-check, not a separate command: launching the full cohort on a fresh run root
-automatically starts the canary and then continues with the remaining tasks.
+task first. A completed benchmark result (`validation.benchmark.status=passed`)
+opens the parallel lane even when its benchmark reward is a non-pass. Phoenix
+upload and other integration evidence remain cohort-level acceptance gates.
+This is a conservative production check, not a separate command: launching the
+full cohort on a fresh run root automatically starts the canary and then
+continues with the remaining tasks.
 
 To skip that one-task checkpoint, set an explicitly blank value in `.env`:
 
