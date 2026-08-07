@@ -272,13 +272,18 @@ class OpenTelemetrySectionConfig:
 
 @dataclass(slots=True)
 class ObservabilityConfig:
-    """Canonical config document for the top-level observability component."""
+    """Canonical config document for the top-level observability component.
+
+    ``enable_full_payloads`` retains complete sanitized request data on every
+    LLM start event.
+    """
 
     version: int = 3
     atof: AtofConfig | None = None
     atif: AtifConfig | None = None
     opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
+    enable_full_payloads: bool = False
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
@@ -289,6 +294,7 @@ class ObservabilityConfig:
                 "atif": self.atif,
                 "opentelemetry": self.opentelemetry,
                 "policy": self.policy,
+                "enable_full_payloads": self.enable_full_payloads,
             }
         )
 

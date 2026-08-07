@@ -35,7 +35,7 @@ use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
 use crate::api::event::{Event, ScopeCategory};
-use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
+use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{
     flush_subscribers, scope_deregister_subscriber, try_scope_deregister_subscriber,
@@ -136,6 +136,9 @@ pub struct ObservabilityConfig {
     /// Observability-local unsupported-config policy.
     #[serde(default)]
     pub policy: ConfigPolicy,
+    /// Whether LLM start events retain complete sanitized request payloads.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enable_full_payloads: bool,
 }
 
 impl Default for ObservabilityConfig {
@@ -146,6 +149,7 @@ impl Default for ObservabilityConfig {
             atif: None,
             opentelemetry: None,
             policy: ConfigPolicy::default(),
+            enable_full_payloads: false,
         }
     }
 }
@@ -481,6 +485,7 @@ crate::editor_config! {
             nested: ConfigPolicy,
             default: ConfigPolicy,
         },
+        enable_full_payloads => { label: "enable_full_payloads", kind: Boolean },
     }
 }
 
@@ -784,6 +789,7 @@ fn register_observability(
     config: ObservabilityConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
         register_atof_exporter(atof, ctx)?;
     }
@@ -793,6 +799,29 @@ fn register_observability(
     if let Some(otel) = config.opentelemetry.filter(|section| section.enabled) {
         register_opentelemetry(otel, ctx)?;
     }
+    Ok(())
+}
+
+fn register_full_payload_policy(
+    enabled: bool,
+    ctx: &mut PluginRegistrationContext,
+) -> PluginResult<()> {
+    let context = global_context();
+    context
+        .write()
+        .map_err(|error| PluginError::RegistrationFailed(error.to_string()))?
+        .observability_full_payloads_enabled = enabled;
+    ctx.add_registration(PluginRegistration::new(
+        "observability",
+        ctx.qualify_name("payload-policy"),
+        Box::new(|| {
+            global_context()
+                .write()
+                .map_err(|error| PluginError::RegistrationFailed(error.to_string()))?
+                .observability_full_payloads_enabled = false;
+            Ok(())
+        }),
+    ));
     Ok(())
 }
 
@@ -2162,6 +2191,7 @@ fn validate_top_level_observability_fields(
             "opentelemetry",
             "openinference",
             "policy",
+            "enable_full_payloads",
         ],
     );
     if plugin_config.contains_key("openinference") {

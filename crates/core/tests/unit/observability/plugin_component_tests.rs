@@ -247,6 +247,13 @@ fn plugin_config(config: Json) -> PluginConfig {
 #[test]
 fn editor_schema_tracks_observability_config_types() {
     let schema = ObservabilityConfig::editor_schema();
+    assert_eq!(
+        schema
+            .field("enable_full_payloads")
+            .expect("full payload field")
+            .kind,
+        EditorFieldKind::Boolean
+    );
     let atof = schema.field("atof").expect("atof section");
     assert_eq!(atof.label, "ATOF");
     assert_eq!(atof.kind, EditorFieldKind::Section);
@@ -434,6 +441,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let defaults = ObservabilityConfig::default();
     assert_eq!(defaults.version, 3);
+    assert!(!defaults.enable_full_payloads);
     assert!(defaults.atof.is_none());
     assert!(defaults.atif.is_none());
     assert!(defaults.opentelemetry.is_none());
@@ -509,6 +517,30 @@ fn assert_endpoint_batch_fields_deserialize() {
     assert_eq!(endpoint.max_queue_size, Some(4096));
     assert_eq!(endpoint.max_export_batch_size, Some(256));
     assert_eq!(endpoint.scheduled_delay_millis, Some(750));
+}
+
+#[test]
+fn full_payload_policy_activates_and_clears_with_the_plugin() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let config = plugin_config(json!({"enable_full_payloads": true}));
+    assert!(!validate_plugin_config(&config).has_errors());
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .observability_full_payloads_enabled
+    );
+
+    clear_plugin_configuration().unwrap();
+    assert!(
+        !global_context()
+            .read()
+            .unwrap()
+            .observability_full_payloads_enabled
+    );
 }
 
 fn assert_default_stream_sink_shape() {

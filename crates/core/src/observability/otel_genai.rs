@@ -7,8 +7,8 @@
 
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::scope::ScopeType;
-use crate::codec::request::ApiSpecificRequest;
-use crate::codec::response::FinishReason;
+use crate::codec::request::{ApiSpecificRequest, ContentPart, Message, MessageContent};
+use crate::codec::response::{AnnotatedLlmResponse, FinishReason};
 use crate::json::Json;
 use opentelemetry::KeyValue;
 use opentelemetry::trace::SpanKind;
@@ -27,11 +27,14 @@ const OPERATION_TEXT_COMPLETION: &str = "text_completion";
 // development attributes. Keep the missing keys in one projection-local block
 // until the generated crate exposes them.
 const GEN_AI_PROVIDER_NAME: &str = "gen_ai.provider.name";
+const GEN_AI_INPUT_MESSAGES: &str = "gen_ai.input.messages";
+const GEN_AI_OUTPUT_MESSAGES: &str = "gen_ai.output.messages";
+const GEN_AI_SYSTEM_INSTRUCTIONS: &str = "gen_ai.system_instructions";
 const GEN_AI_RETRIEVAL_TOP_K: &str = "gen_ai.retrieval.top_k";
 const GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "gen_ai.usage.cache_creation.input_tokens";
 const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
 
-pub(super) fn supports(event: &Event) -> bool {
+fn has_gen_ai_semantics(event: &Event) -> bool {
     matches!(
         event.scope_type(),
         Some(
@@ -45,6 +48,9 @@ pub(super) fn supports(event: &Event) -> bool {
 }
 
 pub(super) fn span_name(event: &Event) -> String {
+    if !has_gen_ai_semantics(event) {
+        return event.name().to_string();
+    }
     let operation = operation_name(event);
     let qualifier = match event.scope_type() {
         Some(ScopeType::Agent) => Some(agent_name(event)),
@@ -62,11 +68,15 @@ pub(super) fn span_name(event: &Event) -> String {
 pub(super) fn span_kind(event: &Event) -> SpanKind {
     match event.scope_type() {
         Some(ScopeType::Agent | ScopeType::Tool) => SpanKind::Internal,
-        _ => SpanKind::Client,
+        Some(ScopeType::Llm | ScopeType::Embedder | ScopeType::Retriever) => SpanKind::Client,
+        _ => SpanKind::Internal,
     }
 }
 
 pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
+    if !has_gen_ai_semantics(event) {
+        return Vec::new();
+    }
     let mut attributes = Vec::new();
     attributes.push(KeyValue::new(
         semconv::GEN_AI_OPERATION_NAME,
@@ -225,6 +235,16 @@ fn push_llm_request_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
     if request.stream == Some(true) {
         attributes.push(KeyValue::new("gen_ai.request.stream", true));
     }
+    if let Some(instructions) = request
+        .instructions
+        .as_ref()
+        .and_then(system_instructions_json)
+    {
+        attributes.push(KeyValue::new(GEN_AI_SYSTEM_INSTRUCTIONS, instructions));
+    }
+    if let Some(messages) = input_messages_json(&request.messages) {
+        attributes.push(KeyValue::new(GEN_AI_INPUT_MESSAGES, messages));
+    }
     push_api_specific_request_attributes(attributes, request.api_specific.as_ref());
 }
 
@@ -279,6 +299,9 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
             string_array([finish_reason(value).to_string()]),
         ));
     }
+    if let Some(messages) = output_messages_json(response) {
+        attributes.push(KeyValue::new(GEN_AI_OUTPUT_MESSAGES, messages));
+    }
     if let Some(usage) = response.usage.as_ref() {
         // `prompt_tokens` is the canonical input count. Cache counts remain
         // separate diagnostic attributes; adding them here would double-count
@@ -301,6 +324,209 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
                 value,
             ));
         }
+    }
+}
+
+fn input_messages_json(messages: &[Message]) -> Option<String> {
+    if messages.is_empty() {
+        return None;
+    }
+    let messages = messages.iter().map(input_message).collect::<Vec<_>>();
+    serde_json::to_string(&messages).ok()
+}
+
+fn system_instructions_json(instructions: &MessageContent) -> Option<String> {
+    let parts = content_parts(instructions);
+    if parts.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&parts).ok()
+}
+
+fn input_message(message: &Message) -> Json {
+    let (role, name, mut parts) = match message {
+        Message::System { content, name } => ("system", name.as_ref(), content_parts(content)),
+        Message::Developer { content, name } => {
+            ("developer", name.as_ref(), content_parts(content))
+        }
+        Message::User { content, name } => ("user", name.as_ref(), content_parts(content)),
+        Message::Assistant {
+            content,
+            tool_calls,
+            name,
+        } => {
+            let mut parts = content.as_ref().map_or_else(Vec::new, content_parts);
+            if let Some(tool_calls) = tool_calls {
+                parts.extend(tool_calls.iter().map(|call| {
+                    let arguments = serde_json::from_str(&call.function.arguments)
+                        .unwrap_or_else(|_| Json::String(call.function.arguments.clone()));
+                    serde_json::json!({
+                        "type": "tool_call",
+                        "id": call.id,
+                        "name": call.function.name,
+                        "arguments": arguments,
+                    })
+                }));
+            }
+            ("assistant", name.as_ref(), parts)
+        }
+        Message::Tool {
+            content,
+            tool_call_id,
+        } => (
+            "tool",
+            None,
+            vec![serde_json::json!({
+                "type": "tool_call_response",
+                "id": tool_call_id,
+                "response": message_content_value(content),
+            })],
+        ),
+        Message::Function { content, name } => (
+            "tool",
+            Some(name),
+            vec![serde_json::json!({
+                "type": "tool_call_response",
+                "response": content,
+            })],
+        ),
+        Message::ToolCallItem {
+            call_id,
+            name,
+            arguments,
+            ..
+        } => (
+            "assistant",
+            None,
+            vec![serde_json::json!({
+                "type": "tool_call",
+                "id": call_id,
+                "name": name,
+                "arguments": arguments,
+            })],
+        ),
+        Message::ToolResultItem {
+            call_id, output, ..
+        } => (
+            "tool",
+            None,
+            vec![serde_json::json!({
+                "type": "tool_call_response",
+                "id": call_id,
+                "response": output,
+            })],
+        ),
+        Message::ProviderNative { kind, value, .. } => (
+            value
+                .get("role")
+                .and_then(Json::as_str)
+                .unwrap_or("provider_native"),
+            None,
+            vec![generic_part(kind, value)],
+        ),
+    };
+    let mut object = Map::from_iter([
+        ("role".to_string(), Json::String(role.to_string())),
+        ("parts".to_string(), Json::Array(std::mem::take(&mut parts))),
+    ]);
+    if let Some(name) = name {
+        object.insert("name".to_string(), Json::String(name.clone()));
+    }
+    Json::Object(object)
+}
+
+fn output_messages_json(response: &AnnotatedLlmResponse) -> Option<String> {
+    let mut parts = response
+        .message
+        .as_ref()
+        .map_or_else(Vec::new, content_parts);
+    if let Some(tool_calls) = response.tool_calls.as_ref() {
+        parts.extend(tool_calls.iter().map(|call| {
+            serde_json::json!({
+                "type": "tool_call",
+                "id": call.id,
+                "name": call.name,
+                "arguments": call.arguments,
+            })
+        }));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let object = Map::from_iter([
+        ("role".to_string(), Json::String("assistant".to_string())),
+        ("parts".to_string(), Json::Array(parts)),
+        (
+            "finish_reason".to_string(),
+            Json::String(
+                response
+                    .finish_reason
+                    .as_ref()
+                    .map_or("unknown", finish_reason)
+                    .to_string(),
+            ),
+        ),
+    ]);
+    serde_json::to_string(&[Json::Object(object)]).ok()
+}
+
+fn content_parts(content: &MessageContent) -> Vec<Json> {
+    match content {
+        MessageContent::Text(content) => vec![text_part(content)],
+        MessageContent::Parts(parts) => parts.iter().map(content_part).collect(),
+    }
+}
+
+fn content_part(part: &ContentPart) -> Json {
+    match part {
+        ContentPart::Text { text, .. } => text_part(text),
+        ContentPart::Refusal { refusal, .. } => text_part(refusal),
+        ContentPart::ToolUse {
+            id, name, input, ..
+        } => serde_json::json!({
+            "type": "tool_call",
+            "id": id,
+            "name": name,
+            "arguments": input,
+        }),
+        ContentPart::ToolResult {
+            tool_use_id,
+            content,
+            ..
+        } => serde_json::json!({
+            "type": "tool_call_response",
+            "id": tool_use_id,
+            "response": content,
+        }),
+        ContentPart::ProviderNative { kind, value, .. } => generic_part(kind, value),
+        ContentPart::ImageUrl { .. } => serialized_part("image_url", part),
+        ContentPart::Image { .. } => serialized_part("image", part),
+        ContentPart::Audio { .. } => serialized_part("audio", part),
+        ContentPart::File { .. } => serialized_part("file", part),
+    }
+}
+
+fn serialized_part(kind: &str, part: &ContentPart) -> Json {
+    generic_part(kind, &serde_json::to_value(part).unwrap_or(Json::Null))
+}
+
+fn text_part(content: &str) -> Json {
+    serde_json::json!({"type": "text", "content": content})
+}
+
+fn generic_part(kind: &str, value: &Json) -> Json {
+    let mut object = value
+        .as_object()
+        .cloned()
+        .unwrap_or_else(|| Map::from_iter([("content".to_string(), value.clone())]));
+    object.insert("type".to_string(), Json::String(kind.to_string()));
+    Json::Object(object)
+}
+
+fn message_content_value(content: &MessageContent) -> Json {
+    match content {
+        MessageContent::Text(text) => Json::String(text.clone()),
+        MessageContent::Parts(parts) => serde_json::to_value(parts).unwrap_or(Json::Null),
     }
 }
 
@@ -338,7 +564,7 @@ fn finish_reason(reason: &FinishReason) -> &str {
     match reason {
         FinishReason::Complete => "stop",
         FinishReason::Length => "length",
-        FinishReason::ToolUse => "tool_calls",
+        FinishReason::ToolUse => "tool_call",
         FinishReason::ContentFilter => "content_filter",
         FinishReason::Unknown(value) => value,
     }
