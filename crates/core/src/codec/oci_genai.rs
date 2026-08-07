@@ -897,6 +897,10 @@ fn validate_oci_supported_fields(
 
 /// Patch envelope-level fields (`compartmentId`, `servingMode`) when the
 /// api-specific annotation changed them.
+///
+/// `api_format` is read-only: the encoder patches the raw payload in place, so
+/// switching formats cannot rebuild the body without leaving the other
+/// format's modeled fields behind, and an edit is rejected instead.
 fn patch_oci_api_specific(
     envelope: Option<&mut serde_json::Map<String, Json>>,
     edited: &Option<ApiSpecificRequest>,
@@ -908,19 +912,26 @@ fn patch_oci_api_specific(
                 Some(ApiSpecificRequest::OCIGenAI {
                     compartment_id,
                     serving_mode,
-                    ..
+                    api_format,
                 }),
                 Some(ApiSpecificRequest::OCIGenAI {
                     compartment_id: old_compartment_id,
                     serving_mode: old_serving_mode,
-                    ..
+                    api_format: old_api_format,
                 }),
-            ) => (
-                compartment_id,
-                serving_mode,
-                old_compartment_id,
-                old_serving_mode,
-            ),
+            ) => {
+                if api_format != old_api_format {
+                    return Err(FlowError::InvalidArgument(
+                        "the OCI GenAI api_format cannot be edited".into(),
+                    ));
+                }
+                (
+                    compartment_id,
+                    serving_mode,
+                    old_compartment_id,
+                    old_serving_mode,
+                )
+            }
             // A dropped api_specific annotation leaves the envelope untouched;
             // the raw payload keeps serving as the source of truth.
             (None, _) => return Ok(()),
@@ -949,22 +960,6 @@ fn patch_oci_api_specific(
         set_or_remove_json(envelope, "servingMode", serving_mode.clone());
     }
     Ok(())
-}
-
-/// The API format the encoder should target: an edited api-specific annotation
-/// wins over the raw payload, mirroring the decode default of `GENERIC`.
-fn encode_api_format(
-    annotated: &AnnotatedLlmRequest,
-    chat_request: &serde_json::Map<String, Json>,
-) -> String {
-    if let Some(ApiSpecificRequest::OCIGenAI {
-        api_format: Some(api_format),
-        ..
-    }) = &annotated.api_specific
-    {
-        return api_format.to_uppercase();
-    }
-    request_api_format(chat_request)
 }
 
 // ---------------------------------------------------------------------------
@@ -1068,13 +1063,7 @@ impl LlmCodec for OCIGenAIChatCodec {
                 .unwrap_or_default(),
             None => obj.clone(),
         };
-        let api_format = encode_api_format(annotated, &chat_request);
-        // An edited api_format changes the body the encoder rebuilds below, so
-        // the declared wire `apiFormat` must follow it or OCI receives a
-        // payload whose shape contradicts its declared format.
-        if api_format != request_api_format(&chat_request) {
-            chat_request.insert("apiFormat".into(), Json::String(api_format.clone()));
-        }
+        let api_format = request_api_format(&chat_request);
 
         validate_oci_supported_fields(annotated, &baseline)?;
 

@@ -1307,24 +1307,31 @@ fn test_tool_call_only_assistant_reencodes_without_null_content_or_empty_id() {
 }
 
 #[test]
-fn test_api_format_edit_updates_wire_api_format() {
+fn test_api_format_edit_is_rejected() {
+    // Merge-not-replace encoding patches the raw payload in place, so a format
+    // switch could never remove the previous format's modeled fields; the
+    // api_format annotation is therefore read-only.
     let codec = OCIGenAIChatCodec;
-    let original = make_request(generic_chat_details());
-    let mut annotated = codec.decode(&original).unwrap();
+    for (payload, new_format) in [
+        (generic_chat_details(), "COHERE"),
+        (generic_chat_details(), "COHEREV2"),
+        (cohere_chat_details(), "GENERIC"),
+    ] {
+        let original = make_request(payload);
+        let mut annotated = codec.decode(&original).unwrap();
+        let Some(ApiSpecificRequest::OCIGenAI { api_format, .. }) = &mut annotated.api_specific
+        else {
+            panic!("expected an OCI api_specific annotation");
+        };
+        *api_format = Some(new_format.into());
 
-    let Some(ApiSpecificRequest::OCIGenAI { api_format, .. }) = &mut annotated.api_specific else {
-        panic!("expected an OCI api_specific annotation");
-    };
-    *api_format = Some("COHERE".into());
-    annotated.messages = vec![Message::User {
-        content: MessageContent::Text("What is the weather?".into()),
-        name: None,
-    }];
-
-    let encoded = codec.encode(&annotated, &original).unwrap();
-    let chat_request = &encoded.content["chatRequest"];
-    assert_eq!(chat_request["apiFormat"], json!("COHERE"));
-    assert_eq!(chat_request["message"], json!("What is the weather?"));
+        let err = codec.encode(&annotated, &original).unwrap_err();
+        assert!(
+            matches!(&err, FlowError::InvalidArgument(message)
+                if message.contains("api_format cannot be edited")),
+            "{new_format}: {err:?}"
+        );
+    }
 }
 
 #[test]
