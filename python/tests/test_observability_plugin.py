@@ -152,6 +152,10 @@ class TestObservabilityConfigHelpers:
         wrapped_config = wrapped["config"]
         assert isinstance(wrapped_config, dict)
         assert wrapped_config["version"] == 3
+        assert wrapped_config["enable_full_payloads"] is False
+
+        full_payload_config = ObservabilityConfig(enable_full_payloads=True).to_dict()
+        assert full_payload_config["enable_full_payloads"] is True
 
     def test_validation_rejects_bad_values(self):
         report = plugin.validate(

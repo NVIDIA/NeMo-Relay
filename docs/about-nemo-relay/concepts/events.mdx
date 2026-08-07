@@ -88,7 +88,8 @@ ATOF uses one `data` field. For scope events, `data` is the semantic input on
 `scope_category == "start"` and the semantic output on
 `scope_category == "end"`.
 
-LLM start annotations use freshness state owned by the nearest agent scope:
+By default, LLM start annotations use freshness state owned by the nearest
+agent scope:
 
 - **Fresh history:** An agent starts fresh when its scope opens and becomes
   fresh again after a `compaction` mark. The first subsequent LLM start retains
@@ -107,6 +108,10 @@ LLM start annotations use freshness state owned by the nearest agent scope:
 - **Concurrency:** Concurrent starts have no guaranteed emission order, but
   exactly one consumes a fresh state. Events are independent observations, not
   a replayable history stream.
+
+Set the observability plugin's `enable_full_payloads` option to `true` to retain
+complete sanitized request input and annotations on every LLM start event.
+Credential removal and sanitizers still apply.
 
 ### Category Profiles
 

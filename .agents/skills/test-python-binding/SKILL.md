@@ -57,6 +57,10 @@ docs/examples.
 # Focused test loop
 uv run pytest -k "<pattern>"
 
+# Required first for focused dynamic-plugin host tests
+just build-test-plugin-fixtures
+uv run pytest python/tests/test_dynamic_plugin_host.py
+
 # Focused Python worker plugin SDK suite
 just test-python-plugin
 

@@ -1,6 +1,6 @@
 ---
 title: "Middleware"
-description: ""
+description: "Choose and configure middleware for managed tool and LLM calls."
 position: 2
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
@@ -14,7 +14,7 @@ calls and sanitizes emitted mark and scope events.
 ## What Middleware Is
 
 Middleware controls or transforms tool and LLM execution and sanitizes emitted
-events. NeMo Relay applies each surface at a specific lifecycle point.
+events. NeMo Relay applies each middleware type at a specific lifecycle point.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
@@ -99,12 +99,30 @@ everything in application code.
 
 ## Middleware Families
 
-NeMo Relay has two major middleware families:
+NeMo Relay has two major middleware families with three distinct purposes:
 
-- **Intercepts** change the real execution path
-- **Guardrails** block work or rewrite emitted observability payloads
+- **Intercepts** change the real request or callback execution path.
+- **Conditional-execution guardrails** decide whether the real work runs.
+- **Sanitize guardrails** change emitted observability without changing the real
+  request or result.
 
-### Callback Error Handling
+## Choose a Middleware Type
+
+Choose the middleware type that matches the behavior you need:
+
+- Use a **conditional-execution guardrail** when the work should be allowed or
+  rejected.
+- Use a **request intercept** when the real request must change before the call.
+- Use an **execution intercept** when code must run before or after the callback.
+- Use a **sanitize guardrail** when only subscribers and exporters should see
+  rewritten data.
+- Use a **mark or scope event sanitizer** when the sensitive fields are in
+  `data`, `category_profile`, or `metadata` rather than the managed tool or LLM
+  request or response payload.
+- Use a **stream execution intercept** when behavior must wrap chunk delivery,
+  finalization, cancellation, or cleanup for a streaming LLM response.
+
+## Callback Error Handling
 
 Conditional-execution guardrails and request or execution intercepts fail
 closed when their callbacks return a failure result. A failure returned
@@ -137,7 +155,7 @@ Use them when the next stage of execution should receive changed input, such as:
 
 Execution intercepts wrap or replace the real callback.
 
-Use them when behavior belongs around the invocation boundary itself, such as:
+Use them when code must run before or after the callback, such as:
 
 - Retries
 - Timing
@@ -212,69 +230,98 @@ the callback failure and withholds the governed observability payload.
 
 ## Managed Execution Order
 
-For managed execution, NeMo Relay applies middleware and emits lifecycle events
-in this order:
+Tool calls and buffered LLM calls follow one normal path grouped into request,
+execution, and response phases.
+
+<MermaidStyles />
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    actor Caller as Application / Framework
-    participant Runtime as NeMo Relay Runtime
-    participant Cond as Conditional Guardrails
-    participant Req as Request Intercepts
-    participant Exec as Execution Intercepts
-    participant Callback as Real Callback
-    participant San as Tool / LLM Sanitizers
-    participant EventSan as Mark / Scope Event Sanitizers
-    participant Dispatch as Async Subscriber Dispatcher
-    participant Consumers as Subscribers / Exporters
-
-    Caller->>Runtime: managed tool or LLM call
-    Runtime->>Cond: decide whether work may proceed
-
-    alt blocked
-        Runtime->>EventSan: sanitize guardrail scopes and rejection mark
-        Cond-->>Caller: reject execution
-    else allowed
-        Runtime->>Req: rewrite the real request
-        Runtime->>San: sanitize emitted start payload
-        Runtime->>EventSan: sanitize start event fields
-        Runtime->>Dispatch: enqueue start event before execution
-        Dispatch-->>Consumers: deliver start event later
-        Runtime->>Exec: wrap execution
-        Exec->>Callback: invoke callback
-        Callback-->>Exec: return real result
-        Exec-->>Runtime: continue
-        Runtime->>San: sanitize emitted end payload
-        Runtime->>EventSan: sanitize end event fields
-        Runtime->>Dispatch: enqueue end event
-        Dispatch-->>Consumers: deliver end event later
-        Runtime-->>Caller: return real result
+flowchart LR
+    subgraph RequestPhase[Request Phase]
+        Conditional[Conditional Guardrails]
+        RequestIntercepts[Request Intercepts]
+        RequestSanitizers[Request Sanitizers]
+        StartEvent[Scope-Start Sanitizers and Start Event]
+        Conditional --> RequestIntercepts --> RequestSanitizers --> StartEvent
     end
+
+    subgraph ExecutionPhase[Execution Phase]
+        ExecutionIntercepts[Execution Intercepts]
+        Callback[Real Callback]
+        ExecutionIntercepts --> Callback
+    end
+
+    subgraph ResponsePhase[Response Phase]
+        ResponseSanitizers[Response Sanitizers]
+        EndEvent[Scope-End Sanitizers and End Event]
+        ResponseSanitizers --> EndEvent
+    end
+
+    StartEvent --> ExecutionIntercepts
+    Callback --> ResponseSanitizers
 ```
 
-1. Conditional-execution guardrails
-2. Request intercepts
-3. Tool or LLM sanitize-request guardrails
-4. Scope-start event sanitizers and start-event emission
-5. Execution intercepts
-6. The real callback, unless an execution intercept replaces it
-7. Tool or LLM sanitize-response guardrails
-8. Scope-end event sanitizers and end-event emission
+The phases run as follows:
+
+1. **Request phase:** Conditional-execution guardrails allow the call, request
+   intercepts rewrite the real request, request sanitizers rewrite the
+   observability copy, and scope-start sanitizers run before Relay enqueues the
+   start event.
+2. **Execution phase:** Execution intercepts wrap or replace the real callback.
+3. **Response phase:** Response sanitizers rewrite the observability copy, and
+   scope-end sanitizers run before Relay enqueues the end event.
+
+The start event is enqueued before execution begins. The async subscriber
+dispatcher delivers start and end snapshots later in FIFO order; managed
+execution does not wait for subscriber or exporter callbacks.
+
+This ordering preserves the distinction between the families:
+
+- Use an intercept to change real execution.
+- Use a sanitize guardrail to change only emitted observability.
+
+### Rejection Path
+
+A conditional-execution guardrail can reject the call during the request phase.
+Relay emits a guardrail scope start/end pair for each conditional guardrail it
+evaluates. If a guardrail rejects the call, Relay skips the managed call start
+and end events and does not run request intercepts, execution intercepts, or the
+real callback. It then sanitizes and enqueues the rejection mark before
+returning the rejection to the managed caller.
+
+```mermaid
+flowchart LR
+    Request[Managed Request]
+    GuardrailStart[Guardrail Scope Start]
+    Conditional{Conditional Guardrail}
+    GuardrailEnd[Guardrail Scope End]
+    Mark[Sanitize and Enqueue Rejection Mark]
+    Rejected[Return Rejection]
+
+    Request --> GuardrailStart --> Conditional --> GuardrailEnd
+    GuardrailEnd -->|rejected| Mark --> Rejected
+```
+
+### Streaming LLM Path
 
 For streaming LLM flows, the same pre-execution order applies: the runtime
-applies `sanitize-request` guardrails and emits the LLM start event before the
+applies request sanitizers and emits the LLM start event before the
 stream execution intercept chain runs. Stream execution intercepts are the
 execution family for streaming provider callbacks. The runtime then collects
-chunks and finalizes the stream before `sanitize-response` guardrails rewrite
-the emitted end-event payload and scope-end event sanitizers run at items 7 and
-8.
+chunks and finalizes the stream before response sanitizers rewrite
+the emitted end-event payload and scope-end event sanitizers run.
 
-This ordering is what makes the semantic split between intercepts and
-guardrails important:
+```mermaid
+flowchart LR
+    RequestPhase[Request Phase and Start Event]
+    StreamIntercepts[Stream Execution Intercepts]
+    Provider[Streaming Provider Callback]
+    Chunks[Chunk Collection]
+    Finalize[Stream Finalization]
+    ResponsePhase[Response Phase and End Event]
 
-- If you need to change the real execution path, use an intercept
-- If you need to change only the emitted payload, use a sanitize guardrail
+    RequestPhase --> StreamIntercepts --> Provider --> Chunks --> Finalize --> ResponsePhase
+```
 
 Before LLM request sanitizers run, Relay removes standard credential headers
 from the event-only request copy: `authorization`, `proxy-authorization`,
@@ -404,115 +451,6 @@ register_llm_sanitize_request_guardrail(
 
 The same registration names support scope-local and plugin-context
 registrations. Priority and name tie-break ordering are unchanged.
-
-## Detailed Execution Flow
-
-<MermaidStyles />
-
-The simplified sequence above is the right mental model for most readers. The
-diagram below expands the same flow to show where guardrail rejections, event
-subscribers, execution-intercept chaining, and streaming collection/finalization
-fit into the runtime path.
-
-```mermaid
-flowchart TB
-    Request([Request])
-
-    subgraph Execution
-        direction TB
-        ConditionalExecutionGuardrails{{Conditional-Execution Guardrail}}
-        RequestIntercepts[/Request Intercepts/]
-        RaiseException[Raise Exception]
-        subgraph Invocation
-            direction TB
-            HasExecutionIntercept{{Has Valid Execution Intercept}}
-            ExecutionIntercepts[/Execution Intercepts/]
-            DefaultCallable[Default Callable]
-            InterceptResult[Execution Result]
-        end
-
-        subgraph Streaming
-            direction TB
-            Finalizer[Finalizer]
-            Collector[Collector]
-        end
-
-        subgraph Observability
-            direction TB
-            SanitizeRequestGuardrails[/Sanitize Request Guardrail/]
-            SanitizeResponseGuardrails[/Sanitize Response Guardrail/]
-            MarkSanitizers[/Mark Event Sanitizers/]
-            ScopeStartSanitizers[/Scope-Start Event Sanitizers/]
-            ScopeEndSanitizers[/Scope-End Event Sanitizers/]
-            StartEvent[Emit Start Event]
-            EndEvent[Emit End Event]
-            Dispatcher[["Async Subscriber Dispatcher"]]
-            EventConsumers[["Subscribers / Exporters"]]
-        end
-    end
-
-    Response([Response])
-
-    Request --> ConditionalExecutionGuardrails
-    RequestIntercepts -->|Transformed Request| SanitizeRequestGuardrails
-    ConditionalExecutionGuardrails -->|"(rejection mark)"| MarkSanitizers
-    MarkSanitizers -->|Sanitized Mark Fields| Dispatcher
-    ConditionalExecutionGuardrails -->|"(rejected)"| RaiseException
-    ConditionalExecutionGuardrails -->|"(passed)"| RequestIntercepts
-    SanitizeRequestGuardrails -->|Sanitized Start Payload| ScopeStartSanitizers
-    ScopeStartSanitizers -->|Sanitized Event Fields| StartEvent
-    StartEvent --> Dispatcher
-    Dispatcher --> EventConsumers
-    StartEvent -->|Before Execution Intercepts| HasExecutionIntercept
-    RequestIntercepts -.->|Real Request| HasExecutionIntercept
-
-    HasExecutionIntercept -->|No| DefaultCallable
-    HasExecutionIntercept -->|Yes| ExecutionIntercepts
-    ExecutionIntercepts -.->|calls next| HasExecutionIntercept
-    ExecutionIntercepts -->|returns or replaces| InterceptResult
-    DefaultCallable -->|returns| InterceptResult
-
-    InterceptResult -->|Response| SanitizeResponseGuardrails
-    InterceptResult -->|Response| Response
-
-    InterceptResult -.->|stream chunks| Collector
-    Collector -..->|stream chunks| Response
-    InterceptResult -.->|"(stream ends)"| Finalizer
-    Finalizer -.->|Aggregated Response| SanitizeResponseGuardrails
-    Finalizer o--o|shared state| Collector
-
-    SanitizeResponseGuardrails -->|Sanitized End Payload| ScopeEndSanitizers
-    ScopeEndSanitizers -->|Sanitized Event Fields| EndEvent
-    EndEvent --> Dispatcher
-
-    class Execution,Invocation,Streaming,Observability,Request,Response grey-lightest;
-    class Dispatcher,EventConsumers,StartEvent,EndEvent teal-lightest;
-    class RequestIntercepts,HasExecutionIntercept,ExecutionIntercepts yellow-lightest;
-    class ConditionalExecutionGuardrails,SanitizeRequestGuardrails,SanitizeResponseGuardrails,MarkSanitizers,ScopeStartSanitizers,ScopeEndSanitizers green-lightest;
-    class RaiseException red-lightest;
-    class DefaultCallable,InterceptResult,Collector,Finalizer magenta-lightest;
-```
-
-## Choosing the Right Surface
-
-Use these comparisons to pick the middleware surface that matches the behavior you need.
-
-- Use a **conditional-execution guardrail** when the work should be allowed or
-  rejected.
-- Use a **request intercept** when the real request must change before the call.
-- Use an **execution intercept** when behavior belongs around the invocation
-  boundary.
-- Use a **sanitize guardrail** when only subscribers and exporters should see
-  rewritten data.
-- Use a **mark or scope event sanitizer** when the sensitive fields are in
-  `data`, `category_profile`, or `metadata` rather than the managed tool or LLM
-  request/response payload.
-- Use a **stream execution intercept** when you need streaming-specific
-  behavior applied across the lifecycle of a long-lived or chunked response,
-  such as per-chunk transformation, incremental authorization, logging or
-  metrics per event, backpressure handling, or cancellation and cleanup,
-  rather than an execution intercept that only surrounds a single call
-  boundary.
 
 ## Practical Guidance
 

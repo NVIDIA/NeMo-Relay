@@ -116,7 +116,7 @@ fn start_http_status_server(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || -> std::io::Result<()> {
         listener.set_nonblocking(true)?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let (mut stream, _) = loop {
             match listener.accept() {
                 Ok(connection) => break connection,
@@ -133,7 +133,7 @@ fn start_http_status_server(
             }
         };
         stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         let mut request = Vec::new();
         let mut byte = [0_u8; 1];
         while !request.ends_with(b"\r\n\r\n") {
@@ -195,7 +195,7 @@ fn start_otlp_capture_server() -> (String, mpsc::Receiver<Vec<u8>>) {
     std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut request = Vec::new();
         let mut byte = [0_u8; 1];
@@ -247,6 +247,13 @@ fn plugin_config(config: Json) -> PluginConfig {
 #[test]
 fn editor_schema_tracks_observability_config_types() {
     let schema = ObservabilityConfig::editor_schema();
+    assert_eq!(
+        schema
+            .field("enable_full_payloads")
+            .expect("full payload field")
+            .kind,
+        EditorFieldKind::Boolean
+    );
     let atof = schema.field("atof").expect("atof section");
     assert_eq!(atof.label, "ATOF");
     assert_eq!(atof.kind, EditorFieldKind::Section);
@@ -434,6 +441,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let defaults = ObservabilityConfig::default();
     assert_eq!(defaults.version, 3);
+    assert!(!defaults.enable_full_payloads);
     assert!(defaults.atof.is_none());
     assert!(defaults.atif.is_none());
     assert!(defaults.opentelemetry.is_none());
@@ -509,6 +517,30 @@ fn assert_endpoint_batch_fields_deserialize() {
     assert_eq!(endpoint.max_queue_size, Some(4096));
     assert_eq!(endpoint.max_export_batch_size, Some(256));
     assert_eq!(endpoint.scheduled_delay_millis, Some(750));
+}
+
+#[test]
+fn full_payload_policy_activates_and_clears_with_the_plugin() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let config = plugin_config(json!({"enable_full_payloads": true}));
+    assert!(!validate_plugin_config(&config).has_errors());
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .observability_full_payloads_enabled
+    );
+
+    clear_plugin_configuration().unwrap();
+    assert!(
+        !global_context()
+            .read()
+            .unwrap()
+            .observability_full_payloads_enabled
+    );
 }
 
 fn assert_default_stream_sink_shape() {
@@ -2861,7 +2893,7 @@ fn opentelemetry_endpoints_fan_out_to_heterogeneous_and_repeated_types() {
 
     for request in [full_request, gen_ai_request, repeated_request] {
         let body = request
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(5))
             .expect("each configured endpoint should receive the exported span");
         assert!(!body.is_empty());
     }
@@ -3076,7 +3108,7 @@ fn opentelemetry_endpoint_delivery_failure_does_not_block_other_endpoints() {
     let _ = clear_plugin_configuration();
 
     let body = healthy_request
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(Duration::from_secs(5))
         .expect("healthy endpoint should receive spans despite another endpoint failing");
     assert!(!body.is_empty());
 }
