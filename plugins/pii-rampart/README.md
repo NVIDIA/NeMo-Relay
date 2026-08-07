@@ -14,7 +14,22 @@ native ABI v3 asynchronous middleware contract, then run inference on the
 existing bounded Rampart Rayon pool. Relay's Tokio workers do not perform or
 wait synchronously on model inference.
 
-## Build
+## Install a release archive
+
+GitHub releases provide one Rampart plugin archive for each supported Relay CLI
+target. Extract the archive, then register its materialized manifest:
+
+```bash
+nemo-relay plugins add ./nemo-relay-pii-rampart-plugin/relay-plugin.toml
+nemo-relay plugins enable pii_rampart
+nemo-relay plugins edit
+```
+
+Each archive contains the platform library, its SHA-256-bound manifest, the
+configuration schema, license, Rust dependency attributions, and this README.
+The model is not bundled.
+
+## Build from source
 
 From this directory, run:
 
@@ -32,6 +47,13 @@ Copy `relay-plugin.toml` to `relay-plugin.local.toml` and replace
 | Windows | `nemo_relay_pii_rampart_plugin.dll` |
 
 Replace `<artifact-sha256>` with the lowercase SHA-256 digest of that library.
+You can also create the same archive produced by CI:
+
+```bash
+just package-pii-rampart-plugin \
+  ./plugins/pii-rampart/target/release/libnemo_relay_pii_rampart_plugin.dylib \
+  aarch64-apple-darwin
+```
 
 ## Model
 
@@ -53,7 +75,7 @@ Relay verifies the expected files and hashes when the plugin is activated.
 
 ## Enable
 
-Add and enable the materialized manifest:
+Add and enable a source-built materialized manifest:
 
 ```bash
 nemo-relay plugins add ./plugins/pii-rampart/relay-plugin.local.toml
@@ -84,4 +106,4 @@ Explicit normalized LLM paths support Relay's built-in OpenAI Chat, OpenAI
 Responses, Anthropic Messages, and Gemini generateContent codecs. The current
 native asynchronous ABI does not pass an owned runtime or opaque codec
 capability across the callback boundary, so explicit normalized paths fail
-closed for those codec kinds.
+closed for other codec kinds.

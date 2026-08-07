@@ -218,3 +218,4 @@ jobs:
           uv run --no-project python -m unittest
           scripts.tests.test_package_cli_bin
           scripts.tests.test_package_node_bin
+          scripts.tests.test_package_pii_rampart_plugin

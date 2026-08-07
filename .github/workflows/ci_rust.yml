@@ -266,7 +266,7 @@ jobs:
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
-      - name: Set CLI binary version
+      - name: Set package versions
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -300,6 +300,10 @@ jobs:
         run: |
           set -e
           cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          cargo build --locked --release \
+            --manifest-path plugins/pii-rampart/Cargo.toml \
+            --target "${{ matrix.target }}" \
+            --target-dir target
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
@@ -316,6 +320,10 @@ jobs:
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
               cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+              cargo build --locked --release \
+                --manifest-path plugins/pii-rampart/Cargo.toml \
+                --target "${{ matrix.target }}" \
+                --target-dir target
             '
 
       - name: Stage CLI binary artifact
@@ -361,6 +369,30 @@ jobs:
             --version "$version" \
             --output-dir "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
 
+      - name: Package Rampart native plugin
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          version="${{ github.ref_name }}"
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            version="dev-${GIT_COMMIT::8}"
+          fi
+          library="libnemo_relay_pii_rampart_plugin.so"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            library="libnemo_relay_pii_rampart_plugin.dylib"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            library="nemo_relay_pii_rampart_plugin.dll"
+          fi
+          source="${NEMO_RELAY_CI_WORKSPACE}/target/${target}/release/${library}"
+          if [ ! -f "$source" ]; then
+            echo "Error: expected Rampart plugin library at ${source}" >&2
+            exit 1
+          fi
+          just \
+            --set output_dir "${NEMO_RELAY_CI_WORKSPACE_TMP}/pii-rampart" \
+            package-pii-rampart-plugin "$source" "$target" "$version"
+
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -373,6 +405,13 @@ jobs:
         with:
           name: cli-python-wheel-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.whl
+          if-no-files-found: error
+
+      - name: Upload Rampart plugin artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pii-rampart-plugin-${{ matrix.platform }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/pii-rampart/pii-rampart-plugin/*
           if-no-files-found: error
 
   PackageSmoke:
@@ -442,6 +481,12 @@ jobs:
           name: cli-python-wheel-${{ matrix.platform }}
           path: cli-wheel/
 
+      - name: Download matching Rampart plugin artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pii-rampart-plugin-${{ matrix.platform }}
+          path: pii-rampart-plugin/
+
       - name: Run downloaded CLI binary and wheel
         if: ${{ matrix.runtime_image == '' }}
         run: |
@@ -466,6 +511,16 @@ jobs:
             echo "Error: CLI binary reports '$binary_version' but wheel reports '$wheel_version'" >&2
             exit 1
           fi
+          plugin_archive="$(find pii-rampart-plugin -maxdepth 1 -type f -print -quit)"
+          test -n "$plugin_archive"
+          python scripts/package-pii-rampart-plugin.py verify \
+            --archive "$plugin_archive" \
+            --target "${{ matrix.target }}" \
+            --extract-dir "${RUNNER_TEMP}/pii-rampart-smoke" \
+            --load-library
+          "$binary" plugins validate \
+            "${RUNNER_TEMP}/pii-rampart-smoke/nemo-relay-pii-rampart-plugin/relay-plugin.toml" \
+            --json
 
       - name: Run downloaded CLI binary and wheel in Linux runtime container
         if: ${{ matrix.runtime_image != '' }}
@@ -491,4 +546,14 @@ jobs:
                 echo "Error: CLI binary and wheel versions differ" >&2
                 exit 1
               fi
+              plugin_archive="$(find pii-rampart-plugin -maxdepth 1 -type f -print -quit)"
+              test -n "$plugin_archive"
+              /opt/python/cp311-cp311/bin/python scripts/package-pii-rampart-plugin.py verify \
+                --archive "$plugin_archive" \
+                --target "${{ matrix.target }}" \
+                --extract-dir /tmp/pii-rampart-smoke \
+                --load-library
+              "$binary" plugins validate \
+                /tmp/pii-rampart-smoke/nemo-relay-pii-rampart-plugin/relay-plugin.toml \
+                --json
             '

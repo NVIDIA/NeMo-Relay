@@ -530,10 +530,49 @@ if missing:
     raise SystemExit(f"Failed to find expected Cargo version fields: {', '.join(missing)}")
 
 path.write_text("".join(output))
+
+plugin_manifest_path = Path("plugins/pii-rampart/Cargo.toml")
+plugin_manifest = plugin_manifest_path.read_text()
+plugin_manifest, count = re.subn(
+    r'(^\[package\]\s+name\s*=\s*"nemo-relay-pii-rampart-plugin"\s+version\s*=\s*")'
+    r'[^\"]+(".*$)',
+    lambda match: f"{match.group(1)}{version}{match.group(2)}",
+    plugin_manifest,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count != 1:
+    raise SystemExit("Failed to find the Rampart plugin package version")
+plugin_manifest_path.write_text(plugin_manifest)
+
+plugin_lock_path = Path("plugins/pii-rampart/Cargo.lock")
+plugin_lock = plugin_lock_path.read_text()
+# This is a standalone workspace lockfile. Update only local path-package
+# versions; resolving the lockfile again could move unrelated third-party pins.
+plugin_lock_packages = (
+    "nemo-relay",
+    "nemo-relay-pii-rampart-plugin",
+    "nemo-relay-pii-redaction",
+    "nemo-relay-plugin",
+    "nemo-relay-types",
+)
+for package in plugin_lock_packages:
+    pattern = rf'(\[\[package\]\]\nname = "{re.escape(package)}"\nversion = ")[^"]+(")'
+    plugin_lock, count = re.subn(
+        pattern,
+        lambda match: f"{match.group(1)}{version}{match.group(2)}",
+        plugin_lock,
+        count=1,
+    )
+    if count != 1:
+        raise SystemExit(f"Failed to find {package} in the Rampart plugin lockfile")
+plugin_lock_path.write_text(plugin_lock)
+
 if changed:
     print(f"Cargo.toml version set to {version}: {', '.join(changed)}")
 else:
     print(f"Cargo.toml already set to {version}")
+print(f"Rampart plugin manifest and lockfile set to {version}")
 PY
 
     local metadata_file=""
@@ -1592,6 +1631,28 @@ set-cargo-version version="":
     fi
     cd "$NEMO_RELAY_REPO_ROOT"
     set_cargo_workspace_version "$version"
+
+# Build a materialized, integrity-checked Rampart native plugin archive.
+# [version] or --set ref_name=<version>; --set [output_dir=<path>]
+package-pii-rampart-plugin library target version="":
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    output_dir="{{ output_dir }}"
+    version="{{ version }}"
+    if [[ -z "$version" ]]; then
+        version="{{ ref_name }}"
+    fi
+    if [[ -z "$version" ]]; then
+        version="$(read_workspace_version)"
+    fi
+    package_dir="$(prepare_package_dir pii-rampart-plugin)"
+    "$(uv_python_executable)" scripts/package-pii-rampart-plugin.py build \
+        --repository "$NEMO_RELAY_REPO_ROOT" \
+        --library "{{ library }}" \
+        --target "{{ target }}" \
+        --version "$version" \
+        --output-dir "$package_dir"
 
 # --set [output_dir=<path>] [ref_name=<name>]
 package-rust:
