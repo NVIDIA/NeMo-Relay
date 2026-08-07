@@ -372,6 +372,15 @@ def test_provider_attempt_rebuilds_from_cached_layers_and_uses_hermetic_runtime(
     assert "harbor_build_args+=(--force-build)" in runner
     assert '--ak "hermetic_runtime_sha256=$hermetic_runtime_sha256"' in runner
     assert '"target": "/opt/hermes-runtime"' in runner
+    assert "--ae 'OPENROUTER_API_KEY=relay-intercepted'" in runner
+    assert '--ae "OPENROUTER_BASE_URL=$fail_closed_openai_base_url"' in runner
+
+
+def test_all_task_smoke_fail_closes_parent_and_delegated_provider_urls() -> None:
+    smoke = (EXAMPLE_ROOT / "scripts" / "smoke_phase2_dataset.py").read_text(encoding="utf-8")
+    assert '"OPENAI_BASE_URL": "http://127.0.0.1:9/v1"' in smoke
+    assert '"OPENROUTER_API_KEY": "relay-intercepted"' in smoke
+    assert '"OPENROUTER_BASE_URL": "http://127.0.0.1:9/v1"' in smoke
 
 
 def test_runner_does_not_expand_an_empty_validation_expectations_array() -> None:

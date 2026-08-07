@@ -269,6 +269,8 @@ fi
     "${agent_kwargs[@]}" \
     --ae 'OPENAI_API_KEY=${OPENAI_API_KEY}' \
     --ae "OPENAI_BASE_URL=$fail_closed_openai_base_url" \
+    --ae 'OPENROUTER_API_KEY=relay-intercepted' \
+    --ae "OPENROUTER_BASE_URL=$fail_closed_openai_base_url" \
     --mounts "$mounts_json" \
     "${agent_hosts[@]}" \
     --artifact /logs/agent/direct-hermes \

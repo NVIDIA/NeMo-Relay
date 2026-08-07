@@ -137,6 +137,8 @@ async def validate_local_dataset(
                         env={
                             "OPENAI_API_KEY": "${OPENAI_API_KEY}",
                             "OPENAI_BASE_URL": "http://127.0.0.1:9/v1",
+                            "OPENROUTER_API_KEY": "relay-intercepted",
+                            "OPENROUTER_BASE_URL": "http://127.0.0.1:9/v1",
                         },
                     )
                 ],
