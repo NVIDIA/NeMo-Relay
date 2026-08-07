@@ -29,6 +29,50 @@ Use these practices when applying the concept in application or integration code
 - Use execution intercepts when you need to wrap real execution and sanitize guardrails when you only need to change emitted observability payloads.
 - Use binding-native typed wrappers and codecs when provider payload conversion would otherwise be repeated at many call sites.
 
+## Latency Benchmark
+
+Use the opt-in latency benchmark to measure the local latency that Relay
+adds around Codex and Claude Code traffic. The harness uses deterministic
+loopback OpenAI and Anthropic providers so network and model-service latency do
+not hide Relay's contribution.
+
+Run the benchmark with the following command:
+
+```bash
+just latency-benchmark
+```
+
+The command builds the release CLI. Its default configuration measures the
+following paths:
+
+- Direct requests to the mock provider.
+- Relay with no exporter, which isolates the managed gateway pipeline.
+- Relay with the ATOF file exporter.
+- Relay with the OTLP exporter sending to a local OpenTelemetry HTTP receiver.
+- Full `nemo-relay hook-forward` subprocesses for Codex and Claude Code.
+- Cold Relay process startup through gateway readiness.
+
+Gateway scenarios cover OpenAI Responses and Anthropic Messages, buffered and
+streaming responses, multiple request payload sizes, and multiple concurrency
+levels.
+
+For buffered calls, inspect total latency. For streaming calls, inspect both
+time to the first content delta and total stream time. The report includes
+p50, p95, and p99 paired latency differences and a bootstrap 95% confidence
+interval for the median.
+
+For setup, CLI options, configuration files, middleware variants, storage,
+output paths, and troubleshooting, refer to the
+[latency benchmark run guide](https://github.com/NVIDIA/NeMo-Relay/blob/main/scripts/latency_benchmark/README.md).
+
+Treat results as environment-specific. Record the commit, release build,
+hardware, operating system, workload sizes, and sample counts when sharing a
+number. Prefer added milliseconds over percentages: a small absolute increase
+can look disproportionately large when the direct loopback baseline is much
+faster than a real model call. Use real Codex or Claude Code runs as an
+end-to-end validation, not as the primary gateway measurement, because host
+startup and scheduling add unrelated variance.
+
 ## Related Topics
 
 Use these links to continue into adjacent concepts and workflows.

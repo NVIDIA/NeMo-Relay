@@ -70,6 +70,29 @@ instead of the built-in shortcut:
 nemo-relay run -- codex
 ```
 
+When `--agent` or an agent shortcut selects the host, pass only the host's
+arguments after `--`:
+
+```bash
+nemo-relay run --agent claude -- -p "Review this change"
+```
+
+Add `--dry-run` before `--` to validate and inspect the resolved launch plan
+without running setup, starting the gateway, or launching the agent. During
+dry-run validation, Relay logs a warning when the selected executable is
+repeated after `--`:
+
+```bash
+nemo-relay run --agent claude --dry-run -- claude
+nemo-relay claude --dry-run -- claude
+```
+
+Live launches do not perform this diagnostic or rewrite forwarded arguments.
+The selected agent receives the arguments exactly as provided.
+
+Dry-run output includes forwarded arguments. Do not share it when those
+arguments contain prompts, credentials, or other sensitive values.
+
 For Claude Code and Codex, transparent mode leaves the caller's source settings,
 selected profile, and installed plugin state unchanged. A process marker makes
 any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's
