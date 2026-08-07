@@ -15,10 +15,10 @@ version = 1
 
 [[components.config.sources.catalog.entries]]
 provider = "openai"
-model_id = "azure/anthropic/claude-opus-4-8"
+model_id = "aws/anthropic/bedrock-claude-opus-5"
 currency = "USD"
 unit = "per_token"
-pricing_as_of = "2026-05-27"
+pricing_as_of = "2026-08-07"
 pricing_source = "Anthropic public list pricing"
 
 [components.config.sources.catalog.entries.rates]
@@ -32,10 +32,10 @@ read_accounting = "included_in_prompt_tokens"
 
 [[components.config.sources.catalog.entries]]
 provider = "openai"
-model_id = "azure/anthropic/claude-sonnet-4-6"
+model_id = "aws/anthropic/bedrock-claude-sonnet-4-6"
 currency = "USD"
 unit = "per_token"
-pricing_as_of = "2026-05-27"
+pricing_as_of = "2026-08-07"
 pricing_source = "Anthropic public list pricing"
 
 [components.config.sources.catalog.entries.rates]
@@ -49,16 +49,17 @@ read_accounting = "included_in_prompt_tokens"
 
 [[components.config.sources.catalog.entries]]
 provider = "openai"
-model_id = "nvidia/zai-org/glm-5.2"
+model_id = "aws/anthropic/bedrock-claude-sonnet-5"
 currency = "USD"
 unit = "per_token"
 pricing_as_of = "2026-08-07"
-pricing_source = "Z.ai public API list pricing"
+pricing_source = "Anthropic public list pricing"
 
 [components.config.sources.catalog.entries.rates]
-input_per_million = 1.4
-output_per_million = 4.4
-cache_read_per_million = 0.26
+input_per_million = 3.0
+output_per_million = 15.0
+cache_read_per_million = 0.3
+cache_write_per_million = 3.75
 
 [components.config.sources.catalog.entries.prompt_cache]
 read_accounting = "included_in_prompt_tokens"
@@ -125,7 +126,7 @@ message_hash_fallback = true
 openai_chat = "strong"
 
 [plugins.dynamic.config.targets.strong]
-model = "azure/anthropic/claude-opus-4-8"
+model = "aws/anthropic/bedrock-claude-opus-5"
 protocol = "openai_chat"
 endpoint = "/v1/chat/completions"
 base_url = "https://inference-api.nvidia.com/v1"
@@ -136,7 +137,7 @@ drop_caller_extra_body = true
 authorization = "SWITCHYARD_PROVIDER_AUTHORIZATION"
 
 [plugins.dynamic.config.targets.weak]
-model = "nvidia/zai-org/glm-5.2"
+model = "aws/anthropic/bedrock-claude-sonnet-5"
 protocol = "openai_chat"
 endpoint = "/v1/chat/completions"
 base_url = "https://inference-api.nvidia.com/v1"
@@ -147,7 +148,7 @@ drop_caller_extra_body = true
 authorization = "SWITCHYARD_PROVIDER_AUTHORIZATION"
 
 [plugins.dynamic.config.targets.judge]
-model = "azure/anthropic/claude-sonnet-4-6"
+model = "aws/anthropic/bedrock-claude-sonnet-4-6"
 protocol = "openai_chat"
 endpoint = "/v1/chat/completions"
 base_url = "https://inference-api.nvidia.com/v1"

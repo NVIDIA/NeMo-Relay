@@ -52,8 +52,9 @@ The two configuration files have deliberately different responsibilities:
   policy, native plugin manifest, authorization variable **name**, Relay
   components, and OpenInference export behavior.
 
-The template configures Opus 4.8 as the strong route, GLM 5.2 as the efficient
-route, and Sonnet 4.6 as the classifier judge, with a `0.5` threshold and
+The template configures AWS-hosted Opus 5 as the strong route, AWS-hosted
+Sonnet 5 as the efficient route, and AWS-hosted Sonnet 4.6 as the classifier
+judge, with a `0.5` threshold and
 session affinity. The coordinator derives its required route-diversity gates
 from the strong and efficient targets, while preflight also verifies the judge.
 Environment variables cannot override these settings.
@@ -168,6 +169,7 @@ OFFLINE_ROOT="$TERMINAL_BENCH_ADMISSION_ROOT/offline-runtime"
   --test-provider-base-url http://127.0.0.1:8000/v1 \
   --test-strong-model phase2/fake-strong \
   --test-weak-model phase2/fake-weak \
+  --test-judge-model phase2/fake-judge \
   --openinference-endpoint http://127.0.0.1:4318/v1/traces \
   --phoenix-project phase2-offline \
   --eval-cohort phase2-offline

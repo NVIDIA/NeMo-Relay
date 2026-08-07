@@ -446,9 +446,9 @@ def test_runner_keeps_benchmark_completion_separate_from_integration_validation(
 def test_plugin_contract_owns_routes_and_authorization_name() -> None:
     module = load_coordinator()
     contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in")
-    assert contract["strong_model"] == "azure/anthropic/claude-opus-4-8"
-    assert contract["weak_model"] == "nvidia/zai-org/glm-5.2"
-    assert contract["judge_model"] == "azure/anthropic/claude-sonnet-4-6"
+    assert contract["strong_model"] == "aws/anthropic/bedrock-claude-opus-5"
+    assert contract["weak_model"] == "aws/anthropic/bedrock-claude-sonnet-5"
+    assert contract["judge_model"] == "aws/anthropic/bedrock-claude-sonnet-4-6"
     assert contract["hermes_caller_model"] == "ollama-route-stub"
     assert contract["provider_base_urls"] == ["https://inference-api.nvidia.com/v1"]
 
