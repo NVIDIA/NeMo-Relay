@@ -432,8 +432,8 @@ def directory_contains_legacy_config_at(parent_fd: int, name: str) -> bool:
     """Return whether a child directory currently contains legacy config files."""
     try:
         directory_fd = os.open(name, directory_open_flags(), dir_fd=parent_fd)
-    except OSError:
-        return False
+    except OSError as error:
+        raise MutationError(f"cannot inspect directory for legacy project configuration: {name}: {error}") from error
     try:
         for filename in LEGACY_PROJECT_CONFIG_FILENAMES:
             try:
@@ -643,13 +643,20 @@ def main() -> int:
             change
             for path in iter_files(root, args.include_lockfiles, args.include_generated)
             if not is_legacy_project_config(path)
-            if (change := rewrite_file(path, root, args.write, root_fd)) is not None
+            if (change := rewrite_file(path, root, write=False)) is not None
         ]
 
         current_legacy_configs = collect_legacy_project_configs(root, args.include_generated)
         if args.write and legacy_configs_changed(legacy_configs, current_legacy_configs):
             raise MutationError("legacy project configuration changed during scan")
         legacy_configs = current_legacy_configs
+        if args.write:
+            applied_file_changes: list[FileChange] = []
+            for change in file_changes:
+                applied_change = rewrite_file(change.path, root, write=True, root_fd=root_fd)
+                if applied_change is not None:
+                    applied_file_changes.append(applied_change)
+            file_changes = applied_file_changes
 
         path_changes: list[PathChange] = []
         if args.rename_paths:
