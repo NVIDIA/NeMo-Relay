@@ -152,6 +152,8 @@ def test_failure_classifier_retries_only_known_infrastructure_failures() -> None
         )
         == "infrastructure"
     )
+    assert module.classify_failure("trusted fallback: provider returned HTTP 408") == "infrastructure"
+    assert module.classify_failure("provider returned HTTP 400") == "harness_or_integration"
     assert module.classify_failure("receipt did not prove plugin close") == "harness_or_integration"
 
 

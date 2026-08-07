@@ -51,6 +51,7 @@ INFRASTRUCTURE_PATTERNS = (
     "no space left on device",
     "phoenix upload",
     "provider has been unresponsive",
+    "provider returned http 408",
     "registry-1.docker.io",
     "temporary failure in name resolution",
     "tls handshake timeout",
