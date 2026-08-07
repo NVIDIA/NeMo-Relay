@@ -342,7 +342,16 @@ def collect_legacy_project_configs(root: Path, include_generated: bool) -> list[
     return sorted(configs, key=lambda config: str(config.path))
 
 
+def legacy_configs_changed(left: list[LegacyProjectConfig], right: list[LegacyProjectConfig]) -> bool:
+    """Return whether the protected legacy config set changed during scanning."""
+    return {config.path for config in left} != {config.path for config in right}
+
+
 def rewrite_file_secure(path: Path, root: Path, root_fd: int) -> FileChange | None:
+    """Apply replacements to one file through directory handles."""
+    if is_legacy_project_config(path):
+        raise MutationError(f"legacy project configuration changed during scan: {path}")
+
     try:
         relative_path = path.relative_to(root)
         with open_relative_directory(root_fd, relative_path.parent) as parent_fd:
@@ -419,6 +428,25 @@ def is_blocked_legacy_config_path(path: Path, legacy_configs: list[LegacyProject
     return any(path == config.path or path in config.path.parents for config in legacy_configs)
 
 
+def directory_contains_legacy_config_at(parent_fd: int, name: str) -> bool:
+    """Return whether a child directory currently contains legacy config files."""
+    try:
+        directory_fd = os.open(name, directory_open_flags(), dir_fd=parent_fd)
+    except OSError:
+        return False
+    try:
+        for filename in LEGACY_PROJECT_CONFIG_FILENAMES:
+            try:
+                config_stat = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(config_stat.st_mode):
+                return True
+        return False
+    finally:
+        os.close(directory_fd)
+
+
 def collect_path_changes(
     root: Path,
     include_generated: bool,
@@ -472,6 +500,9 @@ def apply_path_changes(
                     source_stat = os.stat(old_relative.name, dir_fd=parent_fd, follow_symlinks=False)
                     if not (stat.S_ISREG(source_stat.st_mode) or stat.S_ISDIR(source_stat.st_mode)):
                         raise ValueError("rename source is not a regular file or directory")
+                    if old_relative.name == ".nemo-flow" and stat.S_ISDIR(source_stat.st_mode):
+                        if directory_contains_legacy_config_at(parent_fd, old_relative.name):
+                            raise MutationError(f"legacy project configuration changed during scan: {change.old}")
                     rename_no_replace_at(parent_fd, old_relative.name, new_relative.name)
             except (OSError, RuntimeError, ValueError) as error:
                 raise MutationError(f"unsafe rename: {change.old} -> {change.new}: {error}") from error
@@ -570,9 +601,11 @@ def main() -> int:
         "--max-report",
         type=int,
         default=200,
-        help="Maximum file changes and path changes to print.",
+        help="Maximum file changes, path changes, and legacy configuration warnings to print.",
     )
     args = parser.parse_args()
+    if args.max_report < 0:
+        parser.error("--max-report must be non-negative")
 
     root = Path(args.root).resolve()
     if not root.exists():
@@ -605,14 +638,18 @@ def main() -> int:
                 parser.error(f"confirmed root cannot be opened safely: {error}")
 
         legacy_configs = collect_legacy_project_configs(root, args.include_generated)
-        legacy_config_paths = {config.path for config in legacy_configs}
 
         file_changes = [
             change
             for path in iter_files(root, args.include_lockfiles, args.include_generated)
-            if path not in legacy_config_paths
+            if not is_legacy_project_config(path)
             if (change := rewrite_file(path, root, args.write, root_fd)) is not None
         ]
+
+        current_legacy_configs = collect_legacy_project_configs(root, args.include_generated)
+        if args.write and legacy_configs_changed(legacy_configs, current_legacy_configs):
+            raise MutationError("legacy project configuration changed during scan")
+        legacy_configs = current_legacy_configs
 
         path_changes: list[PathChange] = []
         if args.rename_paths:
