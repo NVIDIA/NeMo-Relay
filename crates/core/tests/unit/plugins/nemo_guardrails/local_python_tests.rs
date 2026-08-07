@@ -573,6 +573,30 @@ fn stream_text_extraction_handles_supported_codecs() {
         ),
         Some("hello".to_string())
     );
+    // OCI GENERIC: bare choice delta with a top-level `message`.
+    assert_eq!(
+        extract_stream_text(
+            LocalGuardrailsCodec::OCIGenAI,
+            &json!({"index": 0, "message": {"content": [{"type": "TEXT", "text": "hello"}]}})
+        ),
+        Some("hello".to_string())
+    );
+    // OCI GENERIC: `choices`-wrapped deltas, optionally inside `chatResponse`.
+    assert_eq!(
+        extract_stream_text(
+            LocalGuardrailsCodec::OCIGenAI,
+            &json!({"chatResponse": {"choices": [
+                {"index": 0, "message": {"content": [{"type": "TEXT", "text": "hel"}]}},
+                {"index": 1, "message": {"content": [{"type": "TEXT", "text": "lo"}]}}
+            ]}})
+        ),
+        Some("hello".to_string())
+    );
+    // OCI COHERE: bare text fragment.
+    assert_eq!(
+        extract_stream_text(LocalGuardrailsCodec::OCIGenAI, &json!({"text": "hello"})),
+        Some("hello".to_string())
+    );
 }
 
 #[cfg(unix)]

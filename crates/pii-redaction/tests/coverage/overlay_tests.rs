@@ -199,3 +199,82 @@ fn oci_genai_overlay_rewrites_cohere_text() {
     assert_eq!(overlaid["chatResponse"]["text"], json!("[REDACTED]"));
     assert_eq!(overlaid["chatResponse"]["finishReason"], json!("COMPLETE"));
 }
+
+#[test]
+fn oci_genai_overlay_rewrites_each_text_part_and_keeps_non_text_blocks() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [
+                        {"type": "TEXT", "text": "raw one"},
+                        {"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,AAAA"}},
+                        {"type": "TEXT", "text": "raw two"}
+                    ]
+                }
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text(
+            "[REDACTED ONE]\n[REDACTED TWO]\nwith remainder".into(),
+        )),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let content = &overlaid["chatResponse"]["choices"][0]["message"]["content"];
+    assert_eq!(content[0]["text"], json!("[REDACTED ONE]"));
+    assert_eq!(
+        content[1],
+        json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,AAAA"}})
+    );
+    // The final TEXT part keeps any surplus newline-separated text.
+    assert_eq!(content[2]["text"], json!("[REDACTED TWO]\nwith remainder"));
+}
+
+#[test]
+fn oci_genai_overlay_sanitizes_nested_function_tool_calls() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [],
+                    "toolCalls": [{
+                        "id": "call_1",
+                        "type": "FUNCTION",
+                        "function": {"name": "one", "arguments": "{\"secret\":\"raw-1\"}"}
+                    }]
+                }
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        tool_calls: Some(vec![tool_call(
+            "call_1",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let call = &overlaid["chatResponse"]["choices"][0]["message"]["toolCalls"][0];
+    assert_eq!(
+        call["function"]["arguments"],
+        json!("{\"secret\":\"[REDACTED]\"}")
+    );
+    assert!(
+        call.get("arguments").is_none(),
+        "sanitized arguments must land on the nested function object, got {call}"
+    );
+}

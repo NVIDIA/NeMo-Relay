@@ -396,10 +396,11 @@ fn hint_does_not_classify_non_object_or_keyless() {
 // Provider-codec factory (name<->surface mapping + codec construction)
 // ---------------------------------------------------------------------------
 
-const ALL_SURFACES: [ProviderSurface; 3] = [
+const ALL_SURFACES: [ProviderSurface; 4] = [
     ProviderSurface::OpenAIChat,
     ProviderSurface::OpenAIResponses,
     ProviderSurface::AnthropicMessages,
+    ProviderSurface::OCIGenAI,
 ];
 
 #[test]

@@ -1277,14 +1277,34 @@ fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<Stri
             if let Some(text) = chunk.get("text").and_then(Json::as_str) {
                 return (!text.is_empty()).then(|| text.to_string());
             }
-            let message = chunk.get("message").and_then(Json::as_object)?;
-            let parts = message.get("content")?.as_array()?;
+            // GENERIC deltas are either a bare choice (`message` at the top
+            // level) or carry a `choices` array of deltas, mirroring the
+            // stream shapes the OCI streaming codec accepts.
+            fn collect_generic_text(message: &Json, collected: &mut String) {
+                let Some(parts) = message.get("content").and_then(Json::as_array) else {
+                    return;
+                };
+                for part in parts {
+                    if part.get("type").and_then(Json::as_str) == Some("TEXT")
+                        && let Some(text) = part.get("text").and_then(Json::as_str)
+                    {
+                        collected.push_str(text);
+                    }
+                }
+            }
             let mut collected = String::new();
-            for part in parts {
-                if part.get("type").and_then(Json::as_str) == Some("TEXT")
-                    && let Some(text) = part.get("text").and_then(Json::as_str)
-                {
-                    collected.push_str(text);
+            match chunk.get("choices").and_then(Json::as_array) {
+                Some(choices) => {
+                    for choice in choices {
+                        if let Some(message) = choice.get("message") {
+                            collect_generic_text(message, &mut collected);
+                        }
+                    }
+                }
+                None => {
+                    if let Some(message) = chunk.get("message") {
+                        collect_generic_text(message, &mut collected);
+                    }
                 }
             }
             (!collected.is_empty()).then_some(collected)

@@ -371,13 +371,21 @@ fn decode_oci_tool_call(value: &Json) -> Result<ToolCall> {
 }
 
 /// Convert a normalized nested [`ToolCall`] back into the flat OCI shape.
+///
+/// A missing wire `id` decodes to an empty string, so an empty id is omitted
+/// on re-encode rather than materializing an `"id": ""` field.
 fn encode_oci_tool_call(tool_call: &ToolCall) -> Json {
-    serde_json::json!({
-        "id": tool_call.id,
-        "type": "FUNCTION",
-        "name": tool_call.function.name,
-        "arguments": tool_call.function.arguments,
-    })
+    let mut obj = serde_json::Map::new();
+    if !tool_call.id.is_empty() {
+        obj.insert("id".into(), Json::String(tool_call.id.clone()));
+    }
+    obj.insert("type".into(), Json::String("FUNCTION".into()));
+    obj.insert("name".into(), Json::String(tool_call.function.name.clone()));
+    obj.insert(
+        "arguments".into(),
+        Json::String(tool_call.function.arguments.clone()),
+    );
+    Json::Object(obj)
 }
 
 // ---------------------------------------------------------------------------
@@ -468,11 +476,14 @@ fn encode_generic_message(message: &Message) -> Result<Json> {
             ..
         } => {
             obj.insert("role".into(), Json::String("ASSISTANT".into()));
+            // `None` round-trips a tool-call-only message: an empty part list
+            // decodes to `None`, so re-encode as `[]` rather than `null` to
+            // keep the OCI typed-part-list shape.
             obj.insert(
                 "content".into(),
                 match content {
                     Some(content) => encode_generic_content(content)?,
-                    None => Json::Null,
+                    None => Json::Array(Vec::new()),
                 },
             );
             if let Some(tool_calls) = tool_calls {
@@ -625,11 +636,15 @@ fn encode_cohere_messages(
         remaining = &remaining[1..];
     }
 
-    let mut current = String::new();
-    if let Some(Message::User { content, .. }) = remaining.last() {
-        current = cohere_text(content)?;
-        remaining = &remaining[..remaining.len() - 1];
-    }
+    // The COHERE chat request requires a non-empty `message` prompt; an edited
+    // list without a trailing user turn would otherwise silently send `""`.
+    let Some(Message::User { content, .. }) = remaining.last() else {
+        return Err(FlowError::InvalidArgument(
+            "OCI GenAI COHERE requests require the last message to be a user message".into(),
+        ));
+    };
+    let current = cohere_text(content)?;
+    remaining = &remaining[..remaining.len() - 1];
 
     let history = remaining
         .iter()
@@ -651,7 +666,16 @@ fn encode_cohere_turn(message: &Message) -> Result<Json> {
             ..
         } => ("CHATBOT", content),
         Message::System { content, .. } => ("SYSTEM", content),
-        Message::Tool { content, .. } => ("TOOL", content),
+        // OCI's CohereToolMessage carries structured `toolResults`, not a plain
+        // `message` string, and has no field for the normalized tool_call_id.
+        // Reject rather than silently dropping the identifier; wire-shaped TOOL
+        // turns survive untouched as ProviderNative messages below.
+        Message::Tool { .. } => {
+            return Err(FlowError::InvalidArgument(
+                "OCI GenAI COHERE tool results cannot be rebuilt from a normalized tool message"
+                    .into(),
+            ));
+        }
         Message::ProviderNative {
             provider, value, ..
         } if provider == "oci_genai" => return Ok(value.clone()),
@@ -1045,6 +1069,12 @@ impl LlmCodec for OCIGenAIChatCodec {
             None => obj.clone(),
         };
         let api_format = encode_api_format(annotated, &chat_request);
+        // An edited api_format changes the body the encoder rebuilds below, so
+        // the declared wire `apiFormat` must follow it or OCI receives a
+        // payload whose shape contradicts its declared format.
+        if api_format != request_api_format(&chat_request) {
+            chat_request.insert("apiFormat".into(), Json::String(api_format.clone()));
+        }
 
         validate_oci_supported_fields(annotated, &baseline)?;
 
@@ -1474,9 +1504,11 @@ struct OCIGenAIStreamingState {
 struct OCIChoiceState {
     role: Option<String>,
     text: String,
-    /// Tool calls keyed by their array position; `arguments` fragments
-    /// accumulate, identity fields last-write-win.
-    tool_calls: std::collections::BTreeMap<usize, OCIToolCallState>,
+    /// Tool-call accumulators in first-seen order. Fragments that carry an
+    /// `id` are matched to the accumulator with that id (OCI provides no
+    /// per-call `index`, and parallel calls can each arrive at event-local
+    /// position 0); id-less fragments fall back to their array position.
+    tool_calls: Vec<OCIToolCallState>,
     finish_reason: Option<String>,
 }
 
@@ -1614,7 +1646,22 @@ impl OCIGenAIStreamingState {
 
 impl OCIChoiceState {
     fn observe_tool_call(&mut self, position: usize, tool_call: &serde_json::Map<String, Json>) {
-        let state = self.tool_calls.entry(position).or_default();
+        let slot = match tool_call.get("id").and_then(Json::as_str) {
+            Some(id) => self
+                .tool_calls
+                .iter()
+                .position(|state| state.id.as_deref() == Some(id))
+                .unwrap_or_else(|| {
+                    self.tool_calls.push(OCIToolCallState::default());
+                    self.tool_calls.len() - 1
+                }),
+            None if position < self.tool_calls.len() => position,
+            None => {
+                self.tool_calls.push(OCIToolCallState::default());
+                self.tool_calls.len() - 1
+            }
+        };
+        let state = &mut self.tool_calls[slot];
         if let Some(id) = tool_call.get("id").and_then(Json::as_str) {
             state.id = Some(id.to_string());
         }
@@ -1635,14 +1682,21 @@ impl OCIChoiceState {
             "role".to_string(),
             Json::String(self.role.unwrap_or_else(|| "ASSISTANT".to_string())),
         );
+        // A tool-call-only stream accumulates no text; emit `[]` so the
+        // response decode yields no assistant message, matching how the
+        // non-streaming path treats an empty part list.
         message.insert(
             "content".to_string(),
-            serde_json::json!([{"type": "TEXT", "text": self.text}]),
+            if self.text.is_empty() {
+                Json::Array(Vec::new())
+            } else {
+                serde_json::json!([{"type": "TEXT", "text": self.text}])
+            },
         );
         if !self.tool_calls.is_empty() {
             let tool_calls: Vec<Json> = self
                 .tool_calls
-                .into_values()
+                .into_iter()
                 .map(OCIToolCallState::finalize)
                 .collect();
             message.insert("toolCalls".to_string(), Json::Array(tool_calls));

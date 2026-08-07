@@ -96,6 +96,9 @@ fn py_llm_codec(codec: Option<&Bound<'_, PyAny>>) -> Option<Arc<dyn LlmCodec>> {
         if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
             return Some(builtin.inner_codec.clone());
         }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOCIGenAIChatCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
         Some(Arc::new(py_callable::PyLlmCodecWrapper {
             py_codec: codec.clone().unbind(),
         }))

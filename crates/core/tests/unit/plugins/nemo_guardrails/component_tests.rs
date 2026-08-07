@@ -671,6 +671,20 @@ fn invalid_shapes_and_values_are_reported() {
             })
     );
 
+    let unsupported_remote_oci_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "oci_genai",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(unsupported_remote_oci_codec.has_errors());
+    assert!(unsupported_remote_oci_codec.diagnostics.iter().any(|diag| {
+        diag.message
+            .contains("remote mode currently supports only codec = 'openai_chat'")
+    }));
+
     let unsupported_remote_tool_input = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",

@@ -1201,3 +1201,195 @@ fn oci_streaming_codec_assembles_cohere_text_response() {
         })
     );
 }
+
+// ===================================================================
+// Encode edge cases surfaced in review
+// ===================================================================
+
+#[test]
+fn test_cohere_encode_rejects_multimodal_content() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(cohere_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let last = annotated.messages.len() - 1;
+    annotated.messages[last] = Message::User {
+        content: MessageContent::Parts(vec![ContentPart::Text {
+            text: "described image".into(),
+            extra: Default::default(),
+        }]),
+        name: None,
+    };
+
+    let err = codec.encode(&annotated, &original).unwrap_err();
+    assert!(matches!(err, FlowError::InvalidArgument(_)), "{err:?}");
+}
+
+#[test]
+fn test_cohere_encode_requires_trailing_user_message() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(cohere_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.messages.push(Message::Assistant {
+        content: Some(MessageContent::Text("appended".into())),
+        tool_calls: None,
+        name: None,
+    });
+
+    let err = codec.encode(&annotated, &original).unwrap_err();
+    assert!(matches!(err, FlowError::InvalidArgument(_)), "{err:?}");
+}
+
+#[test]
+fn test_cohere_encode_rejects_normalized_tool_message() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(cohere_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let last = annotated.messages.len() - 1;
+    annotated.messages.insert(
+        last,
+        Message::Tool {
+            content: MessageContent::Text("72F".into()),
+            tool_call_id: "call-1".into(),
+        },
+    );
+
+    let err = codec.encode(&annotated, &original).unwrap_err();
+    assert!(matches!(err, FlowError::InvalidArgument(_)), "{err:?}");
+}
+
+#[test]
+fn test_tool_call_only_assistant_reencodes_without_null_content_or_empty_id() {
+    use super::super::request::{FunctionCall, ToolCall};
+
+    let codec = OCIGenAIChatCodec;
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "role": "ASSISTANT",
+            "content": [],
+            "toolCalls": [{"type": "FUNCTION", "name": "get_weather", "arguments": "{\"city\": \"NYC\"}"}]
+        }));
+    let original = make_request(payload);
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let last = annotated.messages.len() - 1;
+    let Message::Assistant { tool_calls, .. } = &annotated.messages[last] else {
+        panic!("expected an assistant message");
+    };
+    assert_eq!(tool_calls.as_ref().unwrap()[0].id, "");
+    annotated.messages[last] = Message::Assistant {
+        content: None,
+        tool_calls: Some(vec![ToolCall {
+            id: String::new(),
+            call_type: "function".into(),
+            function: FunctionCall {
+                name: "get_weather".into(),
+                arguments: "{\"city\": \"[REDACTED]\"}".into(),
+            },
+        }]),
+        name: None,
+    };
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let message = &encoded.content["chatRequest"]["messages"][2];
+    assert_eq!(message["content"], json!([]));
+    let tool_call = &message["toolCalls"][0];
+    assert!(
+        tool_call.get("id").is_none(),
+        "empty tool-call id must be omitted, got {tool_call}"
+    );
+    assert_eq!(tool_call["arguments"], json!("{\"city\": \"[REDACTED]\"}"));
+}
+
+#[test]
+fn test_api_format_edit_updates_wire_api_format() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(generic_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let Some(ApiSpecificRequest::OCIGenAI { api_format, .. }) = &mut annotated.api_specific else {
+        panic!("expected an OCI api_specific annotation");
+    };
+    *api_format = Some("COHERE".into());
+    annotated.messages = vec![Message::User {
+        content: MessageContent::Text("What is the weather?".into()),
+        name: None,
+    }];
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = &encoded.content["chatRequest"];
+    assert_eq!(chat_request["apiFormat"], json!("COHERE"));
+    assert_eq!(chat_request["message"], json!("What is the weather?"));
+}
+
+#[test]
+fn oci_streaming_codec_tracks_parallel_tool_calls_by_id() {
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    // Two parallel calls whose fragments arrive in separate events, each at
+    // event-local position 0.
+    collector(json!({
+        "apiFormat": "GENERIC",
+        "index": 0,
+        "message": {
+            "role": "ASSISTANT",
+            "content": [],
+            "toolCalls": [{"id": "call-a", "type": "FUNCTION", "name": "get_weather", "arguments": "{\"city\":"}]
+        }
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": [], "toolCalls": [{"id": "call-b", "type": "FUNCTION", "name": "get_weather", "arguments": "{\"city\":"}]}
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": [], "toolCalls": [{"id": "call-a", "arguments": " \"Paris\"}"}]}
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": [], "toolCalls": [{"id": "call-b", "arguments": " \"Rome\"}"}]},
+        "finishReason": "tool_calls"
+    }))
+    .unwrap();
+
+    let annotated = OCIGenAIChatCodec.decode_response(&finalizer()).unwrap();
+    let tool_calls = annotated.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls.len(), 2);
+    assert_eq!(tool_calls[0].id, "call-a");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "Paris"}));
+    assert_eq!(tool_calls[1].id, "call-b");
+    assert_eq!(tool_calls[1].arguments, json!({"city": "Rome"}));
+}
+
+#[test]
+fn oci_streaming_codec_tool_call_only_stream_decodes_without_message() {
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "apiFormat": "GENERIC",
+        "index": 0,
+        "message": {
+            "role": "ASSISTANT",
+            "content": [],
+            "toolCalls": [{"id": "call-1", "type": "FUNCTION", "name": "get_weather", "arguments": "{}"}]
+        },
+        "finishReason": "tool_calls"
+    }))
+    .unwrap();
+
+    let annotated = OCIGenAIChatCodec.decode_response(&finalizer()).unwrap();
+    assert_eq!(annotated.message, None);
+    assert_eq!(annotated.tool_calls.as_ref().unwrap().len(), 1);
+}

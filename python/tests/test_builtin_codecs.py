@@ -292,6 +292,41 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.model == "claude-3-sonnet-20240229"
         assert annotated.response_text() == "Hello!"
 
+    def test_oci_genai_request_decode_encode_round_trip(self):
+        """OCIGenAIChatCodec decodes and re-encodes an OCI ChatDetails request."""
+        codec = OCIGenAIChatCodec()
+        original = LLMRequest(
+            {},
+            {
+                "compartmentId": "ocid1.compartment.oc1..example",
+                "servingMode": {"servingType": "ON_DEMAND", "modelId": "meta.llama-3.3-70b-instruct"},
+                "chatRequest": {
+                    "apiFormat": "GENERIC",
+                    "messages": [
+                        {"role": "USER", "content": [{"type": "TEXT", "text": "My SSN is 111-22-3333."}]}
+                    ],
+                    "maxTokens": 600,
+                },
+            },
+        )
+        annotated = codec.decode(original)
+        assert isinstance(annotated, AnnotatedLLMRequest)
+        assert annotated.model == "meta.llama-3.3-70b-instruct"
+
+        # Identity: an unedited annotation re-encodes byte-identically.
+        identical = codec.encode(annotated, original)
+        assert identical.content == original.content
+
+        annotated.messages = [
+            {"role": "user", "content": "My SSN is [REDACTED]."},
+        ]
+        encoded = codec.encode(annotated, original)
+        encoded_content = cast(JsonObject, encoded.content)
+        chat_request = cast(JsonObject, encoded_content["chatRequest"])
+        messages = cast(list[JsonObject], chat_request["messages"])
+        assert messages[0]["content"] == [{"type": "TEXT", "text": "My SSN is [REDACTED]."}]
+        assert cast(int, chat_request["maxTokens"]) == 600
+
     def test_oci_genai_decode_response(self):
         """OCIGenAIChatCodec.decode_response() returns AnnotatedLLMResponse."""
         codec = OCIGenAIChatCodec()

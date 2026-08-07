@@ -195,9 +195,12 @@ fn overlay_oci_text_parts(blocks: &mut [Json], message_text: Option<String>) {
         .iter()
         .filter(|block| block.get("type").and_then(Json::as_str) == Some("TEXT"))
         .count();
-    let parts = message_text
-        .as_deref()
-        .map(|text| text.split('\n').collect::<Vec<_>>());
+    // `splitn` keeps surplus newline-separated text inside the final fragment
+    // so a sanitized line that itself contains a newline is never dropped.
+    let parts = message_text.as_deref().map(|text| {
+        text.splitn(text_part_count.max(1), '\n')
+            .collect::<Vec<_>>()
+    });
     let mut text_part_index = 0usize;
 
     for block in blocks {
@@ -245,12 +248,24 @@ fn overlay_oci_tool_calls(
             return;
         };
         set_optional_string_field(raw_call, "id", Some(sanitized_call.id.as_str()));
-        set_optional_string_field(raw_call, "name", Some(sanitized_call.name.as_str()));
-        set_optional_string_field(
-            raw_call,
-            "arguments",
-            Some(json_string(&sanitized_call.arguments).as_str()),
-        );
+        // The OCI decode reads `function.name`/`function.arguments` when a
+        // nested `function` object exists, so sanitize that object too; the
+        // flat fields are the plain OCI wire shape.
+        if let Some(function) = raw_call.get_mut("function").and_then(Json::as_object_mut) {
+            set_optional_string_field(function, "name", Some(sanitized_call.name.as_str()));
+            set_optional_string_field(
+                function,
+                "arguments",
+                Some(json_string(&sanitized_call.arguments).as_str()),
+            );
+        } else {
+            set_optional_string_field(raw_call, "name", Some(sanitized_call.name.as_str()));
+            set_optional_string_field(
+                raw_call,
+                "arguments",
+                Some(json_string(&sanitized_call.arguments).as_str()),
+            );
+        }
     }
 }
 
