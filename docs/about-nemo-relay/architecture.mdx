@@ -176,11 +176,12 @@ already queued subscriber work. For manually registered exporters, follow the
 exporter's documented teardown order before process exit. The
 [ATOF](/configure-plugins/observability/atof),
 [OpenTelemetry](/configure-plugins/observability/opentelemetry), and
-[OpenInference](/configure-plugins/observability/openinference) exporters flush,
-deregister, and then shut down. The
-[ATIF](/configure-plugins/observability/atif) exporter drains subscriber work,
-exports, deregisters, and then clears its state. Clearing plugin configuration
-owns teardown for plugin-installed exporters.
+[OpenInference](/configure-plugins/observability/openinference) exporters
+deregister to stop new deliveries, force-flush queued work, and then shut down.
+The [ATIF](/configure-plugins/observability/atif) export operation drains queued
+subscriber work before taking its snapshot; after export, deregister the
+subscriber and clear the exporter state. Clearing plugin configuration owns
+teardown for plugin-installed exporters.
 
 ## Where Runtime State Lives
 
