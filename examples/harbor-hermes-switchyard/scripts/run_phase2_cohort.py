@@ -201,14 +201,15 @@ def plugin_contract(path: Path) -> dict[str, Any]:
     if len(plugins) != 1:
         raise ValueError("plugin configuration must define exactly one dynamic plugin")
     targets = plugins[0].get("config", {}).get("targets", {})
-    if set(targets) != {"strong", "weak"}:
-        raise ValueError("plugin configuration must define strong and weak targets")
+    if set(targets) != {"strong", "weak", "judge"}:
+        raise ValueError("plugin configuration must define strong, weak, and judge targets")
     for target in targets.values():
         if target.get("header_env") != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
             raise ValueError("plugin authorization must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
     models = [targets[name].get("model") for name in ("weak", "strong")]
-    base_urls = sorted({targets[name].get("base_url") for name in ("weak", "strong")})
-    if any(not isinstance(value, str) or not value for value in models + base_urls):
+    catalog_models = [*models, targets["judge"].get("model")]
+    base_urls = sorted({targets[name].get("base_url") for name in ("weak", "strong", "judge")})
+    if any(not isinstance(value, str) or not value for value in catalog_models + base_urls):
         raise ValueError("plugin target models and base URLs must be non-empty")
     for base_url in base_urls:
         parsed = urllib.parse.urlsplit(base_url)
@@ -220,8 +221,10 @@ def plugin_contract(path: Path) -> dict[str, Any]:
         raise ValueError("Hermes caller model must be distinct from plugin target models")
     return {
         "required_models": sorted(models),
+        "catalog_models": sorted(catalog_models),
         "strong_model": targets["strong"]["model"],
         "weak_model": targets["weak"]["model"],
+        "judge_model": targets["judge"]["model"],
         "hermes_caller_model": caller,
         "provider_base_urls": base_urls,
         "sha256": sha256_file(path),
@@ -564,7 +567,7 @@ def shared_preflight(args: argparse.Namespace, tasks: list[Task]) -> dict[str, A
             verify_provider_catalog(
                 provider_url,
                 provider_authorization,
-                args.plugin_contract["required_models"],
+                args.plugin_contract["catalog_models"],
             )
         )
     if not args.switchyard_bundle.is_dir():

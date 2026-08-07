@@ -48,13 +48,15 @@ The two configuration files have deliberately different responsibilities:
   destination, manually selected capacity, and the real
   `SWITCHYARD_PROVIDER_AUTHORIZATION` header.
 - `config/plugins.toml.in` is checked in and non-secret. It is the only source
-  of provider URLs, protocols, strong and weak models, routing/classifier
+  of provider URLs, protocols, strong, weak, and judge models, routing/classifier
   policy, native plugin manifest, authorization variable **name**, Relay
   components, and OpenInference export behavior.
 
-The template configures Opus 4.6 as the strong route and Sonnet 4.6 as the
-classifier and weak route. The coordinator derives its required route-diversity
-gates from this TOML; environment variables cannot override these settings.
+The template configures Opus 4.8 as the strong route, GLM 5.2 as the efficient
+route, and Sonnet 4.6 as the classifier judge, with a `0.5` threshold and
+session affinity. The coordinator derives its required route-diversity gates
+from the strong and efficient targets, while preflight also verifies the judge.
+Environment variables cannot override these settings.
 Runtime rendering is limited to the Hermes revision, collector endpoint,
 Phoenix project/cohort attributes, and task-owned artifact locations.
 

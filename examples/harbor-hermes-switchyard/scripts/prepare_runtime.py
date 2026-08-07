@@ -115,10 +115,10 @@ def plugin_settings(config: dict[str, object]) -> dict[str, str]:
     if not isinstance(plugin_config, dict) or not isinstance(plugin_config.get("targets"), dict):
         raise ValueError("Switchyard dynamic plugin targets are missing")
     targets = plugin_config["targets"]
-    if set(targets) != {"strong", "weak"}:
-        raise ValueError("Switchyard must define strong and weak targets")
+    if set(targets) != {"strong", "weak", "judge"}:
+        raise ValueError("Switchyard must define strong, weak, and judge targets")
     settings: dict[str, str] = {}
-    for name in ("strong", "weak"):
+    for name in ("strong", "weak", "judge"):
         target = targets[name]
         if not isinstance(target, dict):
             raise ValueError(f"Switchyard target is invalid: {name}")
@@ -150,7 +150,9 @@ def plugin_settings(config: dict[str, object]) -> dict[str, str]:
     settings["hermes_caller_model"] = checked_label(
         str(observation_config["atif"].get("model_name", "")), "hermes_caller_model"
     )
-    if settings["hermes_caller_model"] in {settings["strong_model"], settings["weak_model"]}:
+    if settings["hermes_caller_model"] in {
+        settings["strong_model"], settings["weak_model"], settings["judge_model"]
+    }:
         raise ValueError("Hermes caller model must be distinct from Switchyard targets")
     return settings
 
@@ -172,12 +174,16 @@ def render_config(
     config = tomllib.loads(rendered)
     if test_overrides:
         plugin = config["plugins"]["dynamic"][0]["config"]
-        old_models = {name: plugin["targets"][name]["model"] for name in ("strong", "weak")}
-        for name in ("strong", "weak"):
-            plugin["targets"][name]["model"] = test_overrides[f"{name}_model"]
+        old_models = {name: plugin["targets"][name]["model"] for name in ("strong", "weak", "judge")}
+        for name in ("strong", "weak", "judge"):
+            override = "weak_model" if name == "judge" else f"{name}_model"
+            plugin["targets"][name]["model"] = test_overrides[override]
             plugin["targets"][name]["base_url"] = test_overrides["provider_base_url"]
         pricing = config["components"][0]["config"]["sources"][0]["catalog"]["entries"]
-        replacement_models = {old_models[name]: test_overrides[f"{name}_model"] for name in old_models}
+        replacement_models = {
+            old_models[name]: test_overrides["weak_model" if name == "judge" else f"{name}_model"]
+            for name in old_models
+        }
         for entry in pricing:
             entry["model_id"] = replacement_models.get(entry["model_id"], entry["model_id"])
     settings = plugin_settings(config)
