@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -35,6 +36,10 @@ admission_module = load_module(
 builder_module = load_module(
     "hermetic_runtime_builder",
     EXAMPLE_ROOT / "scripts" / "build_hermetic_runtime.py",
+)
+runtime_preparer_module = load_module(
+    "phase2_runtime_preparer",
+    EXAMPLE_ROOT / "scripts" / "prepare_runtime.py",
 )
 
 
@@ -118,6 +123,12 @@ def test_setup_admission_binds_agent_source() -> None:
 
 def test_bridge_accepts_current_classifier_routing_contract() -> None:
     agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.toml.in")
+
+
+def test_runtime_provenance_derives_classifier_target_from_plugin_config() -> None:
+    with (EXAMPLE_ROOT / "config" / "plugins.toml.in").open("rb") as stream:
+        config = tomllib.load(stream)
+    assert runtime_preparer_module.plugin_settings(config)["classifier_target"] == "judge"
 
 
 def test_hermetic_runtime_requires_portable_ca_bundle(tmp_path: Path) -> None:

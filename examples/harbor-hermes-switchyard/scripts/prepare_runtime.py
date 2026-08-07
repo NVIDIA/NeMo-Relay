@@ -118,6 +118,11 @@ def plugin_settings(config: dict[str, object]) -> dict[str, str]:
     if set(targets) != {"strong", "weak", "judge"}:
         raise ValueError("Switchyard must define strong, weak, and judge targets")
     settings: dict[str, str] = {}
+    algorithm = plugin_config.get("algorithm")
+    classifier_target = algorithm.get("classifier_target") if isinstance(algorithm, dict) else None
+    if classifier_target not in targets:
+        raise ValueError("Switchyard classifier_target must reference a configured target")
+    settings["classifier_target"] = classifier_target
     for name in ("strong", "weak", "judge"):
         target = targets[name]
         if not isinstance(target, dict):
@@ -292,7 +297,6 @@ def main() -> int:
         "plugin_config_template_sha256": sha256(plugin_template),
         "routing": {
             "algorithm": "llm_classifier",
-            "classifier_target": "weak",
             **routing,
         },
         "phoenix_project": phoenix_project,
