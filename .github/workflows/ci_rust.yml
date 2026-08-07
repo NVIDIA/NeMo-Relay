@@ -305,6 +305,10 @@ jobs:
           if [[ "$target" == *-unknown-linux-musl ]]; then
             export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-feature=-crt-static"
           fi
+          # Tract's ARM64 kernels are preprocessed assembly; MSVC cl ignores .S files.
+          if [[ "$target" == "aarch64-pc-windows-msvc" ]]; then
+            export CC_aarch64_pc_windows_msvc=clang-cl
+          fi
           cargo build --locked --release \
             --manifest-path plugins/pii-rampart/Cargo.toml \
             --target "$target" \
