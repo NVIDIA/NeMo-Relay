@@ -32,6 +32,8 @@ _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 
+def _shutdown_default_logging() -> None: ...
+
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
     category_profile: _JsonObject | None
@@ -2397,11 +2399,11 @@ def clear_plugin_configuration_async() -> Awaitable[None]:
     ...
 
 def active_plugin_report() -> Optional[_JsonObject]:
-    """Return the active plugin report.
+    """Return the active plugin report or a failed-teardown diagnostic report.
 
     Returns:
-        Report JSON object for the last active configuration, or ``None`` if no
-        plugin configuration is active.
+        Report JSON object for the active configuration or a failed teardown
+        with runtime diagnostics, or ``None`` if neither exists.
     """
     ...
 

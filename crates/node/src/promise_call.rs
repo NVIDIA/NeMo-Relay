@@ -334,7 +334,11 @@ fn build_completion_unknowns(
         let message = ctx
             .get::<String>(0)
             .unwrap_or_else(|_| "unknown error".to_string());
-        completion.send(Err(FlowError::Internal(message)));
+        let exception_type = ctx.get::<String>(1).unwrap_or_else(|_| "Error".to_string());
+        completion.send(Err(FlowError::CallbackException {
+            message,
+            exception_type,
+        }));
         ctx.env.get_undefined()
     })?;
 

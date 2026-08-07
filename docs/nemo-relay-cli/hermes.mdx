@@ -43,8 +43,7 @@ NeMo Relay checks the installed Hermes CLI before it changes any files.
 Relay preserves unrelated Hermes settings and updates the Relay-owned portions
 of the user configuration. Hermes reads this configuration from
 `$HERMES_HOME/config.yaml`, or `~/.hermes/config.yaml` when `HERMES_HOME` is
-unset. This location is user-owned even when you choose project-scoped Relay
-configuration.
+unset. This location is user-owned, like Relay's default configuration.
 
 The MCP server name `nemo-relay` is reserved for the Relay-managed entry. If
 that name already belongs to another command, installation stops without

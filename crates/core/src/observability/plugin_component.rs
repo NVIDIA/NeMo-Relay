@@ -21,8 +21,9 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::net::IpAddr;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 #[cfg(feature = "object-store")]
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -34,7 +35,7 @@ use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
 use crate::api::event::{Event, ScopeCategory};
-use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
+use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{
     flush_subscribers, scope_deregister_subscriber, try_scope_deregister_subscriber,
@@ -60,14 +61,16 @@ use crate::observability::{
     validate_attribute_mappings,
 };
 use crate::plugin::{
-    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistration, PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    apply_global_config_policy, deregister_plugin, register_builtin_plugin,
+    ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel,
+    OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, Plugin, PluginComponentSpec, PluginError,
+    PluginRegistration, PluginRegistrationCleanupOutcome, PluginRegistrationContext,
+    Result as PluginResult, UnsupportedBehavior, apply_global_config_policy, deregister_plugin,
+    register_builtin_plugin,
 };
+use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 /// The plugin kind registered by the core crate.
 pub const OBSERVABILITY_PLUGIN_KIND: &str = "observability";
-
 /// Top-level observability component wrapper.
 ///
 /// Use this wrapper when constructing a [`PluginComponentSpec`] from Rust
@@ -133,6 +136,9 @@ pub struct ObservabilityConfig {
     /// Observability-local unsupported-config policy.
     #[serde(default)]
     pub policy: ConfigPolicy,
+    /// Whether LLM start events retain complete sanitized request payloads.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enable_full_payloads: bool,
 }
 
 impl Default for ObservabilityConfig {
@@ -143,6 +149,7 @@ impl Default for ObservabilityConfig {
             atif: None,
             opentelemetry: None,
             policy: ConfigPolicy::default(),
+            enable_full_payloads: false,
         }
     }
 }
@@ -203,9 +210,18 @@ pub struct OpenTelemetryEndpointConfig {
     /// Instrumentation scope name.
     #[serde(default = "default_otel_instrumentation_scope")]
     pub instrumentation_scope: String,
-    /// Export timeout in milliseconds.
+    /// OTLP request timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
+    /// Maximum completed spans buffered before the endpoint drops new spans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_queue_size: Option<usize>,
+    /// Maximum spans exported in one batch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_export_batch_size: Option<usize>,
+    /// Maximum delay before exporting a non-full batch, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_delay_millis: Option<u64>,
 }
 
 /// Multi-sink ATOF JSONL exporter config.
@@ -469,6 +485,7 @@ crate::editor_config! {
             nested: ConfigPolicy,
             default: ConfigPolicy,
         },
+        enable_full_payloads => { label: "enable_full_payloads", kind: Boolean },
     }
 }
 
@@ -528,6 +545,14 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 otel_editor_field("service_version", EditorFieldKind::String, &[], true),
                 otel_editor_field("instrumentation_scope", EditorFieldKind::String, &[], false),
                 otel_editor_field("timeout_millis", EditorFieldKind::Integer, &[], false),
+                otel_editor_field("max_queue_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field("max_export_batch_size", EditorFieldKind::Integer, &[], true),
+                otel_editor_field(
+                    "scheduled_delay_millis",
+                    EditorFieldKind::Integer,
+                    &[],
+                    true,
+                ),
                 otel_editor_field("headers", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field("header_env", EditorFieldKind::StringMap, &[], false),
                 otel_editor_field(
@@ -764,6 +789,7 @@ fn register_observability(
     config: ObservabilityConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
         register_atof_exporter(atof, ctx)?;
     }
@@ -773,6 +799,29 @@ fn register_observability(
     if let Some(otel) = config.opentelemetry.filter(|section| section.enabled) {
         register_opentelemetry(otel, ctx)?;
     }
+    Ok(())
+}
+
+fn register_full_payload_policy(
+    enabled: bool,
+    ctx: &mut PluginRegistrationContext,
+) -> PluginResult<()> {
+    let context = global_context();
+    context
+        .write()
+        .map_err(|error| PluginError::RegistrationFailed(error.to_string()))?
+        .observability_full_payloads_enabled = enabled;
+    ctx.add_registration(PluginRegistration::new(
+        "observability",
+        ctx.qualify_name("payload-policy"),
+        Box::new(|| {
+            global_context()
+                .write()
+                .map_err(|error| PluginError::RegistrationFailed(error.to_string()))?
+                .observability_full_payloads_enabled = false;
+            Ok(())
+        }),
+    ));
     Ok(())
 }
 
@@ -890,41 +939,62 @@ fn register_atif_dispatcher(
     );
     ctx.register_subscriber("atif", dispatcher)?;
     let shutdown_storage = Arc::clone(&storage);
-    ctx.add_registration(PluginRegistration::new(
+    ctx.add_registration(PluginRegistration::new_with_outcome(
         "observability",
         ctx.qualify_name("atif.shutdown"),
         Box::new(move || {
-            let work = {
-                let mut guard = manager.lock().map_err(|err| {
-                    PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-                })?;
-                guard.flush_open_agents()
-            };
-            for (scope_uuid, name) in work.scope_subscribers {
-                deregister_atif_shutdown_subscriber(&scope_uuid, &name)?;
-            }
-            for export in work.exports {
-                let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
-                    .map_err(observability_registration_error)?;
-                let agent_uuid = write.agent_uuid;
-                let targets = {
-                    let guard = manager.lock().map_err(|err| {
+            let work = match (|| -> PluginResult<_> {
+                let work = {
+                    let mut guard = manager.lock().map_err(|err| {
                         PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
                     })?;
-                    guard.sink_targets()
+                    guard.flush_open_agents()
                 };
-                let results = write_atif(&write, shutdown_storage.as_slice(), &targets);
-                let mut guard = manager.lock().map_err(|err| {
-                    PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-                })?;
-                let _ = guard.complete_scope_write(agent_uuid, results);
+                for (scope_uuid, name) in &work.scope_subscribers {
+                    deregister_atif_shutdown_subscriber(scope_uuid, name)?;
+                }
+                Ok(work)
+            })() {
+                Ok(work) => work,
+                Err(error) => return PluginRegistrationCleanupOutcome::NotRemoved(error),
+            };
+
+            let delivery = (|| -> PluginResult<()> {
+                for export in work.exports {
+                    let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
+                        .map_err(observability_registration_error)?;
+                    let agent_uuid = write.agent_uuid;
+                    let targets = {
+                        let guard = manager.lock().map_err(|err| {
+                            PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
+                        })?;
+                        guard.sink_targets()
+                    };
+                    let results = write_atif(&write, shutdown_storage.as_slice(), &targets);
+                    let mut guard = manager.lock().map_err(|err| {
+                        PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
+                    })?;
+                    let _ = guard.complete_scope_write(agent_uuid, results);
+                }
+                Ok(())
+            })();
+            if let Err(error) = delivery {
+                return PluginRegistrationCleanupOutcome::RemovedWithError(error);
             }
-            let guard = manager.lock().map_err(|err| {
-                PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-            })?;
-            guard
-                .last_error_result()
-                .map_err(observability_registration_error)
+            let guard = match manager.lock() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    return PluginRegistrationCleanupOutcome::RemovedWithError(
+                        PluginError::Internal(format!("ATIF dispatcher lock poisoned: {error}")),
+                    );
+                }
+            };
+            match guard.last_error_result() {
+                Ok(()) => PluginRegistrationCleanupOutcome::Removed,
+                Err(error) => PluginRegistrationCleanupOutcome::RemovedWithError(
+                    observability_registration_error(error),
+                ),
+            }
         }),
     ));
     Ok(())
@@ -997,10 +1067,20 @@ fn register_opentelemetry(
     // Retain the subscribers as long as the registered fan-out callback exists.
     // Their tracer providers and exporter runtimes must outlive event delivery.
     let delivery_subscribers = subscribers.clone();
-    ctx.add_registration(PluginRegistration::new(
+    ctx.add_registration(PluginRegistration::new_with_outcome(
         "observability",
         ctx.qualify_name("opentelemetry.shutdown"),
-        Box::new(move || shutdown_opentelemetry_subscribers(&subscribers).map_or(Ok(()), Err)),
+        Box::new(
+            move || match shutdown_opentelemetry_subscribers(&subscribers) {
+                None => PluginRegistrationCleanupOutcome::Removed,
+                Some(OpenTelemetryShutdownFailure::Delivery(error)) => {
+                    PluginRegistrationCleanupOutcome::RemovedWithError(error)
+                }
+                Some(OpenTelemetryShutdownFailure::Other(error)) => {
+                    PluginRegistrationCleanupOutcome::NotRemoved(error)
+                }
+            },
+        ),
     ));
     ctx.register_subscriber(
         "opentelemetry",
@@ -1033,14 +1113,14 @@ fn build_opentelemetry_subscribers(
     let mut subscribers = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.into_iter().enumerate() {
         let subscriber = build_otel_config(index, endpoint).and_then(|config| {
-            OpenTelemetrySubscriber::new(config)
+            OpenTelemetrySubscriber::new_for_plugin(config, index)
                 .map(Arc::new)
                 .map_err(observability_registration_error)
         });
         match subscriber {
             Ok(subscriber) => subscribers.push(subscriber),
             Err(error) => {
-                if let Some(_rollback_error) = shutdown_opentelemetry_providers(&subscribers) {
+                if !shutdown_opentelemetry_providers(&subscribers).is_empty() {
                     log::warn!(
                         target: "nemo_relay.plugin",
                         event = "plugin_resource_rollback_failed",
@@ -1057,31 +1137,56 @@ fn build_opentelemetry_subscribers(
     Ok(subscribers)
 }
 
+enum OpenTelemetryShutdownFailure {
+    Delivery(PluginError),
+    Other(PluginError),
+}
+
 fn shutdown_opentelemetry_subscribers(
     subscribers: &[Arc<OpenTelemetrySubscriber>],
-) -> Option<PluginError> {
-    let mut first_error = flush_subscribers().err().map(|error| {
-        observability_registration_error(crate::observability::otel::OpenTelemetryError::Core(
-            error,
-        ))
-    });
-    let provider_error = shutdown_opentelemetry_providers(subscribers);
-    if first_error.is_none() {
-        first_error = provider_error;
+) -> Option<OpenTelemetryShutdownFailure> {
+    let mut errors = Vec::new();
+    if let Err(error) = flush_subscribers() {
+        errors.push(crate::observability::otel::OpenTelemetryError::Core(error));
     }
-    first_error
+    errors.extend(shutdown_opentelemetry_providers(subscribers));
+    if errors.is_empty() {
+        return None;
+    }
+
+    let all_delivery_failures = errors.iter().all(|error| {
+        error
+            .to_string()
+            .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
+    });
+    let summary = errors
+        .into_iter()
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let message = if all_delivery_failures {
+        format!("{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: {summary}")
+    } else {
+        format!("OpenTelemetry shutdown failures: {summary}")
+    };
+    let error = PluginError::RegistrationFailed(message);
+    Some(if all_delivery_failures {
+        OpenTelemetryShutdownFailure::Delivery(error)
+    } else {
+        OpenTelemetryShutdownFailure::Other(error)
+    })
 }
 
 fn shutdown_opentelemetry_providers(
     subscribers: &[Arc<OpenTelemetrySubscriber>],
-) -> Option<PluginError> {
-    let mut first_error = None;
+) -> Vec<crate::observability::otel::OpenTelemetryError> {
+    let mut errors = Vec::new();
     for subscriber in subscribers {
         if let Err(error) = subscriber.shutdown_provider() {
-            first_error.get_or_insert_with(|| observability_registration_error(error));
+            errors.push(error);
         }
     }
-    first_error
+    errors
 }
 
 struct AtifDispatcher {
@@ -1093,9 +1198,7 @@ struct AtifDispatcher {
     /// that cannot be isolated to a single sink. Once set, the dispatcher stops
     /// observing further events.
     fatal_error: Option<String>,
-    /// Per-sink last error. A sink that recorded an error is skipped on
-    /// subsequent trajectories; other sinks continue to receive writes.
-    sink_errors: HashMap<SinkLabel, String>,
+    runtime_failures: Vec<RuntimeDiagnostic>,
     validated_sinks: HashSet<SinkLabel>,
 }
 
@@ -1195,7 +1298,7 @@ impl AtifDispatcher {
             scope_owners: HashMap::new(),
             scope_subscribers: HashMap::new(),
             fatal_error: None,
-            sink_errors: HashMap::new(),
+            runtime_failures: Vec::new(),
             validated_sinks: HashSet::new(),
         }
     }
@@ -1227,6 +1330,12 @@ impl AtifDispatcher {
         let (filename, local_path) = match self.prepare_destination(&session_id, event.metadata()) {
             Ok(destination) => destination,
             Err(error) => {
+                self.record_runtime_failure(
+                    "atif.destination_render_failed",
+                    Some("filename_template".into()),
+                    error.clone(),
+                    Some(session_id.clone()),
+                );
                 log::warn!(
                     target: "nemo_relay.observability",
                     event = "atif_destination_render_failed",
@@ -1330,6 +1439,9 @@ impl AtifDispatcher {
         agent_uuid: Uuid,
         results: Vec<(SinkLabel, std::io::Result<()>)>,
     ) -> Option<(Uuid, String)> {
+        let is_remote_fallback = results
+            .iter()
+            .any(|(label, _)| matches!(label, SinkLabel::Remote(_)));
         for (label, result) in results {
             if result.is_ok()
                 && label == SinkLabel::Local
@@ -1345,6 +1457,10 @@ impl AtifDispatcher {
                     "ATIF storage access validated"
                 );
             } else if let Err(err) = result {
+                let (field, message) = match &label {
+                    SinkLabel::Local => ("output_directory".to_string(), err.to_string()),
+                    SinkLabel::Remote(index) => (format!("storage[{index}]"), err.to_string()),
+                };
                 match &label {
                     SinkLabel::Local => log::warn!(
                         target: "nemo_relay.observability",
@@ -1356,9 +1472,25 @@ impl AtifDispatcher {
                         reason = "write_failed";
                         "ATIF storage access failed"
                     ),
-                    SinkLabel::Remote(_) => {}
+                    SinkLabel::Remote(index) => log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "atif_remote_delivery_failed",
+                        plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                        exporter = "atif",
+                        storage_index = *index;
+                        "ATIF remote storage upload failed"
+                    ),
                 }
-                self.sink_errors.insert(label, err.to_string());
+                self.record_runtime_failure(
+                    match &label {
+                        SinkLabel::Local if is_remote_fallback => "atif.local_fallback_failed",
+                        SinkLabel::Local => "atif.local_write_failed",
+                        SinkLabel::Remote(_) => "atif.remote_delivery_failed",
+                    },
+                    Some(field),
+                    message,
+                    Some(agent_uuid.to_string()),
+                );
             }
         }
         if let Some(agent) = self.agents.get_mut(&agent_uuid) {
@@ -1413,6 +1545,16 @@ impl AtifDispatcher {
         if let Some(message) = &self.fatal_error {
             return Err(std::io::Error::other(message.clone()));
         }
+        if !self.runtime_failures.is_empty() {
+            return Err(std::io::Error::other(format!(
+                "{ATIF_RUNTIME_DELIVERY_FAILURE_MARKER}: {}",
+                self.runtime_failures
+                    .iter()
+                    .map(|diagnostic| format!("{} ({})", diagnostic.code, diagnostic.count))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         Ok(())
     }
 
@@ -1431,10 +1573,8 @@ impl AtifDispatcher {
         session_id: &str,
         metadata: Option<&Json>,
     ) -> Result<(String, Option<PathBuf>), String> {
+        validate_atif_filename_template(&self.config.filename_template)?;
         let filename = render_atif_filename(&self.config.filename_template, session_id, metadata)?;
-        if !self.config.storage.is_empty() {
-            return Ok((filename, None));
-        }
         let directory = self
             .config
             .output_directory
@@ -1446,17 +1586,41 @@ impl AtifDispatcher {
 
     fn sink_targets(&self) -> Vec<SinkLabel> {
         if self.config.storage.is_empty() {
-            if self.sink_errors.contains_key(&SinkLabel::Local) {
-                Vec::new()
-            } else {
-                vec![SinkLabel::Local]
-            }
+            vec![SinkLabel::Local]
         } else {
             (0..self.config.storage.len())
                 .map(SinkLabel::Remote)
-                .filter(|label| !self.sink_errors.contains_key(label))
                 .collect()
         }
+    }
+
+    fn record_runtime_failure(
+        &mut self,
+        code: &str,
+        field: Option<String>,
+        message: String,
+        session_id: Option<String>,
+    ) {
+        let diagnostic = RuntimeDiagnostic {
+            code: code.to_string(),
+            component: OBSERVABILITY_PLUGIN_KIND.to_string(),
+            field,
+            message,
+            session_id,
+            count: 1,
+        };
+        if let Some(existing) = self
+            .runtime_failures
+            .iter_mut()
+            .find(|existing| existing.code == diagnostic.code && existing.field == diagnostic.field)
+        {
+            existing.message = diagnostic.message.clone();
+            existing.session_id = diagnostic.session_id.clone();
+            existing.count += 1;
+        } else {
+            self.runtime_failures.push(diagnostic.clone());
+        }
+        record_active_plugin_runtime_diagnostic(diagnostic);
     }
 }
 
@@ -1487,6 +1651,23 @@ fn validate_atif_filename_template(template: &str) -> Result<(), String> {
 
     if !template.contains("{session_id}") {
         return Err("ATIF filename_template must contain '{session_id}'".to_string());
+    }
+
+    let literal_path = template
+        .replace("{session_id}", "session")
+        .replace("{metadata.", "metadata.");
+    if Path::new(&literal_path).is_absolute()
+        || Path::new(&literal_path).components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir
+                    | Component::CurDir
+                    | Component::RootDir
+                    | Component::Prefix(_)
+            )
+        })
+    {
+        return Err("ATIF filename_template must be a path-safe relative path".to_string());
     }
 
     let mut cursor = 0;
@@ -1531,16 +1712,31 @@ fn render_atif_filename(
             })?;
         let expression = rendered[selector_start..end].to_string();
         let (selector, fallback) = parse_atif_metadata_expression(&expression)?;
-        let value = selector
-            .split('.')
-            .fold(metadata, |value, segment| value?.get(segment))
-            .and_then(Json::as_str)
-            .or(fallback)
-            .ok_or_else(|| {
+        let mut resolved = metadata;
+        for segment in selector.split('.') {
+            resolved = match resolved {
+                Some(Json::Object(object)) => object.get(segment),
+                None | Some(Json::Null) => break,
+                Some(_) => {
+                    return Err(format!(
+                        "filename_template placeholder '{{metadata.{selector}}}' traversed a non-object value"
+                    ));
+                }
+            };
+        }
+        let value = match resolved {
+            Some(Json::String(value)) => value.as_str(),
+            None | Some(Json::Null) => fallback.ok_or_else(|| {
                 format!(
                     "filename_template placeholder '{{metadata.{selector}}}' must resolve to a string"
                 )
-            })?;
+            })?,
+            Some(_) => {
+                return Err(format!(
+                    "filename_template placeholder '{{metadata.{selector}}}' resolved to a non-string value"
+                ));
+            }
+        };
         if !is_safe_atif_metadata_path(value) {
             return Err(format!(
                 "metadata path '{selector}' must be a path-safe relative fragment"
@@ -1713,7 +1909,7 @@ fn write_atif(
     storage: &[Arc<AtifRemoteStorage>],
     targets: &[SinkLabel],
 ) -> Vec<(SinkLabel, std::io::Result<()>)> {
-    targets
+    let mut results = targets
         .iter()
         .map(|label| {
             let result = match label {
@@ -1727,7 +1923,22 @@ fn write_atif(
             };
             (label.clone(), result)
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if !targets.is_empty()
+        && targets
+            .iter()
+            .all(|label| matches!(label, SinkLabel::Remote(_)))
+        && results.iter().all(|(_, result)| result.is_err())
+    {
+        let fallback = match &write.local_path {
+            Some(path) => write_atif_local(path, &write.payload),
+            None => Err(std::io::Error::other(
+                "ATIF local fallback has no output path",
+            )),
+        };
+        results.push((SinkLabel::Local, fallback));
+    }
+    results
 }
 
 fn write_atif_local(path: &PathBuf, payload: &[u8]) -> std::io::Result<()> {
@@ -1811,6 +2022,7 @@ fn build_otel_config(
         }
     };
     validate_otel_header_env(index, &section)?;
+    validate_otel_batch_config(index, &section)?;
     let mut config = CoreOpenTelemetryConfig::new(section.otel_type, section.endpoint)
         .with_transport(transport)
         .with_service_name(section.service_name)
@@ -1819,6 +2031,15 @@ fn build_otel_config(
         .with_mark_projection(section.mark_projection)
         .with_mark_exclude_names(section.mark_exclude_names)
         .with_attribute_mappings(section.attribute_mappings);
+    if let Some(max_queue_size) = section.max_queue_size {
+        config = config.with_max_queue_size(max_queue_size);
+    }
+    if let Some(max_export_batch_size) = section.max_export_batch_size {
+        config = config.with_max_export_batch_size(max_export_batch_size);
+    }
+    if let Some(scheduled_delay_millis) = section.scheduled_delay_millis {
+        config = config.with_scheduled_delay(Duration::from_millis(scheduled_delay_millis));
+    }
     if let Some(namespace) = section.service_namespace {
         config = config.with_service_namespace(namespace);
     }
@@ -1833,6 +2054,36 @@ fn build_otel_config(
         config = config.with_resource_attribute(key, value);
     }
     Ok(config)
+}
+
+fn validate_otel_batch_config(
+    index: usize,
+    section: &OpenTelemetryEndpointConfig,
+) -> PluginResult<()> {
+    for (field, value) in [
+        ("max_queue_size", section.max_queue_size),
+        ("max_export_batch_size", section.max_export_batch_size),
+    ] {
+        if value == Some(0) {
+            return Err(PluginError::InvalidConfig(format!(
+                "OpenTelemetry endpoints[{index}].{field} must be greater than 0"
+            )));
+        }
+    }
+    if section.scheduled_delay_millis == Some(0) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry endpoints[{index}].scheduled_delay_millis must be greater than 0"
+        )));
+    }
+    if matches!(
+        (section.max_export_batch_size, section.max_queue_size),
+        (Some(batch), Some(queue)) if batch > queue
+    ) {
+        return Err(PluginError::InvalidConfig(format!(
+            "OpenTelemetry endpoints[{index}].max_export_batch_size must be less than or equal to max_queue_size"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_otel_header_env(
@@ -1940,6 +2191,7 @@ fn validate_top_level_observability_fields(
             "opentelemetry",
             "openinference",
             "policy",
+            "enable_full_payloads",
         ],
     );
     if plugin_config.contains_key("openinference") {
@@ -2073,6 +2325,9 @@ fn validate_opentelemetry_endpoint_fields(
         "service_version",
         "instrumentation_scope",
         "timeout_millis",
+        "max_queue_size",
+        "max_export_batch_size",
+        "scheduled_delay_millis",
     ];
     const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
     let Some(endpoints) = opentelemetry.get("endpoints").and_then(Json::as_array) else {
@@ -2251,6 +2506,7 @@ fn validate_opentelemetry_section(
                 error,
             );
         }
+        validate_opentelemetry_batch_config(diagnostics, policy, index, endpoint);
         validate_opentelemetry_headers(diagnostics, policy, index, endpoint);
     }
     for error in opentelemetry_destination_collision_errors(&section.endpoints) {
@@ -2265,9 +2521,70 @@ fn validate_opentelemetry_section(
     validate_opentelemetry_feature_support(diagnostics, policy, section);
 }
 
+fn validate_opentelemetry_batch_config(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    index: usize,
+    endpoint: &OpenTelemetryEndpointConfig,
+) {
+    for (field, is_zero) in [
+        ("max_queue_size", endpoint.max_queue_size == Some(0)),
+        (
+            "max_export_batch_size",
+            endpoint.max_export_batch_size == Some(0),
+        ),
+        (
+            "scheduled_delay_millis",
+            endpoint.scheduled_delay_millis == Some(0),
+        ),
+    ] {
+        if is_zero {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("endpoints[{index}].{field}")),
+                format!("OpenTelemetry endpoint {field} must be greater than 0"),
+            );
+        }
+    }
+    if matches!(
+        (endpoint.max_export_batch_size, endpoint.max_queue_size),
+        (Some(batch), Some(queue)) if batch > queue
+    ) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some("opentelemetry".to_string()),
+            Some(format!("endpoints[{index}].max_export_batch_size")),
+            "OpenTelemetry endpoint max_export_batch_size must be less than or equal to max_queue_size"
+                .to_string(),
+        );
+    }
+}
+
 struct OpenTelemetryDestinationCollision {
     index: usize,
     message: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum OpenTelemetryDestinationKey {
+    Url {
+        scheme: String,
+        host: String,
+        port: Option<u16>,
+        path: String,
+        query: Option<String>,
+    },
+    Raw(String),
+}
+
+struct OpenTelemetryDestination {
+    key: OpenTelemetryDestinationKey,
+    display: String,
 }
 
 fn validate_distinct_opentelemetry_destinations(
@@ -2291,7 +2608,7 @@ fn opentelemetry_destination_collision_errors(
             let endpoint_destination = opentelemetry_destination(endpoint);
             let other_destination = opentelemetry_destination(other);
             if endpoint.transport == other.transport
-                && endpoint_destination == other_destination
+                && endpoint_destination.key == other_destination.key
                 && endpoint.otel_type != other.otel_type
             {
                 errors.push(OpenTelemetryDestinationCollision {
@@ -2301,7 +2618,7 @@ fn opentelemetry_destination_collision_errors(
                         opentelemetry_type_name(other.otel_type),
                         opentelemetry_type_name(endpoint.otel_type),
                         endpoint.transport,
-                        endpoint_destination,
+                        endpoint_destination.display,
                     ),
                 });
             }
@@ -2310,13 +2627,94 @@ fn opentelemetry_destination_collision_errors(
     errors
 }
 
-fn opentelemetry_destination(endpoint: &OpenTelemetryEndpointConfig) -> Cow<'_, str> {
+fn opentelemetry_destination(endpoint: &OpenTelemetryEndpointConfig) -> OpenTelemetryDestination {
     let configured_endpoint = endpoint.endpoint.trim();
-    if endpoint.transport == "http_binary" {
+    let effective_endpoint = if endpoint.transport == "http_binary" {
         resolve_http_trace_endpoint(configured_endpoint)
     } else {
         Cow::Borrowed(configured_endpoint)
+    };
+    canonicalize_opentelemetry_destination(&effective_endpoint)
+}
+
+fn canonicalize_opentelemetry_destination(endpoint: &str) -> OpenTelemetryDestination {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return raw_opentelemetry_destination(endpoint);
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return raw_opentelemetry_destination(endpoint);
     }
+    let Some(url_host) = url.host_str() else {
+        return raw_opentelemetry_destination(endpoint);
+    };
+
+    let scheme = url.scheme().to_string();
+    let host = canonical_opentelemetry_host(url_host);
+    let port = url.port_or_known_default();
+    let path = normalize_opentelemetry_path(url.path());
+    let query = url.query().map(str::to_string);
+    let display = format!(
+        "{scheme}://{host}{}{path}{}",
+        port.map(|port| format!(":{port}")).unwrap_or_default(),
+        query
+            .as_deref()
+            .map(|query| format!("?{query}"))
+            .unwrap_or_default(),
+    );
+    OpenTelemetryDestination {
+        key: OpenTelemetryDestinationKey::Url {
+            scheme,
+            host,
+            port,
+            path,
+            query,
+        },
+        display,
+    }
+}
+
+fn raw_opentelemetry_destination(endpoint: &str) -> OpenTelemetryDestination {
+    OpenTelemetryDestination {
+        key: OpenTelemetryDestinationKey::Raw(endpoint.to_string()),
+        display: endpoint.to_string(),
+    }
+}
+
+fn canonical_opentelemetry_host(host: &str) -> String {
+    let domain = host.strip_suffix('.').unwrap_or(host);
+    let unbracketed = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    let is_loopback_domain = domain == "localhost" || domain.ends_with(".localhost");
+    let is_loopback_address = unbracketed
+        .parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback());
+    if is_loopback_domain || is_loopback_address {
+        "<loopback>".to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+fn normalize_opentelemetry_path(path: &str) -> String {
+    let mut normalized = String::with_capacity(path.len());
+    let mut previous_was_slash = false;
+    for character in path.chars() {
+        if character == '/' {
+            if !previous_was_slash {
+                normalized.push(character);
+            }
+            previous_was_slash = true;
+        } else {
+            normalized.push(character);
+            previous_was_slash = false;
+        }
+    }
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    normalized
 }
 
 const fn opentelemetry_type_name(otel_type: OpenTelemetryType) -> &'static str {

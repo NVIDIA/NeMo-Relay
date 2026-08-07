@@ -21,16 +21,13 @@ const RAMPART_MODEL_REVISION = 'b1993e4e68b082835b80ffc65acc03325ea2e501';
  */
 function defaultConfig(modelPath, config) {
   const hasTargetPaths = Array.isArray(config?.target_paths) && config.target_paths.length > 0;
-  const hasTargetPathPatterns =
-    Array.isArray(config?.target_path_patterns) && config.target_path_patterns.length > 0;
+  const hasTargetPathPatterns = Array.isArray(config?.target_path_patterns) && config.target_path_patterns.length > 0;
   const hasPreset = config?.preset === 'trajectory_context';
   if (hasPreset && (hasTargetPaths || hasTargetPathPatterns)) {
     throw new TypeError('Rampart PII config cannot combine preset with explicit target selectors');
   }
   if (!hasPreset && !hasTargetPaths && !hasTargetPathPatterns) {
-    throw new TypeError(
-      'Rampart PII config requires preset, target_paths, or target_path_patterns',
-    );
+    throw new TypeError('Rampart PII config requires preset, target_paths, or target_path_patterns');
   }
   return {
     version: 1,

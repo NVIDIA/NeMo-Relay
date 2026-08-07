@@ -124,7 +124,7 @@ fn add_with_environment_runner(
 
     if explicit_plugin_config.is_some() && scope_flags_selected(&command.scope) {
         return Err(CliError::Config(
-            "--config cannot be combined with --user, --project, or --global for `plugins add`; the same applies to --plugin-config-path"
+            "--config cannot be combined with --user or --global for `plugins add`; the same applies to --plugin-config-path"
                 .into(),
         ));
     }

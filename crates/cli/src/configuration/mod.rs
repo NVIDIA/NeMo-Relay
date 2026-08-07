@@ -113,14 +113,10 @@ pub(crate) fn resolve_server_config(args: &GatewayOverrides) -> Result<ResolvedC
 ///
 /// This intentionally avoids plugin discovery and activation so logging can be initialized before
 /// operational command dispatch. Missing `[logging]` configuration resolves to built-in defaults.
-pub(crate) fn resolve_logging_config(
-    explicit: Option<&Path>,
-    user_only: bool,
-) -> Result<LoggingConfig, CliError> {
+pub(crate) fn resolve_logging_config(explicit: Option<&Path>) -> Result<LoggingConfig, CliError> {
     let explicit = explicit.map(Path::to_path_buf);
-    let user_only = user_only || user_config_scope();
     let mut merged = toml::Value::Table(toml::map::Map::new());
-    for path in config_paths_scoped(explicit.as_ref(), user_only) {
+    for path in config_paths(explicit.as_ref()) {
         let required = explicit.as_ref() == Some(&path);
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
@@ -152,11 +148,11 @@ pub(crate) fn resolve_persistent_server_config(
 ) -> Result<ResolvedConfig, CliError> {
     if args.config.is_some() || args.plugin_config_path.is_some() || args.ready_file.is_some() {
         return Err(CliError::Config(
-            "nemo-relay mcp uses system and user configuration only; use `nemo-relay run` for explicit or project configuration"
+            "nemo-relay mcp uses system and user configuration only; use `nemo-relay run` for explicit configuration"
                 .into(),
         ));
     }
-    let mut resolved = load_shared_config_scoped(None, None, true)?;
+    let mut resolved = load_shared_config(None, None)?;
     apply_server_overrides(&mut resolved.gateway, args)?;
     let active_dynamic_plugins = active_dynamic_plugin_components_for_identity(None, &resolved)?;
     resolved.bootstrap_fingerprint = Some(persistent_bootstrap_fingerprint(
@@ -1004,16 +1000,8 @@ fn load_shared_config(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Result<ResolvedConfig, CliError> {
-    load_shared_config_scoped(explicit, plugin_config_path, user_config_scope())
-}
-
-fn load_shared_config_scoped(
-    explicit: Option<&PathBuf>,
-    plugin_config_path: Option<&PathBuf>,
-    user_only: bool,
-) -> Result<ResolvedConfig, CliError> {
     let mut merged = toml::Value::Table(toml::map::Map::new());
-    for path in config_paths_scoped(explicit, user_only) {
+    for path in config_paths(explicit) {
         let required = explicit == Some(&path);
         let Some(raw) = read_config_file(&path, required, "configuration")? else {
             continue;
@@ -1041,7 +1029,7 @@ fn load_shared_config_scoped(
         }
         merge_gateway_config_toml(&mut merged, parsed);
     }
-    let plugin_toml = load_plugin_toml_config_scoped(explicit, plugin_config_path, user_only)?;
+    let plugin_toml = load_plugin_toml_config(explicit, plugin_config_path)?;
     let mut resolved = ResolvedConfig {
         gateway: GatewayConfig::default(),
         ..ResolvedConfig::default()
@@ -1084,53 +1072,30 @@ pub(crate) fn any_config_file_exists() -> bool {
 }
 
 // Returns the config search path from lowest to highest precedence. An explicit path replaces the
-// ambient user file; project discovery and the system layer still apply.
+// ambient user file; the system layer still applies.
 fn config_paths(explicit: Option<&PathBuf>) -> Vec<PathBuf> {
-    config_paths_scoped(explicit, user_config_scope())
-}
-
-fn config_paths_scoped(explicit: Option<&PathBuf>, user_only: bool) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(path) = explicit {
         paths.push(path.clone());
     } else if let Some(user) = user_config_path() {
         paths.push(user);
     }
-    if !user_only
-        && let Ok(cwd) = std::env::current_dir()
-        && let Some(project) = find_project_config(&cwd)
-    {
-        paths.push(project);
-    }
-    paths.push(PathBuf::from("/etc/nemo-relay/config.toml"));
+    paths.push(system_config_dir().join("config.toml"));
     paths
 }
 
 // Returns the plugin config search path from lowest to highest precedence. An explicit plugin
-// target replaces the ambient user file; project discovery and the system layer still apply.
+// target replaces the ambient user file; the system layer still applies.
 fn plugin_config_paths(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
 ) -> Vec<PathBuf> {
-    plugin_config_paths_scoped(explicit, plugin_config_path, user_config_scope())
-}
-
-fn plugin_config_paths_scoped(
-    explicit: Option<&PathBuf>,
-    plugin_config_path: Option<&PathBuf>,
-    user_only: bool,
-) -> Vec<PathBuf> {
-    let cwd = if user_only {
-        None
-    } else {
-        std::env::current_dir().ok()
-    };
     if let Some(path) = explicit_plugin_config_path(explicit, plugin_config_path) {
         let mut paths = vec![path];
-        paths.extend(implicit_plugin_config_paths(cwd.as_deref(), None));
+        paths.extend(implicit_plugin_config_paths(None));
         return paths;
     }
-    implicit_plugin_config_paths(cwd.as_deref(), user_config_dir())
+    implicit_plugin_config_paths(user_config_dir())
 }
 
 /// Resolves the low-precedence plugin document selected by explicit gateway configuration.
@@ -1147,33 +1112,9 @@ pub(crate) fn explicit_plugin_config_path(
     })
 }
 
-fn user_config_scope() -> bool {
-    std::env::var("NEMO_RELAY_CONFIG_SCOPE").ok().as_deref() == Some("user")
-}
-
-fn implicit_plugin_config_paths(
-    cwd: Option<&std::path::Path>,
-    user_config_dir: Option<PathBuf>,
-) -> Vec<PathBuf> {
+fn implicit_plugin_config_paths(user_config_dir: Option<PathBuf>) -> Vec<PathBuf> {
     // The search-path logic lives in core; the gateway shares it so discovery stays identical.
-    nemo_relay::plugin::default_plugin_config_paths(cwd, user_config_dir)
-}
-
-// Walks upward from the current directory and returns the nearest project-local gateway config.
-// The first hit wins so nested projects can override parent workspace defaults.
-pub(crate) fn find_project_config(start: &std::path::Path) -> Option<PathBuf> {
-    for ancestor in start.ancestors() {
-        let path = ancestor.join(".nemo-relay/config.toml");
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    None
-}
-
-// The project-walk lives in core; the gateway shares it so discovery stays identical.
-fn find_project_plugin_config(start: &std::path::Path) -> Option<PathBuf> {
-    nemo_relay::plugin::nearest_project_plugin_config(start)
+    nemo_relay::plugin::default_plugin_config_paths(user_config_dir)
 }
 
 pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
@@ -1182,22 +1123,13 @@ pub(crate) fn user_plugin_config_path() -> Option<PathBuf> {
 
 pub(crate) fn user_plugin_runtime_config() -> Result<Option<Value>, CliError> {
     Ok(
-        load_plugin_toml_config_from_paths(implicit_plugin_config_paths(None, user_config_dir()))?
+        load_plugin_toml_config_from_paths(implicit_plugin_config_paths(user_config_dir()))?
             .and_then(|config| config.value),
     )
 }
 
-pub(crate) fn project_plugin_config_path(start: &std::path::Path) -> PathBuf {
-    find_project_plugin_config(start)
-        .or_else(|| {
-            find_project_config(start)
-                .and_then(|path| path.parent().map(|parent| parent.join(PLUGINS_TOML)))
-        })
-        .unwrap_or_else(|| start.join(".nemo-relay").join(PLUGINS_TOML))
-}
-
 pub(crate) fn global_plugin_config_path() -> PathBuf {
-    PathBuf::from("/etc/nemo-relay").join(PLUGINS_TOML)
+    system_config_dir().join(PLUGINS_TOML)
 }
 
 // Resolves the user config using XDG first and HOME/USERPROFILE second. Returning `None` keeps
@@ -1210,6 +1142,11 @@ fn user_config_path() -> Option<PathBuf> {
 /// resolver so the gateway, the editor, and the plugin runtime agree on the location.
 pub(crate) fn user_config_dir() -> Option<PathBuf> {
     nemo_relay::plugin::user_config_dir()
+}
+
+/// Resolves the platform system config directory shared with the core plugin runtime.
+pub(crate) fn system_config_dir() -> PathBuf {
+    nemo_relay::plugin::system_config_dir()
 }
 
 // Applies the typed TOML config model to the resolved runtime config. Missing sections and fields
@@ -1316,21 +1253,16 @@ struct FileDynamicPluginConfig {
     config: Option<Map<String, Value>>,
 }
 
-fn load_plugin_toml_config_scoped(
+fn load_plugin_toml_config(
     explicit: Option<&PathBuf>,
     plugin_config_path: Option<&PathBuf>,
-    user_only: bool,
 ) -> Result<Option<PluginTomlConfig>, CliError> {
-    load_plugin_toml_config_from_paths(plugin_config_paths_scoped(
-        explicit,
-        plugin_config_path,
-        user_only,
-    ))
+    load_plugin_toml_config_from_paths(plugin_config_paths(explicit, plugin_config_path))
 }
 
 /// Returns the plugin configuration paths selected by the same rules as runtime resolution.
 ///
-/// Diagnostics use this so they report the same explicit-or-user, project, and system layers as
+/// Diagnostics use this so they report the same explicit-or-user and system layers as
 /// runtime resolution.
 pub(crate) fn diagnostic_plugin_config_paths(
     explicit: Option<&PathBuf>,

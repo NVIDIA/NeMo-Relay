@@ -48,3 +48,14 @@ missing_docs = "deny"
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
+
+# Release artifacts are distributed in Python wheels, split Node.js packages,
+# and as standalone CLI binaries. Thin LTO with size optimization is the first
+# profile that keeps symbols and panic unwinding while meeting the distribution
+# size budget.
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+panic = "unwind"

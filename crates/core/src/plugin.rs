@@ -73,6 +73,8 @@ pub(crate) enum PluginDeregistrationOutcome {
 static PLUGIN_HANDLERS: LazyLock<RwLock<PluginMap>> = LazyLock::new(|| RwLock::new(HashMap::new()));
 static ACTIVE_PLUGIN_CONFIGURATION: LazyLock<Mutex<Option<ActivePluginConfiguration>>> =
     LazyLock::new(|| Mutex::new(None));
+static LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT: LazyLock<Mutex<Option<ConfigReport>>> =
+    LazyLock::new(|| Mutex::new(None));
 static PLUGIN_MUTATION_OWNER: LazyLock<Mutex<PluginMutationOwner>> =
     LazyLock::new(|| Mutex::new(PluginMutationOwner::Idle));
 static NEXT_PLUGIN_REGISTRATION_ID: AtomicU64 = AtomicU64::new(1);
@@ -123,6 +125,12 @@ pub enum PluginError {
 
 /// Specialized [`Result`](std::result::Result) type for plugin operations.
 pub type Result<T> = std::result::Result<T, PluginError>;
+
+/// Identifies teardown errors caused by recoverable ATIF delivery failures.
+pub(crate) const ATIF_RUNTIME_DELIVERY_FAILURE_MARKER: &str = "ATIF runtime delivery failures";
+/// Identifies teardown errors caused by recoverable OpenTelemetry delivery failures.
+pub(crate) const OTEL_RUNTIME_DELIVERY_FAILURE_MARKER: &str =
+    "OpenTelemetry runtime delivery failures";
 
 /// Canonical plugin configuration document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +194,29 @@ pub struct ConfigReport {
     /// Validation and compatibility diagnostics in evaluation order.
     #[serde(default)]
     pub diagnostics: Vec<ConfigDiagnostic>,
+    /// Runtime delivery diagnostics recorded after activation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_diagnostics: Vec<RuntimeDiagnostic>,
+}
+
+/// Bounded aggregate for a runtime failure observed by an active plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RuntimeDiagnostic {
+    /// Stable failure classification.
+    pub code: String,
+    /// Plugin component that reported the failure.
+    pub component: String,
+    /// Optional configuration field associated with the failure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    /// Latest human-readable failure detail.
+    pub message: String,
+    /// Latest affected trajectory session identifier.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Number of failures aggregated into this entry.
+    pub count: u64,
 }
 
 impl ConfigReport {
@@ -306,7 +337,13 @@ pub struct PluginRegistration {
     pub kind: String,
     /// Runtime-qualified registration name.
     pub name: String,
-    deregister: Box<dyn FnMut() -> Result<()> + Send>,
+    deregister: Box<dyn FnMut() -> PluginRegistrationCleanupOutcome + Send>,
+}
+
+pub(crate) enum PluginRegistrationCleanupOutcome {
+    Removed,
+    RemovedWithError(PluginError),
+    NotRemoved(PluginError),
 }
 
 impl fmt::Debug for PluginRegistration {
@@ -323,7 +360,22 @@ impl PluginRegistration {
     pub fn new(
         kind: impl Into<String>,
         name: impl Into<String>,
-        deregister: Box<dyn FnMut() -> Result<()> + Send>,
+        mut deregister: Box<dyn FnMut() -> Result<()> + Send>,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            name: name.into(),
+            deregister: Box::new(move || match deregister() {
+                Ok(()) => PluginRegistrationCleanupOutcome::Removed,
+                Err(error) => PluginRegistrationCleanupOutcome::NotRemoved(error),
+            }),
+        }
+    }
+
+    pub(crate) fn new_with_outcome(
+        kind: impl Into<String>,
+        name: impl Into<String>,
+        deregister: Box<dyn FnMut() -> PluginRegistrationCleanupOutcome + Send>,
     ) -> Self {
         Self {
             kind: kind.into(),
@@ -1508,7 +1560,10 @@ async fn initialize_plugins_exact_inner(
         component_count = enabled_component_count;
         "Plugin configuration activation started"
     );
-    let mut report = ConfigReport { diagnostics };
+    let mut report = ConfigReport {
+        diagnostics,
+        ..ConfigReport::default()
+    };
     report
         .diagnostics
         .extend(validate_plugin_config(&config).diagnostics);
@@ -1524,12 +1579,39 @@ async fn initialize_plugins_exact_inner(
     };
 
     if let Some(mut previous_state) = previous {
-        let teardown_errors = rollback_registrations_checked(&mut previous_state.registrations);
-        if !teardown_errors.is_empty() {
-            record_rollback_failures(rollback_failures.as_ref(), teardown_errors.clone());
+        // Keep the previous report installed while teardown callbacks run so
+        // runtime diagnostics emitted by teardown remain observable.
+        {
+            let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
+                PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+            })?;
+            *guard = Some(ActivePluginConfiguration {
+                config: previous_state.config.clone(),
+                report: previous_state.report.clone(),
+                registrations: Vec::new(),
+            });
+        }
+        let teardown = rollback_registrations_checked(&mut previous_state.registrations);
+        let teardown_report = ACTIVE_PLUGIN_CONFIGURATION
+            .lock()
+            .map_err(|err| {
+                PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+            })?
+            .take()
+            .map(|state| state.report);
+        if !teardown.errors.is_empty() {
+            if let Some(report) =
+                teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+                && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+            {
+                *guard = Some(report);
+            }
+            if !teardown.callbacks_cleared {
+                record_rollback_failures(rollback_failures.as_ref(), teardown.errors.clone());
+            }
             return Err(PluginError::RegistrationFailed(format!(
                 "previous plugin configuration could not be cleared: {}",
-                teardown_errors.join("; ")
+                teardown.errors.join("; ")
             )));
         }
         match initialize_plugin_components_catching_panics(
@@ -1708,8 +1790,7 @@ fn remove_default_policy_overlay(root: &mut Map<String, Json>, config: &ConfigPo
 /// Resolves the default `plugins.toml` layering into one JSON document, or an
 /// empty object when no plugin file exists.
 fn resolve_default_file_plugin_config() -> Result<DiscoveredPluginConfig> {
-    let paths =
-        default_plugin_config_paths(std::env::current_dir().ok().as_deref(), user_config_dir());
+    let paths = default_plugin_config_paths(user_config_dir());
     let documents = read_plugin_config_files(paths)?;
     resolve_discovered_plugin_config(documents)
 }
@@ -1729,8 +1810,13 @@ fn resolve_discovered_plugin_config(
 
 struct DiscoveredPluginConfig {
     value: Json,
-    enabled_sources: HashMap<String, PathBuf>,
+    enabled_sources: HashMap<String, ComponentEnabledSource>,
     sources: Vec<PathBuf>,
+}
+
+struct ComponentEnabledSource {
+    enabled: bool,
+    path: PathBuf,
 }
 
 use std::path::{Path, PathBuf};
@@ -1766,7 +1852,9 @@ where
     Ok(documents)
 }
 
-fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, PathBuf> {
+fn component_enabled_sources(
+    documents: &[(PathBuf, Json)],
+) -> HashMap<String, ComponentEnabledSource> {
     let mut sources = HashMap::new();
     for (path, document) in documents {
         let Some(components) = document.get("components").and_then(Json::as_array) else {
@@ -1776,8 +1864,14 @@ fn component_enabled_sources(documents: &[(PathBuf, Json)]) -> HashMap<String, P
             let Some(kind) = component_kind(component) else {
                 continue;
             };
-            if component.get("enabled").and_then(Json::as_bool).is_some() {
-                sources.insert(kind.to_string(), path.clone());
+            if let Some(enabled) = component.get("enabled").and_then(Json::as_bool) {
+                sources.insert(
+                    kind.to_string(),
+                    ComponentEnabledSource {
+                        enabled,
+                        path: path.clone(),
+                    },
+                );
             }
         }
     }
@@ -1808,7 +1902,7 @@ fn inherited_plugin_config_diagnostics(sources: &[PathBuf]) -> Vec<ConfigDiagnos
 
 fn programmatic_enable_override_diagnostics(
     discovered: &Json,
-    enabled_sources: &HashMap<String, PathBuf>,
+    enabled_sources: &HashMap<String, ComponentEnabledSource>,
     programmatic: &PluginConfig,
 ) -> Vec<ConfigDiagnostic> {
     let Some(discovered_components) = discovered.get("components").and_then(Json::as_array) else {
@@ -1822,18 +1916,21 @@ fn programmatic_enable_override_diagnostics(
             nth_component_by_kind(discovered_components, &component.kind, *nth)
                 .and_then(|index| discovered_components.get(index));
         *nth += 1;
-        if !component.enabled
-            || discovered_component
-                .and_then(|component| component.get("enabled"))
-                .and_then(Json::as_bool)
-                != Some(false)
-        {
+        let discovered_enabled = discovered_component
+            .and_then(|component| component.get("enabled"))
+            .and_then(Json::as_bool);
+        let file_disabled = discovered_enabled == Some(false)
+            || (discovered_enabled.is_none()
+                && enabled_sources
+                    .get(&component.kind)
+                    .is_some_and(|source| !source.enabled));
+        if !component.enabled || !file_disabled {
             continue;
         }
 
         let source = enabled_sources
             .get(&component.kind)
-            .map(|path| format!(" from {}", path.display()))
+            .map(|source| format!(" from {}", source.path.display()))
             .unwrap_or_default();
         diagnostics.push(ConfigDiagnostic {
             level: DiagnosticLevel::Warning,
@@ -1879,13 +1976,23 @@ where
 {
     let mut merged = Json::Object(Map::new());
     let mut sources = Vec::new();
-    for (path, document) in documents {
+    for (path, mut document) in documents {
         validate_plugin_config_version(&path, &document)?;
         validate_unique_component_kinds(&path, &document)?;
+
+        filter_disabled_plugin_components(&mut document);
         layer_config(&mut merged, document);
         sources.push(path);
     }
     Ok((!sources.is_empty()).then_some((merged, sources)))
+}
+
+/// Removes disabled components from one discovered plugin document before layering.
+fn filter_disabled_plugin_components(document: &mut Json) {
+    let Some(components) = document.get_mut("components").and_then(Json::as_array_mut) else {
+        return;
+    };
+    components.retain(|component| component.get("enabled").and_then(Json::as_bool) != Some(false));
 }
 
 /// Rejects a file with an unsupported top-level plugin config version before layering can
@@ -1936,32 +2043,33 @@ fn validate_unique_component_kinds(path: &Path, document: &Json) -> Result<()> {
     )))
 }
 
-/// Default `plugins.toml` search path (lowest precedence first): user, nearest
-/// project file, then system file — mirroring the gateway's discovery. `pub` only
-/// for cross-crate reuse by the gateway.
+/// Default `plugins.toml` search path (lowest precedence first): user, then
+/// system — mirroring the gateway's discovery. `pub` only for cross-crate reuse
+/// by the gateway.
 #[doc(hidden)]
-pub fn default_plugin_config_paths(cwd: Option<&Path>, user_dir: Option<PathBuf>) -> Vec<PathBuf> {
+pub fn default_plugin_config_paths(user_dir: Option<PathBuf>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(dir) = user_dir {
         paths.push(dir.join("plugins.toml"));
     }
-    if let Some(cwd) = cwd
-        && let Some(project) = nearest_project_plugin_config(cwd)
-    {
-        paths.push(project);
-    }
-    paths.push(PathBuf::from("/etc/nemo-relay/plugins.toml"));
+    paths.push(system_config_dir().join("plugins.toml"));
     paths
 }
 
-/// Walks upward from `start` for the nearest `.nemo-relay/plugins.toml`. `pub`
-/// only for cross-crate reuse by the gateway.
+/// Resolves the platform system configuration directory.
 #[doc(hidden)]
-pub fn nearest_project_plugin_config(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .map(|ancestor| ancestor.join(".nemo-relay").join("plugins.toml"))
-        .find(|path| path.exists())
+pub fn system_config_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("nemo-relay")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/etc/nemo-relay")
+    }
 }
 
 /// Resolves the nemo-relay user config directory from `XDG_CONFIG_HOME`, then
@@ -2045,7 +2153,7 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
     let flush_error = crate::api::runtime::subscriber_dispatcher::flush_queued_subscribers()
         .err()
         .map(|error| error.to_string());
-    let previous = {
+    let mut registrations = {
         let mut guard = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
             Ok(guard) => guard,
             Err(err) => {
@@ -2057,16 +2165,31 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
                 };
             }
         };
-        guard.take()
+        guard
+            .as_mut()
+            .map(|state| std::mem::take(&mut state.registrations))
     };
-    let deregistration_errors = previous
-        .map(|mut previous_state| rollback_registrations_checked(&mut previous_state.registrations))
+    // Keep the report installed while callbacks run so runtime diagnostics
+    // emitted by teardown work can be recorded against it.
+    let deregistration = registrations
+        .as_mut()
+        .map(rollback_registrations_checked)
         .unwrap_or_default();
-    let callbacks_cleared = deregistration_errors.is_empty();
-    let deregistration_error = (!callbacks_cleared).then(|| {
+    let teardown_report = match ACTIVE_PLUGIN_CONFIGURATION.lock() {
+        Ok(mut guard) => guard.take().map(|state| state.report),
+        Err(err) => {
+            return PluginHostClearOutcome {
+                result: Err(PluginError::Internal(format!(
+                    "active plugin configuration lock poisoned: {err}"
+                ))),
+                callbacks_cleared: false,
+            };
+        }
+    };
+    let deregistration_error = (!deregistration.errors.is_empty()).then(|| {
         PluginError::RegistrationFailed(format!(
             "plugin teardown failed: {}",
-            deregistration_errors.join("; ")
+            deregistration.errors.join("; ")
         ))
     });
     let result = match (flush_error, deregistration_error) {
@@ -2077,9 +2200,19 @@ fn clear_plugin_configuration_inner() -> PluginHostClearOutcome {
             "{deregister}; subscriber flush also failed: {flush}"
         ))),
     };
+    if result.is_ok() {
+        if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+            *guard = None;
+        }
+    } else if let Some(report) =
+        teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+        && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+    {
+        *guard = Some(report);
+    }
     PluginHostClearOutcome {
         result,
-        callbacks_cleared,
+        callbacks_cleared: deregistration.callbacks_cleared,
     }
 }
 
@@ -2183,22 +2316,55 @@ fn plugin_mutation_conflict(owner: PluginMutationOwner) -> PluginError {
     PluginError::Conflict(message.into())
 }
 
-/// Returns the last successfully configured plugin report.
+/// Returns the active plugin report or a report retained after a failed teardown.
 ///
-/// `None` indicates that no plugin configuration is currently active.
+/// `None` indicates that no plugin configuration is active and no failed
+/// teardown report is retained.
 ///
 /// # Returns
-/// The last successful [`ConfigReport`], or `None` when no configuration is
-/// active.
+/// The active [`ConfigReport`], or the report containing runtime diagnostics
+/// from the last failed teardown.
 ///
 /// # Notes
 /// This is a snapshot of the last successful activation and does not re-run
 /// validation.
 pub fn active_plugin_report() -> Option<ConfigReport> {
-    ACTIVE_PLUGIN_CONFIGURATION
+    let active_report = ACTIVE_PLUGIN_CONFIGURATION
         .lock()
         .ok()
-        .and_then(|guard| guard.as_ref().map(|state| state.report.clone()))
+        .and_then(|guard| guard.as_ref().map(|state| state.report.clone()));
+    active_report.or_else(|| {
+        LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    })
+}
+
+/// Record a bounded runtime diagnostic against the active plugin report.
+pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
+    let Ok(mut guard) = ACTIVE_PLUGIN_CONFIGURATION.lock() else {
+        return;
+    };
+    let Some(state) = guard.as_mut() else {
+        return;
+    };
+    if let Some(existing) = state
+        .report
+        .runtime_diagnostics
+        .iter_mut()
+        .find(|existing| {
+            existing.code == diagnostic.code
+                && existing.component == diagnostic.component
+                && existing.field == diagnostic.field
+        })
+    {
+        existing.message = diagnostic.message;
+        existing.session_id = diagnostic.session_id;
+        existing.count += 1;
+    } else {
+        state.report.runtime_diagnostics.push(diagnostic);
+    }
 }
 
 /// Rolls back registrations in reverse order, ignoring rollback failures.
@@ -2209,26 +2375,53 @@ pub fn rollback_registrations(registrations: &mut Vec<PluginRegistration>) {
     let _ = rollback_registrations_checked(registrations);
 }
 
-fn rollback_registrations_checked(registrations: &mut Vec<PluginRegistration>) -> Vec<String> {
-    let mut errors = Vec::new();
+struct PluginRollbackOutcome {
+    errors: Vec<String>,
+    callbacks_cleared: bool,
+}
+
+impl Default for PluginRollbackOutcome {
+    fn default() -> Self {
+        Self {
+            errors: Vec::new(),
+            callbacks_cleared: true,
+        }
+    }
+}
+
+fn rollback_registrations_checked(
+    registrations: &mut Vec<PluginRegistration>,
+) -> PluginRollbackOutcome {
+    let mut outcome = PluginRollbackOutcome::default();
     for registration in registrations.iter_mut().rev() {
-        let failure = match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error.to_string()),
-            Err(payload) => Some(format!(
-                "deregistration panicked: {}",
-                panic_payload_message(payload)
-            )),
-        };
-        if let Some(error) = failure {
-            errors.push(format!(
-                "{} registration '{}' could not be removed: {error}",
-                registration.kind, registration.name
-            ));
+        match catch_unwind(AssertUnwindSafe(|| (registration.deregister)())) {
+            Ok(PluginRegistrationCleanupOutcome::Removed) => {}
+            Ok(PluginRegistrationCleanupOutcome::RemovedWithError(error)) => {
+                outcome.errors.push(format!(
+                    "{} registration '{}' reported a delivery failure: {error}",
+                    registration.kind, registration.name
+                ));
+            }
+            Ok(PluginRegistrationCleanupOutcome::NotRemoved(error)) => {
+                outcome.callbacks_cleared = false;
+                outcome.errors.push(format!(
+                    "{} registration '{}' could not be removed: {error}",
+                    registration.kind, registration.name
+                ));
+            }
+            Err(payload) => {
+                outcome.callbacks_cleared = false;
+                outcome.errors.push(format!(
+                    "{} registration '{}' could not be removed: deregistration panicked: {}",
+                    registration.kind,
+                    registration.name,
+                    panic_payload_message(payload)
+                ));
+            }
         }
     }
     registrations.clear();
-    errors
+    outcome
 }
 
 fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -2311,8 +2504,10 @@ impl PendingPluginRegistrations {
 
 impl Drop for PendingPluginRegistrations {
     fn drop(&mut self) {
-        let errors = rollback_registrations_checked(&mut self.registrations);
-        record_rollback_failures(self.rollback_failures.as_ref(), errors);
+        let outcome = rollback_registrations_checked(&mut self.registrations);
+        if !outcome.callbacks_cleared {
+            record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        }
     }
 }
 
@@ -2336,8 +2531,10 @@ impl PendingPluginRegistrationContext {
 
 impl Drop for PendingPluginRegistrationContext {
     fn drop(&mut self) {
-        let errors = rollback_registrations_checked(&mut self.context.registrations);
-        record_rollback_failures(self.rollback_failures.as_ref(), errors);
+        let outcome = rollback_registrations_checked(&mut self.context.registrations);
+        if !outcome.callbacks_cleared {
+            record_rollback_failures(self.rollback_failures.as_ref(), outcome.errors);
+        }
     }
 }
 
@@ -2368,6 +2565,9 @@ fn store_active_plugin_configuration(
         report,
         registrations,
     });
+    if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
+        *guard = None;
+    }
     Ok(())
 }
 

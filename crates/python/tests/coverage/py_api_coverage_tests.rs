@@ -6,6 +6,8 @@
 use super::*;
 
 use std::ffi::CString;
+use std::sync::mpsc;
+use std::time::Duration;
 
 use pyo3::types::PyModule;
 use serde_json::json;
@@ -36,6 +38,142 @@ fn with_event_loop<T>(py: Python<'_>, f: impl FnOnce(Bound<'_, PyAny>) -> T) -> 
         .unwrap();
     event_loop.call_method0("close").unwrap();
     result
+}
+
+fn test_loop(py: Python<'_>, closed: bool) -> Bound<'_, PyAny> {
+    let module = load_module(
+        py,
+        r#"
+import threading
+
+class Future:
+    def __init__(self):
+        self._callbacks = []
+        self._cancelled = False
+
+    def add_done_callback(self, callback):
+        self._callbacks.append(callback)
+
+    def cancelled(self):
+        return self._cancelled
+
+    def cancel(self):
+        self._cancelled = True
+        for callback in self._callbacks:
+            callback(self)
+
+class Loop:
+    def __init__(self, closed):
+        self.closed = closed
+        self.closed_checked = threading.Event()
+        self.completion_scheduled = False
+
+    def create_future(self):
+        return Future()
+
+    def is_closed(self):
+        self.closed_checked.set()
+        return self.closed
+
+    def call_soon_threadsafe(self, callback):
+        self.completion_scheduled = True
+        callback()
+"#,
+    );
+    module.getattr("Loop").unwrap().call1((closed,)).unwrap()
+}
+
+struct CancellationSignal(mpsc::Sender<()>);
+
+impl Drop for CancellationSignal {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
+    }
+}
+
+#[test]
+fn safe_future_into_py_settles_rust_panics() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        with_event_loop(py, |event_loop| {
+            let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone());
+            let future = pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(pyo3_async_runtimes::tokio::scope(locals, async move {
+                    Python::attach(|py| {
+                        safe_future_into_py(py, async move { panic!("expected test panic") })
+                            .map(Bound::unbind)
+                    })
+                }))
+                .unwrap();
+
+            let error = event_loop
+                .call_method1("run_until_complete", (future,))
+                .unwrap_err();
+            assert!(error.is_instance_of::<pyo3_async_runtimes::err::RustPanic>(py));
+            assert!(error.to_string().contains("expected test panic"));
+        });
+    });
+}
+
+#[test]
+fn safe_future_into_py_cancels_rust_work() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let event_loop = test_loop(py, false);
+        let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone());
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (dropped_tx, dropped_rx) = mpsc::channel();
+        let future = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(pyo3_async_runtimes::tokio::scope(locals, async move {
+                Python::attach(|py| {
+                    safe_future_into_py(py, async move {
+                        started_tx.send(()).unwrap();
+                        let _cancellation_signal = CancellationSignal(dropped_tx);
+                        std::future::pending::<PyResult<Py<PyAny>>>().await
+                    })
+                    .map(Bound::unbind)
+                })
+            }))
+            .unwrap();
+
+        assert!(started_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        future.bind(py).call_method0("cancel").unwrap();
+        assert!(dropped_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+    });
+}
+
+#[test]
+fn safe_future_into_py_skips_completion_on_closed_loop() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let event_loop = test_loop(py, true);
+        let locals = pyo3_async_runtimes::TaskLocals::new(event_loop.clone());
+        let _future = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(pyo3_async_runtimes::tokio::scope(locals, async move {
+                Python::attach(|py| {
+                    safe_future_into_py(py, async move { Python::attach(|py| Ok(py.None())) })
+                        .map(Bound::unbind)
+                })
+            }))
+            .unwrap();
+
+        assert!(
+            event_loop
+                .getattr("closed_checked")
+                .unwrap()
+                .call_method1("wait", (1.0,))
+                .unwrap()
+                .is_truthy()
+                .unwrap()
+        );
+        assert!(
+            !event_loop
+                .getattr("completion_scheduled")
+                .unwrap()
+                .is_truthy()
+                .unwrap()
+        );
+    });
 }
 
 #[test]

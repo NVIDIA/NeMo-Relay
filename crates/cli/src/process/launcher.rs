@@ -484,7 +484,7 @@ impl PreparedAgentLaunch {
 
     // Builds the launch plan and applies only the preparation needed by the selected agent.
     // Dry-run preparation records equivalent notes and argv/env changes without writing temporary
-    // hook files or patching user/project configuration.
+    // hook files or patching user configuration.
     fn build(
         agent: CodingAgent,
         argv: Vec<String>,
