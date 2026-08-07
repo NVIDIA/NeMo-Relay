@@ -344,6 +344,13 @@ def test_provider_attempt_rebuilds_from_cached_layers_and_uses_hermetic_runtime(
     assert '"target": "/opt/hermes-runtime"' in runner
 
 
+def test_runner_does_not_expand_an_empty_validation_expectations_array() -> None:
+    runner = (EXAMPLE_ROOT / "run_terminal_bench.sh").read_text(encoding="utf-8")
+    assert "validation_expectations=()" not in runner
+    assert '"${validation_expectations[@]}"' not in runner
+    assert "validation_args+=(--expect-late-failure)" in runner
+
+
 def test_plugin_contract_owns_routes_and_authorization_name() -> None:
     module = load_coordinator()
     contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in")

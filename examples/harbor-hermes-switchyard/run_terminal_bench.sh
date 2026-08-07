@@ -235,10 +235,8 @@ values = json.load(open(sys.argv[1]))["routing"]
 print("\n".join(sorted({urlsplit(value).hostname for key, value in values.items() if key.endswith("_base_url")})))
 ' "$run_root/runtime/provenance.json")
 agent_kwargs=()
-validation_expectations=()
 if [[ "$inject_post_response_failure" == "true" ]]; then
   agent_kwargs+=(--ak inject_post_response_failure=true)
-  validation_expectations+=(--expect-late-failure)
 elif [[ "$inject_post_response_failure" != "false" ]]; then
   echo "INJECT_POST_RESPONSE_FAILURE must be true or false" >&2
   exit 2
@@ -320,8 +318,10 @@ validation_args=(
   --scan-root "$run_root/jobs/$job_name"
   --secret-env "$upstream_auth_env"
   --output "$artifact_root/validation.json"
-  "${validation_expectations[@]}"
 )
+if [[ "$inject_post_response_failure" == "true" ]]; then
+  validation_args+=(--expect-late-failure)
+fi
 "$python_bin" "${validation_args[@]}" >"$run_root/validation.log"
 
 "$python_bin" "$example_root/scripts/upload_openinference.py" \
