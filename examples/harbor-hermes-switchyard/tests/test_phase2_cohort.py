@@ -171,6 +171,28 @@ def test_failure_classifier_reads_nested_harbor_logs(tmp_path: Path) -> None:
     assert module.classify_attempt_failure("expected one direct Hermes result, found 0", attempt) == "infrastructure"
 
 
+def test_failure_classifier_reads_nested_harbor_result_json(tmp_path: Path) -> None:
+    module = load_coordinator()
+    attempt = tmp_path / "attempt"
+    result = attempt / "jobs" / "task" / "result.json"
+    result.parent.mkdir(parents=True)
+    result.write_text(
+        json.dumps(
+            {
+                "exception_info": {
+                    "exception_message": (
+                        "Provider has been unresponsive (no response received) "
+                        "for 10 consecutive stale attempts"
+                    )
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.classify_attempt_failure("invalid direct result status", attempt) == "infrastructure"
+
+
 def test_smoke_evidence_is_bound_to_exact_local_dataset(tmp_path: Path) -> None:
     module = load_coordinator()
     dataset = tmp_path / "dataset"

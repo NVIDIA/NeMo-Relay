@@ -181,7 +181,11 @@ def classify_attempt_failure(log_text: str, attempt: Path) -> str:
 
     if classify_failure(log_text) == "infrastructure":
         return "infrastructure"
-    for path in sorted(attempt.rglob("*.log")):
+    diagnostic_paths = [
+        *attempt.rglob("*.log"),
+        *attempt.rglob("result.json"),
+    ]
+    for path in sorted(diagnostic_paths):
         try:
             with path.open(encoding="utf-8", errors="replace") as stream:
                 while chunk := stream.read(1024 * 1024):
