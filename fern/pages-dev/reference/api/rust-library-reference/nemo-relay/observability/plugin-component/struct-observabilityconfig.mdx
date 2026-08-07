@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ObservabilityConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub atof: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atofsectionconfig\">AtofSectionConfig</a>&gt;,\n    pub atif: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atifsectionconfig\">AtifSectionConfig</a>&gt;,\n    pub opentelemetry: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-opentelemetrysectionconfig\">OpenTelemetrySectionConfig</a>&gt;,\n    pub policy: <a href=\"../../plugin/struct-configpolicy\">ConfigPolicy</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ObservabilityConfig &#123;\n    pub version: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n    pub atof: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atofsectionconfig\">AtofSectionConfig</a>&gt;,\n    pub atif: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-atifsectionconfig\">AtifSectionConfig</a>&gt;,\n    pub opentelemetry: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-opentelemetrysectionconfig\">OpenTelemetrySectionConfig</a>&gt;,\n    pub policy: <a href=\"../../plugin/struct-configpolicy\">ConfigPolicy</a>,\n    pub enable_full_payloads: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n&#125;"}} /></pre>
 
 Canonical config document for the observability plugin component.
 
@@ -37,6 +37,10 @@ OpenTelemetry trace export.
 ### `policy: ConfigPolicy`
 
 Observability-local unsupported-config policy.
+
+### `enable_full_payloads: bool`
+
+Whether LLM start events retain complete sanitized request payloads.
 
 ## Trait Implementations
 
