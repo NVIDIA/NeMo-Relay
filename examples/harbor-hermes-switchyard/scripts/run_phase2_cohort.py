@@ -151,9 +151,7 @@ def task_summary_passed(path: Path) -> bool:
     validation = summary.get("validation")
     benchmark = validation.get("benchmark", {}) if isinstance(validation, dict) else {}
     benchmark_status = benchmark.get("status", validation.get("status") if isinstance(validation, dict) else None)
-    return summary.get("status") == "passed" and benchmark_status == "passed" and (
-        isinstance(summary.get("phoenix_upload"), dict) and summary["phoenix_upload"].get("status") == "passed"
-    )
+    return summary.get("status") == "passed" and benchmark_status == "passed"
 
 
 def successful_attempt(task_root: Path) -> Path | None:

@@ -151,14 +151,19 @@ def test_integration_failure_does_not_erase_completed_benchmark_output(tmp_path:
         "validation": {
             "status": "passed",
             "benchmark": {"status": "passed", "errors": []},
-            "integration": {"status": "failed", "errors": ["missing route mark"], "warnings": []},
+            "integration": {
+                "status": "failed",
+                "errors": ["missing route mark", "Phoenix upload did not pass"],
+                "warnings": [],
+                "phoenix_upload": {"status": "failed"},
+            },
             "benchmark_task_passed": True,
             "routed_models": ["sonnet"],
             "routed_targets": ["weak"],
             "cache_read_tokens": 12,
             "secret_findings": [],
         },
-        "phoenix_upload": {"status": "passed", "uploaded_spans": 10},
+        "phoenix_upload": {"status": "failed", "error": "Phoenix upload command failed"},
     }
     (attempt / "summary.json").write_text(json.dumps(attempt_summary), encoding="utf-8")
 
@@ -171,7 +176,9 @@ def test_integration_failure_does_not_erase_completed_benchmark_output(tmp_path:
     assert summary["cohort_gates"]["integration_validation"] == {
         "passed": False,
         "failed_task_count": 1,
-        "failures": [{"task": "one", "errors": ["missing route mark"]}],
+        "failures": [
+            {"task": "one", "errors": ["missing route mark", "Phoenix upload did not pass"]}
+        ],
     }
     assert summary["status"] == "partial"
 
@@ -428,8 +435,10 @@ def test_runner_does_not_expand_an_empty_validation_expectations_array() -> None
 def test_runner_keeps_benchmark_completion_separate_from_integration_validation() -> None:
     runner = (EXAMPLE_ROOT / "run_terminal_bench.sh").read_text(encoding="utf-8")
     assert 'summary["benchmark_completion"] = summary["validation"].get("benchmark", {})' in runner
-    assert 'summary["integration_validation"] = summary["validation"].get("integration", {})' in runner
-    assert "benchmark completion or Phoenix upload did not pass" in runner
+    assert 'integration["phoenix_upload"] = summary["phoenix_upload"]' in runner
+    assert 'summary["integration_validation"] = integration' in runner
+    assert "benchmark completion did not pass" in runner
+    assert "benchmark completion or Phoenix upload did not pass" not in runner
 
 
 def test_plugin_contract_owns_routes_and_authorization_name() -> None:

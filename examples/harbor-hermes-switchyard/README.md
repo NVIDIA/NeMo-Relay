@@ -287,19 +287,20 @@ subject to the cohort's bounded retry limit.
 ## 11. Completion gates
 
 A task is complete when `validation.json` records
-`benchmark.status=passed` and `phoenix-upload.json` has `status=passed`.
-The top-level validation status mirrors benchmark completion for compatibility.
+`benchmark.status=passed`. The top-level validation status mirrors benchmark
+completion for compatibility.
 A benchmark `reward.task_passed=false` is a valid completed result and is never
 retried.
 
-Relay/Switchyard artifact checks are recorded separately in
-`validation.integration`. An integration finding is preserved in the task and
-cohort report; it does not discard a completed benchmark result or cause the
-agent to be run again. It remains a cohort-level acceptance gate.
+Relay/Switchyard artifact checks, including the Phoenix upload result, are
+recorded separately in `validation.integration`. An integration finding is
+preserved in the task and cohort report; it does not discard a completed
+benchmark result or cause the agent to be run again. It remains a cohort-level
+acceptance gate.
 
 The cohort passes only when:
 
-- all 89 tasks are independently validated and uploaded;
+- all 89 tasks have independently completed benchmark results;
 - `cohort_gates.integration_validation` passes;
 - direct artifacts and logs pass secret scans;
 - cache-read evidence is nonzero;

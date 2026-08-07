@@ -326,12 +326,21 @@ if [[ "$inject_post_response_failure" == "true" ]]; then
 fi
 "$python_bin" "${validation_args[@]}" >"$run_root/validation.log"
 
-"$python_bin" "$example_root/scripts/upload_openinference.py" \
+if ! "$python_bin" "$example_root/scripts/upload_openinference.py" \
   --openinference "$openinference" \
   --phoenix-url "$phoenix_base" \
   --project "$phoenix_project" \
   --output "$artifact_root/phoenix-upload.json" \
-  >"$run_root/phoenix-upload.log"
+  >"$run_root/phoenix-upload.log"; then
+  "$python_bin" - "$artifact_root/phoenix-upload.json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+path.write_text(json.dumps({"status": "failed", "error": "Phoenix upload command failed"}, indent=2) + "\n")
+PY
+fi
 
 "$python_bin" - "$artifact_root" "$run_root" "$job_name" "$task_name" <<'PY'
 import json
@@ -348,15 +357,22 @@ summary = {
     "validation": json.loads((artifacts / "validation.json").read_text()),
     "phoenix_upload": json.loads((artifacts / "phoenix-upload.json").read_text()),
 }
+integration = summary["validation"].setdefault("integration", {"status": "passed", "errors": [], "warnings": []})
+integration_errors = list(integration.get("errors", []))
+integration["phoenix_upload"] = summary["phoenix_upload"]
+if summary["phoenix_upload"].get("status") != "passed":
+    integration_errors.append("Phoenix upload did not pass")
+integration["errors"] = sorted(set(integration_errors))
+integration["status"] = "passed" if not integration["errors"] else "failed"
+(artifacts / "validation.json").write_text(json.dumps(summary["validation"], indent=2, sort_keys=True) + "\n")
 summary["benchmark_completion"] = summary["validation"].get("benchmark", {})
-summary["integration_validation"] = summary["validation"].get("integration", {})
+summary["integration_validation"] = integration
 benchmark_complete = summary["benchmark_completion"].get(
     "status", summary["validation"].get("status")
 ) == "passed"
-uploaded = summary["phoenix_upload"].get("status") == "passed"
-summary["status"] = "passed" if benchmark_complete and uploaded else "failed"
+summary["status"] = "passed" if benchmark_complete else "failed"
 if summary["status"] != "passed":
-    raise SystemExit("benchmark completion or Phoenix upload did not pass")
+    raise SystemExit("benchmark completion did not pass")
 (run_root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 print(json.dumps(summary, indent=2))
 PY
