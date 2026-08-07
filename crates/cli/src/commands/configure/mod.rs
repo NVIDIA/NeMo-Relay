@@ -22,8 +22,7 @@ pub(crate) struct ConfigCommand {
     pub(crate) command: Option<ConfigSubcommand>,
     #[arg(value_enum)]
     pub(crate) agent: Option<AgentArg>,
-    /// Reset user Relay configuration. Persistent Hermes integration state is
-    /// managed separately with `nemo-relay uninstall hermes`.
+    /// Reset user Relay configuration.
     #[arg(long)]
     pub(crate) reset: bool,
 }

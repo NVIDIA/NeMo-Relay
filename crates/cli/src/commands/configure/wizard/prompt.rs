@@ -197,11 +197,7 @@ fn ask_agents(
     detected: &[CodingAgent],
     configured: &[CodingAgent],
 ) -> Result<Vec<CodingAgent>, CliError> {
-    let all_supported = [
-        CodingAgent::ClaudeCode,
-        CodingAgent::Codex,
-        CodingAgent::Hermes,
-    ];
+    let all_supported = [CodingAgent::ClaudeCode, CodingAgent::Codex];
     let labels: Vec<String> = all_supported
         .iter()
         .map(|a| {

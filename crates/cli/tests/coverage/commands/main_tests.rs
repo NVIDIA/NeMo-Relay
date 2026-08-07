@@ -353,7 +353,6 @@ fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
         match agent {
             CodingAgent::Codex => Err(error::CliError::Install("codex failure".into())),
             CodingAgent::ClaudeCode => Ok(ExitCode::FAILURE),
-            CodingAgent::Hermes => Ok(ExitCode::SUCCESS),
         }
     })
     .unwrap_err()

@@ -332,16 +332,6 @@ fn generated_hook_dispatch_covers_all_agents() {
     assert_generated_hook_policies();
     assert_eq!(
         transparent_hook_forward_commands_for_platform(
-            Path::new("nemo-relay"),
-            CodingAgent::Hermes,
-            "http://127.0.0.1:1234",
-            false,
-        )
-        .for_event("on_session_start"),
-        "nemo-relay hook-forward hermes --gateway-url http://127.0.0.1:1234 --transparent-run --fail-open"
-    );
-    assert_eq!(
-        transparent_hook_forward_commands_for_platform(
             Path::new("/abs/path/to/nemo-relay"),
             CodingAgent::Codex,
             "http://127.0.0.1:1234",
@@ -363,7 +353,7 @@ fn generated_hook_dispatch_covers_all_agents() {
     );
     let native = transparent_hook_forward_commands(
         Path::new("nemo-relay"),
-        CodingAgent::Hermes,
+        CodingAgent::Codex,
         "http://127.0.0.1:1234",
     )
     .unwrap();
@@ -373,7 +363,7 @@ fn generated_hook_dispatch_covers_all_agents() {
             vec![
                 String::from("nemo-relay"),
                 String::from("hook-forward"),
-                String::from("hermes"),
+                String::from("codex"),
                 String::from("--gateway-url"),
                 String::from("http://127.0.0.1:1234"),
                 String::from("--transparent-run"),
@@ -385,7 +375,7 @@ fn generated_hook_dispatch_covers_all_agents() {
             native,
             transparent_hook_forward_commands_for_platform(
                 Path::new("nemo-relay"),
-                CodingAgent::Hermes,
+                CodingAgent::Codex,
                 "http://127.0.0.1:1234",
                 false,
             )
@@ -447,21 +437,14 @@ fn generated_hook_dispatch_covers_all_agents() {
 }
 
 fn assert_generated_hook_policies() {
-    for agent in [
-        CodingAgent::ClaudeCode,
-        CodingAgent::Codex,
-        CodingAgent::Hermes,
-    ] {
+    for agent in [CodingAgent::ClaudeCode, CodingAgent::Codex] {
         assert!(generated_hooks(agent, "cmd")["hooks"].is_object());
         let commands = GeneratedHookCommands::new("cmd --fail-open", "cmd --fail-closed");
         let generated = generated_policy_hooks(agent, &commands);
         for event in agent.hook_events() {
-            let command = if agent.uses_direct_hook_entries() {
-                generated["hooks"][event][0]["command"].as_str()
-            } else {
-                generated["hooks"][event][0]["hooks"][0]["command"].as_str()
-            }
-            .unwrap();
+            let command = generated["hooks"][event][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap();
             assert_eq!(
                 command,
                 commands.for_event(event),

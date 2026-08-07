@@ -1436,7 +1436,7 @@ fn strips_chatgpt_plus_jwt_from_openai_route_inbound() {
 
 #[test]
 fn preserves_real_bearer_keys_on_openai_route() {
-    // Real provider keys (Hermes's `sk-...` against NVIDIA, an actual OpenAI dev key, etc.)
+    // Real provider keys (an NVIDIA key, an actual OpenAI development key, and so on)
     // must pass through untouched — only recognized ChatGPT auth tokens are stripped.
     let mut inbound = HeaderMap::new();
     inbound.insert(

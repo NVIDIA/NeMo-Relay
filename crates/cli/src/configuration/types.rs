@@ -97,14 +97,11 @@ impl ResolvedDynamicPluginConfig {
 pub(crate) struct AgentConfigs {
     pub(crate) claude: AgentCommandConfig,
     pub(crate) codex: AgentCommandConfig,
-    pub(crate) hermes: AgentCommandConfig,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AgentCommandConfig {
     pub(crate) command: Option<String>,
-    /// Legacy Hermes config-path override retained for existing Relay configuration files.
-    pub(crate) hooks_path: Option<PathBuf>,
 }
 
 impl Default for GatewayConfig {

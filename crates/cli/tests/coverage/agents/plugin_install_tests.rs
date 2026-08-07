@@ -100,19 +100,6 @@ fn readiness_worker_returns_a_report_and_handles_channel_disconnects() {
             .details
             .contains("collector stopped unexpectedly")
     );
-
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    drop(sender);
-    let hermes = crate::agents::receive_integration_readiness_for_test(
-        CodingAgent::Hermes,
-        dir.path().join("config.yaml"),
-        receiver,
-        dir.path(),
-        Duration::from_secs(1),
-    );
-    assert!(hermes.marketplace.is_none());
-    assert!(hermes.plugin.is_none());
-    assert!(!hermes.ok());
 }
 
 #[test]
@@ -367,7 +354,6 @@ struct HomeScope<'a> {
     prev_home: Option<std::ffi::OsString>,
     prev_userprofile: Option<std::ffi::OsString>,
     prev_codex_home: Option<std::ffi::OsString>,
-    prev_hermes_home: Option<std::ffi::OsString>,
 }
 
 impl<'a> HomeScope<'a> {
@@ -378,20 +364,17 @@ impl<'a> HomeScope<'a> {
         let prev_home = std::env::var_os("HOME");
         let prev_userprofile = std::env::var_os("USERPROFILE");
         let prev_codex_home = std::env::var_os("CODEX_HOME");
-        let prev_hermes_home = std::env::var_os("HERMES_HOME");
         // SAFETY: This test holds a process-wide mutex for the lifetime of the env override.
         unsafe {
             std::env::set_var("HOME", path);
             std::env::remove_var("USERPROFILE");
             std::env::remove_var("CODEX_HOME");
-            std::env::remove_var("HERMES_HOME");
         }
         Self {
             _guard: guard,
             prev_home,
             prev_userprofile,
             prev_codex_home,
-            prev_hermes_home,
         }
     }
 
@@ -402,20 +385,17 @@ impl<'a> HomeScope<'a> {
         let prev_home = std::env::var_os("HOME");
         let prev_userprofile = std::env::var_os("USERPROFILE");
         let prev_codex_home = std::env::var_os("CODEX_HOME");
-        let prev_hermes_home = std::env::var_os("HERMES_HOME");
         // SAFETY: This test holds a process-wide mutex for the lifetime of the env override.
         unsafe {
             std::env::remove_var("HOME");
             std::env::remove_var("USERPROFILE");
             std::env::remove_var("CODEX_HOME");
-            std::env::remove_var("HERMES_HOME");
         }
         Self {
             _guard: guard,
             prev_home,
             prev_userprofile,
             prev_codex_home,
-            prev_hermes_home,
         }
     }
 }
@@ -436,10 +416,6 @@ impl Drop for HomeScope<'_> {
                 Some(value) => std::env::set_var("CODEX_HOME", value),
                 None => std::env::remove_var("CODEX_HOME"),
             }
-            match self.prev_hermes_home.take() {
-                Some(value) => std::env::set_var("HERMES_HOME", value),
-                None => std::env::remove_var("HERMES_HOME"),
-            }
         }
     }
 }
@@ -458,7 +434,6 @@ struct PathScope<'a> {
     previous: Option<OsString>,
     previous_home: Option<OsString>,
     previous_codex_home: Option<OsString>,
-    previous_hermes_home: Option<OsString>,
 }
 
 impl<'a> PathScope<'a> {
@@ -469,20 +444,17 @@ impl<'a> PathScope<'a> {
         let previous = std::env::var_os("PATH");
         let previous_home = std::env::var_os("HOME");
         let previous_codex_home = std::env::var_os("CODEX_HOME");
-        let previous_hermes_home = std::env::var_os("HERMES_HOME");
         // SAFETY: This test holds the process-wide environment mutex for the override lifetime.
         unsafe {
             std::env::set_var("PATH", path);
             std::env::set_var("HOME", home);
             std::env::remove_var("CODEX_HOME");
-            std::env::remove_var("HERMES_HOME");
         }
         Self {
             _guard: guard,
             previous,
             previous_home,
             previous_codex_home,
-            previous_hermes_home,
         }
     }
 }
@@ -502,10 +474,6 @@ impl Drop for PathScope<'_> {
             match self.previous_codex_home.take() {
                 Some(value) => std::env::set_var("CODEX_HOME", value),
                 None => std::env::remove_var("CODEX_HOME"),
-            }
-            match self.previous_hermes_home.take() {
-                Some(value) => std::env::set_var("HERMES_HOME", value),
-                None => std::env::remove_var("HERMES_HOME"),
             }
         }
     }
@@ -2113,7 +2081,6 @@ fn top_level_install_uninstall_and_doctor_report_empty_host_selection() {
 fn installed_selection_uses_persisted_integration_state() {
     let dir = tempdir().unwrap();
     let home = dir.path().join("home");
-    std::fs::create_dir_all(home.join(".hermes")).unwrap();
     let _home = HomeScope::enter(&home);
     std::fs::write(
         state_path(CodingAgent::ClaudeCode, dir.path()),
@@ -2122,133 +2089,6 @@ fn installed_selection_uses_persisted_integration_state() {
     .unwrap();
     let selected = crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()));
     assert_eq!(selected, vec![CodingAgent::ClaudeCode]);
-
-    let unrelated_hermes_config = b"# user-owned formatting\nmodel: custom\n";
-    let hermes_config = home.join(".hermes/config.yaml");
-    std::fs::write(&hermes_config, unrelated_hermes_config).unwrap();
-    let selected = crate::agents::installed_integrations(&CodingAgent::ALL, Some(dir.path()));
-    assert_eq!(selected, vec![CodingAgent::ClaudeCode]);
-    assert_eq!(
-        std::fs::read(&hermes_config).unwrap(),
-        unrelated_hermes_config
-    );
-}
-
-#[test]
-fn hermes_doctor_probes_the_configured_relay_and_top_level_doctor_discovers_it() {
-    let dir = tempdir().unwrap();
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let _home = HomeScope::enter(&home);
-    let config = crate::agents::hermes::install::config_path().unwrap();
-    let relay = home
-        .join("bin")
-        .join(format!("nemo-relay{}", std::env::consts::EXE_SUFFIX));
-    std::fs::create_dir_all(relay.parent().unwrap()).unwrap();
-    std::fs::copy(std::env::current_exe().unwrap(), &relay).unwrap();
-    crate::agents::hermes::install_persistent(&config, &relay).unwrap();
-    let configured_relay = crate::agents::hermes::configured_relay_executable(&config).unwrap();
-    let runner = MockRunner::default()
-        .with_executable("hermes", "/bin/hermes")
-        .with_capture_output("/bin/hermes --version", "Hermes Agent v0.18.2 (test)\n");
-
-    let report =
-        crate::agents::hermes::install::doctor_json_value(&options(dir.path()), &runner).unwrap();
-
-    assert_eq!(report["ok"], json!(true));
-    assert_eq!(
-        runner.quiet_commands(),
-        vec![
-            format!("{} hook-forward --help", configured_relay.display()),
-            format!("{} mcp --help", configured_relay.display()),
-        ]
-    );
-    let checks = report["readiness_checks"].as_array().unwrap();
-    for expected in [
-        "Host CLI",
-        "Hermes Agent version",
-        "Configured Relay binary",
-        "Relay hook support",
-        "Relay MCP support",
-        "Hermes MCP, hooks, and trust",
-    ] {
-        assert!(
-            checks
-                .iter()
-                .any(|check| check["name"] == expected && check["ok"] == json!(true)),
-            "missing successful {expected} check: {checks:?}"
-        );
-    }
-
-    let readiness = crate::agents::collect_default_integration_readiness();
-    let hermes = readiness
-        .iter()
-        .find(|readiness| readiness.host == "hermes")
-        .expect("top-level doctor should discover install-only Hermes state");
-    assert_eq!(hermes.state_path, config);
-    assert!(hermes.marketplace.is_none());
-    assert!(hermes.plugin.is_none());
-
-    crate::agents::hermes::install::doctor(&options(dir.path()), &runner).unwrap();
-
-    std::fs::remove_file(&configured_relay).unwrap();
-    let error = crate::agents::hermes::install::doctor(&options(dir.path()), &runner).unwrap_err();
-    assert!(error.contains("doctor checks failed"), "{error}");
-    let report =
-        crate::agents::hermes::install::doctor_json_value(&options(dir.path()), &runner).unwrap();
-    let failed = report["readiness_checks"].as_array().unwrap();
-    for expected in [
-        "Configured Relay binary",
-        "Relay hook support",
-        "Relay MCP support",
-    ] {
-        assert!(
-            failed
-                .iter()
-                .any(|check| check["name"] == expected && check["ok"] == json!(false)),
-            "missing failed {expected} check: {failed:?}"
-        );
-    }
-}
-
-#[test]
-fn hermes_install_and_uninstall_dry_runs_preserve_persistent_state() {
-    let dir = tempdir().unwrap();
-    let home = dir.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    let _home = HomeScope::enter(&home);
-    crate::agents::hermes::install::install(crate::installation::InstallRequest {
-        install_dir: Some(dir.path().to_path_buf()),
-        force: false,
-        dry_run: true,
-        skip_doctor: false,
-    })
-    .unwrap();
-    let config = crate::agents::hermes::install::config_path().unwrap();
-    assert!(!config.exists());
-
-    let hermes_home = config.parent().unwrap();
-    std::fs::create_dir_all(hermes_home).unwrap();
-    let allowlist = hermes_home.join("shell-hooks-allowlist.json");
-    let generation = hermes_home.join(GENERATION_FILE_NAME);
-    let sentinels = [
-        (&config, b"sentinel config\n".as_slice()),
-        (&allowlist, b"sentinel allowlist\n".as_slice()),
-        (&generation, b"sentinel generation\n".as_slice()),
-    ];
-    for (path, contents) in sentinels {
-        std::fs::write(path, contents).unwrap();
-    }
-
-    crate::agents::hermes::install::uninstall(crate::installation::UninstallRequest {
-        install_dir: Some(dir.path().to_path_buf()),
-        dry_run: true,
-    })
-    .unwrap();
-
-    for (path, contents) in sentinels {
-        assert_eq!(std::fs::read(path).unwrap(), contents);
-    }
 }
 
 #[test]

@@ -285,7 +285,6 @@ pub(crate) fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
         let agent = match key {
             "claude" => Some(CodingAgent::ClaudeCode),
             "codex" => Some(CodingAgent::Codex),
-            "hermes" => Some(CodingAgent::Hermes),
             _ => None,
         };
         if let Some(agent) = agent {

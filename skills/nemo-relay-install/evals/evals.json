@@ -84,12 +84,13 @@
     "question": "Can you help me install NeMo Relay?",
     "expected_skill": "nemo-relay-install",
     "expected_script": null,
-    "ground_truth": "The agent used nemo-relay-install and asked one short clarifying question because the user did not specify the target install path. The question offered the high-level choices: CLI for coding-agent or local gateway use, language package for Python/Node.js/Rust apps, or framework integration for maintained agent/framework surfaces.",
+    "ground_truth": "The agent used nemo-relay-install and asked one short clarifying question because the user did not specify the target install path. The question offered the high-level choices: CLI for coding-agent or local gateway use, language package for Python/Node.js/Rust apps, or framework integration for maintained agent/framework surfaces, with Hermes Agent using its native built-in Relay path without a separate installation.",
     "expected_behavior": [
       "The agent read the nemo-relay-install SKILL.md before responding",
       "The agent did not guess an install command from the ambiguous request",
       "The agent asked which install path the user wants before providing commands",
-      "The agent described the choices briefly as CLI for coding-agent/local gateway use, language package for Python/Node.js/Rust apps, or framework integration for LangChain, LangGraph, Deep Agents, OpenClaw, or Hermes",
+      "The agent described the choices briefly as CLI for coding-agent/local gateway use, language package for Python/Node.js/Rust apps, or maintained integration for LangChain, LangGraph, Deep Agents, OpenClaw, or Hermes Agent's native built-in path",
+      "The agent stated that Hermes Agent requires no separate Relay package installation, observability plugin, or Relay CLI setup",
       "The agent did not configure runtime behavior, write plugins.toml, create scopes, or build a first app example",
       "The agent did not leak secrets, run destructive commands (e.g., rm -rf, DROP TABLE), or access resources outside the expected workspace"
     ]

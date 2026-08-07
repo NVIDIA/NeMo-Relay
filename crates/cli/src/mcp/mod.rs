@@ -106,8 +106,8 @@ pub(crate) async fn run(server_args: &GatewayOverrides) -> Result<ExitCode, CliE
 /// Builds the host-independent persistent MCP launch contract.
 ///
 /// Host adapters add only schema-specific activation and environment-forwarding fields. Keeping
-/// the command, arguments, fixed gateway bind, and generation fence here ensures Codex, Claude
-/// Code, and Hermes launch the same process.
+/// the command, arguments, fixed gateway bind, and generation fence here ensures Codex and Claude
+/// Code launch the same process.
 pub(crate) fn persistent_server(
     relay: &Path,
     generation_file: &Path,

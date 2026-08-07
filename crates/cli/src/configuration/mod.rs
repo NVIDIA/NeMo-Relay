@@ -74,19 +74,18 @@ struct FileUpstreamConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileAgentsConfig {
-    // Keys match the agent's CLI invocation name (`claude`, `codex`, `hermes`) — the
+    // Keys match the agent's CLI invocation name (`claude`, `codex`) — the
     // word the user types at the shell — not the product name ("Claude Code") or the internal
     // `CodingAgent` enum kebab spelling. Same convention as the bare-agent shortcut in Phase 2.
     claude: Option<FileAgentCommandConfig>,
     codex: Option<FileAgentCommandConfig>,
-    hermes: Option<FileAgentCommandConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct FileAgentCommandConfig {
     command: Option<String>,
-    hooks_path: Option<PathBuf>,
 }
 
 /// Resolves server-mode configuration from shared config files plus server CLI/environment overrides.
@@ -1487,10 +1486,6 @@ fn apply_file_agents_config(agents: &mut AgentConfigs, file_agents: Option<FileA
     }
     if let Some(value) = file_agents.codex {
         agents.codex.command = value.command;
-    }
-    if let Some(value) = file_agents.hermes {
-        agents.hermes.command = value.command;
-        agents.hermes.hooks_path = value.hooks_path;
     }
 }
 

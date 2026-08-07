@@ -13,6 +13,23 @@ intervening release in sequence.
 
 ## Upgrade to NeMo Relay 0.8
 
+### Move Hermes Agent to Its Native Relay Integration
+
+NeMo Relay 0.8 removes Hermes Agent from the Relay CLI. The `nemo-relay hermes`
+shortcut, `nemo-relay run --agent hermes`, Hermes install, uninstall, doctor,
+configuration, MCP selection, hook forwarding, and `/hooks/hermes` endpoint are
+no longer supported. Relay configuration under `[agents.hermes]` is also
+unsupported.
+
+Remove the `[agents.hermes]` section from every Relay configuration file before
+upgrading. If the section remains, Relay rejects the configuration and prevents
+configuration-resolving commands, including Claude Code and Codex runs, from
+starting.
+
+NeMo Relay is built into Hermes Agent. Do not install Relay separately or
+enable an observability plugin. Hermes Agent understands NeMo Relay plugin
+configurations.
+
 ### Move Project Configuration to a Supported Location
 
 NeMo Relay 0.8 no longer discovers repository-local configuration. Files named

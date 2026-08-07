@@ -13,10 +13,10 @@ in a use-case workflow.
 NeMo Relay's shared runtime model has five parts:
 
 - **Scopes** decide where work belongs and which scope-local behavior is visible.
+- **Events** record what happened in the canonical lifecycle stream.
 - **Middleware** decides what can block, rewrite, sanitize, or wrap managed
   execution.
 - **Plugins** install reusable runtime behavior from configuration.
-- **Events** record what happened in the canonical lifecycle stream.
 - **Subscribers and exporters** consume that stream in process, write raw ATOF
   events, or project events into downstream formats.
 
@@ -38,7 +38,17 @@ runtime concept or integration boundary you need.
   href="/about-nemo-relay/concepts/scopes"
 >
 
-Ownership boundaries for agent runs, requests, workflows, tools, LLM calls, and nested runtime work.
+Scope hierarchy, lifetime, and isolation for agent runs, requests, tools, LLM calls, and nested work.
+</Card>
+
+<Card
+  title="Events"
+  icon="regular waveform-lines"
+  iconPosition="left"
+  href="/about-nemo-relay/concepts/events"
+>
+
+Canonical lifecycle records for scopes, tool calls, LLM calls, marks, subscribers, and exporters.
 </Card>
 
 <Card
@@ -62,16 +72,6 @@ Configuration-driven bundles that install reusable middleware, subscribers, and 
 </Card>
 
 <Card
-  title="Events"
-  icon="regular waveform-lines"
-  iconPosition="left"
-  href="/about-nemo-relay/concepts/events"
->
-
-Canonical lifecycle records for scopes, tool calls, LLM calls, marks, subscribers, and exporters.
-</Card>
-
-<Card
   title="Subscribers"
   icon="regular tower-broadcast"
   iconPosition="left"
@@ -82,23 +82,13 @@ Consumers for lifecycle events, including logs, traces, trajectories, analytics,
 </Card>
 
 <Card
-  title="Framework Integrations"
-  icon="regular diagram-project"
-  iconPosition="left"
-  href="/about-nemo-relay/concepts/framework-integrations"
->
-
-Integration patterns for frameworks that own invocation boundaries, scheduling, retries, or provider payloads.
-</Card>
-
-<Card
-  title="Codecs"
+  title="Provider Codecs"
   icon="regular arrows-rotate"
   iconPosition="left"
   href="/about-nemo-relay/concepts/codecs"
 >
 
-Normalization boundaries for typed application values, provider payloads, middleware, and exporters.
+Provider request and response normalization for middleware and observability.
 </Card>
 
 </CardGroup>

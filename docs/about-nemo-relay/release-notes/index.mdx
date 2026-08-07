@@ -63,6 +63,15 @@ for destination paths and explicit-file alternatives.
 
 - _Fixed issues will be added for the 0.8 release._
 
+### Breaking Changes in 0.8
+
+- Removed Hermes-specific support from the NeMo Relay CLI, including the
+  `hermes` shortcut, `run --agent hermes`, and Hermes-specific install,
+  uninstall, doctor, configuration, MCP selection, and `/hooks/hermes` paths.
+  NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay
+  plugin configurations. No separate observability plugin or Relay CLI setup is
+  required.
+
 ## Known Issues in 0.8
 
 - Go and the raw C FFI remain experimental and source-first. Generated API
@@ -70,7 +79,7 @@ for destination paths and explicit-file alternatives.
 - Local coding-agent observability depends on host hooks and provider traffic
   reaching the local gateway. Relay cannot fully capture remote or cloud
   execution that bypasses the local host.
-- Persistent Codex, Claude Code, and Hermes integrations use user-scoped
+- Persistent Codex and Claude Code integrations use user-scoped
   configuration and a shared loopback gateway. Use `nemo-relay run` when a
   launch must retain project-specific configuration.
 - On Windows, a restrictive host Job Object can limit gateway reuse or prevent
