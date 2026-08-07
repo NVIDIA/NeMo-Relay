@@ -74,8 +74,8 @@ calls do not push those handles onto the scope stack.
 Events are recorded separately from the active stack. Relay emits parent-linked
 start and end events for the Agent scope and the Tool and LLM lifecycles. Those
 records remain in an event tree after the Agent scope has closed. A mark records
-a point-in-time fact under the active scope or managed lifecycle; it does not
-add another entry to the scope stack.
+a point-in-time fact under the active scope; it does not add another entry to
+the scope stack.
 
 <MermaidStyles />
 
@@ -97,7 +97,7 @@ flowchart LR
     mark["Mark event"]
     agent --> tool
     agent --> llm
-    tool --> mark
+    agent --> mark
   end
 
   toolStack -. emits .-> tool
