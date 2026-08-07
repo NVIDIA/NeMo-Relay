@@ -1169,10 +1169,6 @@ test-codex-plugin-e2e:
 test-claude-plugin-e2e:
     ./scripts/test-claude-plugin-e2e.sh
 
-# Opt-in: requires a supported Hermes Agent installation and is intentionally outside test-rust/CI.
-test-hermes-mcp-e2e:
-    ./scripts/test-hermes-mcp-e2e.sh
-
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
     #!/usr/bin/env bash

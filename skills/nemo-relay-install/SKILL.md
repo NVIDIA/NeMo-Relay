@@ -1,6 +1,6 @@
 ---
 name: nemo-relay-install
-description: Use this skill when choosing or running NeMo Relay installation for the CLI, Python, Node.js, Rust, OpenClaw, Hermes, or maintained framework integrations before runtime configuration or quick-start setup.
+description: Use this skill when choosing or running NeMo Relay installation for the CLI, Python, Node.js, Rust, OpenClaw, or maintained framework integrations, or when explaining Hermes Agent's built-in Relay integration.
 license: Apache-2.0
 metadata:
   author: NVIDIA Corporation and Affiliates
@@ -21,7 +21,7 @@ desired outcome, ask one short clarifying question before giving commands:
 
 > Which install path do you want: CLI for coding-agent/local gateway use,
 > language package for a Python/Node.js/Rust app, or framework integration for
-> LangChain, LangGraph, Deep Agents, OpenClaw, or Hermes?
+> LangChain, LangGraph, Deep Agents, OpenClaw, or built-in Hermes Agent support?
 
 Do not ask when the user already names a CLI, language, framework, harness,
 source checkout, or target project file such as `pyproject.toml`, `package.json`,

@@ -347,7 +347,7 @@ fn doctor_accepts_offline_flag() {
 
 #[test]
 fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
-    for shortcut in ["claude", "codex", "hermes"] {
+    for shortcut in ["claude", "codex"] {
         let cli = Cli::try_parse_from([
             "nemo-relay",
             shortcut,
@@ -358,9 +358,7 @@ fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
         ])
         .unwrap();
         let command = match cli.command {
-            Some(Command::Claude(command))
-            | Some(Command::Codex(command))
-            | Some(Command::Hermes(command)) => command,
+            Some(Command::Claude(command)) | Some(Command::Codex(command)) => command,
             other => panic!("expected agent shortcut command, got {other:?}"),
         };
         assert!(command.dry_run);
@@ -378,9 +376,6 @@ fn dry_run_diagnostic_recognizes_supported_agent_executable_forms() {
         (CodingAgent::Codex, "codex"),
         (CodingAgent::Codex, r"C:\tools\CODEX.CMD"),
         (CodingAgent::Codex, r"C:\tools\codex.com"),
-        (CodingAgent::Hermes, "hermes"),
-        (CodingAgent::Hermes, "hermes-agent"),
-        (CodingAgent::Hermes, "/opt/bin/hermes-agent.bat"),
     ];
 
     for (agent, executable) in cases {
@@ -415,7 +410,6 @@ fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
         match agent {
             CodingAgent::Codex => Err(error::CliError::Install("codex failure".into())),
             CodingAgent::ClaudeCode => Ok(ExitCode::FAILURE),
-            CodingAgent::Hermes => Ok(ExitCode::SUCCESS),
         }
     })
     .unwrap_err()

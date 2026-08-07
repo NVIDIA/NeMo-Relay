@@ -171,7 +171,6 @@ async fn run_command(
         Command::Run(command) => run::execute(command, server).await,
         Command::Claude(command) => run::easy_path(CodingAgent::ClaudeCode, command, server).await,
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
-        Command::Hermes(command) => run::easy_path(CodingAgent::Hermes, command, server).await,
         Command::Mcp => mcp::execute(server).await,
         Command::Config(command) => configure::execute(command, server).await,
         Command::Plugins(command) => plugins::execute(command, server),

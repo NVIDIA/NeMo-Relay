@@ -9,7 +9,6 @@ pub(crate) mod json_path;
 pub(crate) enum AgentKind {
     Codex,
     ClaudeCode,
-    Hermes,
     Gateway,
 }
 
@@ -20,7 +19,6 @@ impl AgentKind {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
-            Self::Hermes => "hermes",
             Self::Gateway => "gateway",
         }
     }
@@ -40,8 +38,6 @@ pub(crate) enum NormalizedEvent {
     SubagentStarted(SubagentEvent),
     SubagentEnded(SubagentEvent),
     LlmHint(LlmHintEvent),
-    LlmStarted(LlmEvent),
-    LlmEnded(LlmEvent),
     ToolStarted(ToolEvent),
     ToolEnded(ToolEvent),
     #[allow(dead_code)]
@@ -68,7 +64,6 @@ impl NormalizedEvent {
             | Self::Notification(event)
             | Self::HookMark(event) => &event.session_id,
             Self::LlmHint(event) => &event.session_id,
-            Self::LlmStarted(event) | Self::LlmEnded(event) => &event.session_id,
             Self::SubagentStarted(event) | Self::SubagentEnded(event) => &event.session_id,
             Self::ToolStarted(event) | Self::ToolEnded(event) => &event.session_id,
         }
@@ -78,7 +73,7 @@ impl NormalizedEvent {
         // TurnEnded is intentionally NOT terminal — the agent scope stays open across turns.
         matches!(
             self,
-            Self::AgentEnded(_) | Self::SubagentEnded(_) | Self::LlmEnded(_) | Self::ToolEnded(_)
+            Self::AgentEnded(_) | Self::SubagentEnded(_) | Self::ToolEnded(_)
         )
     }
 }
@@ -115,19 +110,6 @@ pub(crate) struct LlmHintEvent {
     pub(crate) request_id: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) payload: Value,
-    pub(crate) metadata: Value,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct LlmEvent {
-    pub(crate) session_id: String,
-    pub(crate) agent_kind: AgentKind,
-    pub(crate) event_name: String,
-    pub(crate) api_call_id: String,
-    pub(crate) provider: String,
-    pub(crate) model_name: Option<String>,
-    pub(crate) request: Value,
-    pub(crate) response: Value,
     pub(crate) metadata: Value,
 }
 

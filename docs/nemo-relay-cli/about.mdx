@@ -22,7 +22,7 @@ and unsupported platforms.
 
 Persistent integrations use one lifecycle path:
 
-`Codex / Claude Code / Hermes Agent` → `nemo-relay mcp` → `shared Relay gateway`
+`Codex / Claude Code` → `nemo-relay mcp` → `shared Relay gateway`
 
 The host-specific layer installs and emits canonical lifecycle hooks. The MCP
 process is host-neutral and keeps the shared user-level gateway available.
@@ -31,10 +31,10 @@ process is host-neutral and keeps the shared user-level gateway available.
 
 Use these guides when you need to:
 
-- Observe Claude Code, Codex, or Hermes Agent sessions locally.
+- Observe Claude Code or Codex sessions locally.
 - Configure coding-agent hooks for NeMo Relay lifecycle events.
 - Route model-provider traffic through the local NeMo Relay gateway.
-- Install persistent Claude Code, Codex, or Hermes Agent integrations without
+- Install persistent Claude Code or Codex integrations without
   wrapping the agent command.
 - Validate and install model pricing catalog sources for local cost estimates.
 - Export local sessions to Agent Trajectory Interchange Format (ATIF), Agent
@@ -57,7 +57,6 @@ controls.
 | --- | --- | --- | --- | --- |
 | Claude Code | Yes | Yes | Partial | Pre-tool hook responses are supported. LLM optimization uses gateway-routed traffic; full coverage depends on loaded Claude Code hooks. |
 | Codex | Yes | Yes | Partial | Persistent install verifies all 10 hooks in the supported schema. Each `Stop` finalizes a turn snapshot because the plugin schema does not expose `SessionEnd`. |
-| Hermes Agent | Yes | Yes | Partial | User config installs the shared native MCP gateway lifecycle plus exact trusted hooks. Optimization depends on Hermes shell and API-request hook coverage. |
 
 For minimum agent versions, platform support, and current limitations, refer to
 the [Support Matrix](/reference/support-matrix).
@@ -69,14 +68,15 @@ Use these guide links to move from CLI setup into agent-specific instructions.
 - [Basic Usage](/nemo-relay-cli/basic-usage) explains gateway routes, transparent runs,
   shared configuration, hook forwarding, and runtime mapping.
 - [Coding Agent Installation](/nemo-relay-cli/plugin-installation) covers
-  persistent Claude Code, Codex, and Hermes Agent setup.
+  persistent Claude Code and Codex setup.
 - [Claude Code](/nemo-relay-cli/claude-code) covers transparent Claude Code
   runs, Anthropic gateway routing, ATIF verification, and unsupported Claude
   application modes.
 - [Codex](/nemo-relay-cli/codex) covers transparent Codex CLI runs, local
   GUI/app caveats, model provider routing, and remote-task limits.
-- [Hermes Agent](/nemo-relay-cli/hermes) covers Hermes MCP lifecycle setup,
-  exact hook trust, provider routing, and session-finalize behavior.
-
 Start with [Basic Usage](/nemo-relay-cli/basic-usage), then use the guide for the coding
 agent that you want to observe.
+
+Hermes Agent includes NeMo Relay natively and does not use this CLI. No
+separate observability plugin or Relay setup is required. Hermes Agent
+understands NeMo Relay plugin configurations.

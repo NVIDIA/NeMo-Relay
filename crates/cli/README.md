@@ -28,8 +28,8 @@ with the installed `nemo-relay` command rather than link against the crate.
 
 The CLI is designed for these tasks:
 
-- **Observe existing coding agents**: Run Claude Code, Codex, or Hermes
-  Agent through a local NeMo Relay gateway without changing the agent
+- **Observe existing coding agents**: Run Claude Code or Codex through a local
+  NeMo Relay gateway without changing the agent
   itself.
 - **Configure transparent runs interactively**: Use the setup wizard to write
   project or user configuration for supported agents.
@@ -47,14 +47,14 @@ The CLI provides these capabilities:
   Cargo package.
 - **First-run setup**: Bare `nemo-relay` launches setup when no config exists,
   then runs doctor once config is present.
-- **Agent shortcuts**: `nemo-relay claude`, `nemo-relay codex`, and
-  `nemo-relay hermes` start observed agent runs.
+- **Agent shortcuts**: `nemo-relay claude` and `nemo-relay codex` start
+  observed agent runs.
 - **Config-driven launch**: `nemo-relay run` resolves config, environment, and
   CLI overrides for deterministic non-interactive use.
 - **Hook forwarding server**: A local gateway accepts agent hook events and
   provider-shaped OpenAI or Anthropic requests.
-- **Persistent agent integration**: `nemo-relay install` configures Codex,
-  Claude Code, or Hermes Agent with one generated MCP bootstrap and the host's
+- **Persistent agent integration**: `nemo-relay install` configures Codex or
+  Claude Code with one generated MCP bootstrap and the host's
   canonical lifecycle hooks.
 - **Shared gateway lifecycle**: Every persistent integration launches the same
   host-neutral `nemo-relay mcp` client. Concurrent clients share one native

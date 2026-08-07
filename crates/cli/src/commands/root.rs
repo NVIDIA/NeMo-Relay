@@ -21,7 +21,6 @@ pub(crate) enum AgentArg {
     #[value(name = "claude", alias = "claude-code")]
     Claude,
     Codex,
-    Hermes,
 }
 
 impl From<AgentArg> for CodingAgent {
@@ -29,7 +28,6 @@ impl From<AgentArg> for CodingAgent {
         match value {
             AgentArg::Claude => Self::ClaudeCode,
             AgentArg::Codex => Self::Codex,
-            AgentArg::Hermes => Self::Hermes,
         }
     }
 }
@@ -76,18 +74,6 @@ pub(crate) enum Command {
                       nemo-relay --openai-base-url https://inference-api.nvidia.com codex"
     )]
     Codex(EasyPathCommand),
-    /// Run Hermes with observability (setup on first use)
-    #[command(
-        long_about = "Run Hermes Agent under an ephemeral NeMo Relay gateway. The wrapper uses a \
-                      process-private HERMES_HOME overlay for dynamic hooks, without rewriting \
-                      the user's Hermes configuration. Use `nemo-relay install hermes` when bare \
-                      Hermes processes should load the shared native Relay gateway on \
-                      127.0.0.1:47632 through MCP.",
-        after_help = "Examples:\n  \
-                      nemo-relay hermes\n  \
-                      nemo-relay hermes -- chat --provider custom"
-    )]
-    Hermes(EasyPathCommand),
     /// Keep a shared Relay gateway ready for an MCP client.
     #[command(
         long_about = "Start or reuse a shared native NeMo Relay gateway for an MCP stdio \
@@ -130,7 +116,6 @@ impl Command {
         match self {
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
-            Self::Hermes(_) => "hermes",
             Self::Mcp => "mcp",
             Self::Config(_) => "config",
             Self::Plugins(_) => "plugins",

@@ -45,10 +45,13 @@ Pick the row closest to what you are trying to do.
 
 | Goal | Start With | Why |
 |---|---|---|
-| Observe Codex, Claude Code, or Hermes locally | [NeMo Relay CLI](/nemo-relay-cli/about) and [Basic Usage](/nemo-relay-cli/basic-usage) | Relay runs as a local sidecar, forwards hooks, routes provider traffic when configured, and writes observability artifacts without changing application code. |
+| Observe Codex or Claude Code locally | [NeMo Relay CLI](/nemo-relay-cli/about) and [Basic Usage](/nemo-relay-cli/basic-usage) | Relay runs as a local sidecar, forwards hooks, routes provider traffic when configured, and writes observability artifacts without changing application code. |
 | Instrument application-owned LLM or tool calls | [Instrument Applications](/instrument-applications/about) | Direct SDK instrumentation lets Relay run the complete lifecycle and middleware sequence around callbacks your code owns. |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](/supported-integrations/about) | Maintained integrations use public framework or plugin APIs to capture supported lifecycle events. |
 | Configure traces, trajectories, or raw event export | [Observability](/configure-plugins/observability/about) | Exporters consume the same lifecycle event stream and write ATOF, ATIF, OpenTelemetry, or OpenInference output. |
+
+Hermes Agent understands NeMo Relay plugin configurations. Relay is built into
+Hermes Agent without a separate observability plugin or Relay CLI setup.
 
 <Note>
 To evaluate a language binding with the smallest complete example, start with
