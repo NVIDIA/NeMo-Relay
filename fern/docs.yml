@@ -14,6 +14,8 @@ announcement:
   message: "\U0001F514 NVIDIA NeMo Relay is <strong>beta software</strong>. APIs and\
     \ behavior may change with each release."
 redirects:
+- source: /nemo/relay/about-nemo-relay/concepts/framework-integrations
+  destination: /nemo/relay/integrate-into-frameworks/about
 - source: /nemo/relay/about-nemo-relay/release-notes/related-topics
   destination: /nemo/relay/about-nemo-relay/release-notes
 - source: /nemo/relay/about-nemo-relay/release-notes/highlights

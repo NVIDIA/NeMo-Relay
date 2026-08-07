@@ -1,6 +1,6 @@
 ---
 title: "About"
-description: ""
+description: "Choose NeMo Relay APIs for tool and LLM calls controlled by a framework."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -19,6 +19,63 @@ boundary without changing framework behavior.
 Prefer a managed execution wrapper around a stable tool or LLM callback. When
 that is not possible, use explicit lifecycle calls, standalone guardrail or
 intercept helpers, or mark events.
+
+## Choose How Relay Connects
+
+Prefer these options in order when they represent the lifecycle boundary you
+need. Move down the table when the option above cannot capture that boundary or
+the framework does not support it.
+
+| Method | Use When | What Relay Handles |
+| --- | --- | --- |
+| Managed execution wrapper | Relay can wrap the real tool or LLM callback. | Lifecycle pairing, the complete middleware pipeline, timing, and event parentage. |
+| Explicit start and end calls | The framework exposes reliable lifecycle hooks but owns callback execution. | Event construction and parentage; the integration must pair the calls. |
+| Standalone conditional-execution helper | The framework needs an allow-or-block decision before its own call. | The policy decision only. |
+| Standalone request-intercept helper | The framework can accept a rewritten request before its own call. | Request transformation only. |
+| Mark event | The framework exposes only a milestone or state transition. | One point-in-time event without a duration. |
+
+### Prefer Managed Execution Wrappers
+
+A managed wrapper is the best fit when the framework exposes a stable callback.
+It preserves lifecycle ordering, middleware placement, timing, and
+parent-child relationships around the real invocation. The framework should
+still own its scheduler, retries, routing, and object lifetimes unless the
+wrapper explicitly encloses that behavior.
+
+### Use Explicit Lifecycle Calls as the Main Fallback
+
+When Relay cannot wrap the callback, use reliable framework hooks to emit the
+lifecycle explicitly:
+
+1. Emit the start event as soon as the framework can identify the work.
+2. Retain the returned handle.
+3. Emit the matching end event for success or failure.
+4. Use marks only for milestones that do not have a complete lifecycle.
+
+Manual lifecycle calls preserve observability and parentage. They do not run
+execution intercepts, request intercepts, or request and response guardrails
+unless the integration invokes those standalone APIs separately.
+
+### Use Standalone Policy or Transformation When Needed
+
+Conditional-execution helpers return an allow-or-block decision before the
+framework continues its own invocation. Request-intercept helpers return a
+rewritten JSON-compatible request before framework-owned execution. Neither
+helper creates a complete managed lifecycle span by itself.
+
+### Use Marks for Checkpoints
+
+Marks fit retries, queue transitions, scheduler milestones, state changes, and
+debugging checkpoints. They improve visibility but do not replace paired start
+and end events.
+
+### Keep Provider Semantics in Codecs
+
+When provider request or response payloads matter, use
+[Provider Codecs](/integrate-into-frameworks/provider-codecs) and annotated
+request or response data before adding raw-payload parsing to the integration.
+Provider-specific round-trip behavior should remain in the codec or adapter for
+that provider.
 
 ## Start Here
 
