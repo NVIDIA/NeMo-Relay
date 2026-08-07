@@ -41,7 +41,6 @@ impl LoggingArgs {
     pub(super) fn resolve(
         &self,
         explicit_config: Option<&Path>,
-        user_only: bool,
     ) -> Result<LoggingConfig, CliError> {
         if let Some(path) = &self.config_path {
             return LoggingConfig::from_file_path(path).map_err(logging_config_error);
@@ -63,7 +62,7 @@ impl LoggingArgs {
             return Ok(config);
         }
 
-        crate::configuration::resolve_logging_config(explicit_config, user_only)
+        crate::configuration::resolve_logging_config(explicit_config)
     }
 }
 

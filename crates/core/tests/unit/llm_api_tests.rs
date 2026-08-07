@@ -943,6 +943,79 @@ fn freshness_culls_annotations_and_repeated_compactions_are_idempotent() {
 }
 
 #[test]
+fn full_payload_policy_preserves_complete_repeated_request_history() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    global_context()
+        .write()
+        .unwrap()
+        .observability_full_payloads_enabled = true;
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "full-payloads",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let request = multi_turn_request();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for name in ["full-payload-first", "full-payload-repeated"] {
+            llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name(name)
+                    .request(request.clone())
+                    .func(Arc::new(|_| Box::pin(async { Ok(json!({"done": true})) })))
+                    .codec(Arc::new(OpenAIChatCodec))
+                    .build(),
+            )
+            .await
+            .unwrap();
+        }
+    });
+    llm_call(
+        LlmCallParams::builder()
+            .name("full-payload-manual")
+            .request(&request)
+            .annotated_request(multi_turn_annotation())
+            .build(),
+    )
+    .unwrap();
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("full-payloads").unwrap());
+    global_context()
+        .write()
+        .unwrap()
+        .observability_full_payloads_enabled = false;
+
+    let events = events.lock().unwrap();
+    for name in [
+        "full-payload-first",
+        "full-payload-repeated",
+        "full-payload-manual",
+    ] {
+        let start = events
+            .iter()
+            .find(|event| {
+                event.name() == name && event.scope_category() == Some(ScopeCategory::Start)
+            })
+            .unwrap_or_else(|| panic!("missing LLM start event {name}"));
+        assert_eq!(
+            start.input().unwrap()["content"]["messages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(start.annotated_request().unwrap().messages.len(), 4);
+    }
+}
+
+#[test]
 fn request_projection_handles_history_edge_cases() {
     let project = |messages: Json| {
         let annotated: AnnotatedLlmRequest =

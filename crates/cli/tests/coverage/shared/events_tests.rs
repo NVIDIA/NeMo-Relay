@@ -10,7 +10,6 @@ use super::json_path::{string_at, string_at_any, value_at, value_at_any};
 fn agent_kinds_use_stable_runtime_metadata_names() {
     assert_eq!(AgentKind::Codex.as_str(), "codex");
     assert_eq!(AgentKind::ClaudeCode.as_str(), "claude-code");
-    assert_eq!(AgentKind::Hermes.as_str(), "hermes");
     assert_eq!(AgentKind::Gateway.as_str(), "gateway");
 }
 

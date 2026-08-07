@@ -38,8 +38,8 @@ fn pricing_helpers_cover_scopes_components_sources_and_usage() {
         TargetScope::User
     );
     assert_eq!(
-        target_pricing_scope(&ConfigurationScope::Project).unwrap(),
-        TargetScope::Project
+        target_pricing_scope(&ConfigurationScope::User).unwrap(),
+        TargetScope::User
     );
     assert_eq!(
         target_pricing_scope(&ConfigurationScope::Global).unwrap(),

@@ -82,6 +82,7 @@ def main() -> None:
             [
                 "maturin",
                 "build",
+                "--locked",
                 "--release",
                 "--compatibility",
                 "musllinux_1_2",

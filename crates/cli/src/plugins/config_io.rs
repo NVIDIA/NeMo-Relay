@@ -10,9 +10,7 @@ use nemo_relay::plugin::{ConfigPolicy, PluginConfig, validate_plugin_config};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::configuration::{
-    global_plugin_config_path, project_plugin_config_path, user_plugin_config_path,
-};
+use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::error::CliError;
 use crate::plugins::ConfigurationScope;
 use crate::server::register_and_validate_plugin_components;
@@ -20,7 +18,6 @@ use crate::server::register_and_validate_plugin_components;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TargetScope {
     User,
-    Project,
     Global,
 }
 
@@ -179,9 +176,7 @@ impl PluginConfigDocument {
             TargetScope::Global => {
                 crate::filesystem::atomic_write_system_readable(&self.path, rendered.as_bytes())
             }
-            TargetScope::User | TargetScope::Project => {
-                crate::filesystem::atomic_write(&self.path, rendered.as_bytes())
-            }
+            TargetScope::User => crate::filesystem::atomic_write(&self.path, rendered.as_bytes()),
         }
         .map_err(CliError::Config)
     }
@@ -280,10 +275,9 @@ fn json_to_toml(value: Value) -> Result<toml::Value, CliError> {
 pub(crate) fn target_scope(command: &ConfigurationScope) -> Result<TargetScope, CliError> {
     match command {
         ConfigurationScope::Default | ConfigurationScope::User => Ok(TargetScope::User),
-        ConfigurationScope::Project => Ok(TargetScope::Project),
         ConfigurationScope::Global => Ok(TargetScope::Global),
         ConfigurationScope::Invalid => Err(CliError::Config(
-            "choose only one of --user, --project, or --global".into(),
+            "choose only one of --user or --global".into(),
         )),
     }
 }
@@ -302,10 +296,6 @@ pub(crate) fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
                 "cannot determine user config directory; set HOME or XDG_CONFIG_HOME".into(),
             )
         }),
-        TargetScope::Project => {
-            let cwd = std::env::current_dir()?;
-            Ok(project_plugin_config_path(&cwd))
-        }
         TargetScope::Global => Ok(global_plugin_config_path()),
     }
 }

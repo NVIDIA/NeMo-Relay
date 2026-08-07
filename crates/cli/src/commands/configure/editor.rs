@@ -19,15 +19,12 @@ mod prompt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TargetScope {
     User,
-    Project,
     Global,
 }
 
 impl From<&ConfigEditCommand> for TargetScope {
     fn from(command: &ConfigEditCommand) -> Self {
-        if command.project {
-            Self::Project
-        } else if command.global {
+        if command.global {
             Self::Global
         } else {
             Self::User
@@ -47,7 +44,7 @@ fn resolve_edit_target(
     explicit_path: Option<PathBuf>,
 ) -> Result<(TargetScope, PathBuf), CliError> {
     let scope = TargetScope::from(command);
-    let path = if command.project || command.global {
+    let path = if command.global {
         target_path(scope)?
     } else {
         match explicit_path {
@@ -100,7 +97,7 @@ impl ConfigDocument {
                 }
                 crate::filesystem::atomic_write_system_readable(&self.path, contents.as_bytes())
             }
-            TargetScope::User | TargetScope::Project => {
+            TargetScope::User => {
                 crate::filesystem::atomic_write_private(&self.path, contents.as_bytes())
             }
         }
@@ -550,26 +547,8 @@ fn target_path(scope: TargetScope) -> Result<PathBuf, CliError> {
                     "cannot determine user config directory; set HOME or XDG_CONFIG_HOME".into(),
                 )
             }),
-        TargetScope::Project => Ok(project_config_path(&std::env::current_dir()?)),
-        TargetScope::Global => Ok(PathBuf::from("/etc/nemo-relay/config.toml")),
+        TargetScope::Global => Ok(crate::configuration::system_config_dir().join("config.toml")),
     }
-}
-
-fn project_config_path(start: &Path) -> PathBuf {
-    project_config_path_with_boundary(start, None)
-}
-
-fn project_config_path_with_boundary(start: &Path, boundary: Option<&Path>) -> PathBuf {
-    for ancestor in start.ancestors() {
-        let candidate = ancestor.join(".nemo-relay/config.toml");
-        if candidate.exists() {
-            return candidate;
-        }
-        if boundary == Some(ancestor) {
-            break;
-        }
-    }
-    start.join(".nemo-relay/config.toml")
 }
 
 #[cfg(test)]

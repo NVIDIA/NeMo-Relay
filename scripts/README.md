@@ -24,7 +24,6 @@ These checks exercise installed coding-agent clients and are intentionally outsi
 
 - `just test-codex-plugin-e2e`
 - `just test-claude-plugin-e2e`
-- `just test-hermes-mcp-e2e`
 
 ## Internal Layout
 

@@ -103,12 +103,12 @@ fn syntax_analysis_expands_grouped_imports_and_ignores_comments() {
     let paths = syntax_paths(
         r#"
         // use crate::commands::ignored;
-        use crate::{commands::install, agents::{codex, hermes as other}};
+        use crate::{commands::install, agents::{codex, claude as other}};
         "#,
     );
     assert!(paths.contains(&"crate::commands::install".to_string()));
     assert!(paths.contains(&"crate::agents::codex".to_string()));
-    assert!(paths.contains(&"crate::agents::hermes".to_string()));
+    assert!(paths.contains(&"crate::agents::claude".to_string()));
     assert!(!paths.iter().any(|path| path.contains("ignored")));
 }
 
@@ -183,11 +183,7 @@ fn tests_are_not_embedded_in_the_source_tree() {
 #[test]
 fn agent_directories_do_not_import_one_another_or_commands() {
     let agents = source_root().join("agents");
-    for (agent, forbidden) in [
-        ("codex", ["agents::claude", "agents::hermes"]),
-        ("claude", ["agents::codex", "agents::hermes"]),
-        ("hermes", ["agents::codex", "agents::claude"]),
-    ] {
+    for (agent, forbidden) in [("codex", ["agents::claude"]), ("claude", ["agents::codex"])] {
         for path in rust_files(&agents.join(agent)) {
             let source = fs::read_to_string(&path).unwrap();
             let paths = syntax_paths(&source);
@@ -435,11 +431,7 @@ fn shared_runtime_subsystems_do_not_dispatch_host_variants() {
     ] {
         for path in rust_files(&src.join(subsystem)) {
             let source = fs::read_to_string(&path).unwrap();
-            for marker in [
-                "CodingAgent::Codex",
-                "CodingAgent::ClaudeCode",
-                "CodingAgent::Hermes",
-            ] {
+            for marker in ["CodingAgent::Codex", "CodingAgent::ClaudeCode"] {
                 assert!(
                     !source.contains(marker),
                     "{} dispatches host variant {marker}",

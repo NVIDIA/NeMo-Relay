@@ -82,7 +82,6 @@ const BLOCKED_MCP_ENV_VARS: &[&str] = &[
     "NEMO_RELAY_BOOTSTRAP_FINGERPRINT",
     "NEMO_RELAY_BOOTSTRAP_STATE_DIR",
     "NEMO_RELAY_BOOTSTRAP_SHUTDOWN_TOKEN",
-    "NEMO_RELAY_CONFIG_SCOPE",
     "NEMO_RELAY_FAIL_CLOSED",
     "NEMO_RELAY_GATEWAY_BIND",
     "NEMO_RELAY_HOST_SOCKET",
@@ -131,11 +130,9 @@ pub(crate) fn forwarded_names_for_platform(
 
 /// Removes unresolved `${NAME}` values injected by MCP hosts before CLI parsing.
 ///
-/// Hermes forwards environment names through placeholder values rather than a separate
-/// `env_vars` list. When a variable is absent, Hermes preserves the self-placeholder. Relay must
-/// treat that value as unset before clap reads numeric or socket-valued environment options. The
-/// generation fence scopes this cleanup to managed persistent MCP launches; internal variables
-/// remain untouched so malformed or retired generation identities fail closed during validation.
+/// The generation fence scopes this cleanup to managed persistent MCP launches.
+/// Internal variables remain untouched so malformed or retired generation
+/// identities fail closed during validation.
 pub(crate) fn remove_unresolved_mcp_placeholders() {
     if std::env::var_os(GENERATION_FILE_ENV).is_none()
         || std::env::var_os(GENERATION_TOKEN_ENV).is_none()

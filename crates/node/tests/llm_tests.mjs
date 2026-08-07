@@ -90,6 +90,9 @@ function sparseArray() {
 function unprintableError() {
   const error = new Error('sanitize request guardrail failed');
   Object.defineProperties(error, {
+    name: {
+      value: 'GetterError',
+    },
     message: {
       get() {
         throw new Error('message getter boom');
@@ -285,11 +288,11 @@ describe('LLM execute', () => {
 
       await assert.rejects(
         () =>
-          llmCallExecuteAsync(
+          llmCallExecute(
             'exec_status_error_llm',
             makeNative(),
-            async () => {
-              throw new Error('llm status failure');
+            () => {
+              throw unprintableError();
             },
             null,
             null,
@@ -299,7 +302,7 @@ describe('LLM execute', () => {
             },
             null,
           ),
-        /llm status failure/,
+        /JavaScript callback failed/,
       );
 
       await flushSubscribers();
@@ -320,8 +323,9 @@ describe('LLM execute', () => {
       assert.ok(errorEnd, 'expected failed llm end event');
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
-      assert.match(errorEnd.metadata['otel.status_description'], /llm status failure/);
+      assert.match(errorEnd.metadata['otel.status_description'], /JavaScript callback failed/);
       assert.equal(errorEnd.metadata['error.type'], 'internal_error');
+      assert.equal(errorEnd.metadata['exception.type'], 'GetterError');
     } finally {
       deregisterSubscriber('node_llm_status_metadata_sub');
     }

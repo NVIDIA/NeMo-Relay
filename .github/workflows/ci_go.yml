@@ -24,12 +24,11 @@ jobs:
   Test:
     name: Test (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - platform: linux-amd64
@@ -62,7 +61,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false

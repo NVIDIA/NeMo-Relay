@@ -10,22 +10,14 @@ fn agent_descriptors_are_complete_and_unique() {
     let executables = CodingAgent::ALL.map(CodingAgent::executable);
     let hook_paths = CodingAgent::ALL.map(CodingAgent::hook_path);
 
-    assert_eq!(arguments, ["claude", "codex", "hermes"]);
-    assert_eq!(install_arguments, ["claude-code", "codex", "hermes"]);
-    assert_eq!(executables, ["claude", "codex", "hermes"]);
-    assert_eq!(
-        hook_paths,
-        ["/hooks/claude-code", "/hooks/codex", "/hooks/hermes"]
-    );
+    assert_eq!(arguments, ["claude", "codex"]);
+    assert_eq!(install_arguments, ["claude-code", "codex"]);
+    assert_eq!(executables, ["claude", "codex"]);
+    assert_eq!(hook_paths, ["/hooks/claude-code", "/hooks/codex"]);
     assert_eq!(CodingAgent::ClaudeCode.label(), "Claude Code");
     assert_eq!(CodingAgent::Codex.label(), "Codex");
-    assert_eq!(CodingAgent::Hermes.label(), "Hermes Agent");
     assert_eq!(CodingAgent::ClaudeCode.hook_events().len(), 14);
     assert_eq!(CodingAgent::Codex.hook_events().len(), 10);
-    assert_eq!(CodingAgent::Hermes.hook_events().len(), 13);
-    assert!(!CodingAgent::ClaudeCode.uses_direct_hook_entries());
-    assert!(!CodingAgent::Codex.uses_direct_hook_entries());
-    assert!(CodingAgent::Hermes.uses_direct_hook_entries());
     for agent in CodingAgent::ALL {
         let events = agent.hook_events();
         assert!(events.iter().all(|event| !event.is_empty()));
@@ -45,7 +37,6 @@ fn centralized_minimum_versions_accept_stable_boundaries() {
     let cases = [
         (CodingAgent::ClaudeCode, "2.1.121 (Claude Code)"),
         (CodingAgent::Codex, "codex-cli 0.143.0"),
-        (CodingAgent::Hermes, "Hermes Agent v0.18.2 (2026.7.7.2)"),
     ];
 
     for (agent, output) in cases {
@@ -64,8 +55,6 @@ fn centralized_minimum_versions_reject_old_prerelease_and_malformed_output() {
         (CodingAgent::ClaudeCode, "2.1.121 (Other Agent)"),
         (CodingAgent::Codex, "codex-cli 0.142.9"),
         (CodingAgent::Codex, "codex-cli 0.143.0-alpha.1"),
-        (CodingAgent::Hermes, "Hermes Agent v0.18.1"),
-        (CodingAgent::Hermes, "Hermes Agent v0.18.2-rc.1"),
     ];
 
     for (agent, output) in cases {
@@ -97,9 +86,7 @@ fn agent_inference_accepts_supported_binary_aliases() {
         Some(CodingAgent::Codex)
     );
     assert_eq!(CodingAgent::infer("@openai/codex"), None);
-    assert_eq!(
-        CodingAgent::infer("hermes-agent"),
-        Some(CodingAgent::Hermes)
-    );
+    assert_eq!(CodingAgent::infer("hermes"), None);
+    assert_eq!(CodingAgent::infer("hermes-agent"), None);
     assert_eq!(CodingAgent::infer("unknown"), None);
 }

@@ -23,7 +23,8 @@ use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_sco
 use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::observability::plugin_component::OBSERVABILITY_PLUGIN_KIND;
 use nemo_relay::plugin::{
-    PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins,
+    PluginComponentSpec, PluginConfig, active_plugin_report, clear_plugin_configuration,
+    initialize_plugins,
 };
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use serde_json::{Value as Json, json};
@@ -497,13 +498,18 @@ fn atif_storage_posts_trajectory_to_http_endpoints() {
 fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
     let _guard = PLUGIN_TEST_LOCK.lock().unwrap();
     reset_runtime();
+    let recovery_directory = tempfile::tempdir().expect("create recovery directory");
     let mut server = start_http_server(2, vec![("/fail", 500)]);
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
         std::env::set_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN", "Bearer test-token");
     }
 
-    let config = build_http_observability_config(&[format!("{}/fail", server.base_url)]);
+    let mut config = build_http_observability_config(&[format!("{}/fail", server.base_url)]);
+    config.components[0].config["atif"]
+        .as_object_mut()
+        .expect("ATIF config should be an object")
+        .insert("output_directory".into(), json!(recovery_directory.path()));
     futures::executor::block_on(initialize_plugins(config))
         .expect("observability plugin should initialize with HTTP storage");
 
@@ -528,6 +534,15 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
     pop_scope(PopScopeParams::builder().handle_uuid(&second.uuid).build())
         .expect("pop second agent scope");
     flush_subscribers().expect("HTTP upload subscriber should flush after failure");
+
+    let report = active_plugin_report().expect("active plugin report should remain readable");
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "atif.remote_delivery_failed")
+        .expect("failed uploads should be visible before teardown");
+    assert_eq!(diagnostic.field.as_deref(), Some("storage[0]"));
+    assert_eq!(diagnostic.count, 2);
 
     server.stop();
     {
@@ -557,6 +572,19 @@ fn atif_storage_http_non_2xx_retries_on_the_next_trajectory() {
         teardown.to_string().contains("atif.remote_delivery_failed"),
         "teardown should identify the failed remote destination: {teardown}"
     );
+    assert!(
+        !teardown.to_string().contains("could not be removed"),
+        "delivery failure should not imply a leaked registration: {teardown}"
+    );
+    let retained_report =
+        active_plugin_report().expect("failed teardown should retain the plugin report");
+    let retained_diagnostic = retained_report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "atif.remote_delivery_failed")
+        .expect("failed upload diagnostic should remain readable after teardown");
+    assert_eq!(retained_diagnostic.field.as_deref(), Some("storage[0]"));
+    assert_eq!(retained_diagnostic.count, 2);
     // SAFETY: cleanup of test-only env var.
     unsafe {
         std::env::remove_var("NEMO_RELAY_ATIF_HTTP_TEST_TOKEN");

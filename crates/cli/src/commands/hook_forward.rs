@@ -45,8 +45,11 @@ pub(crate) struct HookForwardCommand {
     #[arg(long, value_enum)]
     pub(crate) gateway_mode: Option<GatewayModeArg>,
     /// Return a failure when the payload cannot be delivered or Relay rejects it.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "fail_open")]
     pub(crate) fail_closed: bool,
+    /// Allow the coding agent to continue when the payload cannot be delivered.
+    #[arg(long, conflicts_with = "fail_closed")]
+    pub(crate) fail_open: bool,
 }
 
 impl HookForwardCommand {
@@ -61,7 +64,13 @@ impl HookForwardCommand {
             profile: self.profile,
             session_metadata: self.session_metadata,
             gateway_mode: self.gateway_mode.map(Into::into),
-            fail_closed: self.fail_closed,
+            failure_policy: if self.fail_closed {
+                crate::hooks::HookFailurePolicy::FailClosed
+            } else if self.fail_open {
+                crate::hooks::HookFailurePolicy::FailOpen
+            } else {
+                crate::hooks::HookFailurePolicy::Default
+            },
         }
     }
 }
