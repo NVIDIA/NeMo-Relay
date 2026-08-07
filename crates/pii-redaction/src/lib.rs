@@ -13,6 +13,8 @@ pub mod component;
 pub(crate) mod detectors;
 pub(crate) mod local;
 pub(crate) mod overlay;
+#[cfg(feature = "rampart")]
+pub mod rampart;
 pub(crate) mod trajectory;
 
 #[cfg(test)]

@@ -45,6 +45,8 @@ rust_package:
   - 'crates/core/src/**'
   - 'crates/plugin/Cargo.toml'
   - 'crates/plugin/src/**'
+  - 'crates/pii-redaction/Cargo.toml'
+  - 'crates/pii-redaction/src/**'
   - 'crates/types/Cargo.toml'
   - 'crates/types/src/**'
   - 'crates/worker-proto/Cargo.toml'
@@ -60,8 +62,11 @@ rust_package:
   - 'crates/ffi/src/**'
   - 'justfile'
   - 'python/cli-bin/**'
+  - 'plugins/pii-rampart/**'
   - 'rust-toolchain.toml'
   - 'scripts/package-cli-bin.py'
+  - 'scripts/package-pii-rampart-plugin.py'
+  - 'scripts/tests/test_package_pii_rampart_plugin.py'
 
 node_package:
   - 'Cargo.lock'
@@ -131,6 +136,8 @@ dependencies:
   - 'package-lock.json'
   - 'pyproject.toml'
   - 'python/cli-bin/**'
+  - 'plugins/pii-rampart/Cargo.toml'
+  - 'plugins/pii-rampart/Cargo.lock'
   - 'scripts/licensing/**'
   - 'uv.lock'
 
@@ -166,6 +173,7 @@ rust:
   - 'crates/worker-proto/proto/**'
   - 'crates/ffi/cbindgen.toml'
   - 'integrations/coding-agents/**'
+  - 'plugins/pii-rampart/**'
 
 go:
   - 'crates/ffi/Cargo.toml'

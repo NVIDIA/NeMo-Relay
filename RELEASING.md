@@ -216,6 +216,18 @@ just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 packa
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python-sdist
 ```
 
+The Rampart native plugin package takes an already-built platform library. For
+example, on Apple Silicon:
+
+```bash
+cargo build --locked --release --manifest-path plugins/pii-rampart/Cargo.toml
+just --set output_dir "$PWD/target/release-artifacts" \
+  --set ref_name 0.8.0 \
+  package-pii-rampart-plugin \
+  "$PWD/plugins/pii-rampart/target/release/libnemo_relay_pii_rampart_plugin.dylib" \
+  aarch64-apple-darwin
+```
+
 Be aware that the local packaging recipes intentionally rewrite version fields
 in place while they build artifacts. In a disposable CI workspace that is fine.
 In a local checkout, restore those temporary manifest edits before continuing if
@@ -266,8 +278,13 @@ The release pipeline then:
    - The Rust CLI matrix builds GNU Linux binaries in manylinux containers and
      musl Linux binaries natively, validates each in its matching container, and
      packages each prebuilt binary as a `nemo-relay-cli-bin` wheel.
+   - The same Rust package matrix builds the opt-in Rampart native plugin for
+     six supported targets, materializes a SHA-256-bound plugin manifest, and
+     loads the registration symbol in the matching host or Linux runtime
+     container. The Relay CLI remains available on Windows ARM64, but Tract does
+     not currently support compiling the Rampart plugin for that target.
    - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
-     API wheels, CLI wheels, and split Node npm packages.
+     API wheels, CLI wheels, split Node npm packages, and Rampart plugin archives.
      `SHA256SUMS` covers every attached distribution artifact, and raw CLI
      binaries also receive individual `.sha256` files for installer
      compatibility.

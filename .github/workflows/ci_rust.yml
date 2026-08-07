@@ -198,42 +198,49 @@ jobs:
             platform: linux-amd64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            package_rampart: true
             build_image: quay.io/pypa/manylinux2014_x86_64@sha256:35baef377f64c2ae2e7ed647917ecd090c50f6e8b06fd605012661c2e954cc92
             runtime_image: quay.io/pypa/manylinux2014_x86_64@sha256:35baef377f64c2ae2e7ed647917ecd090c50f6e8b06fd605012661c2e954cc92
           - &package-linux-arm64
             platform: linux-arm64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            package_rampart: true
             build_image: quay.io/pypa/manylinux2014_aarch64@sha256:63f73ecd2be3ad7cf66a402c72c1594b3f9140e263ab6838896e93a8fbf53794
             runtime_image: quay.io/pypa/manylinux2014_aarch64@sha256:63f73ecd2be3ad7cf66a402c72c1594b3f9140e263ab6838896e93a8fbf53794
           - &package-linux-musl-amd64
             platform: linux-musl-amd64
             runner: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            package_rampart: true
             build_image: ''
             runtime_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
           - &package-linux-musl-arm64
             platform: linux-musl-arm64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
+            package_rampart: true
             build_image: ''
             runtime_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
           - &package-macos-arm64
             platform: macos-arm64
             runner: macos-15
             target: aarch64-apple-darwin
+            package_rampart: true
             build_image: ''
             runtime_image: ''
           - &package-windows-amd64
             platform: windows-amd64
             runner: windows-2022
             target: x86_64-pc-windows-msvc
+            package_rampart: true
             build_image: ''
             runtime_image: ''
           - &package-windows-arm64
             platform: windows-arm64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
+            package_rampart: false
             build_image: ''
             runtime_image: ''
 
@@ -266,7 +273,7 @@ jobs:
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
-      - name: Set CLI binary version
+      - name: Set package versions
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -298,8 +305,51 @@ jobs:
         if: ${{ matrix.build_image == '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
-          set -e
+          set -euo pipefail
           cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+
+      - name: Build Rampart native plugin
+        if: ${{ matrix.build_image == '' && matrix.package_rampart && !contains(matrix.platform, 'musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          cargo build --locked --release \
+            --manifest-path plugins/pii-rampart/Cargo.toml \
+            --target "$target" \
+            --target-dir target
+
+      - name: Build Rampart native plugin in musllinux
+        if: ${{ matrix.package_rampart && contains(matrix.platform, 'musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        env:
+          MUSLLINUX_IMAGE: ${{ matrix.runtime_image }}
+          NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
+          RAMPART_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env NEMO_RELAY_RUST_VERSION \
+            --env RAMPART_TARGET \
+            "$MUSLLINUX_IMAGE" \
+            /bin/sh -ec '
+              apk add --no-cache curl
+              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
+                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
+              export PATH="$HOME/.cargo/bin:$PATH"
+              export RUSTFLAGS="-C target-feature=-crt-static"
+              cargo build --locked --release \
+                --manifest-path plugins/pii-rampart/Cargo.toml \
+                --target "$RAMPART_TARGET" \
+                --target-dir target/pii-rampart-musllinux
+              destination="target/$RAMPART_TARGET/release"
+              mkdir -p "$destination"
+              cp \
+                "target/pii-rampart-musllinux/$RAMPART_TARGET/release/libnemo_relay_pii_rampart_plugin.so" \
+                "$destination/"
+            '
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
@@ -316,6 +366,10 @@ jobs:
                 sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
               export PATH="$HOME/.cargo/bin:$PATH"
               cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+              cargo build --locked --release \
+                --manifest-path plugins/pii-rampart/Cargo.toml \
+                --target "${{ matrix.target }}" \
+                --target-dir target
             '
 
       - name: Stage CLI binary artifact
@@ -361,6 +415,31 @@ jobs:
             --version "$version" \
             --output-dir "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
 
+      - name: Package Rampart native plugin
+        if: ${{ matrix.package_rampart }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          version="${{ github.ref_name }}"
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            version="dev-${GIT_COMMIT::8}"
+          fi
+          library="libnemo_relay_pii_rampart_plugin.so"
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            library="libnemo_relay_pii_rampart_plugin.dylib"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            library="nemo_relay_pii_rampart_plugin.dll"
+          fi
+          source="${NEMO_RELAY_CI_WORKSPACE}/target/${target}/release/${library}"
+          if [ ! -f "$source" ]; then
+            echo "Error: expected Rampart plugin library at ${source}" >&2
+            exit 1
+          fi
+          just \
+            --set output_dir "${NEMO_RELAY_CI_WORKSPACE_TMP}/pii-rampart" \
+            package-pii-rampart-plugin "$source" "$target" "$version"
+
       - name: Upload CLI binary artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -373,6 +452,14 @@ jobs:
         with:
           name: cli-python-wheel-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/cli-packages/*.whl
+          if-no-files-found: error
+
+      - name: Upload Rampart plugin artifact
+        if: ${{ matrix.package_rampart }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pii-rampart-plugin-${{ matrix.platform }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/pii-rampart/pii-rampart-plugin/*
           if-no-files-found: error
 
   PackageSmoke:
@@ -442,6 +529,13 @@ jobs:
           name: cli-python-wheel-${{ matrix.platform }}
           path: cli-wheel/
 
+      - name: Download matching Rampart plugin artifact
+        if: ${{ matrix.package_rampart }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pii-rampart-plugin-${{ matrix.platform }}
+          path: pii-rampart-plugin/
+
       - name: Run downloaded CLI binary and wheel
         if: ${{ matrix.runtime_image == '' }}
         run: |
@@ -465,6 +559,18 @@ jobs:
           if [ "$binary_version" != "$wheel_version" ]; then
             echo "Error: CLI binary reports '$binary_version' but wheel reports '$wheel_version'" >&2
             exit 1
+          fi
+          if [ "${{ matrix.package_rampart }}" = "true" ]; then
+            plugin_archive="$(find pii-rampart-plugin -maxdepth 1 -type f -print -quit)"
+            test -n "$plugin_archive"
+            python scripts/package-pii-rampart-plugin.py verify \
+              --archive "$plugin_archive" \
+              --target "${{ matrix.target }}" \
+              --extract-dir "${RUNNER_TEMP}/pii-rampart-smoke" \
+              --load-library
+            "$binary" plugins validate \
+              "${RUNNER_TEMP}/pii-rampart-smoke/nemo-relay-pii-rampart-plugin/relay-plugin.toml" \
+              --json
           fi
 
       - name: Run downloaded CLI binary and wheel in Linux runtime container
@@ -490,5 +596,17 @@ jobs:
               if [ "$binary_version" != "$wheel_version" ]; then
                 echo "Error: CLI binary and wheel versions differ" >&2
                 exit 1
+              fi
+              if [ "${{ matrix.package_rampart }}" = "true" ]; then
+                plugin_archive="$(find pii-rampart-plugin -maxdepth 1 -type f -print -quit)"
+                test -n "$plugin_archive"
+                /opt/python/cp311-cp311/bin/python scripts/package-pii-rampart-plugin.py verify \
+                  --archive "$plugin_archive" \
+                  --target "${{ matrix.target }}" \
+                  --extract-dir /tmp/pii-rampart-smoke \
+                  --load-library
+                "$binary" plugins validate \
+                  /tmp/pii-rampart-smoke/nemo-relay-pii-rampart-plugin/relay-plugin.toml \
+                  --json
               fi
             '
