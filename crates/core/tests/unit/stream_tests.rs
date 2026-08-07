@@ -35,6 +35,14 @@ fn partial_stream_usage_is_not_treated_as_authoritative_without_terminal_evidenc
         ..partial
     };
     assert!(has_authoritative_final_usage(Some(&terminal)));
+    assert!(has_authoritative_successful_completion(Some(&terminal)));
+
+    let failed = AnnotatedLlmResponse {
+        finish_reason: Some(FinishReason::Unknown("failed".to_string())),
+        ..terminal
+    };
+    assert!(has_authoritative_final_usage(Some(&failed)));
+    assert!(!has_authoritative_successful_completion(Some(&failed)));
 }
 
 #[test]
