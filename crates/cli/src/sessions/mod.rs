@@ -1269,6 +1269,8 @@ impl Session {
     async fn close_active_subagents(&mut self, reason: &str) -> Result<Vec<String>, CliError> {
         let mut closed = Vec::new();
         while let Some(subagent_id) = self.subagent_stack.pop() {
+            // Subagent ends precede the turn end on the serial dispatcher, so the turn receipt
+            // returned by `close_turn` also covers these deliveries.
             let _ = self
                 .close_subagent_scope(&subagent_id, json!({ "status": reason }))
                 .await?;

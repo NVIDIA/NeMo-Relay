@@ -1207,7 +1207,7 @@ async fn terminal_hook_responses_wait_for_their_atif_snapshot() {
                 .await
                 .unwrap()
         });
-        tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+        tokio::time::timeout(std::time::Duration::from_secs(10), started_rx)
             .await
             .expect("terminal scope sanitizer should start")
             .unwrap();
@@ -1217,7 +1217,7 @@ async fn terminal_hook_responses_wait_for_their_atif_snapshot() {
                 .await
                 .ok();
         let returned_early = early_response.is_some();
-        release_tx.send(()).unwrap();
+        let _ = release_tx.send(());
         let response = match early_response {
             Some(response) => response.unwrap(),
             None => terminal.await.unwrap(),

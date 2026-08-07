@@ -100,6 +100,10 @@ impl SubscriberDelivery {
     }
 
     /// Wait until this event's subscriber delivery is complete.
+    ///
+    /// Do not call this from a subscriber, event-sanitizer, guardrail, or
+    /// intercept callback. The dispatcher signals completion on its own
+    /// thread, so waiting there creates a wait cycle.
     pub async fn wait(self) -> Result<()> {
         self.completion.await.map_err(|error| {
             FlowError::Internal(format!(
