@@ -309,27 +309,47 @@ jobs:
           cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
 
       - name: Build Rampart native plugin
-        if: ${{ matrix.build_image == '' && matrix.package_rampart }}
+        if: ${{ matrix.build_image == '' && matrix.package_rampart && !contains(matrix.platform, 'musl') }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
           target="${{ matrix.target }}"
-          # Rust's musl targets default to a static CRT, which cannot emit a cdylib.
-          if [[ "$target" == *-unknown-linux-musl ]]; then
-            export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-feature=-crt-static"
-            case "$target" in
-              x86_64-unknown-linux-musl)
-                export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
-                ;;
-              aarch64-unknown-linux-musl)
-                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
-                ;;
-            esac
-          fi
           cargo build --locked --release \
             --manifest-path plugins/pii-rampart/Cargo.toml \
             --target "$target" \
             --target-dir target
+
+      - name: Build Rampart native plugin in musllinux
+        if: ${{ matrix.package_rampart && contains(matrix.platform, 'musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        env:
+          MUSLLINUX_IMAGE: ${{ matrix.runtime_image }}
+          NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
+          RAMPART_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
+            --env NEMO_RELAY_RUST_VERSION \
+            --env RAMPART_TARGET \
+            "$MUSLLINUX_IMAGE" \
+            /bin/sh -ec '
+              apk add --no-cache curl
+              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
+                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
+              export PATH="$HOME/.cargo/bin:$PATH"
+              export RUSTFLAGS="-C target-feature=-crt-static"
+              cargo build --locked --release \
+                --manifest-path plugins/pii-rampart/Cargo.toml \
+                --target "$RAMPART_TARGET" \
+                --target-dir target/pii-rampart-musllinux
+              destination="target/$RAMPART_TARGET/release"
+              mkdir -p "$destination"
+              cp \
+                "target/pii-rampart-musllinux/$RAMPART_TARGET/release/libnemo_relay_pii_rampart_plugin.so" \
+                "$destination/"
+            '
 
       - name: Build CLI release binary in manylinux
         if: ${{ matrix.build_image != '' }}
