@@ -193,7 +193,24 @@ def test_openinference_inspection_extracts_semantic_and_lineage_evidence(tmp_pat
                                     {"key": "nemo_relay.uuid", "value": {"stringValue": "uuid"}},
                                     {"key": "nemo_relay.scope_type", "value": {"stringValue": "llm"}},
                                 ]
-                            }
+                            },
+                            {
+                                "parentSpanId": "parent-span",
+                                "attributes": [
+                                    {"key": "openinference.span.kind", "value": {"stringValue": "CHAIN"}},
+                                    {"key": "nemo_relay.mark.uuid", "value": {"stringValue": "mark-uuid"}},
+                                    {
+                                        "key": "nemo_relay.mark.parent_uuid",
+                                        "value": {"stringValue": "parent-uuid"},
+                                    },
+                                ],
+                            },
+                            {
+                                "attributes": [
+                                    {"key": "openinference.span.kind", "value": {"stringValue": "CHAIN"}},
+                                    {"key": "nemo_relay.mark.uuid", "value": {"stringValue": "orphan-mark"}},
+                                ],
+                            },
                         ],
                     }
                 ],
@@ -203,8 +220,8 @@ def test_openinference_inspection_extracts_semantic_and_lineage_evidence(tmp_pat
     artifact.write_text(json.dumps(payload) + "\n", encoding="utf-8")
     evidence = module.inspect_openinference(artifact)
     assert evidence["documents"] == 1
-    assert evidence["spans"] == 1
-    assert evidence["span_kinds"] == ["LLM"]
+    assert evidence["spans"] == 3
+    assert evidence["span_kinds"] == ["CHAIN", "LLM"]
     assert evidence["scope_names"] == ["harbor-hermes-switchyard"]
-    assert evidence["lineage_spans"] == 1
+    assert evidence["lineage_spans"] == 2
     assert evidence["resource_attributes"]["openinference.project.name"] == ["project"]

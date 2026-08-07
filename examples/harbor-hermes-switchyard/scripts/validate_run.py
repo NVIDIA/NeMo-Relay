@@ -223,7 +223,15 @@ def inspect_openinference(path: Path) -> dict[str, Any]:
                         kind = attributes.get("openinference.span.kind")
                         if isinstance(kind, str) and kind:
                             span_kinds.add(kind)
-                        if attributes.get("nemo_relay.uuid") and attributes.get("nemo_relay.scope_type"):
+                        scope_lineage = attributes.get("nemo_relay.uuid") and attributes.get(
+                            "nemo_relay.scope_type"
+                        )
+                        mark_lineage = (
+                            attributes.get("nemo_relay.mark.uuid")
+                            and attributes.get("nemo_relay.mark.parent_uuid")
+                            and span.get("parentSpanId")
+                        )
+                        if scope_lineage or mark_lineage:
                             lineage_spans += 1
     return {
         "documents": documents,
