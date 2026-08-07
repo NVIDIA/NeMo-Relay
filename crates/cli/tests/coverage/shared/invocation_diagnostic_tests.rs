@@ -16,6 +16,7 @@ fn invocation_diagnostic_detects_supported_agent_names_aliases_and_paths() {
         (CodingAgent::ClaudeCode, "/opt/bin/claude-code.exe"),
         (CodingAgent::Codex, "codex"),
         (CodingAgent::Codex, r"C:\\tools\\CODEX.CMD"),
+        (CodingAgent::Codex, r"C:\\tools\\codex.com"),
         (CodingAgent::Hermes, "hermes"),
         (CodingAgent::Hermes, "hermes-agent"),
         (CodingAgent::Hermes, "/opt/bin/hermes-agent.bat"),
@@ -55,23 +56,24 @@ fn invocation_diagnostic_only_inspects_the_first_post_boundary_token() {
 }
 
 #[test]
-fn invocation_diagnostic_doctor_redacts_arguments_unless_explicitly_requested() {
+fn invocation_diagnostic_warning_redacts_arguments_and_points_to_dry_run() {
     let command = argv(&["/opt/bin/claude-code", "-p", "private synthetic value"]);
     let diagnostic =
         DuplicateAgentExecutable::detect(CodingAgent::ClaudeCode, &command, InvocationForm::Run)
             .unwrap();
 
-    let safe = diagnostic.format_doctor(false);
-    assert!(safe.contains("code = possible_duplicate_agent_executable"));
-    assert!(safe.contains("observed = nemo-relay run --agent claude -- claude"));
-    assert!(safe.contains("<arguments redacted>"));
-    assert!(!safe.contains("/opt/bin/claude-code"));
-    assert!(!safe.contains("private synthetic value"));
-
-    let full = diagnostic.format_doctor(true);
-    assert!(full.contains("/opt/bin/claude-code"));
-    assert!(full.contains("private synthetic value"));
-    assert!(full.contains("recommended = nemo-relay run --agent claude -- -p"));
+    let output = diagnostic.format_warning();
+    assert!(output.contains("Diagnostic: possible_duplicate_agent_executable"));
+    assert!(output.contains("Observed: nemo-relay run --agent claude -- claude"));
+    assert!(output.contains("Recommended: nemo-relay run --agent claude --"));
+    assert!(
+        output.contains(
+            "Inspect without launching: nemo-relay run --agent claude --dry-run -- claude"
+        )
+    );
+    assert!(output.contains("<arguments redacted>"));
+    assert!(!output.contains("/opt/bin/claude-code"));
+    assert!(!output.contains("private synthetic value"));
 }
 
 #[test]
@@ -81,9 +83,10 @@ fn invocation_diagnostic_uses_the_shortcut_command_shape() {
         DuplicateAgentExecutable::detect(CodingAgent::Hermes, &command, InvocationForm::Shortcut)
             .unwrap();
 
-    let output = diagnostic.format_doctor(false);
+    let output = diagnostic.format_warning();
     let redacted =
         crate::process::shell_quote_arg_for_platform("<arguments redacted>", cfg!(windows));
-    assert!(output.contains("observed = nemo-relay hermes -- hermes"));
-    assert!(output.contains(&format!("recommended = nemo-relay hermes -- {redacted}")));
+    assert!(output.contains("Observed: nemo-relay hermes -- hermes"));
+    assert!(output.contains(&format!("Recommended: nemo-relay hermes -- {redacted}")));
+    assert!(output.contains("Inspect without launching: nemo-relay hermes --dry-run -- hermes"));
 }

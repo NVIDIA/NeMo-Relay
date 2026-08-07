@@ -3930,46 +3930,6 @@ anthropic_base_url = "http://127.0.0.1:1"
 }
 
 #[test]
-fn invocation_diagnostic_cli_doctor_requires_opt_in_for_full_output() {
-    let safe = Command::new(gateway_bin())
-        .args([
-            "doctor",
-            "invocation",
-            "--agent",
-            "claude",
-            "--",
-            "claude",
-            "-p",
-            "private synthetic value",
-        ])
-        .output()
-        .unwrap();
-    assert!(safe.status.success());
-    let safe_stdout = String::from_utf8_lossy(&safe.stdout);
-    assert!(safe_stdout.contains("<arguments redacted>"));
-    assert!(!safe_stdout.contains("private synthetic value"));
-
-    let full = Command::new(gateway_bin())
-        .args([
-            "doctor",
-            "invocation",
-            "--agent",
-            "claude",
-            "--show-full-command",
-            "--",
-            "claude",
-            "-p",
-            "private synthetic value",
-        ])
-        .output()
-        .unwrap();
-    assert!(full.status.success());
-    let full_stdout = String::from_utf8_lossy(&full.stdout);
-    assert!(full_stdout.contains("private synthetic value"));
-    assert!(full_stdout.contains("recommended = nemo-relay run --agent claude -- -p"));
-}
-
-#[test]
 fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
     let temp = tempfile::tempdir().unwrap();
     let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
@@ -3984,11 +3944,18 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
         .env("HOME", temp.path())
         .args(["--log-config-path"])
         .arg(&logging_config)
-        .args(["claude", "--", "claude", "-p", "private synthetic value"])
+        .args([
+            "claude",
+            "--dry-run",
+            "--",
+            "claude",
+            "-p",
+            "private synthetic value",
+        ])
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
+    assert!(output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("possible_duplicate_agent_executable"),
@@ -4009,44 +3976,26 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
         "{stderr}"
     );
     assert!(
-        stderr.contains(
-            "Doctor (safe): nemo-relay doctor invocation --agent claude --shortcut -- claude"
-        ),
+        stderr.contains("Inspect without launching: nemo-relay claude --dry-run -- claude"),
         "{stderr}"
     );
-    assert!(stderr.contains("setup requires a TTY"), "{stderr}");
     assert!(!stderr.contains("private synthetic value"), "{stderr}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let argv = stdout
+        .lines()
+        .find(|line| line.starts_with("argv = "))
+        .expect("dry run should print the resolved argv");
+    assert!(
+        argv.ends_with(" claude -p private synthetic value"),
+        "{argv}"
+    );
 
     let diagnostic = read_jsonl_event(&log_path, "agent_invocation_warning").to_string();
     assert!(!diagnostic.contains("private synthetic value"));
-}
-
-#[test]
-fn invocation_diagnostic_cli_doctor_reports_no_duplicate() {
-    let output = Command::new(gateway_bin())
-        .args([
-            "doctor",
-            "invocation",
-            "--agent",
-            "claude",
-            "--",
-            "-p",
-            "synthetic prompt",
-        ])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("code = none"), "{stdout}");
-    assert!(stdout.contains("selected_agent = claude"), "{stdout}");
     assert!(
-        stdout.contains("result = no duplicate agent executable detected"),
-        "{stdout}"
-    );
-    assert!(
-        !stdout.contains("possible_duplicate_agent_executable"),
-        "{stdout}"
+        !xdg.join("nemo-relay/config.toml").exists(),
+        "shortcut dry run must not invoke first-use setup"
     );
 }
 

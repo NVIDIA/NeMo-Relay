@@ -10,7 +10,6 @@
 //! - `format_human(&report)` / `format_json(&report)` render the report.
 
 mod environment;
-pub(crate) mod invocation;
 mod model;
 mod probes;
 mod render;

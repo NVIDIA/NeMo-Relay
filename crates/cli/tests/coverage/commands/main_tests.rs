@@ -346,30 +346,26 @@ fn doctor_accepts_offline_flag() {
 }
 
 #[test]
-fn invocation_diagnostic_parser_accepts_doctor_without_runtime_probe_flags() {
-    let cli = Cli::try_parse_from([
-        "nemo-relay",
-        "doctor",
-        "invocation",
-        "--agent",
-        "claude",
-        "--",
-        "claude",
-        "-p",
-        "synthetic prompt",
-    ])
-    .unwrap();
-    match cli.command {
-        Some(Command::Doctor(command)) => assert!(matches!(
-            command.command,
-            Some(diagnostics::DoctorSubcommand::Invocation(_))
-        )),
-        other => panic!("expected doctor invocation command, got {other:?}"),
+fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
+    for shortcut in ["claude", "codex", "hermes"] {
+        let cli = Cli::try_parse_from([
+            "nemo-relay",
+            shortcut,
+            "--dry-run",
+            "--",
+            shortcut,
+            "synthetic argument",
+        ])
+        .unwrap();
+        let command = match cli.command {
+            Some(Command::Claude(command))
+            | Some(Command::Codex(command))
+            | Some(Command::Hermes(command)) => command,
+            other => panic!("expected agent shortcut command, got {other:?}"),
+        };
+        assert!(command.dry_run);
+        assert_eq!(command.command, [shortcut, "synthetic argument"]);
     }
-
-    assert!(
-        Cli::try_parse_from(["nemo-relay", "doctor", "invocation", "--agent", "claude",]).is_err()
-    );
 }
 
 #[test]

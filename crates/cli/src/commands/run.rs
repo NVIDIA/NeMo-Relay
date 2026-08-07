@@ -11,9 +11,14 @@ use super::serve::ServerArgs;
 use crate::agents::CodingAgent;
 use crate::error::CliError;
 
+mod invocation;
+
 /// Args for an easy-path agent shortcut.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct EasyPathCommand {
+    /// Print the resolved launch plan without setup, gateway startup, or agent execution.
+    #[arg(long)]
+    pub(super) dry_run: bool,
     #[arg(last = true)]
     pub(super) command: Vec<String>,
 }
@@ -61,11 +66,7 @@ pub(super) async fn execute(
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
     if let Some(agent) = command.agent.map(Into::into) {
-        warn_for_possible_duplicate(
-            agent,
-            &command.command,
-            crate::diagnostics::invocation::InvocationForm::Run,
-        );
+        warn_for_possible_duplicate(agent, &command.command, invocation::InvocationForm::Run);
     }
     let inherited = server.to_runtime();
     crate::process::launcher::run(command.into_runtime(), Some(&inherited)).await
@@ -89,7 +90,7 @@ pub(super) async fn easy_path(
     warn_for_possible_duplicate(
         agent,
         &command.command,
-        crate::diagnostics::invocation::InvocationForm::Shortcut,
+        invocation::InvocationForm::Shortcut,
     );
     let inherited = server.to_runtime();
     // An explicit config path is the user's contract. Without one, setup is required only when
@@ -97,7 +98,7 @@ pub(super) async fn easy_path(
     // layer so process supervision receives a complete, agent-neutral run request.
     let explicit_config = inherited.config.as_deref();
     let needs_setup = explicit_config.is_none() && !crate::configuration::any_config_file_exists();
-    if needs_setup {
+    if needs_setup && !command.dry_run {
         let explicit_plugin_path = easy_path_plugin_config_path(&inherited);
         super::configure::run(Some(agent), explicit_plugin_path).await?;
     }
@@ -108,7 +109,7 @@ pub(super) async fn easy_path(
         anthropic_base_url: None,
         session_metadata: None,
         plugin_config_path: None,
-        dry_run: false,
+        dry_run: command.dry_run,
         print: false,
         command: command.command,
     };
@@ -118,11 +119,9 @@ pub(super) async fn easy_path(
 fn warn_for_possible_duplicate(
     agent: CodingAgent,
     command: &[String],
-    form: crate::diagnostics::invocation::InvocationForm,
+    form: invocation::InvocationForm,
 ) {
-    if let Some(diagnostic) =
-        crate::diagnostics::invocation::DuplicateAgentExecutable::detect(agent, command, form)
-    {
+    if let Some(diagnostic) = invocation::DuplicateAgentExecutable::detect(agent, command, form) {
         diagnostic.log();
         super::print_invocation_warning(&diagnostic.format_warning());
     }

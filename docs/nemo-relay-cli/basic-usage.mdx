@@ -82,14 +82,14 @@ nemo-relay run --agent claude -- -p "Review this change"
 ```
 
 If the selected executable is repeated after `--`, Relay warns and continues
-without modifying the command. Inspect the correction without launching the
-agent:
+without modifying the command. Add `--dry-run` before `--` to inspect the
+resolved launch plan without running setup, starting the gateway, or launching
+the agent:
 
 ```bash
-nemo-relay doctor invocation --agent claude -- claude
+nemo-relay run --agent claude --dry-run -- claude
+nemo-relay claude --dry-run -- claude
 ```
-
-Arguments are redacted unless `--show-full-command` is explicitly used.
 
 For Claude Code and Codex, transparent mode leaves the caller's source settings,
 selected profile, and installed plugin state unchanged. A process marker makes

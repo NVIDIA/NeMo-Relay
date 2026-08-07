@@ -50,29 +50,6 @@ impl<'a> DuplicateAgentExecutable<'a> {
         );
     }
 
-    pub(crate) fn format_doctor(&self, show_full_command: bool) -> String {
-        let visibility = if show_full_command {
-            "full command; may contain sensitive data"
-        } else {
-            "arguments redacted"
-        };
-        format!(
-            "INVOCATION DIAGNOSTIC\n\
-             code = {POSSIBLE_DUPLICATE_AGENT_EXECUTABLE}\n\
-             confidence = high\n\
-             selected_agent = {}\n\
-             duplicate_executable = {}\n\
-             visibility = {visibility}\n\
-             observed = {}\n\
-             recommended = {}\n\
-             action = continue unchanged",
-            self.agent.as_arg(),
-            self.agent.as_arg(),
-            self.observed_command(show_full_command),
-            self.recommended_command(show_full_command),
-        )
-    }
-
     pub(crate) fn format_warning(&self) -> String {
         format!(
             "WARNING: Possible duplicate agent executable after `--`.\n\
@@ -80,60 +57,41 @@ impl<'a> DuplicateAgentExecutable<'a> {
                Duplicate executable: {}\n\
                Observed: {}\n\
                Recommended: {}\n\
-               Doctor (safe): {}\n\
-               Doctor (full): {}\n\
+               Inspect without launching: {}\n\
                Relay will continue without modifying the command.",
             self.agent.as_arg(),
-            self.observed_command(false),
-            self.recommended_command(false),
-            self.doctor_command(false),
-            self.doctor_command(true),
+            self.observed_command(),
+            self.recommended_command(),
+            self.dry_run_command(),
         )
     }
 
-    fn observed_command(&self, show_full_command: bool) -> String {
+    fn observed_command(&self) -> String {
         let mut command = self.relay_prefix();
         command.push("--".into());
-        if show_full_command {
-            command.extend(self.command.iter().cloned());
-        } else {
-            command.push(self.agent.as_arg().into());
-            if self.command.len() > 1 {
-                command.push("<arguments redacted>".into());
-            }
-        }
-        render_command(&command)
-    }
-
-    fn recommended_command(&self, show_full_command: bool) -> String {
-        let mut command = self.relay_prefix();
-        command.push("--".into());
-        if show_full_command {
-            command.extend(self.command.iter().skip(1).cloned());
-        } else if self.command.len() > 1 {
+        command.push(self.agent.as_arg().into());
+        if self.command.len() > 1 {
             command.push("<arguments redacted>".into());
         }
         render_command(&command)
     }
 
-    fn doctor_command(&self, show_full_command: bool) -> String {
-        let mut command = vec![
-            "nemo-relay".into(),
-            "doctor".into(),
-            "invocation".into(),
-            "--agent".into(),
-            self.agent.as_arg().into(),
-        ];
-        if self.form == InvocationForm::Shortcut {
-            command.push("--shortcut".into());
+    fn recommended_command(&self) -> String {
+        let mut command = self.relay_prefix();
+        command.push("--".into());
+        if self.command.len() > 1 {
+            command.push("<arguments redacted>".into());
         }
-        if show_full_command {
-            command.push("--show-full-command".into());
-        }
+        render_command(&command)
+    }
+
+    fn dry_run_command(&self) -> String {
+        let mut command = self.relay_prefix();
+        command.push("--dry-run".into());
         command.push("--".into());
         command.push(self.agent.as_arg().into());
-        if show_full_command && self.command.len() > 1 {
-            command.push("<original arguments>".into());
+        if self.command.len() > 1 {
+            command.push("<arguments redacted>".into());
         }
         render_command(&command)
     }
@@ -162,5 +120,5 @@ fn render_command(command: &[String]) -> String {
 }
 
 #[cfg(test)]
-#[path = "../../tests/coverage/shared/invocation_diagnostic_tests.rs"]
+#[path = "../../../tests/coverage/shared/invocation_diagnostic_tests.rs"]
 mod tests;
