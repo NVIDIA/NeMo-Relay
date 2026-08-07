@@ -493,7 +493,12 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(3));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
-    let serialized_endpoint = &generic.config["opentelemetry"]["endpoints"][0];
+    assert_endpoint_batch_fields_omitted(&generic.config["opentelemetry"]["endpoints"][0]);
+
+    assert_endpoint_batch_fields_deserialize();
+}
+
+fn assert_endpoint_batch_fields_omitted(serialized_endpoint: &Json) {
     for field in [
         "max_queue_size",
         "max_export_batch_size",
@@ -501,8 +506,6 @@ fn default_config_and_component_conversion_cover_public_shape() {
     ] {
         assert!(serialized_endpoint.get(field).is_none());
     }
-
-    assert_endpoint_batch_fields_deserialize();
 }
 
 fn assert_endpoint_batch_fields_deserialize() {
