@@ -427,9 +427,14 @@ def _rust_missing_cargo_about_packages(rendered_keys: set[tuple[str, str]]) -> l
 
 def _stable_rust_license_text(crate: dict[str, Any], detected_text: str) -> str:
     """Prefer an equivalent bundled license file over cargo-about's platform-dependent match."""
-    normalized_detected = textwrap.dedent(detected_text).strip()
+    normalized_detected = "\n".join(
+        " ".join(line.split()) for line in textwrap.dedent(detected_text).strip().splitlines()
+    )
     for _, bundled_text in _rust_license_files(crate):
-        if textwrap.dedent(bundled_text).strip() == normalized_detected:
+        normalized_bundled = "\n".join(
+            " ".join(line.split()) for line in textwrap.dedent(bundled_text).strip().splitlines()
+        )
+        if normalized_bundled == normalized_detected:
             return bundled_text
     return detected_text
 
