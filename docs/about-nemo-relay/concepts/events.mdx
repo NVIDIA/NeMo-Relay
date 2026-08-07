@@ -162,7 +162,7 @@ read. The following payload excerpt shows the stable skill-load fields.
 Standard [fields common to every event](#fields-common-to-every-event), such as
 `atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
 
-Detection affects observability only. An unsupported or unrecognized read still
+Detection only affects observability. An unsupported or unrecognized read still
 runs normally, but Relay emits no skill-load mark. Skill-load, first-use, and
 reuse analytics can therefore undercount actual loads.
 
@@ -282,11 +282,14 @@ The mark has these lifecycle semantics:
 - Relay emits at most one mark for each skill in a tool call. A later tool call
   that attempts the same load emits another mark.
 
-The three related facts are intentionally distinct: `skill.load` records an
-attempt detected before execution, the tool end event records whether execution
-succeeded, and `skill.load.inferred` records a prompt expansion that Relay could
-not confirm as a file read. Consumers should not treat any one of them as proof
-of the others.
+The three related facts are intentionally distinct:
+
+- `skill.load` records an attempt detected before execution.
+- The tool end event records whether execution succeeded.
+- `skill.load.inferred` records a prompt expansion that Relay could not confirm
+  as a file read.
+
+Consumers should not treat any one of them as proof of the others.
 
 Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`, and
 tool calls made through the Rust, Python, Node.js, Go/FFI, LangChain, LangGraph,
