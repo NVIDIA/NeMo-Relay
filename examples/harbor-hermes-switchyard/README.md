@@ -12,7 +12,7 @@ and result aggregation are intentionally out of scope for this example.
 |---|---|
 | NeMo Relay | Released `nemo-relay==0.7.0` platform wheel, installed by digest rather than from this source checkout. |
 | Hermes | `bbednarski9/hermes-agent`, detached commit `efb63e714abc436af88af9b0d6734751c199aa6d` from PR #77915. |
-| Switchyard | `bbednarski9/Switchyard`, detached commit `5d9d3292d6154e44d50295d0d4a3fd4f144f2528` from PR #270. |
+| Switchyard | `bbednarski9/Switchyard`, detached commit `8daac03edf8544144833af1fd009b3da737715bc` from PR #270. |
 | Harbor | `harbor==0.18.0`, local export of dataset `terminal-bench@2.0`. |
 
 Every source checkout is detached and verified. The Hermes installer is

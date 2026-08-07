@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import tomllib
 import urllib.error
@@ -23,10 +24,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+import run_setup_admission as setup_admission  # noqa: E402
+
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-cohort.v1"
 PLAN_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-plan.v1"
 TASK_STATE_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-task-state.v1"
 EXPECTED_HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
+HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
 INFRASTRUCTURE_PATTERNS = (
     "apt-get update && apt-get install",
     "cannot connect to the docker daemon",
@@ -222,6 +229,131 @@ def switchyard_library(bundle: Path) -> Path:
     if len(libraries) != 1:
         raise ValueError("Switchyard bundle must contain exactly one native library")
     return libraries[0]
+
+
+def load_hermetic_runtime(path: Path, args: argparse.Namespace) -> dict[str, Any]:
+    payload = setup_admission.load_payload(path)
+    expected = {
+        "schema_version": HERMETIC_RUNTIME_SCHEMA,
+        "status": "passed",
+        "hermes_commit": EXPECTED_HERMES_COMMIT,
+        "relay_version": "0.7.0",
+        "relay_wheel_sha256": sha256_file(args.relay_wheel),
+        "relay_architecture": args.relay_architecture,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": payload.get(key)}
+        for key, value in expected.items()
+        if payload.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"hermetic runtime does not match cohort inputs: {mismatches}")
+    digest = payload.get("content_sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise ValueError("hermetic runtime content digest is missing or invalid")
+    for relative in ("bin/hermes", "bin/python", "bin/uv", "hermes-agent-src/venv"):
+        if not (path / relative).exists():
+            raise FileNotFoundError(path / relative)
+    return payload
+
+
+def ensure_hermetic_runtime(args: argparse.Namespace) -> tuple[Path, dict[str, Any]]:
+    wheel_digest = sha256_file(args.relay_wheel)
+    name = f"hermes-{EXPECTED_HERMES_COMMIT[:8]}-relay-070-{args.relay_architecture}-{wheel_digest[:12]}"
+    output = args.bootstrap_root / name
+    args.bootstrap_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock_path = args.bootstrap_root / f".{name}.lock"
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if output.is_dir():
+            return output, load_hermetic_runtime(output, args)
+        if output.exists():
+            raise ValueError(f"hermetic runtime cache path is not a directory: {output}")
+        subprocess.run(
+            [
+                str(args.python_bin),
+                str(args.hermetic_runtime_builder),
+                "--output",
+                str(output),
+                "--relay-wheel",
+                str(args.relay_wheel),
+                "--relay-architecture",
+                args.relay_architecture,
+                "--hermes-commit",
+                EXPECTED_HERMES_COMMIT,
+            ],
+            check=True,
+        )
+        return output, load_hermetic_runtime(output, args)
+
+
+def prepare_setup_runtime(args: argparse.Namespace) -> Path:
+    destination = args.run_root / "setup-runtime"
+    runtime = destination / "runtime"
+    provenance = runtime / "provenance.json"
+    if provenance.is_file():
+        observed = read_json(provenance)
+        if (
+            observed.get("nemo_relay", {}).get("wheel_sha256") != sha256_file(args.relay_wheel)
+            or observed.get("switchyard", {}).get("library_sha256")
+            != sha256_file(switchyard_library(args.switchyard_bundle))
+            or observed.get("relay_config_sha256") != sha256_file(runtime / "plugins.toml")
+        ):
+            raise ValueError("existing setup runtime does not match cohort inputs")
+        return runtime
+    if destination.exists():
+        raise ValueError(f"incomplete setup runtime already exists: {destination}")
+    temporary = destination.with_name(f".{destination.name}.preparing-{os.getpid()}")
+    if temporary.exists():
+        raise ValueError(f"stale setup runtime preparation exists: {temporary}")
+    try:
+        subprocess.run(
+            [
+                str(args.python_bin),
+                str(args.runtime_preparer),
+                "--run-root",
+                str(temporary),
+                "--switchyard-bundle",
+                str(args.switchyard_bundle),
+                "--relay-wheel",
+                str(args.relay_wheel),
+                "--relay-architecture",
+                args.relay_architecture,
+                "--plugin-config-template",
+                str(args.plugin_config_template),
+                "--openinference-endpoint",
+                "http://127.0.0.1:9/v1/traces",
+                "--phoenix-project",
+                args.phoenix_project,
+                "--eval-cohort",
+                args.eval_cohort,
+            ],
+            check=True,
+        )
+        temporary.replace(destination)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return runtime
+
+
+def bootstrap_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    clock = setup_admission.run_clock_preflight()
+    if clock["status"] != "passed":
+        raise RuntimeError("wall-clock preflight failed; synchronize the host and Docker clocks")
+    compatibility_plan = {
+        "inputs": {
+            "relay_architecture": args.relay_architecture,
+            "switchyard_bundle": str(args.switchyard_bundle),
+            "switchyard_library_sha256": sha256_file(switchyard_library(args.switchyard_bundle)),
+        }
+    }
+    plugin = setup_admission.run_plugin_compatibility_preflight(compatibility_plan)
+    if plugin["status"] != "passed":
+        raise RuntimeError("Switchyard plugin does not load in the oldest supported task base")
+    evidence = {"status": "passed", "clock": clock, "plugin_compatibility": plugin}
+    write_json(args.run_root / "bootstrap-preflight.json", evidence)
+    return evidence
 
 
 def validate_smoke_evidence(
@@ -482,6 +614,9 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
         "sample_count": args.sample_count,
         "canary_task": args.canary_task,
         "concurrency": args.concurrency,
+        "setup_concurrency": args.setup_concurrency,
+        "setup_batch_size": args.setup_batch_size,
+        "setup_max_infra_attempts": args.setup_max_infra_attempts,
         "parallel_max_memory_gb": args.parallel_max_memory_gb,
         "docker_memory_reserve_gb": args.docker_memory_reserve_gb,
         "minimum_free_gb": args.minimum_free_gb,
@@ -506,6 +641,8 @@ def make_plan(args: argparse.Namespace, tasks: list[Task]) -> dict[str, Any]:
             "relay_wheel_sha256": sha256_file(args.relay_wheel),
             "switchyard_manifest_sha256": sha256_file(manifest),
             "switchyard_library_sha256": sha256_file(library_candidates[0]),
+            "hermetic_runtime_sha256": args.hermetic_runtime_payload["content_sha256"],
+            "setup_runtime_provenance_sha256": sha256_file(args.setup_runtime / "provenance.json"),
         },
         "tasks": [task.as_json() for task in tasks],
     }
@@ -634,6 +771,64 @@ class CohortRunner:
             write_json(self.args.run_root / "summary.json", summary)
             write_report(self.args.run_root, summary)
 
+    def provision_environments(self) -> bool:
+        output = self.args.run_root / "setup-admission"
+        command = [
+            str(self.args.python_bin),
+            str(self.args.setup_admission_runner),
+            "--dataset",
+            str(self.args.dataset_root),
+            "--runtime-root",
+            str(self.args.setup_runtime),
+            "--hermetic-runtime",
+            str(self.args.hermetic_runtime),
+            "--output",
+            str(output),
+            "--harbor",
+            str(self.args.harbor_bin),
+            "--concurrency",
+            str(self.args.setup_concurrency),
+            "--batch-size",
+            str(self.args.setup_batch_size),
+            "--max-infra-attempts",
+            str(self.args.setup_max_infra_attempts),
+            "--backoff-seconds",
+            str(self.args.backoff_seconds),
+            "--force-build",
+            "--no-preserve-containers",
+        ]
+        log_path = self.args.run_root / "setup-admission-coordinator.log"
+        with log_path.open("a", encoding="utf-8") as log:
+            process = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+        summary_path = output / "summary.json"
+        summary = read_json(summary_path) if summary_path.is_file() else {}
+        passed = (
+            process.returncode == 0
+            and summary.get("status") == "passed"
+            and summary.get("planned") == len(self.tasks)
+            and summary.get("passed") == len(self.tasks)
+        )
+        write_json(
+            self.args.run_root / "setup-state.json",
+            {
+                "schema_version": "harbor-hermes-switchyard.phase2-setup-state.v1",
+                "status": "passed" if passed else "failed",
+                "failure_class": (
+                    None
+                    if passed
+                    else "harness_or_integration"
+                    if process.returncode == 20 or summary.get("integration_failures")
+                    else "infrastructure"
+                ),
+                "exit_code": process.returncode,
+                "summary": summary,
+                "hermetic_runtime_sha256": self.args.hermetic_runtime_payload["content_sha256"],
+                "force_build": True,
+                "setup_concurrency": self.args.setup_concurrency,
+            },
+        )
+        return passed
+
     async def run_attempt(self, task: Task, attempt_number: int) -> tuple[int, Path, str]:
         task_root = self.args.run_root / "tasks" / task.directory_name
         attempts_root = task_root / "attempts"
@@ -660,6 +855,13 @@ class CohortRunner:
                 "AGENT_TIMEOUT_MULTIPLIER": "3",
                 "AGENT_SETUP_TIMEOUT_MULTIPLIER": "6",
                 "ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER": "6",
+                "HERMETIC_RUNTIME_DIR": str(self.args.hermetic_runtime),
+                "HERMETIC_RUNTIME_SHA256": self.args.hermetic_runtime_payload["content_sha256"],
+                # Harbor assigns trial-specific local image tags. Rebuild from the
+                # pinned task Dockerfile so an incompatible published prebuilt image
+                # cannot replace the architecture-validated setup-admission image.
+                # The setup lane has already populated Docker's layer cache.
+                "HARBOR_FORCE_BUILD": "true",
             }
         )
         with log_path.open("wb") as log:
@@ -782,6 +984,8 @@ class CohortRunner:
         preflight = shared_preflight(self.args, self.tasks)
         write_json(self.args.run_root / "preflight.json", {"status": "passed", **preflight})
         await self.refresh_summary()
+        if not self.provision_environments():
+            return False
         remaining = self.tasks
         if self.args.canary_task:
             first = self.tasks[0]
@@ -813,6 +1017,9 @@ def parse_args() -> argparse.Namespace:
         help="task to run alone before the cohort; pass an empty value to disable the canary",
     )
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--setup-concurrency", type=int, default=2)
+    parser.add_argument("--setup-batch-size", type=int, default=89)
+    parser.add_argument("--setup-max-infra-attempts", type=int, default=4)
     parser.add_argument("--parallel-max-memory-gb", type=int, default=2)
     parser.add_argument("--docker-memory-reserve-gb", type=int, default=4)
     parser.add_argument("--max-infra-attempts", type=int, default=3)
@@ -822,6 +1029,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offline-evidence", type=Path, required=True)
     parser.add_argument("--plugin-config-template", type=Path, required=True)
     parser.add_argument("--task-runner", type=Path, default=example_root / "run_terminal_bench.sh")
+    parser.add_argument(
+        "--setup-admission-runner",
+        type=Path,
+        default=example_root / "scripts" / "run_setup_admission.py",
+    )
+    parser.add_argument(
+        "--hermetic-runtime-builder",
+        type=Path,
+        default=example_root / "scripts" / "build_hermetic_runtime.py",
+    )
+    parser.add_argument(
+        "--runtime-preparer",
+        type=Path,
+        default=example_root / "scripts" / "prepare_runtime.py",
+    )
+    parser.add_argument(
+        "--bootstrap-root",
+        type=Path,
+        help="shared content-addressed bootstrap cache; generated automatically when absent",
+    )
     parser.add_argument("--harbor-bin", type=Path, default=example_root / ".venv" / "bin" / "harbor")
     parser.add_argument("--python-bin", type=Path, default=example_root / ".venv" / "bin" / "python")
     parser.add_argument("--phoenix-url", required=True)
@@ -837,6 +1064,9 @@ def parse_args() -> argparse.Namespace:
     for name in (
         "sample_count",
         "concurrency",
+        "setup_concurrency",
+        "setup_batch_size",
+        "setup_max_infra_attempts",
         "parallel_max_memory_gb",
         "docker_memory_reserve_gb",
         "max_infra_attempts",
@@ -846,6 +1076,9 @@ def parse_args() -> argparse.Namespace:
             parser.error(f"--{name.replace('_', '-')} must be positive")
     if not args.run_root.is_absolute():
         parser.error("--run-root must be absolute")
+    args.bootstrap_root = (
+        (args.bootstrap_root or args.run_root.parent / "harbor-hermes-switchyard-bootstrap").expanduser().resolve()
+    )
     if args.plan_only and args.preflight_only:
         parser.error("--plan-only and --preflight-only are mutually exclusive")
     return args
@@ -881,6 +1114,9 @@ def main() -> int:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise SystemExit(f"another Phase 2 supervisor owns {args.run_root}") from None
+        bootstrap_preflight(args)
+        args.hermetic_runtime, args.hermetic_runtime_payload = ensure_hermetic_runtime(args)
+        args.setup_runtime = prepare_setup_runtime(args)
         plan = make_plan(args, tasks)
         load_or_create_plan(args.run_root / "plan.json", plan)
         if args.plan_only:
@@ -903,6 +1139,9 @@ def main() -> int:
         if passed:
             return 0
         states = [read_json(path) for path in (args.run_root / "tasks").glob("*/task-state.json") if path.is_file()]
+        setup_state = args.run_root / "setup-state.json"
+        if setup_state.is_file():
+            states.append(read_json(setup_state))
         if any(state.get("failure_class") == "harness_or_integration" for state in states):
             return 20
         return 75

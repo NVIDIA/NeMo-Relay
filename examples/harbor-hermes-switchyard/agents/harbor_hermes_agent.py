@@ -12,6 +12,7 @@ into the task environment, and frames the additional Phase 1 artifacts around
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shlex
 import time
@@ -30,9 +31,15 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _DEFAULT_HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
 _DEFAULT_HERMES_REF = "feat/relay-native-plugin-init"
 _DEFAULT_HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
-_DEFAULT_SWITCHYARD_COMMIT = "5d9d3292d6154e44d50295d0d4a3fd4f144f2528"
+_DEFAULT_SWITCHYARD_COMMIT = "8daac03edf8544144833af1fd009b3da737715bc"
 _ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 _PROVIDER_AUTHORIZATION_FILE = "/run/secrets/switchyard-provider-authorization"
+_HERMETIC_RUNTIME_ROOT = "/opt/hermes-runtime"
+_HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
+_HERMETIC_CA_BUNDLE_RELATIVE = Path("hermes-agent-src/venv/lib/python3.11/site-packages/certifi/cacert.pem")
+_HERMETIC_CA_BUNDLE = f"{_HERMETIC_RUNTIME_ROOT}/{_HERMETIC_CA_BUNDLE_RELATIVE.as_posix()}"
+_HERMETIC_RUNTIME_READY_ATTEMPTS = 6
+_HERMETIC_RUNTIME_READY_DELAY_SECONDS = 2
 
 
 def _require_full_sha(value: str, name: str) -> str:
@@ -55,6 +62,73 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _load_hermetic_runtime(
+    path: Path,
+    *,
+    expected_digest: str,
+    hermes_commit: str,
+    relay_wheel_sha256: str,
+    relay_architecture: str,
+) -> dict[str, Any]:
+    marker = path / "payload.json"
+    if not marker.is_file():
+        raise FileNotFoundError(marker)
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    expected = {
+        "schema_version": _HERMETIC_RUNTIME_SCHEMA,
+        "status": "passed",
+        "content_sha256": expected_digest,
+        "hermes_commit": hermes_commit,
+        "relay_wheel_sha256": relay_wheel_sha256,
+        "relay_architecture": relay_architecture,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": payload.get(key)}
+        for key, value in expected.items()
+        if payload.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"hermetic runtime metadata mismatch: {mismatches}")
+    required = (
+        path / "bin" / "hermes",
+        path / "bin" / "python",
+        path / "bin" / "uv",
+        path / "hermes-agent-src" / "venv",
+        path / _HERMETIC_CA_BUNDLE_RELATIVE,
+    )
+    missing = [str(candidate) for candidate in required if not candidate.exists()]
+    if missing:
+        raise FileNotFoundError(f"hermetic runtime is incomplete: {missing}")
+    return payload
+
+
+def _hermetic_runtime_readiness_command(
+    runtime_root: str = _HERMETIC_RUNTIME_ROOT,
+    *,
+    attempts: int = _HERMETIC_RUNTIME_READY_ATTEMPTS,
+    delay_seconds: int = _HERMETIC_RUNTIME_READY_DELAY_SECONDS,
+) -> str:
+    """Return a bounded probe that executes both nested runtime entrypoints."""
+    if attempts < 1:
+        raise ValueError("attempts must be positive")
+    if delay_seconds < 0:
+        raise ValueError("delay_seconds cannot be negative")
+    runtime = shlex.quote(runtime_root)
+    attempt_numbers = " ".join(str(attempt) for attempt in range(1, attempts + 1))
+    return (
+        "runtime_ready=1; "
+        f"for attempt in {attempt_numbers}; do "
+        f'if {runtime}/bin/python -c "import importlib.metadata as m; '
+        "assert m.version('nemo-relay') == '0.7.0'\" "
+        f"&& {runtime}/bin/hermes version; then "
+        "runtime_ready=0; break; "
+        "else runtime_ready=$?; fi; "
+        f'if [ "$attempt" -lt {attempts} ]; then sleep {delay_seconds}; fi; '
+        "done; "
+        '[ "$runtime_ready" -eq 0 ] || exit "$runtime_ready"; '
+    )
 
 
 def _verify_elf_architecture(path: Path, architecture: str) -> None:
@@ -234,6 +308,8 @@ class HarborHermesAgent(Hermes):
         switchyard_commit: str = _DEFAULT_SWITCHYARD_COMMIT,
         artifact_root: str = "/logs/agent/direct-hermes",
         inject_post_response_failure: bool = False,
+        hermetic_runtime_dir: str | None = None,
+        hermetic_runtime_sha256: str | None = None,
         **kwargs: Any,
     ) -> None:
         self.repository_url = _require_public_https_git_url(repository_url)
@@ -252,6 +328,8 @@ class HarborHermesAgent(Hermes):
         self.relay_wheel_path = Path(relay_wheel_path).expanduser().resolve()
         self.artifact_root = artifact_root.rstrip("/")
         self.inject_post_response_failure = inject_post_response_failure
+        self.hermetic_runtime_dir: Path | None = None
+        self.hermetic_runtime_sha256: str | None = None
         self._load_provider_authorization = False
         if not self.artifact_root.startswith("/logs/agent/"):
             raise ValueError("artifact_root must be an absolute child of /logs/agent")
@@ -278,6 +356,21 @@ class HarborHermesAgent(Hermes):
         self.switchyard_library = libraries[0]
         _verify_elf_architecture(self.switchyard_library, relay_architecture)
 
+        if (hermetic_runtime_dir is None) != (hermetic_runtime_sha256 is None):
+            raise ValueError("hermetic_runtime_dir and hermetic_runtime_sha256 must be supplied together")
+        if hermetic_runtime_dir is not None and hermetic_runtime_sha256 is not None:
+            runtime_dir = Path(hermetic_runtime_dir).expanduser().resolve()
+            runtime_digest = _require_sha256(hermetic_runtime_sha256, "hermetic_runtime_sha256")
+            _load_hermetic_runtime(
+                runtime_dir,
+                expected_digest=runtime_digest,
+                hermes_commit=self.commit,
+                relay_wheel_sha256=self.relay_wheel_sha256,
+                relay_architecture=self.relay_architecture,
+            )
+            self.hermetic_runtime_dir = runtime_dir
+            self.hermetic_runtime_sha256 = runtime_digest
+
         self._example_root = Path(__file__).resolve().parents[1]
         self._finalizer_path = self._example_root / "scripts" / "finalize_artifacts.py"
         if not self._finalizer_path.is_file():
@@ -296,6 +389,15 @@ class HarborHermesAgent(Hermes):
         cwd: str | None = None,
         timeout_sec: int | None = None,
     ) -> Any:
+        if self.hermetic_runtime_dir is not None:
+            ca_bundle = shlex.quote(_HERMETIC_CA_BUNDLE)
+            command = (
+                f"test -r {ca_bundle}; "
+                f"export SSL_CERT_FILE={ca_bundle}; "
+                f"export REQUESTS_CA_BUNDLE={ca_bundle}; "
+                f"export CURL_CA_BUNDLE={ca_bundle}; "
+                f"{command}"
+            )
         if self._load_provider_authorization:
             secret_file = shlex.quote(_PROVIDER_AUTHORIZATION_FILE)
             command = (
@@ -314,6 +416,31 @@ class HarborHermesAgent(Hermes):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
+        if self.hermetic_runtime_dir is not None:
+            runtime = shlex.quote(_HERMETIC_RUNTIME_ROOT)
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    "set -euo pipefail; "
+                    f"test -r {runtime}/payload.json; "
+                    f"test -x {runtime}/bin/hermes; "
+                    f"test -x {runtime}/bin/python; "
+                    f"test -x {runtime}/bin/uv; "
+                    f"test -r {shlex.quote(_HERMETIC_CA_BUNDLE)}; "
+                    f"{_hermetic_runtime_readiness_command()}"
+                    "rm -rf /tmp/hermes-agent-src; "
+                    f"ln -s {runtime}/hermes-agent-src /tmp/hermes-agent-src; "
+                    'mkdir -p /tmp/hermes/bin "$HOME/.local/bin"; '
+                    f'ln -sf {runtime}/bin/hermes "$HOME/.local/bin/hermes"; '
+                    f"ln -sf {runtime}/bin/uv /tmp/hermes/bin/uv; "
+                    f"if test -x {runtime}/bin/rg; then "
+                    f'ln -sf {runtime}/bin/rg "$HOME/.local/bin/rg"; fi; '
+                    'export PATH="$HOME/.local/bin:$PATH"'
+                ),
+                timeout_sec=90,
+            )
+            return
+
         await self.exec_as_root(
             environment,
             command=(
@@ -371,22 +498,47 @@ class HarborHermesAgent(Hermes):
         await environment.upload_file(self.relay_config_path, "/tmp/hermes/relay/plugins.toml")
         relay_wheel = f"/opt/relay-wheels/{self.relay_wheel_path.name}"
         await environment.upload_file(self.relay_wheel_path, relay_wheel)
+        if self.hermetic_runtime_dir is None:
+            relay_install = (
+                "/tmp/hermes/bin/uv pip install "
+                "--python /tmp/hermes-agent-src/venv/bin/python "
+                f"--force-reinstall --no-deps {shlex.quote(relay_wheel)}; "
+                "/tmp/hermes-agent-src/venv/bin/python"
+            )
+        else:
+            relay_install = f"{_HERMETIC_RUNTIME_ROOT}/bin/python"
         await self.exec_as_agent(
             environment,
             command=(
                 "set -euo pipefail; "
                 f"test \"$(sha256sum {shlex.quote(relay_wheel)} | cut -d' ' -f1)\" = "
                 f"{shlex.quote(self.relay_wheel_sha256)}; "
-                "/tmp/hermes/bin/uv pip install "
-                "--python /tmp/hermes-agent-src/venv/bin/python "
-                f"--force-reinstall --no-deps {shlex.quote(relay_wheel)}; "
-                "/tmp/hermes-agent-src/venv/bin/python -c "
-                "\"import importlib.metadata as m; assert m.version('nemo-relay') == '0.7.0'\""
+                f'{relay_install} -c "import importlib.metadata as m; '
+                "assert m.version('nemo-relay') == '0.7.0'\""
             ),
             timeout_sec=120,
         )
         await environment.upload_dir(self.switchyard_bundle_dir, "/opt/relay-plugins/nvidia.switchyard")
         await environment.upload_file(self._finalizer_path, "/installed-agent/finalize_artifacts.py")
+        probe_python = (
+            f"{_HERMETIC_RUNTIME_ROOT}/bin/python"
+            if self.hermetic_runtime_dir is not None
+            else "/tmp/hermes-agent-src/venv/bin/python"
+        )
+        switchyard_library = f"/opt/relay-plugins/nvidia.switchyard/{self.switchyard_library.name}"
+        await self.exec_as_agent(
+            environment,
+            command=(
+                f"{probe_python} -c "
+                + shlex.quote(
+                    "import ctypes, importlib.metadata as m; "
+                    "assert m.version('nemo-relay') == '0.7.0'; "
+                    f"library = ctypes.CDLL({switchyard_library!r}); "
+                    "assert getattr(library, 'nemo_relay_register_plugin')"
+                )
+            ),
+            timeout_sec=30,
+        )
         await self.exec_as_agent(
             environment,
             command=self._finalizer_command("initialize"),
@@ -402,7 +554,11 @@ class HarborHermesAgent(Hermes):
         error_type: str = "",
     ) -> str:
         arguments = [
-            "/tmp/hermes-agent-src/venv/bin/python",
+            (
+                f"{_HERMETIC_RUNTIME_ROOT}/bin/python"
+                if self.hermetic_runtime_dir is not None
+                else "/tmp/hermes-agent-src/venv/bin/python"
+            ),
             "/installed-agent/finalize_artifacts.py",
             mode,
             "--artifact-root",

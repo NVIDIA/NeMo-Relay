@@ -290,6 +290,60 @@ def test_phase2_launcher_is_local_dataset_only() -> None:
     assert "INFERENCE_SECRETS_FILE" not in launcher
 
 
+def test_coordinator_owns_bounded_force_build_setup_lane(
+    tmp_path: Path,
+) -> None:
+    module = load_coordinator()
+    args = argparse.Namespace(
+        run_root=tmp_path / "run",
+        python_bin=tmp_path / "python",
+        setup_admission_runner=tmp_path / "run_setup_admission.py",
+        dataset_root=tmp_path / "dataset",
+        setup_runtime=tmp_path / "setup-runtime",
+        hermetic_runtime=tmp_path / "hermetic-runtime",
+        harbor_bin=tmp_path / "harbor",
+        setup_concurrency=2,
+        setup_batch_size=89,
+        setup_max_infra_attempts=4,
+        backoff_seconds=0,
+        hermetic_runtime_payload={"content_sha256": "a" * 64},
+    )
+    args.run_root.mkdir()
+    captured: list[str] = []
+
+    def fake_run(command: list[str], **_: object) -> SimpleNamespace:
+        captured.extend(command)
+        output = Path(command[command.index("--output") + 1])
+        output.mkdir(parents=True)
+        (output / "summary.json").write_text(
+            json.dumps({"status": "passed", "planned": 2, "passed": 2}),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0)
+
+    tasks = [module.Task(1, "one", 2), module.Task(2, "two", 2)]
+    with patch.object(module.subprocess, "run", side_effect=fake_run):
+        assert module.CohortRunner(args, tasks).provision_environments()
+    assert captured[captured.index("--concurrency") + 1] == "2"
+    assert captured[captured.index("--batch-size") + 1] == "89"
+    assert "--force-build" in captured
+    assert "--no-preserve-containers" in captured
+    rendered = " ".join(captured)
+    assert "SWITCHYARD_PROVIDER_AUTHORIZATION" not in rendered
+    assert "Bearer " not in rendered
+
+
+def test_provider_attempt_rebuilds_from_cached_layers_and_uses_hermetic_runtime() -> None:
+    runner = (EXAMPLE_ROOT / "run_terminal_bench.sh").read_text(encoding="utf-8")
+    coordinator = (EXAMPLE_ROOT / "scripts" / "run_phase2_cohort.py").read_text(encoding="utf-8")
+    assert 'HARBOR_FORCE_BUILD": "true"' in coordinator
+    assert 'HERMETIC_RUNTIME_DIR": str(self.args.hermetic_runtime)' in coordinator
+    assert 'harbor_force_build="${HARBOR_FORCE_BUILD:-true}"' in runner
+    assert "harbor_build_args+=(--force-build)" in runner
+    assert '--ak "hermetic_runtime_sha256=$hermetic_runtime_sha256"' in runner
+    assert '"target": "/opt/hermes-runtime"' in runner
+
+
 def test_plugin_contract_owns_routes_and_authorization_name() -> None:
     module = load_coordinator()
     contract = module.plugin_contract(EXAMPLE_ROOT / "config" / "plugins.toml.in")

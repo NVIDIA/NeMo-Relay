@@ -32,9 +32,13 @@ sample_count="${TBENCH_SAMPLE_COUNT:-89}"
 # keeps the conservative default.
 canary_task="${TBENCH_CANARY_TASK-adaptive-rejection-sampler}"
 concurrency="${TBENCH_CONCURRENCY:-4}"
+setup_concurrency="${TBENCH_SETUP_CONCURRENCY:-2}"
+setup_batch_size="${TBENCH_SETUP_BATCH_SIZE:-89}"
+setup_max_infra_attempts="${TBENCH_SETUP_MAX_INFRA_ATTEMPTS:-4}"
 parallel_memory_gb="${TBENCH_PARALLEL_MAX_MEMORY_GB:-2}"
 docker_memory_reserve_gb="${TBENCH_DOCKER_MEMORY_RESERVE_GB:-4}"
 minimum_free_gb="${TBENCH_MINIMUM_FREE_GB:-100}"
+bootstrap_root="${TERMINAL_BENCH_BOOTSTRAP_ROOT:-${TERMINAL_BENCH_ADMISSION_ROOT:-$(dirname "$run_root")}/bootstrap}"
 
 for required in \
   "$harbor_bin" \
@@ -74,6 +78,9 @@ exec "$python_bin" "$example_root/scripts/run_phase2_cohort.py" \
   --sample-count "$sample_count" \
   --canary-task "$canary_task" \
   --concurrency "$concurrency" \
+  --setup-concurrency "$setup_concurrency" \
+  --setup-batch-size "$setup_batch_size" \
+  --setup-max-infra-attempts "$setup_max_infra_attempts" \
   --parallel-max-memory-gb "$parallel_memory_gb" \
   --docker-memory-reserve-gb "$docker_memory_reserve_gb" \
   --minimum-free-gb "$minimum_free_gb" \
@@ -89,4 +96,5 @@ exec "$python_bin" "$example_root/scripts/run_phase2_cohort.py" \
   --switchyard-bundle "$switchyard_bundle" \
   --relay-wheel "$relay_wheel" \
   --relay-architecture "$relay_architecture" \
+  --bootstrap-root "$bootstrap_root" \
   "$@"

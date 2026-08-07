@@ -28,6 +28,9 @@ agent_setup_timeout_multiplier="${AGENT_SETUP_TIMEOUT_MULTIPLIER:-6}"
 environment_build_timeout_multiplier="${ENVIRONMENT_BUILD_TIMEOUT_MULTIPLIER:-6}"
 collector_image="${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.135.0}"
 inject_post_response_failure="${INJECT_POST_RESPONSE_FAILURE:-false}"
+hermetic_runtime_dir="${HERMETIC_RUNTIME_DIR:-}"
+hermetic_runtime_sha256="${HERMETIC_RUNTIME_SHA256:-}"
+harbor_force_build="${HARBOR_FORCE_BUILD:-true}"
 
 if [[ -z "$run_root" || "$run_root" != /* ]]; then
   echo "usage: $0 /absolute/new-run-root" >&2
@@ -86,6 +89,25 @@ if [[ "$relay_architecture" != "x86_64" && "$relay_architecture" != "aarch64" ]]
   echo "RELAY_ARCHITECTURE must be x86_64 or aarch64" >&2
   exit 2
 fi
+if [[ ( -n "$hermetic_runtime_dir" && -z "$hermetic_runtime_sha256" ) || \
+      ( -z "$hermetic_runtime_dir" && -n "$hermetic_runtime_sha256" ) ]]; then
+  echo "HERMETIC_RUNTIME_DIR and HERMETIC_RUNTIME_SHA256 must be supplied together" >&2
+  exit 2
+fi
+if [[ -n "$hermetic_runtime_dir" ]]; then
+  if [[ "$hermetic_runtime_dir" != /* || ! -f "$hermetic_runtime_dir/payload.json" ]]; then
+    echo "HERMETIC_RUNTIME_DIR must be an absolute prepared runtime directory" >&2
+    exit 2
+  fi
+  if [[ ! "$hermetic_runtime_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "HERMETIC_RUNTIME_SHA256 must be a lowercase SHA-256 digest" >&2
+    exit 2
+  fi
+fi
+if [[ "$harbor_force_build" != "true" && "$harbor_force_build" != "false" ]]; then
+  echo "HARBOR_FORCE_BUILD must be true or false" >&2
+  exit 2
+fi
 
 docker info >/dev/null
 curl --fail --silent --show-error \
@@ -127,14 +149,23 @@ chmod 0600 "$provider_authorization_file"
 provider_authorization_target="/run/secrets/switchyard-provider-authorization"
 mounts_json="$($python_bin -c '
 import json, sys
-print(json.dumps([{
+mounts = [{
     "type": "bind",
     "source": sys.argv[1],
     "target": sys.argv[2],
     "read_only": True,
     "bind": {"create_host_path": False},
-}], separators=(",", ":")))
-' "$provider_authorization_file" "$provider_authorization_target")"
+}]
+if sys.argv[3]:
+    mounts.append({
+        "type": "bind",
+        "source": sys.argv[3],
+        "target": "/opt/hermes-runtime",
+        "read_only": True,
+        "bind": {"create_host_path": False},
+    })
+print(json.dumps(mounts, separators=(",", ":")))
+' "$provider_authorization_file" "$provider_authorization_target" "$hermetic_runtime_dir")"
 
 if [[ -z "$switchyard_bundle" ]]; then
   temporary_build="$(mktemp -d "$(dirname "$run_root")/.switchyard-build.XXXXXX")"
@@ -212,6 +243,16 @@ elif [[ "$inject_post_response_failure" != "false" ]]; then
   echo "INJECT_POST_RESPONSE_FAILURE must be true or false" >&2
   exit 2
 fi
+if [[ -n "$hermetic_runtime_dir" ]]; then
+  agent_kwargs+=(
+    --ak "hermetic_runtime_dir=$hermetic_runtime_dir"
+    --ak "hermetic_runtime_sha256=$hermetic_runtime_sha256"
+  )
+fi
+harbor_build_args=()
+if [[ "$harbor_force_build" == "true" ]]; then
+  harbor_build_args+=(--force-build)
+fi
 (
   "$harbor_bin" run \
     "${dataset_args[@]}" \
@@ -242,7 +283,7 @@ fi
     --agent-timeout-multiplier "$agent_timeout_multiplier" \
     --agent-setup-timeout-multiplier "$agent_setup_timeout_multiplier" \
     --environment-build-timeout-multiplier "$environment_build_timeout_multiplier" \
-    --force-build \
+    "${harbor_build_args[@]}" \
     --yes
 ) >"$run_root/harbor.log" 2>&1
 

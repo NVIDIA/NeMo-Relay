@@ -5,7 +5,7 @@
 set -euo pipefail
 
 switchyard_repository="${SWITCHYARD_REPOSITORY:-https://github.com/bbednarski9/Switchyard.git}"
-switchyard_commit="${SWITCHYARD_COMMIT:-5d9d3292d6154e44d50295d0d4a3fd4f144f2528}"
+switchyard_commit="${SWITCHYARD_COMMIT:-8daac03edf8544144833af1fd009b3da737715bc}"
 target_architecture="${SWITCHYARD_TARGET_ARCHITECTURE:-x86_64}"
 output_dir="${1:-}"
 
@@ -40,7 +40,7 @@ if [[ "$target_architecture" != "x86_64" && "$target_architecture" != "aarch64" 
   exit 2
 fi
 if [[ "$docker_architecture" == "aarch64" || "$docker_architecture" == "arm64" ]]; then
-  builder_image="${SWITCHYARD_BUILDER_IMAGE:-rust:1.96.1-bookworm@sha256:809725748b728a8e1f8621a3c76e49fba8780c16d99ceda20abdb44d32665c30}"
+  builder_image="${SWITCHYARD_BUILDER_IMAGE:-rust:1.96.1-bullseye@sha256:69e444ec65a82386d041a4a3d15e47a797967b90ae24aa342bd8a3600dd9e244}"
   builder_platform="linux/arm64"
   if [[ "$target_architecture" == "x86_64" ]]; then
     cargo_target="x86_64-unknown-linux-gnu"
@@ -54,7 +54,7 @@ else
     echo "aarch64 cross-builds from an x86_64 Docker host are not supported" >&2
     exit 2
   fi
-  builder_image="${SWITCHYARD_BUILDER_IMAGE:-rust:1.96.1-bookworm@sha256:d99f7b31f49909348dc59b51f3c95d1efded1701ffb222f095aaab7de3c4abd8}"
+  builder_image="${SWITCHYARD_BUILDER_IMAGE:-rust:1.96.1-bullseye@sha256:65136b30fc6b10112cbae63a868da085a878679a80d562272e485ecaaad3276a}"
   builder_platform="linux/amd64"
   cargo_target=""
   library_path="/tmp/target/release/libswitchyard_nemo_relay_plugin.so"
