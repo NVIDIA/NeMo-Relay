@@ -203,10 +203,16 @@ The `gen_ai` endpoint uses these operation names:
 | Embedder | `embeddings` |
 | Retriever | `retrieval` |
 
-Rerankers, marks, and unsupported scope types are omitted. Supported
-descendants remain attached to their nearest exported ancestor. This
-projection never emits `nemo_relay.*` fields and does not export message
-content, tool payloads, or retrieval content.
+Marks are omitted. Relay scope types without GenAI semantics are emitted as
+minimal internal spans so that the original span parentage is preserved. This
+projection never emits `nemo_relay.*` fields. LLM spans include the
+`gen_ai.system_instructions`, `gen_ai.input.messages`, and
+`gen_ai.output.messages` attributes as JSON strings that follow the
+OpenTelemetry GenAI schemas. Each attribute is emitted only when its normalized
+instructions, messages, or response content is present. Redact sensitive
+content with an LLM or event sanitizer. Tool and retrieval payloads are not
+exported. Set top-level `enable_full_payloads = true` to retain complete
+sanitized LLM request history on every start span.
 
 ### Error Type Mapping
 
