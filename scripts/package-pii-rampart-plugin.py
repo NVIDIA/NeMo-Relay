@@ -29,7 +29,6 @@ TARGET_LIBRARIES = {
     "aarch64-unknown-linux-musl": "libnemo_relay_pii_rampart_plugin.so",
     "aarch64-apple-darwin": "libnemo_relay_pii_rampart_plugin.dylib",
     "x86_64-pc-windows-msvc": "nemo_relay_pii_rampart_plugin.dll",
-    "aarch64-pc-windows-msvc": "nemo_relay_pii_rampart_plugin.dll",
 }
 PACKAGE_FILES = {
     "ATTRIBUTIONS-Rust.md": Path("ATTRIBUTIONS-Rust.md"),

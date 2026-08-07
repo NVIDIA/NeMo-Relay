@@ -279,8 +279,10 @@ The release pipeline then:
      musl Linux binaries natively, validates each in its matching container, and
      packages each prebuilt binary as a `nemo-relay-cli-bin` wheel.
    - The same Rust package matrix builds the opt-in Rampart native plugin for
-     seven CLI targets, materializes a SHA-256-bound plugin manifest, and loads
-     the registration symbol in the matching host or Linux runtime container.
+     six supported targets, materializes a SHA-256-bound plugin manifest, and
+     loads the registration symbol in the matching host or Linux runtime
+     container. The Relay CLI remains available on Windows ARM64, but Tract does
+     not currently support compiling the Rampart plugin for that target.
    - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
      API wheels, CLI wheels, split Node npm packages, and Rampart plugin archives.
      `SHA256SUMS` covers every attached distribution artifact, and raw CLI

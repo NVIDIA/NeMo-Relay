@@ -125,6 +125,10 @@ class PackagePiiRampartPluginTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match"):
                 PACKAGE.archive_entries(repository, library, "x86_64-unknown-linux-gnu")
 
+    def test_rejects_unsupported_target(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported target"):
+            PACKAGE.library_name("aarch64-pc-windows-msvc")
+
     def test_rejects_unsafe_archive_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

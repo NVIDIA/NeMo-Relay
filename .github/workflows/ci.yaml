@@ -324,7 +324,7 @@ jobs:
             expect_count 7 "Python API wheel" "${python_api_wheels[@]}"
             expect_count 8 "Node npm" "${node_npm[@]}"
             expect_count 5 "Rampart tar" "${rampart_tars[@]}"
-            expect_count 2 "Rampart zip" "${rampart_zips[@]}"
+            expect_count 1 "Rampart zip" "${rampart_zips[@]}"
 
             mapfile -t distribution_assets < <(
               find . -maxdepth 1 -type f \
