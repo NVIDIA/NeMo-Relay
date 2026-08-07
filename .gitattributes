@@ -2,3 +2,4 @@
 # SPDX-License-Identifier: Apache-2.0
 
 examples/python-grpc-worker-plugin/nemo_relay_python_grpc_worker_example/worker.py text eol=lf
+*.cmd text eol=crlf

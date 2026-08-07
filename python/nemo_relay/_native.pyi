@@ -1157,6 +1157,26 @@ class AnthropicMessagesCodec:
         """Decode an Anthropic response into a normalized response view."""
         ...
 
+class GeminiGenerateContentCodec:
+    """Built-in codec for Gemini generateContent requests and responses.
+
+    Summary:
+        Native codec bridge for Gemini generateContent payloads.
+    """
+
+    def __init__(self) -> None:
+        """Create a Gemini generateContent codec."""
+        ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a Gemini generateContent request into a normalized request view."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode a normalized request back into Gemini generateContent shape."""
+        ...
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
+        """Decode a Gemini response into a normalized response view."""
+        ...
+
 class AdaptiveRuntime:
     """Hosted adaptive runtime bridge implemented by the native extension.
 

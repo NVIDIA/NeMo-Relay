@@ -49,10 +49,10 @@ use uuid::Uuid;
 use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json};
 use crate::py_callable;
 use crate::py_types::{
-    PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyLLMAttributes, PyLLMHandle, PyLLMRequest,
-    PyLlmStream, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
-    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
-    PyToolAttributes, PyToolHandle,
+    PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyGeminiGenerateContentCodec,
+    PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream, PyOpenAIChatCodec,
+    PyOpenAIResponsesCodec, PyPropagationContext, PyScopeAttributes, PyScopeHandle, PyScopeStack,
+    PyScopeType, PyThreadScopeStackBinding, PyToolAttributes, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -258,6 +258,9 @@ fn py_llm_response_codec(
         if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
             return Some(builtin.inner_response_codec.clone());
         }
+        if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyGeminiGenerateContentCodec>>() {
+            return Some(builtin.inner_response_codec.clone());
+        }
         // Fall back to wrapping the Python object as a custom response codec
         Some(Arc::new(py_callable::PyLlmResponseCodecWrapper {
             py_codec: c.clone().unbind(),
@@ -277,6 +280,9 @@ fn py_llm_codec(codec: Option<&Bound<'_, PyAny>>) -> Option<Arc<dyn LlmCodec>> {
             return Some(builtin.inner_codec.clone());
         }
         if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyGeminiGenerateContentCodec>>() {
             return Some(builtin.inner_codec.clone());
         }
         Some(Arc::new(py_callable::PyLlmCodecWrapper {

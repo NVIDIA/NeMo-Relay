@@ -66,12 +66,14 @@ and older CLI versions during installation, diagnostics, and transparent runs.
 | --- | --- | --- | --- |
 | Claude Code | 2.1.121 | Persistent install, transparent run, lifecycle hooks, local gateway routing, and pre-tool security | Claude desktop, web, and application sessions are unsupported unless they expose the same local hook and gateway controls. Optimization requires gateway-routed LLM traffic and available hooks. |
 | Codex CLI | 0.143.0 | Persistent install, transparent run, 10 supported plugin hooks, local gateway routing, and pre-tool security | Cloud or remote tasks that bypass the local machine have partial or no LLM capture. The plugin hook schema has no `SessionEnd`; Relay finalizes the cumulative session snapshot at `Stop`. Encrypted Codex multi-agent v2 payloads cannot be decrypted or reliably linked. |
-| Hermes Agent | 0.18.2 | Persistent MCP integration, transparent run, lifecycle hooks, local gateway routing, and pre-tool security | Optimization depends on Hermes shell and API-request hook coverage. Hook-observed and gateway-observed LLM spans can both be present when both paths are enabled. |
 
 For installation, diagnostics, and host-specific behavior, refer to [Coding Agent
 Installation](/nemo-relay-cli/plugin-installation), [Claude
-Code](/nemo-relay-cli/claude-code), [Codex](/nemo-relay-cli/codex), and [Hermes
-Agent](/nemo-relay-cli/hermes).
+Code](/nemo-relay-cli/claude-code), and [Codex](/nemo-relay-cli/codex).
+
+Hermes Agent includes NeMo Relay as a native in-process integration. It does
+not require a separate observability plugin or Relay CLI setup. Hermes Agent
+understands NeMo Relay plugin configurations.
 
 ## Framework and Agent Harness Integrations
 

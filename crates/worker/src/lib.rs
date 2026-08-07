@@ -154,6 +154,8 @@ pub enum BuiltinLlmCodec {
     OpenAiResponses,
     /// Anthropic Messages.
     AnthropicMessages,
+    /// Gemini generateContent request and response payloads.
+    GeminiGenerateContent,
 }
 
 /// Per-call LLM codec identity supplied to worker sanitizers.
@@ -2157,6 +2159,9 @@ fn codec_identity_from_proto(
             Some("anthropic_messages") => {
                 LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
             }
+            Some("gemini_generate_content") => {
+                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
+            }
             _ => LlmCodecIdentity::Opaque,
         },
         Some(LlmCodecKind::Runtime) => codec_id
@@ -2675,3 +2680,7 @@ fn rustc_version_runtime() -> String {
         .unwrap_or("unknown")
         .to_string()
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/codec_identity_tests.rs"]
+mod codec_identity_tests;

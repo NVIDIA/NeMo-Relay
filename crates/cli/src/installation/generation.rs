@@ -366,6 +366,7 @@ impl GenerationRetirement {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn acquire(path: &Path) -> Result<Option<Self>, String> {
         Self::acquire_with_timeout(path, DEFAULT_GENERATION_LOCK_TIMEOUT)
     }
@@ -377,6 +378,7 @@ impl GenerationRetirement {
         Self::acquire_impl(path, DEFAULT_GENERATION_LOCK_TIMEOUT, Some(external_lock))
     }
 
+    #[cfg(test)]
     pub(crate) fn acquire_with_timeout(
         path: &Path,
         timeout: Duration,
@@ -868,7 +870,7 @@ fn open_generation_lock_path(lock_path: &Path) -> Result<File, String> {
 
 fn open_marker_generation_lock(marker_path: &Path, lock_path: &Path) -> Result<File, String> {
     // Legacy one-line markers derive a sibling lock. Creating only that deterministic path keeps
-    // old installs and Hermes upgrades compatible without allowing a marker to create an
+    // old installs compatible without allowing a marker to create an
     // arbitrary external file. New plugin markers always point at a pre-initialized state lock.
     if is_legacy_sibling_lock(marker_path, lock_path)? {
         open_generation_lock_path(lock_path)

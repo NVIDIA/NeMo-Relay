@@ -346,6 +346,27 @@ fn doctor_accepts_offline_flag() {
 }
 
 #[test]
+fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
+    for shortcut in ["claude", "codex"] {
+        let cli = Cli::try_parse_from([
+            "nemo-relay",
+            shortcut,
+            "--dry-run",
+            "--",
+            shortcut,
+            "synthetic argument",
+        ])
+        .unwrap();
+        let command = match cli.command {
+            Some(Command::Claude(command)) | Some(Command::Codex(command)) => command,
+            other => panic!("expected agent shortcut command, got {other:?}"),
+        };
+        assert!(command.dry_run);
+        assert_eq!(command.command, [shortcut, "synthetic argument"]);
+    }
+}
+
+#[test]
 fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
     let visited = std::cell::RefCell::new(Vec::new());
     let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {
@@ -353,7 +374,6 @@ fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
         match agent {
             CodingAgent::Codex => Err(error::CliError::Install("codex failure".into())),
             CodingAgent::ClaudeCode => Ok(ExitCode::FAILURE),
-            CodingAgent::Hermes => Ok(ExitCode::SUCCESS),
         }
     })
     .unwrap_err()

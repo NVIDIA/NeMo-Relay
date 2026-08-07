@@ -116,6 +116,7 @@ extern int32_t nemo_relay_llm_stream_call_execute(
 extern FfiCodecHandle* nemo_relay_openai_chat_codec_new(void);
 extern FfiCodecHandle* nemo_relay_openai_responses_codec_new(void);
 extern FfiCodecHandle* nemo_relay_anthropic_messages_codec_new(void);
+extern FfiCodecHandle* nemo_relay_gemini_generate_content_codec_new(void);
 extern void nemo_relay_codec_free(FfiCodecHandle* handle);
 
 extern void nemo_relay_set_last_error_message(const char* msg);
@@ -922,9 +923,9 @@ func WithLLMCodec(codec CodecFunc) LLMCallOption {
 
 // CodecHandle wraps an opaque FFI codec handle that carries both request
 // codec (decode/encode) and response codec (decode_response) implementations.
-// Create via [NewOpenAIChatCodec], [NewOpenAIResponsesCodec], or
-// [NewAnthropicMessagesCodec]. The handle is automatically freed when
-// garbage collected.
+// Create via [NewOpenAIChatCodec], [NewOpenAIResponsesCodec],
+// [NewAnthropicMessagesCodec], or [NewGeminiGenerateContentCodec]. The handle is
+// automatically freed when garbage collected.
 type CodecHandle struct {
 	ptr *C.FfiCodecHandle
 }
@@ -977,9 +978,25 @@ func NewAnthropicMessagesCodec() *CodecHandle {
 	return h
 }
 
+// NewGeminiGenerateContentCodec creates a codec for the Gemini generateContent API.
+//
+// The returned handle can be passed to [WithLLMCodec] or
+// [WithLLMResponseCodec] to enable structured request and response handling for
+// Gemini generateContent payloads.
+func NewGeminiGenerateContentCodec() *CodecHandle {
+	h := &CodecHandle{ptr: C.nemo_relay_gemini_generate_content_codec_new()}
+	runtime.SetFinalizer(h, func(h *CodecHandle) {
+		if h.ptr != nil {
+			C.nemo_relay_codec_free(h.ptr)
+			h.ptr = nil
+		}
+	})
+	return h
+}
+
 // WithLLMResponseCodec sets the response codec for this LLM call.
-// Pass a CodecHandle created by [NewOpenAIChatCodec],
-// [NewOpenAIResponsesCodec], or [NewAnthropicMessagesCodec].
+// Pass a CodecHandle created by [NewOpenAIChatCodec], [NewOpenAIResponsesCodec],
+// [NewAnthropicMessagesCodec], or [NewGeminiGenerateContentCodec].
 // The codec handle is kept alive for the duration of the FFI call via
 // runtime.KeepAlive, so it is safe to pass an inline-constructed handle.
 func WithLLMResponseCodec(codec *CodecHandle) LLMCallOption {

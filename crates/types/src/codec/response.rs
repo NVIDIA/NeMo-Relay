@@ -6,7 +6,8 @@
 //! This module defines [`AnnotatedLlmResponse`] and its supporting types
 //! for structured, API-agnostic access to LLM response data.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Map;
 
 use crate::Json;
 
@@ -190,11 +191,16 @@ fn default_cost_currency() -> String {
 /// Normalized reason why the model stopped generating.
 ///
 /// Maps from provider-specific stop reasons:
-/// - **Complete**: OpenAI Chat `"stop"`, Anthropic `"end_turn"`, Responses `"completed"`
-/// - **Length**: OpenAI Chat `"length"`, Anthropic `"max_tokens"`, Responses incomplete+max_output_tokens
-/// - **ToolUse**: OpenAI Chat `"tool_calls"`, Anthropic `"tool_use"`
-/// - **ContentFilter**: OpenAI Chat `"content_filter"`, Responses incomplete+content_filter
+/// - **Complete**: OpenAI Chat `"stop"`, Anthropic `"end_turn"`, Responses `"completed"`,
+///   Gemini generateContent `"STOP"` (without function-call parts)
+/// - **Length**: OpenAI Chat `"length"`, Anthropic `"max_tokens"`, Responses incomplete+max_output_tokens,
+///   Gemini generateContent `"MAX_TOKENS"`
+/// - **ToolUse**: OpenAI Chat `"tool_calls"`, Anthropic `"tool_use"`,
+///   Gemini generateContent `"TOOL_CODE"` (unconditional) or `"STOP"` when function-call parts are present
+/// - **ContentFilter**: OpenAI Chat `"content_filter"`, Responses incomplete+content_filter,
+///   Gemini generateContent `"SAFETY"` / `"RECITATION"` / `"BLOCKLIST"` / `"PROHIBITED_CONTENT"` and other policy codes
 /// - **Unknown**: Forward-compatible catch-all for unrecognized reasons
+///   (e.g. Gemini generateContent `"MALFORMED_FUNCTION_CALL"`, `"UNEXPECTED_TOOL_CALL"`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
@@ -229,7 +235,7 @@ impl FinishReason {
 /// Unlike the request-side `ToolCall` (which stores arguments as a JSON
 /// string per OpenAI convention), response tool calls store arguments as
 /// parsed [`Json`]. Codecs parse OpenAI's string arguments during decode;
-/// Anthropic's `input` is already parsed JSON.
+/// Anthropic's `input` and Gemini generateContent `args` are already parsed JSON objects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResponseToolCall {
     /// Unique identifier for this tool call.
@@ -326,6 +332,32 @@ pub enum ApiSpecificResponse {
         content_blocks: Option<Vec<Json>>,
     },
 
+    /// Gemini generateContent API-specific fields.
+    #[serde(rename = "gemini_generate_content")]
+    GeminiGenerateContent {
+        /// Tokens consumed by the model's internal reasoning (Gemini generateContent thinking).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thoughts_tokens: Option<u64>,
+        /// Candidate-level safety ratings from the Gemini generateContent response.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        safety_ratings: Option<Json>,
+        /// Grounding metadata (web search attribution, etc.).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        grounding_metadata: Option<Json>,
+        /// Citation metadata for grounded responses.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        citation_metadata: Option<Json>,
+        /// Any remaining candidate-level fields not modeled above.
+        #[serde(
+            flatten,
+            default,
+            skip_serializing_if = "gemini_extra_is_empty",
+            serialize_with = "serialize_gemini_extra",
+            deserialize_with = "deserialize_gemini_extra"
+        )]
+        extra: serde_json::Map<String, Json>,
+    },
+
     /// Custom/unknown API -- catch-all for user-implemented codecs.
     #[serde(rename = "custom")]
     Custom {
@@ -334,6 +366,31 @@ pub enum ApiSpecificResponse {
         /// Opaque API-specific data.
         data: Json,
     },
+}
+
+fn gemini_extra_is_empty(extra: &Map<String, Json>) -> bool {
+    extra.keys().all(|key| key == "api")
+}
+
+fn serialize_gemini_extra<S>(extra: &Map<String, Json>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let filtered = extra
+        .iter()
+        .filter(|(key, _)| key.as_str() != "api")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<Map<String, Json>>();
+    filtered.serialize(serializer)
+}
+
+fn deserialize_gemini_extra<'de, D>(deserializer: D) -> Result<Map<String, Json>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut extra = Map::<String, Json>::deserialize(deserializer)?;
+    extra.remove("api");
+    Ok(extra)
 }
 
 // ---------------------------------------------------------------------------

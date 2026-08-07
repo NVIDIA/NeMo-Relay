@@ -473,7 +473,8 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	chatCodec := NewOpenAIChatCodec()
 	responsesCodec := NewOpenAIResponsesCodec()
 	anthropicCodec := NewAnthropicMessagesCodec()
-	if chatCodec == nil || responsesCodec == nil || anthropicCodec == nil {
+	geminiCodec := NewGeminiGenerateContentCodec()
+	if chatCodec == nil || responsesCodec == nil || anthropicCodec == nil || geminiCodec == nil {
 		t.Fatal("expected non-nil codec handles")
 	}
 
@@ -484,10 +485,89 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	chatCodec = nil
 	responsesCodec = nil
 	anthropicCodec = nil
+	geminiCodec = nil
 
 	for i := 0; i < 8; i++ {
 		runtime.GC()
 		runtime.Gosched()
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestGeminiGenerateContentCodecFunctionCallID(t *testing.T) {
+	runTestWithScopeStack(t, testGeminiGenerateContentCodecFunctionCallID)
+}
+
+func testGeminiGenerateContentCodecFunctionCallID(t *testing.T) {
+	// Verify that NewGeminiGenerateContentCodec returns a usable handle and that,
+	// when processing a Gemini response with an explicit functionCall.id,
+	// the annotated response carries the actual id (not the function name).
+	geminiResp := json.RawMessage(`{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{"functionCall": {"id": "call_abc123", "name": "my_fn", "args": {"x": 1}}}]
+			},
+			"finishReason": "STOP",
+			"index": 0
+		}],
+		"usageMetadata": {}
+	}`)
+
+	executor := func(_ json.RawMessage) (json.RawMessage, error) {
+		return geminiResp, nil
+	}
+
+	capturedEvents, cleanup := registerLlmCodecEventCollector(t)
+	defer cleanup()
+
+	_, err := LlmCallExecute(
+		"gemini_fn_id_test",
+		map[string]interface{}{
+			"headers": map[string]interface{}{},
+			"content": map[string]interface{}{
+				"contents": []interface{}{
+					map[string]interface{}{
+						"role": "user",
+						"parts": []interface{}{
+							map[string]interface{}{"text": "call my_fn"},
+						},
+					},
+				},
+			},
+		},
+		executor,
+		WithLLMResponseCodec(NewGeminiGenerateContentCodec()),
+	)
+	if err != nil {
+		t.Fatalf("LlmCallExecute with GeminiGenerateContentCodec failed: %v", err)
+	}
+
+	events := capturedEvents()
+	_, endEvent := requireLlmScopeEvents(t, events)
+
+	var annotated map[string]interface{}
+	if err := json.Unmarshal(endEvent.AnnotatedResponse(), &annotated); err != nil {
+		t.Fatalf("AnnotatedResponse not valid JSON: %v", err)
+	}
+
+	toolCalls, ok := annotated["tool_calls"].([]interface{})
+	if !ok || len(toolCalls) == 0 {
+		t.Fatalf("expected tool_calls in annotated response, got %#v", annotated)
+	}
+	tc, ok := toolCalls[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tool_calls[0] to be a map, got %T", toolCalls[0])
+	}
+	id, _ := tc["id"].(string)
+	if id != "call_abc123" {
+		t.Errorf("functionCall id must be 'call_abc123', got %q", id)
+	}
+	name, _ := tc["name"].(string)
+	if name != "my_fn" {
+		t.Errorf("functionCall name must be 'my_fn', got %q", name)
+	}
+	if id == name {
+		t.Error("id must differ from name — id must not be the function name")
 	}
 }

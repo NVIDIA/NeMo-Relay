@@ -14,7 +14,7 @@ use base64::Engine;
 
 #[cfg(test)]
 pub(crate) fn generated_hooks(agent: CodingAgent, command: &str) -> Value {
-    generated_policy_hooks(agent, &GeneratedHookCommands::uniform(command))
+    generated_policy_hooks(agent, &GeneratedHookCommands::new(command, command))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,23 +33,12 @@ impl GeneratedHookCommands {
         }
     }
 
-    pub(crate) fn uniform(command: impl Into<String>) -> Self {
-        let command = command.into();
-        Self::new(command.clone(), command)
-    }
-
     pub(crate) fn for_event(&self, event: &str) -> &str {
         if event_requires_fail_closed(event) {
             &self.fail_closed
         } else {
             &self.fail_open
         }
-    }
-
-    pub(crate) fn contains(&self, command: &str) -> bool {
-        command == self.fail_open
-            || command == self.fail_closed
-            || self.legacy.as_deref() == Some(command)
     }
 
     pub(crate) fn legacy(&self) -> Option<&str> {
@@ -61,11 +50,7 @@ pub(crate) fn generated_policy_hooks(
     agent: CodingAgent,
     commands: &GeneratedHookCommands,
 ) -> Value {
-    if agent.uses_direct_hook_entries() {
-        direct_hooks(agent.hook_events(), commands)
-    } else {
-        grouped_hooks(agent.hook_events(), commands)
-    }
+    grouped_hooks(agent.hook_events(), commands)
 }
 
 /// Canonical persistent hook command used by every supported host.
@@ -319,9 +304,7 @@ pub(super) fn safe_windows_launcher_token(launcher: &str) -> bool {
 }
 
 /// Decode only the exact PowerShell envelope emitted by [`encoded_windows_hook_command`].
-///
-/// Hermes uses this to migrate and replace Relay-owned hooks whose generation arguments change.
-#[cfg(any(windows, test))]
+#[cfg(test)]
 pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> {
     const COMMAND_SEPARATOR: &str = " -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
     const SCRIPT_PREFIX: &str = "$ErrorActionPreference='Stop'; & ";
@@ -360,7 +343,7 @@ pub(crate) fn decode_windows_hook_command(command: &str) -> Option<Vec<String>> 
     parse_powershell_single_quoted_arguments(invocation)
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 pub(super) fn parse_powershell_single_quoted_arguments(mut raw: &str) -> Option<Vec<String>> {
     let mut arguments = Vec::new();
     while !raw.is_empty() {
@@ -387,22 +370,6 @@ pub(super) fn parse_powershell_single_quoted_arguments(mut raw: &str) -> Option<
         }
     }
     (!arguments.is_empty()).then_some(arguments)
-}
-
-fn direct_hooks(events: &[&str], commands: &GeneratedHookCommands) -> Value {
-    let hooks: serde_json::Map<String, Value> = events
-        .iter()
-        .map(|event| {
-            (
-                (*event).to_string(),
-                json!([{
-                    "command": commands.for_event(event),
-                    "timeout": 30
-                }]),
-            )
-        })
-        .collect();
-    json!({ "hooks": Value::Object(hooks) })
 }
 
 // Generates hook groups for Claude/Codex events and adds a wildcard matcher to tool events when

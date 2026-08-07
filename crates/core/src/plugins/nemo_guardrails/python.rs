@@ -891,6 +891,7 @@ enum LocalGuardrailsCodec {
     OpenAIChat,
     OpenAIResponses,
     AnthropicMessages,
+    GeminiGenerateContent,
 }
 
 impl LocalGuardrailsCodec {
@@ -899,6 +900,7 @@ impl LocalGuardrailsCodec {
             Self::OpenAIChat => ProviderSurface::OpenAIChat,
             Self::OpenAIResponses => ProviderSurface::OpenAIResponses,
             Self::AnthropicMessages => ProviderSurface::AnthropicMessages,
+            Self::GeminiGenerateContent => ProviderSurface::GeminiGenerateContent,
         }
     }
 
@@ -907,6 +909,7 @@ impl LocalGuardrailsCodec {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+            ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
         }
     }
 
@@ -1346,6 +1349,26 @@ fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<Stri
                 .and_then(Json::as_str)
                 .filter(|text| !text.is_empty())
                 .map(str::to_string)
+        }
+        LocalGuardrailsCodec::GeminiGenerateContent => {
+            let candidates = chunk.get("candidates")?.as_array()?;
+            let parts = candidates
+                .first()?
+                .get("content")?
+                .get("parts")?
+                .as_array()?;
+            let mut texts = vec![];
+            for part in parts {
+                if part.get("thought").and_then(Json::as_bool) == Some(true) {
+                    continue;
+                }
+                if let Some(text) = part.get("text").and_then(Json::as_str)
+                    && !text.is_empty()
+                {
+                    texts.push(text);
+                }
+            }
+            (!texts.is_empty()).then(|| texts.join(""))
         }
     }
 }

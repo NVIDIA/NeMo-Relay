@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::json;
 
 use super::*;
-use crate::agents::shared::adapters::{claude_code, codex, hermes};
+use crate::agents::shared::adapters::{claude_code, codex};
 
 #[test]
 fn maps_claude_canonical_tool_payload() {
@@ -71,16 +71,6 @@ fn preserves_supported_coding_agent_skill_load_tool_arguments() {
             }),
             &HeaderMap::new(),
         ),
-        hermes::adapt(
-            json!({
-                "session_id": "hermes-session",
-                "hook_event_name": "pre_tool_call",
-                "tool_name": "skill_view",
-                "tool_input": {"name": "review"},
-                "extra": {"tool_call_id": "hermes-skill"}
-            }),
-            &HeaderMap::new(),
-        ),
     ];
 
     let expected = [
@@ -89,7 +79,6 @@ fn preserves_supported_coding_agent_skill_load_tool_arguments() {
             "Bash",
             json!({"command": "cat /workspace/skills/review/SKILL.md"}),
         ),
-        ("skill_view", json!({"name": "review"})),
     ];
     for (outcome, (tool_name, arguments)) in cases.into_iter().zip(expected) {
         match &outcome.events[0] {
@@ -376,7 +365,10 @@ fn agent_extractors_keep_fallbacks_at_adapter_boundary() {
             }
         );
 
-        assert!(session_id(payload, headers, extractor).starts_with("hook-"));
+        assert_eq!(
+            session_id_with_fallback(payload, headers, extractor, "hook-test"),
+            "hook-test"
+        );
         assert_eq!(event_name(payload, extractor), "unknown");
 
         let event = common_tool_event_with_fallback(payload, headers, kind, extractor, "hook-test");
@@ -395,12 +387,6 @@ fn agent_extractors_keep_fallbacks_at_adapter_boundary() {
     assert_fallbacks(
         &CODEX_PAYLOAD_EXTRACTOR,
         AgentKind::Codex,
-        &payload,
-        &headers,
-    );
-    assert_fallbacks(
-        &HERMES_PAYLOAD_EXTRACTOR,
-        AgentKind::Hermes,
         &payload,
         &headers,
     );
@@ -467,7 +453,6 @@ fn agent_extractors_prefer_extra_call_ids_over_structural_ids() {
     for extractor in [
         &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
         &CODEX_PAYLOAD_EXTRACTOR,
-        &HERMES_PAYLOAD_EXTRACTOR,
     ] {
         assert_eq!(
             extractor
@@ -491,7 +476,6 @@ fn agent_extractors_keep_hook_event_name_precedence() {
     for extractor in [
         &CLAUDE_CODE_PAYLOAD_EXTRACTOR as &dyn AgentPayloadExtractor,
         &CODEX_PAYLOAD_EXTRACTOR,
-        &HERMES_PAYLOAD_EXTRACTOR,
     ] {
         assert_eq!(
             extractor.event_name(&payload).as_deref(),
@@ -545,45 +529,6 @@ fn codex_extractor_prefers_codex_specific_fields() {
 }
 
 #[test]
-fn hermes_extractor_prefers_child_subagent_and_claude_session_header() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-claude-code-session-id",
-        "claude-session".parse().unwrap(),
-    );
-    let payload = json!({
-        "subagent_id": "generic-subagent",
-        "child_subagent_id": "hermes-child"
-    });
-
-    assert_eq!(
-        HERMES_PAYLOAD_EXTRACTOR
-            .session_id(&payload, &headers)
-            .as_deref(),
-        Some("claude-session")
-    );
-    assert_eq!(
-        HERMES_PAYLOAD_EXTRACTOR
-            .subagent_id(&payload, &headers)
-            .as_deref(),
-        Some("hermes-child")
-    );
-
-    let nested_payload = json!({
-        "subagent": { "id": "nested-subagent" },
-        "extra": {
-            "subagent_id": "extra-subagent"
-        }
-    });
-    assert_eq!(
-        HERMES_PAYLOAD_EXTRACTOR
-            .subagent_id(&nested_payload, &headers)
-            .as_deref(),
-        Some("nested-subagent")
-    );
-}
-
-#[test]
 fn codex_extractor_ignores_claude_session_header() {
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -591,7 +536,7 @@ fn codex_extractor_ignores_claude_session_header() {
         "claude-session".parse().unwrap(),
     );
 
-    // RelayOnly: unlike Claude Code and Hermes, Codex must not adopt the Claude
+    // RelayOnly: Codex must not adopt the Claude
     // installed-mode session header. With no native session id the extractor
     // returns None, and the adapter boundary applies the synthetic fallback.
     assert_eq!(
@@ -633,408 +578,6 @@ fn keeps_codex_response_unwrapped() {
         NormalizedEvent::AgentStarted(_)
     ));
     assert_eq!(outcome.response, json!({}));
-}
-
-#[test]
-fn maps_hermes_shell_hook_tool_payload() {
-    let headers = HeaderMap::new();
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "pre_tool_call",
-            "tool_name": "terminal",
-            "tool_input": { "command": "pwd" },
-            "session_id": "hermes-session",
-            "extra": {
-                "task_id": "task-1",
-                "tool_call_id": "tool-1"
-            }
-        }),
-        &headers,
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::ToolStarted(event) => {
-            assert_eq!(event.agent_kind, AgentKind::Hermes);
-            assert_eq!(event.session_id, "hermes-session");
-            assert_eq!(event.tool_call_id, "tool-1");
-            assert_eq!(event.tool_name, "terminal");
-            assert_eq!(event.arguments, json!({ "command": "pwd" }));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-    assert_eq!(outcome.response, json!({}));
-}
-
-#[test]
-fn drops_uncorrelatable_hermes_pre_tool_call() {
-    let headers = HeaderMap::new();
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "pre_tool_call",
-            "task_id": "task-1",
-            "tool_call_id": "toolcall-1",
-            "tool_name": "terminal",
-            "tool_input": { "command": "pwd" }
-        }),
-        &headers,
-    );
-
-    assert!(outcome.events.is_empty());
-    assert_eq!(outcome.response, json!({}));
-}
-
-#[test]
-fn maps_hermes_subagent_child_identifiers() {
-    let headers = HeaderMap::new();
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "subagent_start",
-            "session_id": "parent-session",
-            "extra": {
-                "child_session_id": "child-session",
-                "child_subagent_id": "sa-1",
-                "parent_turn_id": "turn-1"
-            }
-        }),
-        &headers,
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::SubagentStarted(event) => {
-            assert_eq!(event.agent_kind, AgentKind::Hermes);
-            assert_eq!(event.session_id, "parent-session");
-            assert_eq!(event.subagent_id, "sa-1");
-            assert_eq!(
-                event.payload["extra"]["child_session_id"],
-                json!("child-session")
-            );
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-#[test]
-fn maps_hermes_camel_case_child_subagent_identifiers() {
-    let headers = HeaderMap::new();
-
-    for payload in [
-        json!({
-            "hook_event_name": "subagent_start",
-            "session_id": "parent-session",
-            "childSubagentId": "sa-camel-top"
-        }),
-        json!({
-            "hook_event_name": "subagent_start",
-            "session_id": "parent-session",
-            "extra": {
-                "childSubagentId": "sa-camel-extra"
-            }
-        }),
-    ] {
-        let expected = payload
-            .get("childSubagentId")
-            .or_else(|| payload.pointer("/extra/childSubagentId"))
-            .and_then(|value| value.as_str())
-            .expect("test payload should include childSubagentId")
-            .to_string();
-        let outcome = hermes::adapt(payload, &headers);
-
-        match &outcome.events[0] {
-            NormalizedEvent::SubagentStarted(event) => {
-                assert_eq!(event.subagent_id, expected);
-            }
-            event => panic!("unexpected event: {event:?}"),
-        }
-    }
-}
-
-#[test]
-fn maps_hermes_real_session_boundary_without_closing_per_turn_end() {
-    let headers = HeaderMap::new();
-
-    let per_turn = hermes::adapt(
-        json!({
-            "hook_event_name": "on_session_end",
-            "session_id": "hermes-session"
-        }),
-        &headers,
-    );
-    // `on_session_end` is per-turn for hermes-agent, so it snapshots ATIF without becoming a
-    // user-visible system trajectory step.
-    assert_eq!(per_turn.events.len(), 1);
-    assert!(matches!(per_turn.events[0], NormalizedEvent::TurnEnded(_)));
-
-    let finalized = hermes::adapt(
-        json!({
-            "hook_event_name": "on_session_finalize",
-            "session_id": "hermes-session"
-        }),
-        &headers,
-    );
-    assert_eq!(finalized.events.len(), 1);
-    assert!(matches!(
-        finalized.events[0],
-        NormalizedEvent::AgentEnded(_)
-    ));
-}
-
-#[test]
-fn maps_hermes_hook_event_name_and_subagent_from_extra_payload() {
-    let outcome = hermes::adapt(
-        json!({
-            "session_id": "hermes-session",
-            "extra": {
-                "hook_event_name": "subagent_stop",
-                "subagent_id": "worker-1"
-            }
-        }),
-        &HeaderMap::new(),
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::SubagentEnded(event) => {
-            assert_eq!(event.event_name, "subagent_stop");
-            assert_eq!(event.subagent_id, "worker-1");
-            assert_eq!(event.session_id, "hermes-session");
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-#[test]
-fn maps_hermes_api_hooks_to_llm_lifecycle() {
-    let headers = HeaderMap::new();
-
-    let started = hermes::adapt(
-        json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "hermes-session",
-            "extra": {
-                "task_id": "task-1",
-                "api_call_count": 2,
-                "model": "qwen",
-                "provider": "custom",
-                "base_url": "http://localhost:11434/v1",
-                "api_mode": "chat_completions",
-                "message_count": 3,
-                "tool_count": 1,
-                "approx_input_tokens": 12,
-                "request_char_count": 456,
-                "max_tokens": 1024
-            }
-        }),
-        &headers,
-    );
-    match &started.events[0] {
-        NormalizedEvent::LlmStarted(event) => {
-            assert_eq!(event.session_id, "hermes-session");
-            assert_eq!(event.api_call_id, "hermes-session:task-1:2");
-            assert_eq!(event.provider, "custom");
-            assert_eq!(event.model_name.as_deref(), Some("qwen"));
-            assert_eq!(event.request["message_count"], json!(3));
-            assert_eq!(
-                event.request["fidelity"]["provider_payload_exact"],
-                json!(false)
-            );
-            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-
-    let ended = hermes::adapt(
-        json!({
-            "hook_event_name": "post_api_request",
-            "session_id": "hermes-session",
-            "extra": {
-                "task_id": "task-1",
-                "api_call_count": 2,
-                "model": "qwen",
-                "response_model": "qwen",
-                "provider": "custom",
-                "api_duration": 0.25,
-                "finish_reason": "stop",
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 5,
-                    "prompt_tokens_details": { "cached_tokens": 3 }
-                }
-            }
-        }),
-        &headers,
-    );
-    match &ended.events[0] {
-        NormalizedEvent::LlmEnded(event) => {
-            assert_eq!(event.api_call_id, "hermes-session:task-1:2");
-            assert_eq!(event.response["usage"]["prompt_tokens"], json!(10));
-            assert_eq!(event.response["usage"]["completion_tokens"], json!(5));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-#[test]
-fn maps_hermes_exact_api_hook_payloads_to_llm_lifecycle() {
-    let headers = HeaderMap::new();
-
-    let started = hermes::adapt(
-        json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "hermes-session",
-            "extra": {
-                "task_id": "task-1",
-                "api_request_id": "turn-1:api:2",
-                "api_call_count": 2,
-                "model": "qwen",
-                "provider": "custom",
-                "request": {
-                    "method": "POST",
-                    "body": {
-                        "model": "qwen",
-                        "messages": [
-                            { "role": "user", "content": "hello" }
-                        ],
-                        "tools": [
-                            { "type": "function", "function": { "name": "search_files" } }
-                        ]
-                    }
-                }
-            }
-        }),
-        &headers,
-    );
-    match &started.events[0] {
-        NormalizedEvent::LlmStarted(event) => {
-            assert_eq!(event.api_call_id, "turn-1:api:2");
-            assert_eq!(event.request["messages"][0]["content"], json!("hello"));
-            assert_eq!(
-                event.request["tools"][0]["function"]["name"],
-                json!("search_files")
-            );
-            assert_eq!(event.metadata["provider_payload_exact"], json!(true));
-            assert_eq!(
-                event.metadata["fidelity_source"],
-                json!("hermes_api_hooks_sanitized")
-            );
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-
-    let ended = hermes::adapt(
-        json!({
-            "hook_event_name": "post_api_request",
-            "session_id": "hermes-session",
-            "extra": {
-                "task_id": "task-1",
-                "api_request_id": "turn-1:api:2",
-                "api_call_count": 2,
-                "model": "qwen",
-                "response": {
-                    "model": "qwen",
-                    "finish_reason": "tool_calls",
-                    "assistant_message": {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call-1",
-                                "type": "function",
-                                "function": {
-                                    "name": "search_files",
-                                    "arguments": "{\"query\":\"needle\"}"
-                                }
-                            }
-                        ]
-                    },
-                    "usage": {
-                        "prompt_tokens": 10,
-                        "completion_tokens": 5
-                    }
-                }
-            }
-        }),
-        &headers,
-    );
-    match &ended.events[0] {
-        NormalizedEvent::LlmEnded(event) => {
-            assert_eq!(event.api_call_id, "turn-1:api:2");
-            assert_eq!(event.response["tool_calls"][0]["id"], json!("call-1"));
-            assert_eq!(event.response["usage"]["prompt_tokens"], json!(10));
-            assert_eq!(event.metadata["provider_payload_exact"], json!(true));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-#[test]
-fn maps_hermes_api_request_error_to_llm_end() {
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "api_request_error",
-            "session_id": "hermes-session",
-            "extra": {
-                "task_id": "task-1",
-                "api_request_id": "turn-1:api:3",
-                "api_call_count": 3,
-                "model": "qwen",
-                "provider": "custom",
-                "status_code": 502,
-                "retry_count": 1,
-                "max_retries": 2,
-                "retryable": true,
-                "reason": "upstream",
-                "error": {
-                    "type": "BadGateway",
-                    "message": "gateway upstream error"
-                }
-            }
-        }),
-        &HeaderMap::new(),
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::LlmEnded(event) => {
-            assert_eq!(event.api_call_id, "turn-1:api:3");
-            assert_eq!(event.response["status_code"], json!(502));
-            assert_eq!(
-                event.response["error"]["message"],
-                json!("gateway upstream error")
-            );
-            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-#[test]
-fn maps_hermes_null_request_as_lossy_summary() {
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "hermes-session",
-            "extra": {
-                "task_id": "task-1",
-                "api_call_count": 4,
-                "model": "qwen",
-                "provider": "custom",
-                "request": null,
-                "message_count": 2
-            }
-        }),
-        &HeaderMap::new(),
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::LlmStarted(event) => {
-            assert_eq!(event.api_call_id, "hermes-session:task-1:4");
-            assert_eq!(event.request["message_count"], json!(2));
-            assert_eq!(
-                event.request["fidelity"]["provider_payload_exact"],
-                json!(false)
-            );
-            assert_eq!(event.metadata["provider_payload_exact"], json!(false));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
 }
 
 #[test]
@@ -1089,30 +632,6 @@ fn normalizes_mark_style_events_and_header_session_ids() {
         assert!(metadata.get("cwd").is_none());
         assert_eq!(payload["cwd"], json!("/repo"));
         assert_eq!(metadata["gateway_config_profile"], json!("coverage"));
-    }
-}
-
-#[test]
-fn maps_hermes_llm_hooks_to_private_hints() {
-    let headers = HeaderMap::new();
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "pre_llm_call",
-            "session_id": "hermes-session",
-            "model": "anthropic/claude-sonnet",
-            "request_id": "req-1"
-        }),
-        &headers,
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::LlmHint(event) => {
-            assert_eq!(event.session_id, "hermes-session");
-            assert_eq!(event.event_name, "pre_llm_call");
-            assert_eq!(event.model.as_deref(), Some("anthropic/claude-sonnet"));
-            assert_eq!(event.request_id.as_deref(), Some("req-1"));
-        }
-        event => panic!("unexpected event: {event:?}"),
     }
 }
 
@@ -1240,59 +759,6 @@ fn codex_partial_tool_end_keeps_missing_fields_null() {
     }
 }
 
-#[test]
-fn hermes_partial_post_tool_payload_synthesizes_call_id_only() {
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "post_tool_call",
-            "session_id": "hermes-session",
-            "tool_name": "terminal"
-        }),
-        &HeaderMap::new(),
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::ToolEnded(event) => {
-            assert_eq!(event.session_id, "hermes-session");
-            assert!(event.tool_call_id.starts_with("tool-"));
-            assert_eq!(event.tool_name, "terminal");
-            assert_eq!(event.arguments, json!(null));
-            assert_eq!(event.result, json!(null));
-            assert_eq!(event.status, None);
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-#[test]
-fn maps_hermes_post_tool_call_result_and_status_shapes() {
-    let outcome = hermes::adapt(
-        json!({
-            "hook_event_name": "post_tool_call",
-            "session_id": "hermes-session",
-            "tool_call_id": "tool-1",
-            "tool_name": "terminal",
-            "tool_response": { "stdout": "/repo" },
-            "decision": "allow"
-        }),
-        &HeaderMap::new(),
-    );
-
-    match &outcome.events[0] {
-        NormalizedEvent::ToolEnded(event) => {
-            assert_eq!(event.tool_call_id, "tool-1");
-            assert_eq!(event.result, json!({ "stdout": "/repo" }));
-            assert_eq!(event.status.as_deref(), Some("allow"));
-        }
-        event => panic!("unexpected event: {event:?}"),
-    }
-}
-
-/// Walks a payload-path precedence chain: each step asserts the expected
-/// winner, then removes the winning key (from the payload root, or from its
-/// `extra` object when the first tuple field is true) so the next candidate
-/// takes over. Once every listed key is removed, the extraction must yield
-/// nothing.
 fn assert_string_fallback_chain(
     payload: &mut serde_json::Value,
     chain: &[(bool, &str, &str)],
@@ -1312,84 +778,6 @@ fn assert_string_fallback_chain(
         object.remove(*key);
     }
     assert_eq!(extract(payload), None, "chain should be exhausted");
-}
-
-#[test]
-fn hermes_tool_result_path_precedence_walks_fallback_chain() {
-    let headers = HeaderMap::new();
-    let mut payload = json!({
-        "tool_output": "from-tool-output",
-        "tool_response": "from-tool-response",
-        "output": "from-output",
-        "result": "from-result",
-        "extra": {
-            "tool_output": "from-extra-tool-output",
-            "result": "from-extra-result"
-        }
-    });
-
-    assert_string_fallback_chain(
-        &mut payload,
-        &[
-            (false, "tool_output", "from-tool-output"),
-            (false, "tool_response", "from-tool-response"),
-            (false, "output", "from-output"),
-            (false, "result", "from-result"),
-            (true, "tool_output", "from-extra-tool-output"),
-            (true, "result", "from-extra-result"),
-        ],
-        |payload| {
-            HERMES_PAYLOAD_EXTRACTOR
-                .tool_call(payload, &headers, "post_tool_call")
-                .result
-                .map(|result| result.as_str().expect("string tool result").to_string())
-        },
-    );
-}
-
-#[test]
-fn hermes_tool_status_prefers_explicit_fields_over_derived_status() {
-    let headers = HeaderMap::new();
-    let mut payload = json!({
-        "status": "success",
-        "decision": "block",
-        "permission": "deny"
-    });
-
-    assert_string_fallback_chain(
-        &mut payload,
-        &[
-            (false, "status", "success"),
-            (false, "decision", "block"),
-            (false, "permission", "deny"),
-        ],
-        |payload| {
-            HERMES_PAYLOAD_EXTRACTOR
-                .tool_call(payload, &headers, "post_tool_call")
-                .status
-        },
-    );
-
-    // Explicit status fields win over event-name-derived status; without them the conservative
-    // failure spellings still map to `error`.
-    assert_eq!(
-        HERMES_PAYLOAD_EXTRACTOR
-            .tool_call(
-                &json!({ "status": "success" }),
-                &headers,
-                "post_tool_call_failed"
-            )
-            .status
-            .as_deref(),
-        Some("success")
-    );
-    assert_eq!(
-        HERMES_PAYLOAD_EXTRACTOR
-            .tool_call(&json!({}), &headers, "post_tool_call_failed")
-            .status
-            .as_deref(),
-        Some("error")
-    );
 }
 
 #[test]

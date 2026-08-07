@@ -1169,9 +1169,27 @@ test-codex-plugin-e2e:
 test-claude-plugin-e2e:
     ./scripts/test-claude-plugin-e2e.sh
 
-# Opt-in: requires a supported Hermes Agent installation and is intentionally outside test-rust/CI.
-test-hermes-mcp-e2e:
-    ./scripts/test-hermes-mcp-e2e.sh
+# Opt-in: builds the release CLI and runs configurable local latency suites.
+[positional-arguments]
+latency-benchmark *benchmark_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    result_dir={{ quote(output_dir) }}
+    result_dir="${result_dir:-target/benchmark-results}"
+    for argument in "$@"; do
+        if [[ "$argument" == "-h" || "$argument" == "--help" ]]; then
+            exec uv run --locked python -m scripts.latency_benchmark.src "$@"
+        fi
+    done
+    cargo build --locked --release -p nemo-relay-cli
+    uv run --locked python -m scripts.latency_benchmark.src \
+        --relay-bin target/release/nemo-relay \
+        --output "$result_dir/nemo-relay-latency-report.json" \
+        "$@"
+
+# Runs the fast latency benchmark fixture tests without building Relay.
+test-latency-benchmark:
+    uv run --locked python -m pytest scripts/latency_benchmark/tests
 
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:

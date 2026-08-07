@@ -160,6 +160,8 @@ pub enum BuiltinLlmCodec {
     OpenAiResponses,
     /// Anthropic Messages request and response payloads.
     AnthropicMessages,
+    /// Gemini generateContent request and response payloads.
+    GeminiGenerateContent,
 }
 
 impl BuiltinLlmCodec {
@@ -170,6 +172,7 @@ impl BuiltinLlmCodec {
             Self::OpenAiChat => "openai_chat",
             Self::OpenAiResponses => "openai_responses",
             Self::AnthropicMessages => "anthropic_messages",
+            Self::GeminiGenerateContent => "gemini_generate_content",
         }
     }
 }

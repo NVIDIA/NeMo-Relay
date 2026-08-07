@@ -6,7 +6,7 @@ use nemo_relay::api::llm::LlmRequest;
 use serde_json::Map;
 
 use super::*;
-use crate::events::{LlmEvent, LlmHintEvent};
+use crate::events::LlmHintEvent;
 
 fn session_event(session_id: &str, event_name: &str) -> SessionEvent {
     SessionEvent {
@@ -46,20 +46,6 @@ fn llm_hint_event(session_id: &str) -> LlmHintEvent {
     }
 }
 
-fn llm_event(session_id: &str, event_name: &str) -> LlmEvent {
-    LlmEvent {
-        session_id: session_id.into(),
-        agent_kind: AgentKind::Codex,
-        event_name: event_name.into(),
-        api_call_id: "api-call-1".into(),
-        provider: "openai.responses".into(),
-        model_name: Some("gpt-test".into()),
-        request: json!({ "input": "hello" }),
-        response: json!({ "output_text": "hi" }),
-        metadata: json!({ "event_metadata": event_name }),
-    }
-}
-
 fn tool_event(session_id: &str, event_name: &str) -> ToolEvent {
     ToolEvent {
         session_id: session_id.into(),
@@ -76,41 +62,6 @@ fn tool_event(session_id: &str, event_name: &str) -> ToolEvent {
     }
 }
 
-fn hermes_llm_event(session_id: &str, task_id: &str) -> NormalizedEvent {
-    NormalizedEvent::LlmStarted(LlmEvent {
-        session_id: session_id.into(),
-        agent_kind: AgentKind::Hermes,
-        event_name: "pre_api_request".into(),
-        api_call_id: format!("{session_id}:{task_id}:1"),
-        provider: "custom".into(),
-        model_name: Some("qwen".into()),
-        request: json!({ "extra": { "task_id": task_id } }),
-        response: Value::Null,
-        metadata: json!({ "event_metadata": "pre_api_request" }),
-    })
-}
-
-fn hermes_tool_event(task_id: &str, session_scope: Option<&str>) -> NormalizedEvent {
-    let mut payload = json!({ "extra": { "task_id": task_id } });
-    if let Some(session_scope) = session_scope {
-        payload["extra"]["parent_session_id"] = json!(session_scope);
-    }
-
-    NormalizedEvent::ToolStarted(ToolEvent {
-        session_id: task_id.into(),
-        agent_kind: AgentKind::Hermes,
-        event_name: "pre_tool_call".into(),
-        tool_call_id: format!("{task_id}:tool-1"),
-        tool_name: "read_file".into(),
-        subagent_id: None,
-        arguments: json!({ "path": "README.md" }),
-        result: Value::Null,
-        status: None,
-        payload,
-        metadata: json!({ "event_metadata": "pre_tool_call" }),
-    })
-}
-
 fn aliases() -> HashMap<String, SessionAlias> {
     HashMap::from([(
         "child".into(),
@@ -120,45 +71,6 @@ fn aliases() -> HashMap<String, SessionAlias> {
             json!({ "alias_metadata": true }),
         ),
     )])
-}
-
-#[test]
-fn hermes_task_session_routing_is_scoped_by_parent_session() {
-    let mut state = SessionAlignmentState::default();
-
-    state.route_event(hermes_llm_event("hermes-a", "task-1"));
-    state.route_event(hermes_llm_event("hermes-b", "task-1"));
-
-    let routed_a = state.route_event(hermes_tool_event("task-1", Some("hermes-a")));
-    let NormalizedEvent::ToolStarted(routed_a) = routed_a else {
-        panic!("expected routed Hermes tool event");
-    };
-    assert_eq!(routed_a.session_id, "hermes-a");
-    assert_eq!(routed_a.metadata["hermes_task_id"], json!("task-1"));
-    assert_eq!(routed_a.metadata["hermes_session_id"], json!("hermes-a"));
-
-    let routed_b = state.route_event(hermes_tool_event("task-1", Some("hermes-b")));
-    let NormalizedEvent::ToolStarted(routed_b) = routed_b else {
-        panic!("expected routed Hermes tool event");
-    };
-    assert_eq!(routed_b.session_id, "hermes-b");
-    assert_eq!(routed_b.metadata["hermes_task_id"], json!("task-1"));
-    assert_eq!(routed_b.metadata["hermes_session_id"], json!("hermes-b"));
-}
-
-#[test]
-fn hermes_task_session_routing_leaves_ambiguous_unscoped_task_event_unchanged() {
-    let mut state = SessionAlignmentState::default();
-
-    state.route_event(hermes_llm_event("hermes-a", "task-1"));
-    state.route_event(hermes_llm_event("hermes-b", "task-1"));
-
-    let routed = state.route_event(hermes_tool_event("task-1", None));
-    let NormalizedEvent::ToolStarted(routed) = routed else {
-        panic!("expected Hermes tool event");
-    };
-    assert_eq!(routed.session_id, "task-1");
-    assert!(routed.metadata.get("hermes_session_id").is_none());
 }
 
 #[test]
@@ -549,8 +461,6 @@ fn route_event_through_alias_covers_all_event_variants() {
         NormalizedEvent::SubagentStarted(subagent_event("child", "SubagentStart")),
         NormalizedEvent::SubagentEnded(subagent_event("child", "SubagentEnd")),
         NormalizedEvent::LlmHint(llm_hint_event("child")),
-        NormalizedEvent::LlmStarted(llm_event("child", "LlmStart")),
-        NormalizedEvent::LlmEnded(llm_event("child", "LlmEnd")),
         NormalizedEvent::ToolStarted(tool_event("child", "ToolStart")),
         NormalizedEvent::ToolEnded(tool_event("child", "ToolEnd")),
     ];
@@ -585,9 +495,7 @@ fn route_event_through_alias_covers_all_event_variants() {
             | NormalizedEvent::PromptSubmitted(_)
             | NormalizedEvent::Compaction(_)
             | NormalizedEvent::Notification(_)
-            | NormalizedEvent::HookMark(_)
-            | NormalizedEvent::LlmStarted(_)
-            | NormalizedEvent::LlmEnded(_) => {}
+            | NormalizedEvent::HookMark(_) => {}
         }
     }
 }
@@ -770,7 +678,7 @@ fn gateway_turn_input_builds_claude_prompt_for_anthropic_messages_only() {
 
     // Only Claude installed mode can race the UserPromptSubmit hook, so every other agent kind
     // and route stays None.
-    for agent_kind in [AgentKind::Codex, AgentKind::Hermes, AgentKind::Gateway] {
+    for agent_kind in [AgentKind::Codex, AgentKind::Gateway] {
         assert_eq!(
             gateway_turn_input(agent_kind, "anthropic.messages", &request),
             None
@@ -864,7 +772,6 @@ fn event_metadata(event: &NormalizedEvent) -> &Value {
             &event.metadata
         }
         NormalizedEvent::LlmHint(event) => &event.metadata,
-        NormalizedEvent::LlmStarted(event) | NormalizedEvent::LlmEnded(event) => &event.metadata,
         NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => &event.metadata,
     }
 }

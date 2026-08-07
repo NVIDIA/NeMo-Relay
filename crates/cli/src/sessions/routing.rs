@@ -134,43 +134,12 @@ pub(super) fn route_event_for_session(
     sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
 ) -> Option<(NormalizedEvent, String, bool)> {
-    let mut event = alignment_state.route_event(event);
-    let explicit_subagent_alias = alignment::explicit_subagent_alias(&mut event);
+    let event = alignment_state.route_event(event);
     let session_id = event.session_id().to_string();
     let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
 
     if event.is_terminal() && !sessions.contains_key(&session_id) {
         return None;
     }
-    if !apply_explicit_subagent_alias(
-        &mut event,
-        sessions,
-        alignment_state,
-        explicit_subagent_alias,
-    ) {
-        return None;
-    }
     Some((event, session_id, is_agent_started))
-}
-
-fn apply_explicit_subagent_alias(
-    event: &mut NormalizedEvent,
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-    explicit_subagent_alias: Option<(String, SessionAlias)>,
-) -> bool {
-    let Some((child_session_id, alias)) = explicit_subagent_alias else {
-        alignment_state.align_explicit_subagent_end(event);
-        return true;
-    };
-    if sessions
-        .get(&child_session_id)
-        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
-    {
-        return false;
-    }
-    sessions.remove(&child_session_id);
-    alignment_state.insert_alias(child_session_id, alias);
-    alignment_state.align_explicit_subagent_end(event);
-    true
 }

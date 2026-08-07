@@ -779,6 +779,7 @@ async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
         (pb.LLM_CODEC_KIND_BUILTIN, "openai_chat"),
         (pb.LLM_CODEC_KIND_BUILTIN, "openai_responses"),
         (pb.LLM_CODEC_KIND_BUILTIN, "anthropic_messages"),
+        (pb.LLM_CODEC_KIND_BUILTIN, "gemini_generate_content"),
         (pb.LLM_CODEC_KIND_RUNTIME, "com.example.chat.v1"),
         (pb.LLM_CODEC_KIND_OPAQUE, None),
     ]:
@@ -830,6 +831,8 @@ async def test_llm_sanitizers_receive_codec_context_and_can_omit_payloads():
             "response",
             LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("builtin", "anthropic_messages")),
         ),
+        ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("builtin", "gemini_generate_content"))),
+        ("response", LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("builtin", "gemini_generate_content"))),
         ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
         ("response", LlmSanitizeResponseContext(plugin_api.LlmCodecIdentity("runtime", "com.example.chat.v1"))),
         ("request", LlmSanitizeRequestContext(plugin_api.LlmCodecIdentity("opaque"))),

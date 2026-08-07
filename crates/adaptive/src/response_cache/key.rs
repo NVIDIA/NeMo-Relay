@@ -338,6 +338,28 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .is_some_and(|blocks| blocks.iter().any(lossy_system_block))
         }
         ProviderSurface::OpenAIResponses => false,
+        ProviderSurface::GeminiGenerateContent => {
+            object
+                .get("generationConfig")
+                .is_some_and(|generation_config| {
+                    let Some(generation_config) = generation_config.as_object() else {
+                        return true;
+                    };
+                    generation_config.keys().any(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "temperature" | "topP" | "maxOutputTokens" | "stopSequences"
+                        )
+                    })
+                })
+                || object
+                    .get("systemInstruction")
+                    .is_some_and(lossy_gemini_system_instruction)
+                || object
+                    .get("contents")
+                    .and_then(Json::as_array)
+                    .is_some_and(|items| items.iter().any(lossy_gemini_content_item))
+        }
     }
 }
 
@@ -360,6 +382,129 @@ fn lossy_system_block(block: &Json) -> bool {
         || fields
             .keys()
             .any(|key| !matches!(key.as_str(), "type" | "text" | "cache_control"))
+}
+
+/// Whether a Gemini `systemInstruction` would lose detail in the normalized
+/// request key. The Gemini codec flattens it to a single system text string, so
+/// only one non-empty plain text part without sibling fields is lossless.
+fn lossy_gemini_system_instruction(value: &Json) -> bool {
+    let Some(object) = value.as_object() else {
+        return true;
+    };
+    if object.keys().any(|key| key != "parts") {
+        return true;
+    }
+    let Some(parts) = object.get("parts").and_then(Json::as_array) else {
+        return true;
+    };
+    let [part] = parts.as_slice() else {
+        return true;
+    };
+    let Some(part_object) = part.as_object() else {
+        return true;
+    };
+    if part_object.len() != 1 {
+        return true;
+    }
+    part_object
+        .get("text")
+        .and_then(Json::as_str)
+        .is_none_or(str::is_empty)
+}
+
+fn lossy_gemini_content_item(item: &Json) -> bool {
+    let Some(object) = item.as_object() else {
+        return true;
+    };
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "role" | "parts"))
+    {
+        return true;
+    }
+    let Some(parts) = object.get("parts").and_then(Json::as_array) else {
+        return true;
+    };
+
+    let mut plain_text_parts = 0usize;
+    for part in parts {
+        if lossy_gemini_part(part, &mut plain_text_parts) {
+            return true;
+        }
+    }
+    plain_text_parts > 1
+}
+
+fn lossy_gemini_part(part: &Json, plain_text_parts: &mut usize) -> bool {
+    let Some(object) = part.as_object() else {
+        return true;
+    };
+    if object.get("thought").and_then(Json::as_bool) == Some(true) {
+        return true;
+    }
+    let data_keys = object
+        .keys()
+        .filter(|key| is_gemini_part_data_key(key))
+        .collect::<Vec<_>>();
+    if data_keys.len() > 1 {
+        return true;
+    }
+    let Some(data_key) = data_keys.first().map(|key| key.as_str()) else {
+        return true;
+    };
+    match data_key {
+        "text" => {
+            if !object.get("text").is_some_and(Json::is_string) {
+                return true;
+            }
+            if object.len() == 1 {
+                *plain_text_parts += 1;
+            }
+            false
+        }
+        "functionCall" => {
+            object.keys().any(|key| key != "functionCall")
+                || match object.get("functionCall").and_then(Json::as_object) {
+                    Some(fc) => {
+                        fc.keys()
+                            .any(|key| !matches!(key.as_str(), "name" | "id" | "args"))
+                            || fc.get("args").is_some_and(|args| !args.is_object())
+                    }
+                    None => true,
+                }
+        }
+        "functionResponse" => {
+            object.keys().any(|key| key != "functionResponse")
+                || match object.get("functionResponse").and_then(Json::as_object) {
+                    Some(fr) => {
+                        fr.keys().any(|key| {
+                            !matches!(key.as_str(), "id" | "name" | "response" | "parts")
+                        }) || match (
+                            fr.get("id").and_then(Json::as_str),
+                            fr.get("name").and_then(Json::as_str),
+                        ) {
+                            (Some(id), Some(name)) => id != name,
+                            _ => false,
+                        }
+                    }
+                    None => true,
+                }
+        }
+        _ => false,
+    }
+}
+
+fn is_gemini_part_data_key(key: &str) -> bool {
+    matches!(
+        key,
+        "text"
+            | "inlineData"
+            | "fileData"
+            | "functionCall"
+            | "functionResponse"
+            | "executableCode"
+            | "codeExecutionResult"
+    )
 }
 
 /// Whether the raw request body carries a non-empty `messages` (chat) or `input`

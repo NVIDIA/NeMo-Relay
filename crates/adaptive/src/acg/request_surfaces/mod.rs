@@ -43,11 +43,13 @@ pub(crate) trait RequestSurfaceApplier: Send + Sync {
 }
 
 impl RequestSurface {
-    fn from_provider_surface(surface: ProviderSurface) -> Self {
+    fn from_provider_surface(surface: ProviderSurface) -> Option<Self> {
         match surface {
-            ProviderSurface::OpenAIChat => Self::OpenAIChat,
-            ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
-            ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+            ProviderSurface::OpenAIChat => Some(Self::OpenAIChat),
+            ProviderSurface::OpenAIResponses => Some(Self::OpenAIResponses),
+            ProviderSurface::AnthropicMessages => Some(Self::AnthropicMessages),
+            // Gemini generateContent ACG request editing is intentionally unsupported.
+            ProviderSurface::GeminiGenerateContent => None,
         }
     }
 
@@ -90,13 +92,16 @@ impl RequestSurface {
 pub(crate) fn resolve_request_surface_from_request(
     request: &LlmRequest,
 ) -> crate::acg::Result<RequestSurface> {
-    detect_request_surface(&request.content)
-        .map(RequestSurface::from_provider_surface)
-        .ok_or_else(|| {
-            crate::acg::AcgError::Internal(
-                "unable to resolve request surface from request shape".to_string(),
-            )
-        })
+    let Some(surface) = detect_request_surface(&request.content) else {
+        return Err(crate::acg::AcgError::Internal(
+            "unable to resolve request surface from request shape".to_string(),
+        ));
+    };
+    RequestSurface::from_provider_surface(surface).ok_or_else(|| {
+        crate::acg::AcgError::Internal(format!(
+            "resolved request surface {surface:?} does not have an ACG applier"
+        ))
+    })
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
