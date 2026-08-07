@@ -31,6 +31,26 @@ def test_harbor_018_numeric_reward_is_normalized() -> None:
     assert module.read_benchmark_passed({"verifier_result": {"rewards": {"reward": 1.0}}}) is True
 
 
+def test_verifier_backed_agent_timeout_is_a_completed_nonpass() -> None:
+    module = load_validator()
+    direct_result = {
+        "status": "failed",
+        "error": {"phase": "agent", "type": "CancelledError"},
+    }
+    harbor_result = {
+        "exception_info": {"exception_type": "AgentTimeoutError"},
+        "verifier_result": {"rewards": {"reward": 0.0}},
+    }
+    assert module.is_verifier_backed_agent_timeout_nonpass(direct_result, harbor_result) is True
+
+    harbor_result["exception_info"]["exception_type"] = "RuntimeError"
+    assert module.is_verifier_backed_agent_timeout_nonpass(direct_result, harbor_result) is False
+
+    harbor_result["exception_info"]["exception_type"] = "AgentTimeoutError"
+    harbor_result["verifier_result"]["rewards"]["reward"] = 1.0
+    assert module.is_verifier_backed_agent_timeout_nonpass(direct_result, harbor_result) is False
+
+
 def test_harbor_timeout_multipliers_are_validated(tmp_path: Path) -> None:
     module = load_validator()
     config = {

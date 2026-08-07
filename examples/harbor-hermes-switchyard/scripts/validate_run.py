@@ -43,6 +43,31 @@ def read_benchmark_passed(value: dict[str, Any]) -> bool | None:
     return None
 
 
+def is_verifier_backed_agent_timeout_nonpass(
+    direct_result: dict[str, Any], harbor_result: dict[str, Any]
+) -> bool:
+    """Recognize a completed benchmark non-pass caused by Harbor's agent deadline.
+
+    Harbor cancels the agent subprocess at its configured deadline, so the
+    direct adapter records ``CancelledError`` and cannot emit a final response
+    or terminal ATIF/AGENT span.  The outcome is complete only when Harbor
+    independently records ``AgentTimeoutError`` and the verifier produces a
+    non-passing reward.  Other cancellation and missing-artifact cases remain
+    integration failures.
+    """
+    error = direct_result.get("error")
+    exception = harbor_result.get("exception_info")
+    return (
+        direct_result.get("status") == "failed"
+        and isinstance(error, dict)
+        and error.get("phase") == "agent"
+        and error.get("type") == "CancelledError"
+        and isinstance(exception, dict)
+        and exception.get("exception_type") == "AgentTimeoutError"
+        and read_benchmark_passed(harbor_result) is False
+    )
+
+
 def validate_harbor_job_config(job_dir: Path) -> tuple[dict[str, float], list[str]]:
     """Validate the timeout multipliers serialized by Harbor for this job."""
     errors: list[str] = []
@@ -432,6 +457,7 @@ def main() -> int:
     harbor_results: list[Path] = []
     harbor_timeout_multipliers: dict[str, float] = {}
     benchmark_passed: bool | None = None
+    harbor_result: dict[str, Any] = {}
     if args.harbor_job_dir:
         harbor_timeout_multipliers, timeout_errors = validate_harbor_job_config(args.harbor_job_dir)
         errors.extend(timeout_errors)
@@ -444,6 +470,17 @@ def main() -> int:
             harbor_result = read_json(harbor_results[0])
             benchmark_passed = read_benchmark_passed(harbor_result)
 
+    terminal_timeout_nonpass = is_verifier_backed_agent_timeout_nonpass(result, harbor_result)
+    if terminal_timeout_nonpass:
+        tolerated_errors = {
+            "missing ATIF trajectory",
+            "invalid direct result status: 'failed'",
+            "direct result has no normalized final response",
+        }
+        if "LLM" in openinference_evidence["span_kinds"]:
+            tolerated_errors.add("OpenInference artifact does not contain both AGENT and LLM span kinds")
+        errors = [error for error in errors if error not in tolerated_errors]
+
     validation = {
         "schema_version": SCHEMA_VERSION,
         "status": "passed" if not errors else "failed",
@@ -452,6 +489,7 @@ def main() -> int:
         "harbor_trial_count": len(harbor_results) if args.harbor_job_dir else None,
         "harbor_timeout_multipliers": harbor_timeout_multipliers,
         "benchmark_task_passed": benchmark_passed,
+        "terminal_agent_timeout_nonpass": terminal_timeout_nonpass,
         "atof_event_count": event_count,
         "atif_trajectory_count": len(atif_files),
         "openinference": openinference_evidence,
