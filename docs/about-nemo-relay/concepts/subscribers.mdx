@@ -73,7 +73,7 @@ ATOF and ATIF describe different stages of the observability path:
 
 | Format | What It Represents | What Subscribers or Exporters Do With It |
 | --- | --- | --- |
-| ATOF | The canonical record for each Relay scope lifecycle event or mark | Subscribers receive these events directly. The ATOF JSONL exporter writes one raw event per line. |
+| ATOF | The canonical raw scope, tool, LLM, middleware, and mark event stream | Subscribers receive these events directly. The ATOF JSONL exporter writes one raw event per line. |
 | ATIF | A trajectory projection assembled from related ATOF events | The ATIF exporter maps model and tool activity into trajectory steps for analysis, replay, or evaluation. |
 
 Marks are point-in-time ATOF events, not ATIF trajectory steps, so ATIF `steps`
@@ -103,8 +103,8 @@ debugging logic.
 For host integrations that need a serialized event payload, use the event
 object's JSON serialization helpers instead of reconstructing payloads from
 native attributes. Python subscribers can call `event.to_dict()` or
-`event.to_json()` from the callback while still using the normal subscriber
-registration API.
+`event.to_json()` from the callback, while continuing to use the normal
+subscriber registration API.
 
 This pattern is useful when an agent runtime, framework adapter, or plugin host
 already has its own lifecycle hooks but wants NeMo Relay to be the shared
