@@ -5,7 +5,6 @@
 
 pub(crate) mod claude;
 pub(crate) mod codex;
-pub(crate) mod hermes;
 pub(crate) mod shared;
 
 use semver::Version;
@@ -16,7 +15,6 @@ pub(crate) enum CodingAgent {
     /// `claude-code` remains an input alias for older Relay configuration.
     ClaudeCode,
     Codex,
-    Hermes,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -29,17 +27,15 @@ pub(super) struct AgentDescriptor {
     version_product: &'static str,
     minimum_version: (u64, u64, u64),
     hook_events: &'static [&'static str],
-    direct_hook_entries: bool,
 }
 
 impl CodingAgent {
-    pub(crate) const ALL: [Self; 3] = [Self::ClaudeCode, Self::Codex, Self::Hermes];
+    pub(crate) const ALL: [Self; 2] = [Self::ClaudeCode, Self::Codex];
 
     const fn descriptor(self) -> AgentDescriptor {
         match self {
             Self::ClaudeCode => claude::DESCRIPTOR,
             Self::Codex => codex::DESCRIPTOR,
-            Self::Hermes => hermes::DESCRIPTOR,
         }
     }
 
@@ -71,11 +67,6 @@ impl CodingAgent {
     /// Complete lifecycle event set installed for this host.
     pub(crate) const fn hook_events(self) -> &'static [&'static str] {
         self.descriptor().hook_events
-    }
-
-    /// Hermes stores direct command entries; plugin hosts use nested command-hook groups.
-    pub(crate) const fn uses_direct_hook_entries(self) -> bool {
-        self.descriptor().direct_hook_entries
     }
 
     pub(crate) fn minimum_version(self) -> Version {
@@ -117,7 +108,6 @@ impl CodingAgent {
         match self {
             Self::ClaudeCode => claude::parse_version(raw),
             Self::Codex => codex::parse_version(raw),
-            Self::Hermes => hermes::parse_version(raw),
         }
     }
 
@@ -139,7 +129,6 @@ impl CodingAgent {
         match name {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
-            "hermes" | "hermes-agent" => Some(Self::Hermes),
             _ => None,
         }
     }
@@ -170,7 +159,6 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         match self {
             Self::Codex => &[".agents", "plugins", "marketplace.json"],
             Self::ClaudeCode => &[".claude-plugin", "marketplace.json"],
-            Self::Hermes => unreachable!("Hermes does not use marketplace layout"),
         }
     }
 
@@ -178,7 +166,6 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         match self {
             Self::Codex => &[".codex-plugin", "plugin.json"],
             Self::ClaudeCode => &[".claude-plugin", "plugin.json"],
-            Self::Hermes => unreachable!("Hermes does not use marketplace layout"),
         }
     }
 
@@ -219,7 +206,6 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
                 "--scope".into(),
                 "user".into(),
             ],
-            Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
         }
     }
 
@@ -227,7 +213,6 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
         match self {
             Self::Codex => vec!["plugin".into(), "remove".into(), plugin_id.into()],
             Self::ClaudeCode => vec!["plugin".into(), "uninstall".into(), plugin_name.into()],
-            Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
         }
     }
 
@@ -243,7 +228,6 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
             Self::ClaudeCode => {
                 crate::installation::marketplace::host::claude_registration_report(options, runner)
             }
-            Self::Hermes => unreachable!("Hermes does not register marketplace plugins"),
         }
     }
 
@@ -259,7 +243,6 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
             Self::ClaudeCode => format!(
                 "cannot safely replace or uninstall an existing Claude Code plugin because its MCP generation marker {problem}; close all Claude Code clients and standalone `nemo-relay mcp` processes, run `claude plugin uninstall nemo-relay-plugin` and `claude plugin marketplace remove nemo-relay-local`, remove the stale marketplace and state from the selected install directory, then run `nemo-relay install claude-code --force` to create a fenced install (and `nemo-relay uninstall claude-code` afterward if removal was intended)"
             ),
-            Self::Hermes => unreachable!("Hermes does not use marketplace generations"),
         }
     }
 
@@ -285,7 +268,6 @@ impl crate::installation::marketplace::MarketplaceHost for CodingAgent {
                     || plugin_root.join(".mcp.json").exists()
                     || generation_fence.exists()
             }
-            Self::Hermes => unreachable!("Hermes does not use marketplace installs"),
         }
     }
 
@@ -347,7 +329,6 @@ pub(crate) fn marketplace_manifest(
     match agent {
         CodingAgent::Codex => codex::assets::marketplace_manifest(marketplace, plugin),
         CodingAgent::ClaudeCode => claude::assets::marketplace_manifest(marketplace, plugin),
-        CodingAgent::Hermes => unreachable!("Hermes does not install a marketplace plugin"),
     }
 }
 
@@ -355,7 +336,6 @@ pub(crate) fn plugin_manifest(agent: CodingAgent, plugin: &str) -> serde_json::V
     match agent {
         CodingAgent::Codex => codex::assets::plugin_manifest(plugin),
         CodingAgent::ClaudeCode => claude::assets::plugin_manifest(plugin),
-        CodingAgent::Hermes => unreachable!("Hermes does not install a marketplace plugin"),
     }
 }
 
@@ -366,7 +346,6 @@ pub(crate) fn plugin_mcp_config(
     match agent {
         CodingAgent::Codex => codex::assets::mcp_config(server),
         CodingAgent::ClaudeCode => Ok(claude::assets::mcp_config(server)),
-        CodingAgent::Hermes => unreachable!("Hermes does not install a marketplace plugin"),
     }
 }
 
@@ -382,7 +361,7 @@ pub(crate) fn prepare_launch(
     agent: CodingAgent,
     launch: &mut crate::process::PreparedAgentLaunch,
     gateway_url: &str,
-    resolved: &crate::configuration::ResolvedConfig,
+    _resolved: &crate::configuration::ResolvedConfig,
     proxy_credential: &crate::provider_auth::TransparentProxyCredential,
     dry_run: bool,
 ) -> Result<(), crate::error::CliError> {
@@ -395,17 +374,11 @@ pub(crate) fn prepare_launch(
         CodingAgent::ClaudeCode => {
             claude::launch::prepare(launch, gateway_url, proxy_credential, dry_run)
         }
-        CodingAgent::Hermes => hermes::launch::prepare(
-            launch,
-            resolved.agents.hermes.hooks_path.as_deref(),
-            dry_run,
-        ),
     }
 }
 
 pub(crate) fn configured(agent: CodingAgent, configs: &crate::configuration::AgentConfigs) -> bool {
     config(agent, configs).command.is_some()
-        || matches!(agent, CodingAgent::Hermes) && configs.hermes.hooks_path.is_some()
 }
 
 pub(crate) const fn config(
@@ -415,18 +388,16 @@ pub(crate) const fn config(
     match agent {
         CodingAgent::ClaudeCode => &configs.claude,
         CodingAgent::Codex => &configs.codex,
-        CodingAgent::Hermes => &configs.hermes,
     }
 }
 
 pub(crate) fn hook_status(
     agent: CodingAgent,
-    configs: &crate::configuration::AgentConfigs,
+    _configs: &crate::configuration::AgentConfigs,
 ) -> Result<String, String> {
     match agent {
         CodingAgent::Codex => codex::doctor::hook_status(),
         CodingAgent::ClaudeCode => claude::doctor::hook_status(),
-        CodingAgent::Hermes => hermes::doctor::hook_status(configs.hermes.hooks_path.as_deref()),
     }
 }
 
@@ -457,7 +428,6 @@ pub(crate) fn snapshot_setup(agent: CodingAgent) -> Result<SetupSnapshot, String
     match agent {
         CodingAgent::Codex => snapshot_codex_setup().map(SetupSnapshot::Codex),
         CodingAgent::ClaudeCode => snapshot_claude_setup().map(SetupSnapshot::Claude),
-        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
     }
 }
 
@@ -479,7 +449,6 @@ pub(crate) fn setup_marketplace_plugin(
             install_codex_plugin_with_generation(gateway_url, plugin_root, generation_token)
         }
         CodingAgent::ClaudeCode => enable_claude_provider(gateway_url),
-        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
     }
 }
 
@@ -491,7 +460,6 @@ pub(crate) fn uninstall_marketplace_plugin(
     match agent {
         CodingAgent::Codex => uninstall_codex_plugin(gateway_url, plugin_root),
         CodingAgent::ClaudeCode => restore_claude_provider(gateway_url),
-        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
     }
 }
 
@@ -509,7 +477,6 @@ pub(crate) fn doctor_marketplace_plugin(
             generation_token,
         ),
         CodingAgent::ClaudeCode => doctor_plugin(CodingAgent::ClaudeCode, gateway_url, plugin_root),
-        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
     }
 }
 
@@ -523,7 +490,6 @@ pub(crate) fn doctor_marketplace_plugin_json(
         CodingAgent::ClaudeCode => {
             doctor_plugin_json(CodingAgent::ClaudeCode, gateway_url, plugin_root)
         }
-        CodingAgent::Hermes => unreachable!("Hermes does not use marketplace setup"),
     }
 }
 
@@ -532,7 +498,6 @@ pub(crate) fn install_integration(
     command: crate::installation::InstallRequest,
 ) -> Result<std::process::ExitCode, crate::error::CliError> {
     match agent {
-        CodingAgent::Hermes => hermes::install::install(command),
         CodingAgent::Codex => codex::install::install(command),
         CodingAgent::ClaudeCode => claude::install::install(command),
     }
@@ -543,7 +508,6 @@ pub(crate) fn uninstall_integration(
     command: crate::installation::UninstallRequest,
 ) -> Result<std::process::ExitCode, crate::error::CliError> {
     match agent {
-        CodingAgent::Hermes => hermes::install::uninstall(command),
         CodingAgent::Codex => codex::install::uninstall(command),
         CodingAgent::ClaudeCode => claude::install::uninstall(command),
     }
@@ -567,12 +531,8 @@ pub(crate) fn installed_integrations(
     candidates
         .iter()
         .copied()
-        .filter(|agent| match agent {
-            CodingAgent::Codex | CodingAgent::ClaudeCode => {
-                crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
-            }
-            CodingAgent::Hermes => hermes::install::config_path()
-                .is_ok_and(|path| hermes::persistent_state_exists(&path)),
+        .filter(|agent| {
+            crate::installation::marketplace::persisted_state_exists(*agent, &install_dir)
         })
         .collect()
 }
@@ -581,31 +541,14 @@ pub(crate) fn doctor_integration(
     agent: CodingAgent,
     options: &crate::installation::marketplace::state::PluginInstallOptions,
 ) -> Result<(), crate::error::CliError> {
-    match agent {
-        CodingAgent::Codex | CodingAgent::ClaudeCode => {
-            crate::installation::marketplace::doctor_marketplace_integration(agent, options)
-        }
-        CodingAgent::Hermes => {
-            let runner = crate::installation::marketplace::host::RealCommandRunner;
-            hermes::install::doctor(options, &runner).map_err(crate::error::CliError::Install)
-        }
-    }
+    crate::installation::marketplace::doctor_marketplace_integration(agent, options)
 }
 
 pub(crate) fn doctor_integration_report(
     agent: CodingAgent,
     options: &crate::installation::marketplace::state::PluginInstallOptions,
 ) -> Result<serde_json::Value, crate::error::CliError> {
-    match agent {
-        CodingAgent::Codex | CodingAgent::ClaudeCode => {
-            crate::installation::marketplace::doctor_marketplace_report(agent, options)
-        }
-        CodingAgent::Hermes => {
-            let runner = crate::installation::marketplace::host::RealCommandRunner;
-            hermes::install::doctor_json_value(options, &runner)
-                .map_err(crate::error::CliError::Install)
-        }
-    }
+    crate::installation::marketplace::doctor_marketplace_report(agent, options)
 }
 
 struct PendingIntegrationReadiness {
@@ -682,15 +625,7 @@ fn spawn_integration_readiness(
     agent: CodingAgent,
     install_dir: PathBuf,
 ) -> PendingIntegrationReadiness {
-    let state_path = match agent {
-        CodingAgent::Codex | CodingAgent::ClaudeCode => {
-            crate::installation::marketplace::marketplace_state_path(agent, &install_dir)
-        }
-        CodingAgent::Hermes => {
-            hermes::install::config_path().unwrap_or_else(|_| install_dir.join("hermes.json"))
-        }
-    };
-    let worker_state_path = state_path.clone();
+    let state_path = crate::installation::marketplace::marketplace_state_path(agent, &install_dir);
     let worker_install_dir = install_dir.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
@@ -702,16 +637,9 @@ fn spawn_integration_readiness(
             skip_doctor: true,
         };
         let runner = crate::installation::marketplace::host::RealCommandRunner;
-        let readiness = match agent {
-            CodingAgent::Codex | CodingAgent::ClaudeCode => {
-                crate::installation::marketplace::collect_marketplace_readiness(
-                    agent, &options, &runner,
-                )
-            }
-            CodingAgent::Hermes => {
-                hermes::install::collect_readiness(&worker_state_path, &options, &runner)
-            }
-        };
+        let readiness = crate::installation::marketplace::collect_marketplace_readiness(
+            agent, &options, &runner,
+        );
         let _ = sender.send(readiness);
     });
     PendingIntegrationReadiness {
@@ -727,20 +655,14 @@ fn failed_integration_readiness(
     install_dir: &Path,
     details: &str,
 ) -> crate::installation::marketplace::HostPluginReadiness {
-    let (marketplace, plugin) = match agent {
-        CodingAgent::Codex | CodingAgent::ClaudeCode => {
-            let (marketplace, plugin) =
-                crate::installation::marketplace::marketplace_install_roots(agent, install_dir);
-            (Some(marketplace), Some(plugin))
-        }
-        CodingAgent::Hermes => (None, None),
-    };
+    let (marketplace, plugin) =
+        crate::installation::marketplace::marketplace_install_roots(agent, install_dir);
     let mut readiness = crate::installation::marketplace::HostPluginReadiness {
         host: agent.install_arg().to_string(),
         remediation: format!("nemo-relay install {} --force", agent.install_arg()),
         state_path,
-        marketplace,
-        plugin,
+        marketplace: Some(marketplace),
+        plugin: Some(plugin),
         checks: Vec::new(),
         relay: None,
         host_plugin_registered: None,
@@ -752,6 +674,7 @@ fn failed_integration_readiness(
 }
 
 pub(crate) use crate::process::portable_executable_path;
+#[cfg(any(not(windows), test))]
 pub(crate) use crate::process::shell_quote_arg_for_platform;
 #[cfg(test)]
 pub(crate) use crate::process::strip_windows_verbatim_prefix;
@@ -784,10 +707,6 @@ pub(crate) fn install_codex_plugin_with_generation(
         generation_token,
     )
     .map(|_| ())
-}
-
-pub(crate) fn stop_plugin_gateway() -> Result<(), String> {
-    crate::bootstrap::state::stop_owned_and_reset(crate::bootstrap::DEFAULT_URL)
 }
 
 pub(crate) fn uninstall_codex_plugin(gateway_url: &str, plugin_root: &Path) -> Result<(), String> {
@@ -870,12 +789,6 @@ pub(crate) fn doctor_plugin_json(
                 Some(trust),
             )
         }
-        other => {
-            return Err(format!(
-                "plugin doctor supports claude and codex, got {}",
-                other.as_arg()
-            ));
-        }
     };
     let mut report = json!({
         "ok": ok,
@@ -934,12 +847,6 @@ fn doctor_ok(
             if !trust.ready() {
                 print_info("codex hook trust", &trust.summary());
             }
-        }
-        other => {
-            return Err(format!(
-                "plugin doctor supports claude and codex, got {}",
-                other.as_arg()
-            ));
         }
     }
     Ok(ok)

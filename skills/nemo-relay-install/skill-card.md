@@ -1,5 +1,5 @@
 ## Description: <br>
-Use this skill when choosing or running NeMo Relay installation for the CLI, Python, Node.js, Rust, OpenClaw, Hermes, or maintained framework integrations before runtime configuration or quick-start setup. <br>
+Use this skill when choosing or running NeMo Relay installation for the CLI, Python, Node.js, Rust, OpenClaw, or maintained framework integrations, or when explaining Hermes Agent's built-in Relay integration. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
 
@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers installing the NeMo Relay CLI, language packages (Python, Node.js, Rust), or maintained framework integrations (LangChain, LangGraph, Deep Agents, OpenClaw, Hermes) before runtime configuration. <br>
+Developers and engineers installing the NeMo Relay CLI, language packages (Python, Node.js, Rust), or maintained framework integrations (LangChain, LangGraph, Deep Agents, OpenClaw), plus Hermes Agent users who need the native built-in Relay path. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>

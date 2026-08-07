@@ -5,8 +5,6 @@
 pub(crate) mod claude_code;
 #[path = "../codex/adapter.rs"]
 pub(crate) mod codex;
-#[path = "../hermes/adapter.rs"]
-pub(crate) mod hermes;
 
 pub(crate) const SKILL_LOAD_SOURCE_KEY: &str = "skill_load_source";
 pub(crate) const SKILL_LOAD_SOURCE_PROMPT_EXPANSION: &str = "prompt_expansion";
@@ -114,9 +112,7 @@ pub(crate) trait AgentPayloadExtractor {
     }
 
     /// Tool payload paths (call id, name, arguments, result, status).
-    fn tool_paths(&self) -> &'static ToolPathSet {
-        TOOL_PATHS
-    }
+    fn tool_paths(&self) -> &'static ToolPathSet;
 
     // -- Shared behavior (derived from the deviation hooks above) ------------
 
@@ -186,12 +182,10 @@ pub(crate) trait AgentPayloadExtractor {
 
 pub(super) struct ClaudeCodePayloadExtractor;
 pub(super) struct CodexPayloadExtractor;
-pub(super) struct HermesPayloadExtractor;
 
 pub(super) static CLAUDE_CODE_PAYLOAD_EXTRACTOR: ClaudeCodePayloadExtractor =
     ClaudeCodePayloadExtractor;
 pub(super) static CODEX_PAYLOAD_EXTRACTOR: CodexPayloadExtractor = CodexPayloadExtractor;
-pub(super) static HERMES_PAYLOAD_EXTRACTOR: HermesPayloadExtractor = HermesPayloadExtractor;
 
 /// Claude Code reports its native tool identifier as `tool_use_id`, so it uses
 /// a tool path set that prefers that key. Every other hook field matches the
@@ -216,16 +210,6 @@ impl AgentPayloadExtractor for CodexPayloadExtractor {
 
     fn tool_paths(&self) -> &'static ToolPathSet {
         CODEX_TOOL_PATHS
-    }
-}
-
-/// Hermes always runs nested under another agent, so the `child_subagent_id`
-/// signal is the most reliable owner and is preferred over the generic
-/// session-scoped subagent id. Session, event, and tool extraction match the
-/// canonical defaults.
-impl AgentPayloadExtractor for HermesPayloadExtractor {
-    fn subagent_id_paths(&self) -> &'static [&'static [&'static str]] {
-        HERMES_SUBAGENT_ID_PATHS
     }
 }
 
@@ -318,25 +302,6 @@ const CODEX_SUBAGENT_ID_PATHS: &[&[&str]] = &[
     &["extra", "agent", "id"],
 ];
 
-/// Hermes deviation: prefers the `child_subagent_id` owner signal before the
-/// generic session-scoped subagent id.
-const HERMES_SUBAGENT_ID_PATHS: &[&[&str]] = &[
-    &["child_subagent_id"],
-    &["childSubagentId"],
-    &["subagent_id"],
-    &["subagentId"],
-    &["agent_id"],
-    &["subagent", "id"],
-    &["agent", "id"],
-    &["extra", "child_subagent_id"],
-    &["extra", "childSubagentId"],
-    &["extra", "subagent_id"],
-    &["extra", "subagentId"],
-    &["extra", "agent_id"],
-    &["extra", "subagent", "id"],
-    &["extra", "agent", "id"],
-];
-
 /// Claude Code deviation: its native tool identifier is `tool_use_id`, checked
 /// before the generic `tool_call_id` shapes.
 const CLAUDE_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
@@ -351,8 +316,7 @@ const CLAUDE_TOOL_CALL_ID_PATHS: &[&[&str]] = &[
     &["id"],
 ];
 
-/// Canonical tool-call-id precedence for harnesses that report the generic
-/// `tool_call_id` first (Codex and Hermes).
+/// Codex tool-call-id precedence.
 const TOOL_CALL_ID_PATHS: &[&[&str]] = &[
     &["tool_call_id"],
     &["toolCallId"],
@@ -373,8 +337,7 @@ const TOOL_NAME_PATHS: &[&[&str]] = &[
     &["name"],
 ];
 
-/// Canonical argument precedence for harnesses that nest tool input under
-/// `tool_input` first (Claude Code and Hermes).
+/// Claude Code argument precedence.
 const TOOL_ARGUMENT_PATHS: &[&[&str]] = &[&["tool_input"], &["input"], &["arguments"], &["args"]];
 
 /// Codex deviation: sends tool arguments under `arguments`/`args` first.
@@ -390,15 +353,6 @@ const TOOL_RESULT_PATHS: &[&[&str]] = &[
 ];
 const TOOL_STATUS_PATHS: &[&[&str]] = &[&["status"], &["decision"], &["permission"]];
 
-/// Canonical tool path set used by harnesses that report generic tool shapes
-/// (Hermes). Name, result, and status precedence is shared by every harness.
-const TOOL_PATHS: &ToolPathSet = &ToolPathSet {
-    call_id: TOOL_CALL_ID_PATHS,
-    name: TOOL_NAME_PATHS,
-    arguments: TOOL_ARGUMENT_PATHS,
-    result: TOOL_RESULT_PATHS,
-    status: TOOL_STATUS_PATHS,
-};
 const CLAUDE_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
     call_id: CLAUDE_TOOL_CALL_ID_PATHS,
     name: TOOL_NAME_PATHS,
@@ -525,19 +479,6 @@ fn agent_tool_call(
     }
 }
 
-/// Derive a stable session identifier from extracted facts and compatibility fallbacks.
-///
-/// Header and payload precedence lives in the selected extractor. This boundary
-/// applies the final synthetic ID fallback so sparse payloads stay observable.
-fn session_id(
-    payload: &Value,
-    headers: &HeaderMap,
-    extractor: &dyn AgentPayloadExtractor,
-) -> String {
-    let fallback_session_id = fallback_session_id();
-    session_id_with_fallback(payload, headers, extractor, &fallback_session_id)
-}
-
 fn fallback_session_id() -> String {
     format!("hook-{}", Uuid::now_v7())
 }
@@ -587,20 +528,6 @@ fn metadata(
     extractor: &dyn AgentPayloadExtractor,
 ) -> Value {
     extractor.metadata(payload, headers, kind, event_name)
-}
-
-/// Create a root session event using the common extraction rules.
-///
-/// Lifecycle, marks, notifications, and compaction events all carry identical
-/// session-id and metadata correlation fields.
-pub(crate) fn common_session_event(
-    payload: &Value,
-    headers: &HeaderMap,
-    kind: AgentKind,
-    extractor: &dyn AgentPayloadExtractor,
-) -> SessionEvent {
-    let fallback_session_id = fallback_session_id();
-    common_session_event_with_fallback(payload, headers, kind, extractor, &fallback_session_id)
 }
 
 fn common_session_event_with_fallback(

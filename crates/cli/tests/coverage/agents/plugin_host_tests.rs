@@ -2005,20 +2005,9 @@ supports_websockets = false
 }
 
 #[test]
-fn plugin_host_doctor_rejects_unsupported_agents_and_reports_lazy_claude_status() {
+fn plugin_host_doctor_reports_lazy_claude_status() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
-
-    assert!(
-        doctor_plugin(CodingAgent::Hermes, DEFAULT_URL, dir.path())
-            .unwrap_err()
-            .contains("supports claude and codex")
-    );
-    assert!(
-        doctor_plugin_json(CodingAgent::Hermes, DEFAULT_URL, dir.path())
-            .unwrap_err()
-            .contains("supports claude and codex")
-    );
 
     let report = doctor_plugin_json(CodingAgent::ClaudeCode, DEFAULT_URL, dir.path()).unwrap();
     assert_eq!(report["ok"], json!(false));
@@ -3799,7 +3788,7 @@ fn claude_restore_removes_settings_created_from_an_absent_original() {
 }
 
 #[test]
-fn plugin_host_entrypoints_reject_unsupported_agents_and_report_json() {
+fn plugin_host_entrypoints_report_json() {
     let dir = tempdir().unwrap();
     let _home = HomeScope::enter(dir.path());
     let settings_path = dir.path().join(".claude").join("settings.json");
@@ -3843,16 +3832,6 @@ fn plugin_host_entrypoints_reject_unsupported_agents_and_report_json() {
     );
     assert_eq!(codex_report["checks"]["codex_provider_alias"], json!(false));
     assert_eq!(codex_report["checks"]["codex_hooks"], json!(false));
-    assert!(
-        doctor_plugin_json(CodingAgent::Hermes, DEFAULT_URL, &plugin_root)
-            .unwrap_err()
-            .contains("supports claude and codex")
-    );
-    assert!(
-        doctor_plugin(CodingAgent::Hermes, DEFAULT_URL, &plugin_root)
-            .unwrap_err()
-            .contains("supports claude and codex")
-    );
     assert!(
         doctor_plugin(CodingAgent::Codex, DEFAULT_URL, &plugin_root)
             .unwrap_err()

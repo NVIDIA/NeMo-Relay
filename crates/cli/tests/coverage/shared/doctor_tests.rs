@@ -635,7 +635,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
             status: Status::Warn,
             details: "using fallback layer".into(),
         },
-        vec!["codex".into(), "hermes".into()],
+        vec!["codex".into(), "claude".into()],
         &PluginConfigurationDiagnostics {
             sources: vec![],
             error: None,
@@ -668,7 +668,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
     let rendered = format_human(&report);
     assert!(rendered.contains("Global"));
     assert!(rendered.contains("Resolution ! using fallback layer"));
-    assert!(rendered.contains("Agents     codex, hermes"));
+    assert!(rendered.contains("Agents     codex, claude"));
 }
 
 #[test]
@@ -695,10 +695,7 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
         Status::Pass
     );
 
-    let mut agents = AgentConfigs::default();
-    agents.hermes.hooks_path = Some(PathBuf::from("/tmp/hermes.yaml"));
-    assert!(agent_configured(CodingAgent::Hermes, &agents));
-    assert_eq!(configured_agent_names(&agents), vec!["hermes".to_string()]);
+    let agents = AgentConfigs::default();
     assert_eq!(
         hook_status(CodingAgent::ClaudeCode, &agents),
         (Status::Pass, "hooks: injected during run".into())
@@ -706,13 +703,6 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     assert_eq!(
         hook_status(CodingAgent::Codex, &agents),
         (Status::Pass, "hooks: injected during run".into())
-    );
-    assert_eq!(
-        hook_status(CodingAgent::Hermes, &AgentConfigs::default()),
-        (
-            Status::Pass,
-            "hooks: injected through an isolated HERMES_HOME during run".into()
-        )
     );
 }
 
@@ -849,20 +839,6 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
     assert_eq!(optional.status, Status::Warn);
     assert!(optional.annotation.contains("could not determine version"));
 }
-
-#[test]
-fn hermes_hook_status_reports_actionable_persistent_diagnosis_failures() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut agents = AgentConfigs::default();
-    agents.hermes.hooks_path = Some(temp.path().join("missing-config.yaml"));
-
-    let (status, details) = hook_status(CodingAgent::Hermes, &agents);
-
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("persistent MCP/hooks"), "{details}");
-    assert!(details.contains("install hermes --force"), "{details}");
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {

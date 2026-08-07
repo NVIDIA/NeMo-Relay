@@ -88,9 +88,8 @@ impl Drop for EnvScope {
 fn detect_installed_agents_finds_binaries_on_path() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
-    // Drop stub binaries for two of the three supported agents — confirming detection picks up
-    // only the ones present and ignores the others.
-    for exec in ["claude", "hermes"] {
+    // Drop stub binaries for both supported agents.
+    for exec in ["claude", "codex"] {
         let path = temp.path().join(exec);
         std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -101,8 +100,7 @@ fn detect_installed_agents_finds_binaries_on_path() {
     // race with every other test that reads the environment.
     let detected = detect_installed_agents_in(Some(temp.path().as_os_str()));
     assert!(detected.contains(&CodingAgent::ClaudeCode));
-    assert!(detected.contains(&CodingAgent::Hermes));
-    assert!(!detected.contains(&CodingAgent::Codex));
+    assert!(detected.contains(&CodingAgent::Codex));
 }
 
 #[test]
@@ -156,7 +154,7 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
 fn save_config_writes_user_scope_to_user_config_dir() {
     let _xdg = XdgScope::cleared();
     let answers = SetupAnswers {
-        agents: vec![CodingAgent::ClaudeCode],
+        agents: vec![CodingAgent::Codex],
     };
     let doc = build_config(&answers);
     let home = tempfile::tempdir().unwrap();
@@ -173,7 +171,7 @@ fn save_config_writes_user_scope_to_user_config_dir() {
     let contents = std::fs::read_to_string(&written[0]).unwrap();
     assert!(user_config_dir.is_dir());
     assert!(!contents.contains("[exporters]"));
-    assert!(contents.contains("[agents.claude]"));
+    assert!(contents.contains("[agents.codex]"));
 }
 
 #[test]
@@ -352,13 +350,13 @@ fn write_or_merge_replaces_agents_without_merge_scope_and_preserves_other_sectio
     )
     .unwrap();
     let doc = build_config(&SetupAnswers {
-        agents: vec![CodingAgent::Hermes],
+        agents: vec![CodingAgent::ClaudeCode],
     });
 
     write_or_merge(&path, &doc, None).unwrap();
     let overwritten = std::fs::read_to_string(&path).unwrap();
     assert!(!overwritten.contains("[agents.codex]"));
-    assert!(overwritten.contains("[agents.hermes]"));
+    assert!(overwritten.contains("[agents.claude]"));
     assert!(overwritten.contains("[upstream]"));
     assert!(overwritten.contains("https://example.test"));
 
@@ -437,19 +435,17 @@ fn reset_noops_when_user_config_is_missing() {
 #[test]
 fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     let temp = tempfile::tempdir().unwrap();
-    let hermes_home = temp.path().join("hermes-home");
     let _env = EnvScope::set(&[
         ("HOME", Some(temp.path().as_os_str())),
         ("USERPROFILE", None),
         ("XDG_CONFIG_HOME", None),
-        ("HERMES_HOME", Some(hermes_home.as_os_str())),
     ]);
     let config_dir = temp.path().join(".config/nemo-relay");
     std::fs::create_dir_all(&config_dir).unwrap();
     let path = config_dir.join("config.toml");
     std::fs::write(&path, "agents = \"not-a-table\"\n").unwrap();
 
-    reset(Some(CodingAgent::Hermes)).unwrap();
+    reset(Some(CodingAgent::Codex)).unwrap();
 
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -457,7 +453,7 @@ fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     );
 
     std::fs::write(&path, "not valid toml = [\n").unwrap();
-    let error = reset(Some(CodingAgent::Hermes)).unwrap_err().to_string();
+    let error = reset(Some(CodingAgent::Codex)).unwrap_err().to_string();
     assert!(
         error.contains("could not parse existing config"),
         "error was: {error}"
