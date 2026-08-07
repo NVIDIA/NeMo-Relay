@@ -342,15 +342,21 @@ artifacts = pathlib.Path(sys.argv[1])
 run_root = pathlib.Path(sys.argv[2])
 summary = {
     "schema_version": "harbor-hermes-switchyard.task-summary.v1",
-    "status": "passed",
     "job_name": sys.argv[3],
     "task_name": sys.argv[4],
     "artifacts": str(artifacts),
     "validation": json.loads((artifacts / "validation.json").read_text()),
     "phoenix_upload": json.loads((artifacts / "phoenix-upload.json").read_text()),
 }
-if summary["validation"].get("status") != "passed" or summary["phoenix_upload"].get("status") != "passed":
-    raise SystemExit("task evidence gates did not pass")
+summary["benchmark_completion"] = summary["validation"].get("benchmark", {})
+summary["integration_validation"] = summary["validation"].get("integration", {})
+benchmark_complete = summary["benchmark_completion"].get(
+    "status", summary["validation"].get("status")
+) == "passed"
+uploaded = summary["phoenix_upload"].get("status") == "passed"
+summary["status"] = "passed" if benchmark_complete and uploaded else "failed"
+if summary["status"] != "passed":
+    raise SystemExit("benchmark completion or Phoenix upload did not pass")
 (run_root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 print(json.dumps(summary, indent=2))
 PY

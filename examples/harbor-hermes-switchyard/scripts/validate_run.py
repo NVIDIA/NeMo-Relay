@@ -323,13 +323,20 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    errors: list[str] = []
+    # Keep benchmark completion distinct from the optional-but-audited
+    # Relay/Switchyard evidence contract. A verifier-backed task result is
+    # still a completed Terminal-Bench evaluation if observability evidence is
+    # incomplete; the cohort summary decides whether that evidence is strong
+    # enough for this integration example to pass as a whole.
+    integration_errors: list[str] = []
+    benchmark_errors: list[str] = []
+    integration_warnings: list[str] = []
     root = args.artifacts.resolve()
     try:
         files = contained_files(root)
     except Exception as error:
         files = []
-        errors.append(str(error))
+        integration_errors.append(str(error))
 
     required = {
         "result": root / "direct-hermes-result.json",
@@ -339,12 +346,13 @@ def main() -> int:
     }
     for name, path in required.items():
         if not path.is_file():
-            errors.append(f"missing {name}: {path}")
+            target = benchmark_errors if name == "result" else integration_errors
+            target.append(f"missing {name}: {path}")
     atif_files = sorted((root / "relay" / "atif").glob("trajectory-*.atif.json"))
     if not atif_files:
-        errors.append("missing ATIF trajectory")
+        integration_errors.append("missing ATIF trajectory")
     if not args.openinference.is_file() or args.openinference.stat().st_size == 0:
-        errors.append("missing OpenInference OTLP artifact")
+        integration_errors.append("missing OpenInference OTLP artifact")
 
     result: dict[str, Any] = {}
     receipt: dict[str, Any] = {}
@@ -352,23 +360,23 @@ def main() -> int:
     if required["result"].is_file():
         result = read_json(required["result"])
         if result.get("status") not in {"completed", "preserved_completed_response"}:
-            errors.append(f"invalid direct result status: {result.get('status')!r}")
+            benchmark_errors.append(f"invalid direct result status: {result.get('status')!r}")
         if not isinstance(result.get("final_response"), str) or not result["final_response"]:
-            errors.append("direct result has no normalized final response")
+            benchmark_errors.append("direct result has no normalized final response")
         if args.expect_late_failure:
             if result.get("status") != "preserved_completed_response":
-                errors.append("expected a preserved completed response after late failure")
+                benchmark_errors.append("expected a preserved completed response after late failure")
             if result.get("error", {}).get("type") != "InjectedPostResponseFailure":
-                errors.append("deterministic post-response failure was not recorded")
+                benchmark_errors.append("deterministic post-response failure was not recorded")
     if required["receipt"].is_file():
         receipt = read_json(required["receipt"])
     if args.provenance.is_file():
         provenance = read_json(args.provenance)
     else:
-        errors.append("missing runtime provenance")
+        integration_errors.append("missing runtime provenance")
 
     if receipt:
-        errors.extend(validate_receipt_provenance(receipt, provenance))
+        integration_errors.extend(validate_receipt_provenance(receipt, provenance))
 
     openinference_evidence = {
         "documents": 0,
@@ -382,15 +390,15 @@ def main() -> int:
         try:
             openinference_evidence = inspect_openinference(args.openinference)
         except Exception as error:
-            errors.append(f"invalid OpenInference OTLP artifact: {error}")
+            integration_errors.append(f"invalid OpenInference OTLP artifact: {error}")
         if openinference_evidence["documents"] == 0 or openinference_evidence["spans"] == 0:
-            errors.append("OpenInference artifact contains no spans")
+            integration_errors.append("OpenInference artifact contains no spans")
         if not {"AGENT", "LLM"}.issubset(openinference_evidence["span_kinds"]):
-            errors.append("OpenInference artifact does not contain both AGENT and LLM span kinds")
+            integration_errors.append("OpenInference artifact does not contain both AGENT and LLM span kinds")
         if openinference_evidence["scope_names"] != ["harbor-hermes-switchyard"]:
-            errors.append("OpenInference instrumentation scope does not match the example")
+            integration_errors.append("OpenInference instrumentation scope does not match the example")
         if openinference_evidence["lineage_spans"] != openinference_evidence["spans"]:
-            errors.append("OpenInference spans are missing Relay UUID or scope-type lineage")
+            integration_errors.append("OpenInference spans are missing Relay UUID or scope-type lineage")
         expected_resources = {
             "openinference.project.name": provenance.get("phoenix_project"),
             "evaluation.cohort": provenance.get("eval_cohort"),
@@ -399,7 +407,7 @@ def main() -> int:
         }
         for key, expected in expected_resources.items():
             if openinference_evidence["resource_attributes"].get(key) != [expected]:
-                errors.append(f"OpenInference resource attribute {key!r} does not match runtime provenance")
+                integration_errors.append(f"OpenInference resource attribute {key!r} does not match runtime provenance")
 
     event_count = 0
     routing_marks: list[str] = []
@@ -418,14 +426,14 @@ def main() -> int:
         cache_read_tokens = atof_evidence["cache_read_tokens"]
         cache_write_tokens = atof_evidence["cache_write_tokens"]
         if event_count == 0:
-            errors.append("ATOF artifact is empty")
+            integration_errors.append("ATOF artifact is empty")
         if not routing_marks:
-            errors.append("ATOF artifact has no Switchyard routing evidence")
+            integration_errors.append("ATOF artifact has no Switchyard routing evidence")
         if not routed_targets:
-            errors.append("ATOF artifact has no selected Switchyard target")
+            integration_errors.append("ATOF artifact has no selected Switchyard target")
         unexpected_targets = sorted(set(routed_targets) - {"strong", "weak"})
         if unexpected_targets:
-            errors.append(f"ATOF artifact selected unexpected targets: {unexpected_targets}")
+            integration_errors.append(f"ATOF artifact selected unexpected targets: {unexpected_targets}")
 
     caller_model = provenance.get("routing", {}).get("hermes_caller_model")
     target_models = {
@@ -439,7 +447,7 @@ def main() -> int:
         }
     )
     if caller_model and caller_model in routed_models:
-        errors.append("Hermes caller stub appeared as a routed provider model")
+        integration_errors.append("Hermes caller stub appeared as a routed provider model")
 
     secret_values: list[bytes] = []
     for name in args.secret_env:
@@ -460,7 +468,7 @@ def main() -> int:
         files_to_scan.extend(scan_files(scan_root.resolve()))
     findings = scan_secrets(sorted(set(files_to_scan)), secret_values)
     if findings:
-        errors.append(f"secret scan found {len(findings)} persisted value(s)")
+        integration_errors.append(f"secret scan found {len(findings)} persisted value(s)")
 
     harbor_results: list[Path] = []
     harbor_timeout_multipliers: dict[str, float] = {}
@@ -468,31 +476,47 @@ def main() -> int:
     harbor_result: dict[str, Any] = {}
     if args.harbor_job_dir:
         harbor_timeout_multipliers, timeout_errors = validate_harbor_job_config(args.harbor_job_dir)
-        errors.extend(timeout_errors)
+        integration_errors.extend(timeout_errors)
         harbor_results = [
             path for path in sorted(args.harbor_job_dir.glob("**/result.json")) if is_trial_result(read_json(path))
         ]
         if len(harbor_results) != 1:
-            errors.append(f"expected one Harbor trial result, found {len(harbor_results)}")
+            benchmark_errors.append(f"expected one Harbor trial result, found {len(harbor_results)}")
         elif harbor_results:
             harbor_result = read_json(harbor_results[0])
             benchmark_passed = read_benchmark_passed(harbor_result)
+            if benchmark_passed is None:
+                benchmark_errors.append("Harbor trial did not contain a normalized benchmark reward")
+    else:
+        benchmark_errors.append("missing Harbor job directory for benchmark completion")
 
     terminal_timeout_nonpass = is_verifier_backed_agent_timeout_nonpass(result, harbor_result)
     if terminal_timeout_nonpass:
-        tolerated_errors = {
-            "missing ATIF trajectory",
+        tolerated_benchmark_errors = {
             "invalid direct result status: 'failed'",
             "direct result has no normalized final response",
         }
+        benchmark_errors = [error for error in benchmark_errors if error not in tolerated_benchmark_errors]
+        tolerated_integration_errors = {
+            "missing ATIF trajectory",
+        }
         if "LLM" in openinference_evidence["span_kinds"]:
-            tolerated_errors.add("OpenInference artifact does not contain both AGENT and LLM span kinds")
-        errors = [error for error in errors if error not in tolerated_errors]
+            tolerated_integration_errors.add("OpenInference artifact does not contain both AGENT and LLM span kinds")
+        for error in integration_errors:
+            if error in tolerated_integration_errors:
+                integration_warnings.append(error)
+        integration_errors = [error for error in integration_errors if error not in tolerated_integration_errors]
 
     validation = {
         "schema_version": SCHEMA_VERSION,
-        "status": "passed" if not errors else "failed",
-        "errors": errors,
+        "status": "passed" if not benchmark_errors else "failed",
+        "errors": benchmark_errors,
+        "benchmark": {"status": "passed" if not benchmark_errors else "failed", "errors": benchmark_errors},
+        "integration": {
+            "status": "passed" if not integration_errors else "failed",
+            "errors": integration_errors,
+            "warnings": integration_warnings,
+        },
         "direct_result_status": result.get("status"),
         "harbor_trial_count": len(harbor_results) if args.harbor_job_dir else None,
         "harbor_timeout_multipliers": harbor_timeout_multipliers,
@@ -513,7 +537,7 @@ def main() -> int:
     args.output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     args.output.write_text(json.dumps(validation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(validation, indent=2))
-    return 0 if not errors else 1
+    return 0 if not benchmark_errors else 1
 
 
 if __name__ == "__main__":

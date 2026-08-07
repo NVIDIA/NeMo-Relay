@@ -148,12 +148,11 @@ def task_summary_passed(path: Path) -> bool:
         summary = read_json(path)
     except (OSError, ValueError, json.JSONDecodeError):
         return False
-    return (
-        summary.get("status") == "passed"
-        and isinstance(summary.get("validation"), dict)
-        and summary["validation"].get("status") == "passed"
-        and isinstance(summary.get("phoenix_upload"), dict)
-        and summary["phoenix_upload"].get("status") == "passed"
+    validation = summary.get("validation")
+    benchmark = validation.get("benchmark", {}) if isinstance(validation, dict) else {}
+    benchmark_status = benchmark.get("status", validation.get("status") if isinstance(validation, dict) else None)
+    return summary.get("status") == "passed" and benchmark_status == "passed" and (
+        isinstance(summary.get("phoenix_upload"), dict) and summary["phoenix_upload"].get("status") == "passed"
     )
 
 
@@ -675,12 +674,15 @@ def task_record(task: Task, attempt: Path | None) -> dict[str, Any]:
     summary = read_json(attempt / "summary.json")
     validation = summary["validation"]
     upload = summary["phoenix_upload"]
+    integration = validation.get("integration", {"status": validation.get("status"), "errors": []})
     record.update(
         {
-            "status": "passed",
+            "status": "completed",
             "successful_attempt": attempt.name,
             "attempt_root": str(attempt),
             "benchmark_task_passed": validation.get("benchmark_task_passed"),
+            "benchmark_completion": validation.get("benchmark", {"status": validation.get("status")}),
+            "integration_validation": integration,
             "direct_result_status": validation.get("direct_result_status"),
             "switchyard_decision_count": validation.get("switchyard_decision_count", 0),
             "routed_models": validation.get("routed_models", []),
@@ -700,15 +702,29 @@ def aggregate_summary(args: argparse.Namespace, tasks: list[Task]) -> dict[str, 
     for task in tasks:
         task_root = args.run_root / "tasks" / task.directory_name
         records.append(task_record(task, successful_attempt(task_root)))
-    complete = all(record["status"] == "passed" for record in records)
+    complete = all(record["status"] == "completed" for record in records)
     cache_read_tokens = sum(int(record.get("cache_read_tokens") or 0) for record in records)
     observed_models = sorted(
         {model for record in records for model in record.get("routed_models", []) if isinstance(model, str)}
     )
     missing_models = sorted(set(args.required_model).difference(observed_models))
-    secrets_clean = all(not record.get("secret_findings") for record in records if record["status"] == "passed")
+    completed_records = [record for record in records if record["status"] == "completed"]
+    secrets_clean = all(not record.get("secret_findings") for record in completed_records)
+    integration_failures = [
+        {
+            "task": record["name"],
+            "errors": record.get("integration_validation", {}).get("errors", []),
+        }
+        for record in completed_records
+        if record.get("integration_validation", {}).get("status") != "passed"
+    ]
     gates = {
-        "task_outputs": {"passed": complete, "completed": sum(r["status"] == "passed" for r in records)},
+        "task_outputs": {"passed": complete, "completed": sum(r["status"] == "completed" for r in records)},
+        "integration_validation": {
+            "passed": not integration_failures,
+            "failed_task_count": len(integration_failures),
+            "failures": integration_failures,
+        },
         "cache_hit": {
             "required": args.require_cache_hit,
             "passed": not args.require_cache_hit or cache_read_tokens > 0,
@@ -730,7 +746,7 @@ def aggregate_summary(args: argparse.Namespace, tasks: list[Task]) -> dict[str, 
         "phoenix_project": args.phoenix_project,
         "evaluation_cohort": args.eval_cohort,
         "planned_tasks": len(records),
-        "completed_tasks": sum(record["status"] == "passed" for record in records),
+        "completed_tasks": sum(record["status"] == "completed" for record in records),
         "benchmark_pass_count": sum(record.get("benchmark_task_passed") is True for record in records),
         "benchmark_nonpass_count": sum(record.get("benchmark_task_passed") is False for record in records),
         "uploaded_spans": sum(int(record.get("uploaded_spans") or 0) for record in records),
@@ -1144,6 +1160,11 @@ def main() -> int:
         print(json.dumps(summary, indent=2))
         if passed:
             return 0
+        if (
+            summary["completed_tasks"] == summary["planned_tasks"]
+            and not summary["cohort_gates"]["integration_validation"]["passed"]
+        ):
+            return 20
         states = [read_json(path) for path in (args.run_root / "tasks").glob("*/task-state.json") if path.is_file()]
         setup_state = args.run_root / "setup-state.json"
         if setup_state.is_file():

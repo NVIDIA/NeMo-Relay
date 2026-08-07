@@ -141,6 +141,41 @@ def test_cohort_summary_blocks_missing_route_even_when_tasks_pass(tmp_path: Path
     assert summary["cohort_gates"]["route_diversity"]["missing_models"] == ["sonnet"]
 
 
+def test_integration_failure_does_not_erase_completed_benchmark_output(tmp_path: Path) -> None:
+    module = load_coordinator()
+    task = module.Task(1, "one", 2)
+    attempt = tmp_path / "tasks" / task.directory_name / "attempts" / "001"
+    attempt.mkdir(parents=True)
+    attempt_summary = {
+        "status": "passed",
+        "validation": {
+            "status": "passed",
+            "benchmark": {"status": "passed", "errors": []},
+            "integration": {"status": "failed", "errors": ["missing route mark"], "warnings": []},
+            "benchmark_task_passed": True,
+            "routed_models": ["sonnet"],
+            "routed_targets": ["weak"],
+            "cache_read_tokens": 12,
+            "secret_findings": [],
+        },
+        "phoenix_upload": {"status": "passed", "uploaded_spans": 10},
+    }
+    (attempt / "summary.json").write_text(json.dumps(attempt_summary), encoding="utf-8")
+
+    assert module.task_summary_passed(attempt / "summary.json") is True
+    args = cohort_args(tmp_path)
+    args.required_model = ["sonnet"]
+    summary = module.aggregate_summary(args, [task])
+    assert summary["completed_tasks"] == 1
+    assert summary["tasks"][0]["status"] == "completed"
+    assert summary["cohort_gates"]["integration_validation"] == {
+        "passed": False,
+        "failed_task_count": 1,
+        "failures": [{"task": "one", "errors": ["missing route mark"]}],
+    }
+    assert summary["status"] == "partial"
+
+
 def test_failure_classifier_retries_only_known_infrastructure_failures() -> None:
     module = load_coordinator()
     assert module.classify_failure("TLS handshake timeout contacting registry-1.docker.io") == "infrastructure"
@@ -388,6 +423,13 @@ def test_runner_does_not_expand_an_empty_validation_expectations_array() -> None
     assert "validation_expectations=()" not in runner
     assert '"${validation_expectations[@]}"' not in runner
     assert "validation_args+=(--expect-late-failure)" in runner
+
+
+def test_runner_keeps_benchmark_completion_separate_from_integration_validation() -> None:
+    runner = (EXAMPLE_ROOT / "run_terminal_bench.sh").read_text(encoding="utf-8")
+    assert 'summary["benchmark_completion"] = summary["validation"].get("benchmark", {})' in runner
+    assert 'summary["integration_validation"] = summary["validation"].get("integration", {})' in runner
+    assert "benchmark completion or Phoenix upload did not pass" in runner
 
 
 def test_plugin_contract_owns_routes_and_authorization_name() -> None:
