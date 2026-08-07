@@ -13,6 +13,7 @@ use nemo_relay::api::runtime::{TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::plugin::PluginConfig;
 use nemo_relay::plugin::dynamic::{
@@ -57,7 +58,8 @@ fn config_schema_matches_activation_invariants() {
         json!({"model_path": "/model", "target_paths": ["/content"]}),
         json!({
             "model_path": "/model",
-            "target_path_patterns": ["/messages/*/content"]
+            "target_path_patterns": ["/messages/*/content"],
+            "codec": "gemini_generate_content"
         }),
         json!({
             "model_path": "/model",
@@ -165,7 +167,10 @@ async fn run_live_test() {
     let llm_request_capture = Arc::clone(&llm_request_seen);
 
     let stack = create_scope_stack();
-    let (tool_result, llm_result) = TASK_SCOPE_STACK
+    let gemini_request_seen = Arc::new(Mutex::new(None::<LlmRequest>));
+    let gemini_request_capture = Arc::clone(&gemini_request_seen);
+
+    let (tool_result, llm_result, gemini_result) = TASK_SCOPE_STACK
         .scope(stack, async move {
             let scope = push_scope(
                 PushScopeParams::builder()
@@ -227,6 +232,44 @@ async fn run_live_test() {
             .await
             .expect("execute managed LLM call");
 
+            let gemini_request = LlmRequest {
+                headers: Map::new(),
+                content: json!({
+                    "contents": [{
+                        "role": "user",
+                        "parts": [{"text": format!("Email {REQUEST_EMAIL}; safe-gemini-input")}]
+                    }]
+                }),
+            };
+            let gemini_response = json!({
+                "candidates": [{
+                    "content": {
+                        "role": "model",
+                        "parts": [{"text": format!("Email {RESPONSE_EMAIL}; safe-gemini-output")}]
+                    },
+                    "finishReason": "STOP"
+                }],
+                "modelVersion": "gemini-test-model"
+            });
+            let callback_response = gemini_response.clone();
+            let codec = Arc::new(GeminiGenerateContentCodec);
+            let gemini_result = llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name("gemini")
+                    .request(gemini_request)
+                    .func(Arc::new(move |request| {
+                        *gemini_request_capture.lock().expect("Gemini capture lock") =
+                            Some(request);
+                        let response = callback_response.clone();
+                        Box::pin(async move { Ok(response) })
+                    }))
+                    .codec(codec.clone())
+                    .response_codec(codec)
+                    .build(),
+            )
+            .await
+            .expect("execute managed Gemini call");
+
             pop_scope(
                 PopScopeParams::builder()
                     .handle_uuid(&scope.uuid)
@@ -234,7 +277,7 @@ async fn run_live_test() {
                     .build(),
             )
             .expect("pop live-test scope");
-            (tool_result, llm_result)
+            (tool_result, llm_result, gemini_result)
         })
         .await;
 
@@ -258,6 +301,17 @@ async fn run_live_test() {
             .contains(REQUEST_EMAIL)
     );
     assert!(llm_result.to_string().contains(RESPONSE_EMAIL));
+    assert!(
+        gemini_request_seen
+            .lock()
+            .expect("Gemini capture lock")
+            .as_ref()
+            .expect("Gemini callback ran")
+            .content
+            .to_string()
+            .contains(REQUEST_EMAIL)
+    );
+    assert!(gemini_result.to_string().contains(RESPONSE_EMAIL));
 
     let concurrent_emails = run_concurrent_tool_calls(8).await;
 
@@ -273,7 +327,14 @@ async fn run_live_test() {
         );
     }
     assert!(serialized.contains("[REDACTED]"));
-    for retained in ["scope-input", "scope-output", "tool-input", "tool-output"] {
+    for retained in [
+        "scope-input",
+        "scope-output",
+        "tool-input",
+        "tool-output",
+        "safe-gemini-input",
+        "safe-gemini-output",
+    ] {
         assert!(
             serialized.contains(retained),
             "missing safe value {retained}"

@@ -908,6 +908,9 @@ impl RampartSanitizer {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages) => {
                 Some(ProviderSurface::AnthropicMessages)
             }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent) => {
+                Some(ProviderSurface::GeminiGenerateContent)
+            }
             LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => None,
         }
     }
@@ -2447,6 +2450,62 @@ mod tests {
         assert_eq!(sanitized["id"], "chatcmpl-José");
         assert_eq!(sanitized["model"], "model-José");
         assert_eq!(sanitized["vendor_trace"], "trace-José");
+    }
+
+    #[test]
+    fn gemini_request_projection_preserves_provider_fields() {
+        let sanitizer = sanitizer(Arc::new(NameDetector), vec!["/messages/0/content"]);
+        let request = LlmRequest {
+            headers: Map::new(),
+            content: serde_json::json!({
+                "contents": [{
+                    "role": "user",
+                    "parts": [{"text": "Hello José"}]
+                }],
+                "vendorTrace": "trace-José"
+            }),
+        };
+        let codec = build_request_codec(ProviderSurface::GeminiGenerateContent);
+        let sanitized = sanitizer
+            .sanitize_request_with_codec(codec.as_ref(), &request)
+            .unwrap();
+
+        assert_eq!(
+            sanitized.content["contents"][0]["parts"][0]["text"],
+            "Hello [REDACTED]"
+        );
+        assert_eq!(sanitized.content["vendorTrace"], "trace-José");
+    }
+
+    #[test]
+    fn gemini_response_projection_preserves_provider_fields() {
+        let sanitizer = sanitizer(Arc::new(NameDetector), vec!["/message"]);
+        let payload = serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello José"}]
+                },
+                "finishReason": "STOP"
+            }],
+            "modelVersion": "model-José",
+            "vendorTrace": "trace-José"
+        });
+        let codec = build_response_codec(ProviderSurface::GeminiGenerateContent);
+        let sanitized = sanitizer
+            .sanitize_response_with_codec(
+                codec.as_ref(),
+                ProviderSurface::GeminiGenerateContent,
+                payload,
+            )
+            .unwrap();
+
+        assert_eq!(
+            sanitized["candidates"][0]["content"]["parts"][0]["text"],
+            "Hello [REDACTED]"
+        );
+        assert_eq!(sanitized["modelVersion"], "model-José");
+        assert_eq!(sanitized["vendorTrace"], "trace-José");
     }
 
     #[test]

@@ -81,6 +81,7 @@ without sanitization. The original application call continues unchanged.
 The `trajectory_context` preset operates on provider-native request and response
 content and is the recommended configuration for coding-agent telemetry.
 Explicit normalized LLM paths support Relay's built-in OpenAI Chat, OpenAI
-Responses, and Anthropic Messages codecs. The current native asynchronous ABI
-does not pass an owned runtime or opaque codec capability across the callback
-boundary, so explicit normalized paths fail closed for those codec kinds.
+Responses, Anthropic Messages, and Gemini generateContent codecs. The current
+native asynchronous ABI does not pass an owned runtime or opaque codec
+capability across the callback boundary, so explicit normalized paths fail
+closed for those codec kinds.

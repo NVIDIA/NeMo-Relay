@@ -417,9 +417,14 @@ fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
     if let Some(codec) = config.codec.as_deref()
         && !supported_codec_names().contains(&codec)
     {
+        let supported = supported_codec_names()
+            .into_iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
         violations.push(ConfigViolation::new(
             "codec",
-            "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'",
+            format!("codec must be one of {supported}"),
         ));
     }
     validate_content_selection(config, &mut violations);
@@ -629,7 +634,7 @@ fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::s
     let mut schema: schemars::schema::SchemaObject =
         <String as schemars::JsonSchema>::json_schema(generator).into();
     schema.enum_values = Some(
-        ["openai_chat", "openai_responses", "anthropic_messages"]
+        supported_codec_names()
             .into_iter()
             .map(|value| Json::String(value.into()))
             .collect(),
@@ -697,6 +702,18 @@ mod tests {
                 .iter()
                 .any(|item| item.field.as_deref() == Some("target_path_patterns"))
         );
+    }
+
+    #[test]
+    fn accepts_every_builtin_provider_codec() {
+        for codec in supported_codec_names() {
+            let mut config = valid_config();
+            config.insert("codec".into(), Json::String(codec.into()));
+            assert!(
+                validate_rampart_pii_config(&config).is_empty(),
+                "built-in codec {codec} should be accepted"
+            );
+        }
     }
 
     #[test]

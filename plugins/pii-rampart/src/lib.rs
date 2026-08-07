@@ -117,6 +117,9 @@ impl CodecContext {
             ("builtin", Some("anthropic_messages")) => {
                 LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
             }
+            ("builtin", Some("gemini_generate_content")) => {
+                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
+            }
             ("runtime", Some(id)) => LlmCodecIdentity::Runtime(id.to_owned()),
             _ => LlmCodecIdentity::Opaque,
         }

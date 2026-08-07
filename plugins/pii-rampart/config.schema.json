@@ -165,7 +165,12 @@
     "codec": {
       "title": "Fallback provider codec",
       "type": "string",
-      "enum": ["openai_chat", "openai_responses", "anthropic_messages"]
+      "enum": [
+        "openai_chat",
+        "openai_responses",
+        "anthropic_messages",
+        "gemini_generate_content"
+      ]
     },
     "preset": {
       "title": "Content-selection preset",
