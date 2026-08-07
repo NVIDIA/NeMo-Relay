@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # CLI Try-Now Reference
 
 Use this reference only for the default coding-agent trial. Keep the first run
-local, user-scoped, read-only, and limited to the built-in Observability
-plugin.
+local, user-scoped, confirmation-gated, and limited to the built-in
+Observability plugin.
 
 ## Contents
 

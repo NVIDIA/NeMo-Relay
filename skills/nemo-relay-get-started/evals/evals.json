@@ -154,7 +154,8 @@
       "The agent states that NeMo Relay is part of Hermes Agent",
       "The agent does not recommend a separate Relay package installation",
       "The agent does not recommend enabling an observability plugin",
-      "The agent states that Hermes Agent understands NeMo Relay plugin configurations"
+      "The agent states that Hermes Agent understands NeMo Relay plugin configurations",
+      "The agent stops after explaining the native Hermes Agent path and does not enter generic installation or plugin-progression steps"
     ]
   },
   {
