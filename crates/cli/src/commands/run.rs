@@ -16,7 +16,7 @@ mod invocation;
 /// Args for an easy-path agent shortcut.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct EasyPathCommand {
-    /// Print the resolved launch plan without setup, gateway startup, or agent execution.
+    /// Print the resolved launch plan, including forwarded arguments, without executing it.
     #[arg(long)]
     pub(super) dry_run: bool,
     #[arg(last = true)]

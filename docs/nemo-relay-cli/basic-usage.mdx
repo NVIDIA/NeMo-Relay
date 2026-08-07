@@ -91,6 +91,9 @@ nemo-relay run --agent claude --dry-run -- claude
 nemo-relay claude --dry-run -- claude
 ```
 
+Dry-run output includes forwarded arguments. Do not share it when those
+arguments contain prompts, credentials, or other sensitive values.
+
 For Claude Code and Codex, transparent mode leaves the caller's source settings,
 selected profile, and installed plugin state unchanged. A process marker makes
 any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's
