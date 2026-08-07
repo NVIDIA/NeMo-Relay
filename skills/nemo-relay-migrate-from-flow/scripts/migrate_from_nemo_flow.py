@@ -115,12 +115,16 @@ LEGACY_PROJECT_CONFIG_FILENAMES = {"config.toml", "plugins.toml"}
 
 @dataclass(frozen=True)
 class FileChange:
+    """A text file that would receive or received identifier replacements."""
+
     path: Path
     count: int
 
 
 @dataclass(frozen=True)
 class PathChange:
+    """A file or directory path that would be or was renamed."""
+
     old: Path
     new: Path
 
@@ -137,6 +141,7 @@ class MutationError(RuntimeError):
 
 
 def apply_replacements(text: str) -> tuple[str, int]:
+    """Apply explicit NeMo Flow to NeMo Relay replacements in text."""
     count = 0
     updated = text
     for old, new in REPLACEMENTS:
@@ -148,12 +153,14 @@ def apply_replacements(text: str) -> tuple[str, int]:
 
 
 def should_skip_dir(name: str, include_generated: bool) -> bool:
+    """Return whether a directory name should be skipped during traversal."""
     if include_generated and name == "_generated":
         return False
     return name in SKIP_DIRS
 
 
 def is_safe_entry(path: Path, root: Path) -> bool:
+    """Return whether path is a non-symlink entry contained by root."""
     if path.is_symlink():
         return False
     try:
@@ -163,6 +170,7 @@ def is_safe_entry(path: Path, root: Path) -> bool:
 
 
 def should_scan_file(path: Path, include_lockfiles: bool) -> bool:
+    """Return whether a file is a supported text candidate for scanning."""
     if path.name in LOCKFILE_NAMES and not include_lockfiles:
         return False
     return path.name in TEXT_FILENAMES or path.suffix in TEXT_SUFFIXES
@@ -188,6 +196,7 @@ def supports_secure_mutation() -> bool:
 
 
 def supports_atomic_no_replace_rename() -> bool:
+    """Return whether the platform exposes an atomic no-replace rename API."""
     libc = ctypes.CDLL(None)
     return (sys.platform.startswith("linux") and hasattr(libc, "renameat2")) or (
         sys.platform == "darwin" and hasattr(libc, "renameatx_np")
@@ -225,6 +234,7 @@ def rename_no_replace_at(parent_fd: int, old_name: str, new_name: str) -> None:
 
 
 def directory_open_flags() -> int:
+    """Return flags used to open directories without following symlinks."""
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
@@ -262,6 +272,7 @@ def open_relative_directory(root_fd: int, relative_path: Path) -> Iterator[int]:
 
 
 def same_file_version(left: os.stat_result, right: os.stat_result) -> bool:
+    """Return whether two stat results describe the same unchanged file."""
     return (
         left.st_dev == right.st_dev
         and left.st_ino == right.st_ino
@@ -308,6 +319,7 @@ def replace_file_at(parent_fd: int, name: str, data: bytes, source_stat: os.stat
 
 
 def iter_files(root: Path, include_lockfiles: bool, include_generated: bool):
+    """Yield safe text file candidates below root."""
     for current_root, dirs, files in os.walk(root):
         current = Path(current_root)
         dirs[:] = [
@@ -365,6 +377,7 @@ def rewrite_file_secure(path: Path, root: Path, root_fd: int) -> FileChange | No
 
 
 def rewrite_file(path: Path, root: Path, write: bool, root_fd: int | None = None) -> FileChange | None:
+    """Report or apply replacements for one file."""
     if write:
         if root_fd is None:
             raise MutationError("write mode requires a confirmed root directory handle")
@@ -396,6 +409,7 @@ def rewrite_file(path: Path, root: Path, write: bool, root_fd: int | None = None
 
 
 def updated_name(name: str) -> str:
+    """Return a path component with explicit NeMo Flow names replaced."""
     updated, _ = apply_replacements(name)
     return updated
 
@@ -443,6 +457,7 @@ def apply_path_changes(
     write: bool,
     root_fd: int | None = None,
 ) -> list[PathChange]:
+    """Report or apply safe path renames."""
     applied: list[PathChange] = []
     for change in changes:
         if write:
@@ -487,6 +502,7 @@ def print_report(
     write: bool,
     max_report: int,
 ) -> None:
+    """Print a dry-run or write-mode migration summary."""
     mode = "updated" if write else "would update"
     rename_mode = "renamed" if write else "would rename"
 
@@ -515,6 +531,7 @@ def print_report(
 
 
 def main() -> int:
+    """Run the command-line migration helper."""
     parser = argparse.ArgumentParser(
         description="Rewrite explicit NeMo Flow names to NeMo Relay names.",
     )
