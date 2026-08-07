@@ -482,6 +482,18 @@ describe('Subscribers', () => {
     }
   });
 
+  it('flushSubscribers settles after a subscriber callback failure', async () => {
+    registerSubscriber('node_flush_js_failure', () => {
+      throw new Error('flush failure');
+    });
+    try {
+      event('node_flush_js_failure_mark', null, null, null);
+      await flushSubscribers();
+    } finally {
+      deregisterSubscriber('node_flush_js_failure');
+    }
+  });
+
   it('isolates a synchronous global subscriber throw', () => {
     runSubscriberFailureChild({
       callback: "throw new Error('sync subscriber boom');",

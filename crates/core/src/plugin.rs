@@ -1578,102 +1578,175 @@ async fn initialize_plugins_exact_inner(
         guard.take()
     };
 
-    if let Some(mut previous_state) = previous {
-        // Keep the previous report installed while teardown callbacks run so
-        // runtime diagnostics emitted by teardown remain observable.
-        {
-            let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
-                PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
-            })?;
-            *guard = Some(ActivePluginConfiguration {
-                config: previous_state.config.clone(),
-                report: previous_state.report.clone(),
-                registrations: Vec::new(),
-            });
-        }
-        let teardown = rollback_registrations_checked(&mut previous_state.registrations);
-        let teardown_report = ACTIVE_PLUGIN_CONFIGURATION
-            .lock()
-            .map_err(|err| {
-                PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
-            })?
-            .take()
-            .map(|state| state.report);
-        if !teardown.errors.is_empty() {
-            if let Some(report) =
-                teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
-                && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
-            {
-                *guard = Some(report);
-            }
-            if !teardown.callbacks_cleared {
-                record_rollback_failures(rollback_failures.as_ref(), teardown.errors.clone());
-            }
-            return Err(PluginError::RegistrationFailed(format!(
-                "previous plugin configuration could not be cleared: {}",
-                teardown.errors.join("; ")
-            )));
-        }
-        match initialize_plugin_components_catching_panics(
-            config.clone(),
-            rollback_failures.clone(),
-        )
-        .await
-        {
-            Ok(registrations) => {
-                store_active_plugin_configuration(config, report.clone(), registrations)?;
-                log::info!(
-                    target: "nemo_relay.plugin",
-                    event = "plugin_configuration_replaced",
-                    component_count = enabled_component_count;
-                    "Plugin configuration replaced"
-                );
-                Ok(report)
-            }
-            Err(err) => match initialize_plugin_components_catching_panics(
-                previous_state.config.clone(),
-                rollback_failures.clone(),
+    match previous {
+        Some(previous_state) => {
+            replace_plugin_configuration(
+                config,
+                report,
+                previous_state,
+                rollback_failures,
+                enabled_component_count,
             )
             .await
-            {
-                Ok(registrations) => {
-                    store_active_plugin_configuration(
-                        previous_state.config,
-                        previous_state.report,
-                        registrations,
-                    )?;
-                    log::warn!(
-                        target: "nemo_relay.plugin",
-                        event = "plugin_configuration_restored",
-                        recovery = "previous_configuration";
-                        "Plugin activation failed; previous configuration restored"
-                    );
-                    Err(err)
-                }
-                Err(restore_err) => {
-                    log::error!(
-                        target: "nemo_relay.plugin",
-                        event = "plugin_rollback_failed",
-                        recovery = "previous_configuration";
-                        "Plugin activation failed and the previous configuration could not be restored"
-                    );
-                    Err(PluginError::RegistrationFailed(format!(
-                        "{err}; previous plugin configuration could not be restored: {restore_err}"
-                    )))
-                }
-            },
         }
-    } else {
-        let registrations =
-            initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
-        store_active_plugin_configuration(config, report.clone(), registrations)?;
-        log::info!(
-            target: "nemo_relay.plugin",
-            event = "plugin_configuration_activated",
-            component_count = enabled_component_count;
-            "Plugin configuration activated"
-        );
-        Ok(report)
+        None => {
+            activate_initial_plugin_configuration(
+                config,
+                report,
+                rollback_failures,
+                enabled_component_count,
+            )
+            .await
+        }
+    }
+}
+
+async fn activate_initial_plugin_configuration(
+    config: PluginConfig,
+    report: ConfigReport,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    enabled_component_count: usize,
+) -> Result<ConfigReport> {
+    let registrations =
+        initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
+    store_active_plugin_configuration(config, report.clone(), registrations)?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_configuration_activated",
+        component_count = enabled_component_count;
+        "Plugin configuration activated"
+    );
+    Ok(report)
+}
+
+async fn replace_plugin_configuration(
+    config: PluginConfig,
+    report: ConfigReport,
+    mut previous_state: ActivePluginConfiguration,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    enabled_component_count: usize,
+) -> Result<ConfigReport> {
+    install_previous_configuration_for_teardown(&previous_state)?;
+    let teardown = rollback_registrations_checked(&mut previous_state.registrations);
+    let teardown_report = take_active_runtime_diagnostics_report()?;
+    if !teardown.errors.is_empty() {
+        record_failed_teardown(&teardown, teardown_report, rollback_failures.as_ref());
+        return Err(PluginError::RegistrationFailed(format!(
+            "previous plugin configuration could not be cleared: {}",
+            teardown.errors.join("; ")
+        )));
+    }
+    activate_replacement_or_restore(
+        config,
+        report,
+        previous_state,
+        rollback_failures,
+        enabled_component_count,
+    )
+    .await
+}
+
+fn install_previous_configuration_for_teardown(
+    previous_state: &ActivePluginConfiguration,
+) -> Result<()> {
+    let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
+        PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+    })?;
+    *guard = Some(ActivePluginConfiguration {
+        config: previous_state.config.clone(),
+        report: previous_state.report.clone(),
+        registrations: Vec::new(),
+    });
+    Ok(())
+}
+
+fn take_active_runtime_diagnostics_report() -> Result<Option<ConfigReport>> {
+    Ok(ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .map_err(|err| {
+            PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
+        })?
+        .take()
+        .map(|state| state.report))
+}
+
+fn record_failed_teardown(
+    teardown: &PluginRollbackOutcome,
+    teardown_report: Option<ConfigReport>,
+    rollback_failures: Option<&Arc<Mutex<Vec<String>>>>,
+) {
+    if let Some(report) = teardown_report.filter(|report| !report.runtime_diagnostics.is_empty())
+        && let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock()
+    {
+        *guard = Some(report);
+    }
+    if !teardown.callbacks_cleared {
+        record_rollback_failures(rollback_failures, teardown.errors.clone());
+    }
+}
+
+async fn activate_replacement_or_restore(
+    config: PluginConfig,
+    report: ConfigReport,
+    previous_state: ActivePluginConfiguration,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    enabled_component_count: usize,
+) -> Result<ConfigReport> {
+    match initialize_plugin_components_catching_panics(config.clone(), rollback_failures.clone())
+        .await
+    {
+        Ok(registrations) => {
+            store_active_plugin_configuration(config, report.clone(), registrations)?;
+            log::info!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_replaced",
+                component_count = enabled_component_count;
+                "Plugin configuration replaced"
+            );
+            Ok(report)
+        }
+        Err(err) => {
+            restore_previous_plugin_configuration(previous_state, rollback_failures, err).await
+        }
+    }
+}
+
+async fn restore_previous_plugin_configuration(
+    previous_state: ActivePluginConfiguration,
+    rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    err: PluginError,
+) -> Result<ConfigReport> {
+    match initialize_plugin_components_catching_panics(
+        previous_state.config.clone(),
+        rollback_failures,
+    )
+    .await
+    {
+        Ok(registrations) => {
+            store_active_plugin_configuration(
+                previous_state.config,
+                previous_state.report,
+                registrations,
+            )?;
+            log::warn!(
+                target: "nemo_relay.plugin",
+                event = "plugin_configuration_restored",
+                recovery = "previous_configuration";
+                "Plugin activation failed; previous configuration restored"
+            );
+            Err(err)
+        }
+        Err(restore_err) => {
+            log::error!(
+                target: "nemo_relay.plugin",
+                event = "plugin_rollback_failed",
+                recovery = "previous_configuration";
+                "Plugin activation failed and the previous configuration could not be restored"
+            );
+            Err(PluginError::RegistrationFailed(format!(
+                "{err}; previous plugin configuration could not be restored: {restore_err}"
+            )))
+        }
     }
 }
 

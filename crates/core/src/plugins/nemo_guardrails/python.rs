@@ -1308,69 +1308,64 @@ fn streaming_output_blocked(message: String) -> FlowError {
 fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<String> {
     let chunk = chunk.as_object()?;
     match codec {
-        LocalGuardrailsCodec::OpenAIChat => {
-            let choices = chunk.get("choices")?.as_array()?;
-            let mut parts = vec![];
-            for choice in choices {
-                let content = choice
-                    .get("delta")
-                    .and_then(Json::as_object)
-                    .and_then(|delta| delta.get("content"))
-                    .and_then(Json::as_str);
-                if let Some(content) = content
-                    && !content.is_empty()
-                {
-                    parts.push(content);
-                }
-            }
-            (!parts.is_empty()).then(|| parts.join(""))
-        }
-        LocalGuardrailsCodec::OpenAIResponses => {
-            if chunk.get("type").and_then(Json::as_str) == Some("response.output_text.delta") {
-                chunk
-                    .get("delta")
-                    .and_then(Json::as_str)
-                    .filter(|delta| !delta.is_empty())
-                    .map(str::to_string)
-            } else {
-                None
-            }
-        }
-        LocalGuardrailsCodec::AnthropicMessages => {
-            if chunk.get("type").and_then(Json::as_str) != Some("content_block_delta") {
-                return None;
-            }
-            let delta = chunk.get("delta")?.as_object()?;
-            if delta.get("type").and_then(Json::as_str) != Some("text_delta") {
-                return None;
-            }
-            delta
-                .get("text")
-                .and_then(Json::as_str)
-                .filter(|text| !text.is_empty())
-                .map(str::to_string)
-        }
-        LocalGuardrailsCodec::GeminiGenerateContent => {
-            let candidates = chunk.get("candidates")?.as_array()?;
-            let parts = candidates
-                .first()?
-                .get("content")?
-                .get("parts")?
-                .as_array()?;
-            let mut texts = vec![];
-            for part in parts {
-                if part.get("thought").and_then(Json::as_bool) == Some(true) {
-                    continue;
-                }
-                if let Some(text) = part.get("text").and_then(Json::as_str)
-                    && !text.is_empty()
-                {
-                    texts.push(text);
-                }
-            }
-            (!texts.is_empty()).then(|| texts.join(""))
-        }
+        LocalGuardrailsCodec::OpenAIChat => extract_openai_chat_stream_text(chunk),
+        LocalGuardrailsCodec::OpenAIResponses => extract_openai_response_stream_text(chunk),
+        LocalGuardrailsCodec::AnthropicMessages => extract_anthropic_stream_text(chunk),
+        LocalGuardrailsCodec::GeminiGenerateContent => extract_gemini_stream_text(chunk),
     }
+}
+
+fn extract_openai_chat_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    let choices = chunk.get("choices")?.as_array()?;
+    let parts = choices
+        .iter()
+        .filter_map(|choice| {
+            choice
+                .get("delta")
+                .and_then(Json::as_object)
+                .and_then(|delta| delta.get("content"))
+                .and_then(Json::as_str)
+                .filter(|content| !content.is_empty())
+        })
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(""))
+}
+
+fn extract_openai_response_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    (chunk.get("type").and_then(Json::as_str) == Some("response.output_text.delta"))
+        .then(|| chunk.get("delta").and_then(Json::as_str))
+        .flatten()
+        .filter(|delta| !delta.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_anthropic_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    if chunk.get("type").and_then(Json::as_str) != Some("content_block_delta") {
+        return None;
+    }
+    let delta = chunk.get("delta")?.as_object()?;
+    (delta.get("type").and_then(Json::as_str) == Some("text_delta"))
+        .then(|| delta.get("text").and_then(Json::as_str))
+        .flatten()
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_gemini_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    let parts = chunk
+        .get("candidates")?
+        .as_array()?
+        .first()?
+        .get("content")?
+        .get("parts")?
+        .as_array()?;
+    let texts = parts
+        .iter()
+        .filter(|part| part.get("thought").and_then(Json::as_bool) != Some(true))
+        .filter_map(|part| part.get("text").and_then(Json::as_str))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    (!texts.is_empty()).then(|| texts.join(""))
 }
 
 async fn monitor_guardrails_stream(
