@@ -9,6 +9,10 @@ This example shows a trusted in-process Rust dynamic plugin using the
 high-level `nemo-relay-plugin` SDK. It builds as a `cdylib`, exports a stable
 native ABI entry symbol, validates JSON config, registers middleware and
 subscribers, emits runtime marks/scopes, and creates an isolated scope stack.
+Typed middleware returns futures driven by the SDK-owned Tokio executor; the
+subscriber remains synchronous. The middleware demonstrates timers, async I/O,
+codec use across an await, concurrent opt-in `next` calls, and stream
+transformation.
 
 The example intentionally depends on `nemo-relay-plugin`, not on the host
 `nemo-relay` runtime crate. Rust DTOs stay inside the plugin crate; the

@@ -23,13 +23,16 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
   plugins cross `grpc-v1`.
 - Do not pass Rust runtime types, trait objects, futures, or allocator-owned
   strings across the native dynamic-library boundary.
+- Typed native middleware futures run on the SDK-owned Tokio executor. Keep
+  subscribers synchronous and preserve raw synchronous ABI registrations.
 - Keep worker protocol DTOs in `JsonEnvelope`; protobuf owns control flow, not
   duplicated Relay data models.
 - Keep `relay-plugin.toml` dynamic records separate from generic runtime
   components. Enabled dynamic records may synthesize internal component specs;
   disabled records stay inspectable but unloaded.
-- Treat plugin Relay compatibility as normal SemVer. Use `>=0.5,<1.0` in
-  examples unless a plugin intentionally declares a narrower range.
+- Treat plugin Relay compatibility as normal SemVer. Typed async native plugin
+  examples require `>=0.8.0,<1.0`; other examples use `>=0.5,<1.0` unless a
+  plugin intentionally declares a narrower range.
 - Do not add tests under `src`; Rust tests belong in crate `tests/` trees and
   Python SDK tests belong under `python/tests`.
 - Native and worker plugins are trusted extensions. Document that native plugins

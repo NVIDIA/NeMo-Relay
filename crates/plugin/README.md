@@ -42,20 +42,22 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **`PluginContext`**: Component-scoped registration APIs for middleware and
   subscribers.
 - **`PluginRuntime`**: Typed helpers for Relay-owned scopes and marks.
-- **Stable native ABI v3**: C-compatible host and plugin tables behind the
-  safe Rust authoring interface. The v3 tables preserve a v2-compatible field
-  prefix, but native plugins must still be rebuilt for v3 as described in the
-  [0.7 migration guide](https://docs.nvidia.com/nemo/relay/reference/migration-guides#upgrade-to-nemo-relay-07).
-- **Raw async middleware**: Completion-based raw registrations for plugins
-  that need asynchronous guardrails, intercepts, or event sanitizers. Typed
-  Rust callbacks remain synchronous convenience APIs.
+- **Stable native ABI v4**: C-compatible host and plugin tables behind the
+  safe Rust authoring interface. Relay negotiates frozen v3 and v2 tables for
+  previously compiled plugins.
+- **Typed async middleware**: Every typed guardrail, sanitizer, and intercept
+  returns a future driven by a per-plugin SDK-owned Tokio runtime. Subscribers
+  and raw synchronous ABI registrations remain synchronous.
+- **Async continuations and streams**: Cloneable `ToolNext`, `LlmNext`, and
+  `LlmStreamNext` handles support repeated or concurrent calls. Streaming LLM
+  continuations use a pull-based host handle.
 
 ## Installation
 
 Add the SDK to a Rust dynamic-plugin project:
 
 ```bash
-cargo add nemo-relay-plugin serde_json
+cargo add nemo-relay-plugin serde_json tokio
 ```
 
 Configure the library as a dynamic library:
@@ -93,6 +95,15 @@ nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_register_plugin, || ExamplePlug
 Build the `cdylib`, describe its entry symbol and compatibility in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. See the
 complete example for platform-specific artifact and manifest setup.
+
+Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. The SDK creates
+two Tokio worker threads by default. Override `NativePlugin::executor_config`
+with a nonzero `NativeExecutorConfig::worker_threads` value when needed. Do not
+block those workers; use async I/O or `tokio::task::spawn_blocking`.
+
+Relay scope context is restored around every poll of a registered middleware
+future. Child tasks created with `tokio::spawn` do not automatically inherit
+that scope context.
 
 ## Documentation
 
