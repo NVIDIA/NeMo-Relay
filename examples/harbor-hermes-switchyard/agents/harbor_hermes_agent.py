@@ -375,6 +375,9 @@ class HarborHermesAgent(Hermes):
         self._finalizer_path = self._example_root / "scripts" / "finalize_artifacts.py"
         if not self._finalizer_path.is_file():
             raise FileNotFoundError(self._finalizer_path)
+        self._relay_version_path = self._example_root / "scripts" / "relay_version.py"
+        if not self._relay_version_path.is_file():
+            raise FileNotFoundError(self._relay_version_path)
 
         extra_env = dict(kwargs.pop("extra_env", None) or {})
         extra_env["HERMES_NEMO_RELAY_PLUGINS_TOML"] = "/tmp/hermes/relay/plugins.toml"
@@ -520,6 +523,7 @@ class HarborHermesAgent(Hermes):
         )
         await environment.upload_dir(self.switchyard_bundle_dir, "/opt/relay-plugins/nvidia.switchyard")
         await environment.upload_file(self._finalizer_path, "/installed-agent/finalize_artifacts.py")
+        await environment.upload_file(self._relay_version_path, "/installed-agent/relay_version.py")
         probe_python = (
             f"{_HERMETIC_RUNTIME_ROOT}/bin/python"
             if self.hermetic_runtime_dir is not None

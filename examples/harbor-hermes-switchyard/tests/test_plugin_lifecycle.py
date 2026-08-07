@@ -58,3 +58,17 @@ def test_install_verifies_detached_commit_and_relay_release() -> None:
     assert "/tmp/hermes-install-path/ffmpeg" in source
     assert "uv sync --frozen --extra all" in source
     assert "m.version('nemo-relay').split('.')" in source
+
+
+def test_setup_uploads_finalizer_with_its_relay_version_dependency() -> None:
+    uploads = {
+        (ast.unparse(call.args[0]), ast.literal_eval(call.args[1]))
+        for call in ast.walk(method("setup"))
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "upload_file"
+        and len(call.args) == 2
+        and isinstance(call.args[1], ast.Constant)
+    }
+    assert ("self._finalizer_path", "/installed-agent/finalize_artifacts.py") in uploads
+    assert ("self._relay_version_path", "/installed-agent/relay_version.py") in uploads
