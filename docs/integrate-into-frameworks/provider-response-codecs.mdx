@@ -84,17 +84,17 @@ the same component config directly through the plugin APIs.
 
 Source precedence is deployment controlled:
 
-1. Project or application overrides.
-2. User/global device model pricing.
-3. Enterprise-managed sources, such as a remotely synced file or a service
+1. Explicit application model pricing supplied programmatically.
+2. Enterprise-managed system sources, such as a remotely synced file or a service
    backed by a database.
 
 The built-in `pricing` plugin component accepts inline catalogs or JSON catalog
 files in precedence order. In discovered `plugins.toml` config, system config
-loads first, project config loads next, and user config loads last. For the
+has higher precedence than the selected explicit-or-user config. For the
 `pricing` component, higher-priority `sources` are prepended instead of
-replacing lower-priority sources, so a user override can win for one model while
-enterprise or fleet model pricing remains available for everything else:
+replacing lower-priority sources, so a system source wins for a matching model
+while explicit-or-user sources remain available as fallbacks. Programmatic
+application sources can precede both file layers:
 
 ```toml
 [[components]]
@@ -111,6 +111,9 @@ type = "inline"
 version = 1
 entries = []
 ```
+
+On Windows, use the expanded ProgramData path in TOML, for example
+`C:\\ProgramData\\nemo-relay\\pricing.json`.
 
 Each catalog entry declares:
 
@@ -132,11 +135,14 @@ plus tests. It should not require adding another Rust `match` arm.
 Use the CLI to validate catalog files and manage file-backed model pricing sources:
 
 ```bash
-nemo-relay model-pricing validate /path/to/pricing.json
-nemo-relay model-pricing init --project
-nemo-relay model-pricing add-source /path/to/pricing.json --project
+nemo-relay model-pricing validate <path/to/pricing.json>
+nemo-relay model-pricing init --user
+nemo-relay model-pricing add-source <path/to/pricing.json> --user
 nemo-relay model-pricing resolve gpt-4o-mini --provider openai --prompt-tokens 1000 --completion-tokens 500
 ```
+
+Replace `<path/to/pricing.json>` with the path to your pricing catalog before
+running the validation or source-management commands.
 
 `model-pricing init` creates or enables the `pricing` plugin component in the
 selected `plugins.toml`. The initialized component has an empty `sources` list.
@@ -147,13 +153,13 @@ Use `model-pricing add-source` or an inline config edit to provide model pricing
 file source by default, making it the highest-priority source in that scope. Use
 `--append` when the file should be a lower-priority fallback. Both commands
 default to user config at `$XDG_CONFIG_HOME/nemo-relay/plugins.toml`. Pass
-`--project` for `.nemo-relay/plugins.toml` or `--global` for
-`/etc/nemo-relay/plugins.toml`.
+`--global` for `/etc/nemo-relay/plugins.toml` on Unix or
+`%ProgramData%\nemo-relay\plugins.toml` on Windows.
 
 `model-pricing resolve` uses the same discovered config path as the gateway. It
 reports the winning catalog source, matched provider/model, and, when token
 counts are supplied, the estimated total cost. The source line is one of
-`file:<path>` or `inline:<index>`, which makes overlapping project/user/fleet
+`file:<path>` or `inline:<index>`, which makes overlapping user/fleet
 entries debuggable. This is a dry diagnostic command. It does not mutate
 configuration.
 
@@ -215,9 +221,10 @@ entry, Relay omits the estimate instead of guessing.
 Database-backed or remote model pricing should be implemented as a source that
 returns a validated `PricingCatalog` snapshot to Relay. Keep database queries,
 service auth, refresh cadence, and caching outside the LLM response hot path. A
-fleet deployment can refresh `/etc/nemo-relay/pricing.json` from an IT-managed
-service, or embed a custom Rust `PricingSource` that reads from a database and
-installs a `PricingResolver` snapshot during process startup.
+fleet deployment can refresh `/etc/nemo-relay/pricing.json` on Unix or the
+corresponding `%ProgramData%\nemo-relay\pricing.json` file on Windows from an
+IT-managed service, or embed a custom Rust `PricingSource` that reads from a
+database and installs a `PricingResolver` snapshot during process startup.
 
 External model pricing catalogs should be converted into Relay catalog JSON
 out-of-band and then loaded through a `file` source, unless the embedding

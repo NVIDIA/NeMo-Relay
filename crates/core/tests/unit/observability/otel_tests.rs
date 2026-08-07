@@ -17,21 +17,23 @@ use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
+use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
-    Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
+    ResponseToolCall, Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::json::Json;
 use crate::observability::atif::{AtifAgentInfo, AtifExporter, AtifStepExtra};
 use crate::observability::{relay_span_id, relay_trace_id};
 use opentelemetry::trace::TraceContextExt;
-use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
+use opentelemetry_sdk::trace::{BatchConfigBuilder, InMemorySpanExporterBuilder};
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use uuid::Uuid;
 
@@ -43,11 +45,66 @@ impl Drop for ResetPricingResolverGuard {
     }
 }
 
+struct ClearPluginConfigurationGuard;
+
+impl Drop for ClearPluginConfigurationGuard {
+    fn drop(&mut self) {
+        let _ = crate::plugin::clear_plugin_configuration();
+    }
+}
+
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
 
 impl Drop for RestoreThreadScopeStackGuard {
     fn drop(&mut self) {
         restore_thread_scope_stack(self.0.clone());
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct BlockingSpanExporter {
+    state: Arc<(Mutex<BlockingExporterState>, Condvar)>,
+}
+
+#[derive(Debug, Default)]
+struct BlockingExporterState {
+    export_started: bool,
+    release_export: bool,
+}
+
+impl BlockingSpanExporter {
+    fn wait_until_export_starts(&self) {
+        let (state, changed) = &*self.state;
+        let guard = state.lock().unwrap();
+        let (guard, timeout) = changed
+            .wait_timeout_while(guard, Duration::from_secs(5), |state| !state.export_started)
+            .unwrap();
+        assert!(guard.export_started && !timeout.timed_out());
+    }
+
+    fn release(&self) {
+        let (state, changed) = &*self.state;
+        state.lock().unwrap().release_export = true;
+        changed.notify_all();
+    }
+}
+
+impl Drop for BlockingSpanExporter {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl SpanExporter for BlockingSpanExporter {
+    async fn export(&self, _batch: Vec<SpanData>) -> OTelSdkResult {
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap();
+        state.export_started = true;
+        changed.notify_all();
+        while !state.release_export {
+            state = changed.wait(state).unwrap();
+        }
+        Ok(())
     }
 }
 
@@ -470,6 +527,27 @@ fn make_end_event(
         scope_type,
         output,
     )
+}
+
+fn make_end_event_with_metadata(
+    uuid: Uuid,
+    parent_uuid: Option<Uuid>,
+    name: &str,
+    scope_type: ScopeType,
+    metadata: Json,
+) -> Event {
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .parent_uuid_opt(parent_uuid)
+            .uuid(uuid)
+            .name(name)
+            .metadata(metadata)
+            .build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::from(scope_type),
+        None,
+    ))
 }
 
 fn make_scope_event(
@@ -1168,7 +1246,7 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 }
 
 #[test]
-fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
+fn gen_ai_projection_is_fixed_and_preserves_all_scope_parentage() {
     let (provider, exporter) = make_provider();
     let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
         provider,
@@ -1237,7 +1315,7 @@ fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    assert_eq!(spans.len(), 2);
+    assert_eq!(spans.len(), 3);
     let agent = spans
         .iter()
         .find(|span| span.name.as_ref() == "invoke_agent research-agent")
@@ -1246,9 +1324,15 @@ fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
         .iter()
         .find(|span| span.name.as_ref() == "execute_tool web-search")
         .unwrap();
+    let reranker = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "rerank")
+        .unwrap();
     assert_eq!(agent.span_kind, SpanKind::Internal);
+    assert_eq!(reranker.span_kind, SpanKind::Internal);
     assert_eq!(tool.span_kind, SpanKind::Internal);
-    assert_eq!(tool.parent_span_id, agent.span_context.span_id());
+    assert_eq!(reranker.parent_span_id, agent.span_context.span_id());
+    assert_eq!(tool.parent_span_id, reranker.span_context.span_id());
     assert!(agent.events.events.is_empty());
     assert!(spans.iter().all(|span| {
         span.attributes.iter().all(|attribute| {
@@ -1257,6 +1341,7 @@ fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
         })
     }));
     let agent_attributes = attr_map(&agent.attributes);
+    assert!(reranker.attributes.is_empty());
     let tool_attributes = attr_map(&tool.attributes);
     assert_eq!(
         agent_attributes.get("gen_ai.operation.name"),
@@ -1305,7 +1390,6 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
         ),
     ] {
         let event = make_start_event(Uuid::now_v7(), None, name, scope_type, None);
-        assert!(crate::observability::otel_genai::supports(&event));
         assert_eq!(
             crate::observability::otel_genai::span_name(&event),
             expected_name
@@ -1316,9 +1400,24 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
         );
     }
 
-    for unsupported in [ScopeType::Reranker, ScopeType::Guardrail] {
-        let event = make_start_event(Uuid::now_v7(), None, "unsupported", unsupported, None);
-        assert!(!crate::observability::otel_genai::supports(&event));
+    for generic in [
+        ScopeType::Function,
+        ScopeType::Reranker,
+        ScopeType::Guardrail,
+        ScopeType::Evaluator,
+        ScopeType::Custom,
+        ScopeType::Unknown,
+    ] {
+        let event = make_start_event(Uuid::now_v7(), None, "generic", generic, None);
+        assert_eq!(
+            crate::observability::otel_genai::span_name(&event),
+            "generic"
+        );
+        assert_eq!(
+            crate::observability::otel_genai::span_kind(&event),
+            SpanKind::Internal
+        );
+        assert!(crate::observability::otel_genai::start_attributes(&event).is_empty());
     }
 }
 
@@ -1480,7 +1579,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
     );
     assert_eq!(
         attributes.get("gen_ai.response.finish_reasons"),
-        Some(&"[\"tool_calls\"]".to_string())
+        Some(&"[\"tool_call\"]".to_string())
     );
     assert_eq!(
         attributes.get("gen_ai.usage.input_tokens"),
@@ -1523,6 +1622,311 @@ fn gen_ai_end_projection_preserves_explicit_error_type() {
         attributes.get("error.type"),
         Some(&"invalid_argument".to_string())
     );
+}
+
+#[test]
+fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::GenAi] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+                provider,
+                "error-propagation-test".to_string(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+            );
+        let agent_uuid = Uuid::now_v7();
+        let function_uuid = Uuid::now_v7();
+        let llm_uuid = Uuid::now_v7();
+        processor.process(&make_start_event(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            None,
+        ));
+        let llm_parent_uuid = if otel_type == OpenTelemetryType::GenAi {
+            processor.process(&make_start_event(
+                function_uuid,
+                Some(agent_uuid),
+                "function",
+                ScopeType::Function,
+                None,
+            ));
+            function_uuid
+        } else {
+            agent_uuid
+        };
+        processor.process(&make_start_event(
+            llm_uuid,
+            Some(llm_parent_uuid),
+            "chat",
+            ScopeType::Llm,
+            None,
+        ));
+        processor.process(&make_end_event_with_metadata(
+            llm_uuid,
+            Some(llm_parent_uuid),
+            "chat",
+            ScopeType::Llm,
+            json!({
+                "otel.status_code": "ERROR",
+                "otel.status_description": "internal error: ValueError: boom",
+                "error.type": "internal_error",
+                "exception.type": "ValueError",
+            }),
+        ));
+        if otel_type == OpenTelemetryType::GenAi {
+            processor.process(&make_end_event_with_metadata(
+                function_uuid,
+                Some(agent_uuid),
+                "function",
+                ScopeType::Function,
+                json!({
+                    "otel.status_code": "ERROR",
+                    "otel.status_description": "internal error: ValueError: boom",
+                }),
+            ));
+        }
+        processor.process(&make_end_event_with_metadata(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            json!({
+                "otel.status_code": "ERROR",
+                "otel.status_description": "internal error: ValueError: boom",
+            }),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let expected_span_count = if otel_type == OpenTelemetryType::GenAi {
+            3
+        } else {
+            2
+        };
+        assert_eq!(spans.len(), expected_span_count);
+        for span in &spans {
+            assert_eq!(
+                attr_map(&span.attributes).get("error.type"),
+                Some(&"internal_error".to_string())
+            );
+            let exception = span
+                .events
+                .events
+                .iter()
+                .find(|event| event.name.as_ref() == "exception")
+                .expect("expected exception event");
+            assert_eq!(
+                attr_map(&exception.attributes).get("exception.type"),
+                Some(&"ValueError".to_string())
+            );
+        }
+    }
+}
+
+#[test]
+fn generic_function_error_propagates_to_agent_span() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+        provider,
+        "suppressed-error-propagation-test".to_string(),
+        OpenTelemetryType::GenAi,
+        MarkProjection::default(),
+        default_mark_exclude_names(),
+        Vec::new(),
+    );
+    let agent_uuid = Uuid::now_v7();
+    let function_uuid = Uuid::now_v7();
+    processor.process(&make_start_event(
+        agent_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        None,
+    ));
+    processor.process(&make_start_event(
+        function_uuid,
+        Some(agent_uuid),
+        "function",
+        ScopeType::Function,
+        None,
+    ));
+    processor.process(&make_end_event_with_metadata(
+        function_uuid,
+        Some(agent_uuid),
+        "function",
+        ScopeType::Function,
+        json!({
+            "otel.status_code": "ERROR",
+            "error.type": "internal_error",
+            "exception.type": "ValueError",
+        }),
+    ));
+    processor.process(&make_end_event_with_metadata(
+        agent_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        json!({"otel.status_code": "ERROR"}),
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 2);
+    let agent_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "invoke_agent agent")
+        .expect("expected agent span");
+    let function_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "function")
+        .expect("expected generic function span");
+    assert_eq!(
+        function_span.parent_span_id,
+        agent_span.span_context.span_id()
+    );
+    assert_eq!(
+        attr_map(&agent_span.attributes).get("error.type"),
+        Some(&"internal_error".to_string())
+    );
+    let exception = agent_span
+        .events
+        .events
+        .iter()
+        .find(|event| event.name.as_ref() == "exception")
+        .expect("expected propagated exception event");
+    assert_eq!(
+        attr_map(&exception.attributes).get("exception.type"),
+        Some(&"ValueError".to_string())
+    );
+}
+
+#[test]
+fn generic_parent_error_propagation_isolated_by_trace_id() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+        provider,
+        "error-trace-isolation-test".to_string(),
+        OpenTelemetryType::GenAi,
+        MarkProjection::default(),
+        default_mark_exclude_names(),
+        Vec::new(),
+    );
+    let shared_span_id = [0xAB; 8];
+    let mut first_agent_bytes = [0x11; 16];
+    first_agent_bytes[8..].copy_from_slice(&shared_span_id);
+    let mut second_agent_bytes = [0x22; 16];
+    second_agent_bytes[8..].copy_from_slice(&shared_span_id);
+    let cases = [
+        (
+            Uuid::from_bytes(first_agent_bytes),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            "first_error",
+            "FirstException",
+        ),
+        (
+            Uuid::from_bytes(second_agent_bytes),
+            Uuid::now_v7(),
+            Uuid::now_v7(),
+            "second_error",
+            "SecondException",
+        ),
+    ];
+    assert_eq!(
+        relay_span_id(cases[0].0),
+        relay_span_id(cases[1].0),
+        "fixture agents must share a span ID"
+    );
+    assert_ne!(
+        relay_trace_id(cases[0].0),
+        relay_trace_id(cases[1].0),
+        "fixture agents must belong to different traces"
+    );
+
+    for (agent_uuid, function_uuid, llm_uuid, _, _) in cases {
+        processor.process(&make_start_event(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            None,
+        ));
+        processor.process(&make_start_event(
+            function_uuid,
+            Some(agent_uuid),
+            "function",
+            ScopeType::Function,
+            None,
+        ));
+        processor.process(&make_start_event(
+            llm_uuid,
+            Some(function_uuid),
+            "chat",
+            ScopeType::Llm,
+            None,
+        ));
+    }
+    for (agent_uuid, function_uuid, llm_uuid, error_type, exception_type) in cases {
+        processor.process(&make_end_event_with_metadata(
+            llm_uuid,
+            Some(function_uuid),
+            "chat",
+            ScopeType::Llm,
+            json!({
+                "otel.status_code": "ERROR",
+                "error.type": error_type,
+                "exception.type": exception_type,
+            }),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            function_uuid,
+            Some(agent_uuid),
+            "function",
+            ScopeType::Function,
+            json!({"otel.status_code": "ERROR"}),
+        ));
+    }
+    for (agent_uuid, _, _, _, _) in cases {
+        processor.process(&make_end_event_with_metadata(
+            agent_uuid,
+            None,
+            "agent",
+            ScopeType::Agent,
+            json!({"otel.status_code": "ERROR"}),
+        ));
+    }
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 6);
+    for (agent_uuid, _, _, error_type, exception_type) in cases {
+        let agent_span = spans
+            .iter()
+            .find(|span| {
+                span.span_context.trace_id() == relay_trace_id(agent_uuid)
+                    && span.parent_span_id == SpanId::INVALID
+            })
+            .expect("expected agent span for trace");
+        assert_eq!(
+            attr_map(&agent_span.attributes).get("error.type"),
+            Some(&error_type.to_string())
+        );
+        let exception = agent_span
+            .events
+            .events
+            .iter()
+            .find(|event| event.name.as_ref() == "exception")
+            .expect("expected propagated exception event");
+        assert_eq!(
+            attr_map(&exception.attributes).get("exception.type"),
+            Some(&exception_type.to_string())
+        );
+    }
 }
 
 #[test]
@@ -1692,10 +2096,74 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
         assert_eq!(attributes.get(key), Some(&expected.to_string()));
     }
     assert!(!attributes.contains_key("gen_ai.request.choice.count"));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.input.messages"]).unwrap(),
+        json!([{
+            "role": "user",
+            "parts": [{"type": "text", "content": "hello"}]
+        }])
+    );
+
+    let response = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    message: Some(MessageContent::Text("hello back".to_string())),
+                    finish_reason: Some(FinishReason::Complete),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let response_attributes =
+        attr_map(&crate::observability::otel_genai::end_attributes(&response));
+    assert_eq!(
+        serde_json::from_str::<Json>(&response_attributes["gen_ai.output.messages"]).unwrap(),
+        json!([{
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "hello back"}],
+            "finish_reason": "stop"
+        }])
+    );
+
+    let response_without_finish_reason = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    message: Some(MessageContent::Text("still working".to_string())),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let response_attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &response_without_finish_reason,
+    ));
+    assert_eq!(
+        serde_json::from_str::<Json>(&response_attributes["gen_ai.output.messages"]).unwrap(),
+        json!([{
+            "role": "assistant",
+            "parts": [{"type": "text", "content": "still working"}],
+            "finish_reason": "unknown"
+        }])
+    );
 
     for (reason, expected) in [
         (FinishReason::Complete, "stop"),
         (FinishReason::Length, "length"),
+        (FinishReason::ToolUse, "tool_call"),
         (FinishReason::ContentFilter, "content_filter"),
         (
             FinishReason::Unknown("provider_reason".to_string()),
@@ -1724,6 +2192,175 @@ fn gen_ai_projection_covers_optional_request_controls_and_finish_reasons() {
             Some(&format!("[\"{expected}\"]"))
         );
     }
+}
+
+#[test]
+fn gen_ai_projection_covers_message_variants_and_empty_input() {
+    let annotated_request = serde_json::from_value::<AnnotatedLlmRequest>(json!({
+        "instructions": "Be concise.",
+        "messages": [
+            {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": "{not-json"
+                    }
+                }]
+            },
+            {
+                "role": "tool",
+                "content": "result",
+                "tool_call_id": "call-1"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "provider_native",
+                        "provider": "example",
+                        "kind": "reasoning",
+                        "value": {"content": "provider payload"}
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"}
+                    }
+                ]
+            }
+        ]
+    }))
+    .unwrap();
+    let event = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(std::sync::Arc::new(annotated_request))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.system_instructions"]).unwrap(),
+        json!([{"type": "text", "content": "Be concise."}])
+    );
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.input.messages"]).unwrap(),
+        json!([
+            {
+                "role": "assistant",
+                "parts": [{
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "lookup",
+                    "arguments": "{not-json"
+                }]
+            },
+            {
+                "role": "tool",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "id": "call-1",
+                    "response": "result"
+                }]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {"type": "reasoning", "content": "provider payload"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"}
+                    }
+                ]
+            }
+        ])
+    );
+
+    let empty_event = make_scope_event_with_profile(
+        ScopeCategory::Start,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_request(std::sync::Arc::new(AnnotatedLlmRequest::default()))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(
+        &empty_event,
+    ));
+    assert!(!attributes.contains_key("gen_ai.input.messages"));
+    assert!(!attributes.contains_key("gen_ai.system_instructions"));
+}
+
+#[test]
+fn gen_ai_projection_covers_output_tool_calls_and_empty_output() {
+    let tool_call_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                    tool_calls: Some(vec![ResponseToolCall {
+                        id: "call-1".to_string(),
+                        name: "lookup".to_string(),
+                        arguments: json!({"city": "Paris"}),
+                    }]),
+                    finish_reason: Some(FinishReason::ToolUse),
+                    ..empty_annotated_response()
+                }))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &tool_call_event,
+    ));
+    assert_eq!(
+        serde_json::from_str::<Json>(&attributes["gen_ai.output.messages"]).unwrap(),
+        json!([{
+            "role": "assistant",
+            "parts": [{
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "lookup",
+                "arguments": {"city": "Paris"}
+            }],
+            "finish_reason": "tool_call"
+        }])
+    );
+
+    let empty_event = make_scope_event_with_profile(
+        ScopeCategory::End,
+        Uuid::now_v7(),
+        None,
+        "chat",
+        ScopeType::Llm,
+        None,
+        Some(
+            CategoryProfile::builder()
+                .annotated_response(std::sync::Arc::new(empty_annotated_response()))
+                .build(),
+        ),
+    );
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &empty_event,
+    ));
+    assert!(!attributes.contains_key("gen_ai.output.messages"));
 }
 
 #[test]
@@ -3061,7 +3698,11 @@ fn provider_builders_cover_success_paths() {
             .with_header("authorization", "Bearer token")
             .with_resource_attribute("deployment.environment", "test")
             .with_service_namespace("agents")
-            .with_service_version("1.2.3"),
+            .with_service_version("1.2.3")
+            .with_max_queue_size(16)
+            .with_max_export_batch_size(4)
+            .with_scheduled_delay(Duration::from_millis(10)),
+        None,
     )
     .unwrap();
     http_provider.force_flush().unwrap();
@@ -3074,6 +3715,63 @@ fn provider_builders_cover_success_paths() {
     .unwrap();
     subscriber.force_flush().unwrap();
     subscriber.shutdown().unwrap();
+}
+
+#[test]
+fn dropped_spans_are_recorded_in_the_active_plugin_report() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _ = crate::plugin::clear_plugin_configuration();
+    let _clear_guard = ClearPluginConfigurationGuard;
+    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+        crate::plugin::PluginConfig::default(),
+    ))
+    .unwrap();
+
+    let exporter = BlockingSpanExporter::default();
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        exporter.clone(),
+        "https://collector.example/v1/traces".to_string(),
+        Some("opentelemetry.endpoints[2].endpoint".to_string()),
+        BatchConfigBuilder::default()
+            .with_max_queue_size(1)
+            .with_max_export_batch_size(1)
+            .with_scheduled_delay(Duration::from_secs(60))
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let tracer = provider.tracer("dropped-span-diagnostic-test");
+
+    tracer.start("export-in-progress").end();
+    exporter.wait_until_export_starts();
+    tracer.start("queued").end();
+    tracer.start("dropped-1").end();
+    tracer.start("dropped-2").end();
+    exporter.release();
+    let shutdown = provider.shutdown().unwrap_err();
+    assert!(
+        shutdown
+            .to_string()
+            .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
+    );
+
+    let report = crate::plugin::active_plugin_report().unwrap();
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.spans_dropped")
+        .unwrap();
+    assert_eq!(diagnostic.count, 2);
+    assert_eq!(
+        diagnostic.field.as_deref(),
+        Some("opentelemetry.endpoints[2].endpoint")
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/traces")
+    );
 }
 
 #[test]
@@ -3097,6 +3795,7 @@ fn grpc_metadata_and_runtime_builder_paths_succeed() {
             &OpenTelemetryConfig::grpc("grpc-demo")
                 .with_endpoint("http://127.0.0.1:4317")
                 .with_header("authorization", "Bearer token"),
+            None,
         )
         .unwrap();
         provider.force_flush().ok();

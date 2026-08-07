@@ -927,38 +927,6 @@ async fn serve_listener_exits_after_codex_stop_without_session_end() {
         .unwrap();
     result.unwrap();
 }
-
-#[tokio::test]
-async fn serve_listener_exits_after_hermes_turn_without_session_finalize() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _env = EnvVarGuard::set("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "1");
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let handle = tokio::spawn(async move { serve_listener(listener, test_config(), None).await });
-    let client = test_http_client();
-
-    for hook_event_name in ["on_session_start", "on_session_end"] {
-        let response = client
-            .post(format!("{url}/hooks/hermes"))
-            .json(&json!({
-                "session_id": "plugin-idle-hermes-session",
-                "hook_event_name": hook_event_name
-            }))
-            .send()
-            .await
-            .unwrap();
-        assert!(response.status().is_success());
-    }
-
-    let result = tokio::time::timeout(std::time::Duration::from_secs(3), handle)
-        .await
-        .expect("plugin idle timeout should stop after the Hermes turn ends")
-        .unwrap();
-    result.unwrap();
-}
-
 #[tokio::test]
 async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -1008,9 +976,9 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     assert!(nemo_relay::plugin::active_plugin_report().is_some());
 
     let client = test_http_client();
-    for hook_event_name in ["on_session_start", "on_session_finalize"] {
+    for hook_event_name in ["SessionStart", "Stop"] {
         let response = client
-            .post(format!("{url}/hooks/hermes"))
+            .post(format!("{url}/hooks/codex"))
             .json(&json!({
                 "session_id": "plugin-bridge-session",
                 "hook_event_name": hook_event_name
@@ -1027,8 +995,8 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
 
     let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
     assert!(
-        events.lines().count() >= 2,
-        "expected ATOF lifecycle events, got {events:?}"
+        events.lines().count() >= 1,
+        "expected an ATOF lifecycle event, got {events:?}"
     );
     let trajectories = std::fs::read_dir(temp.path().join("atif"))
         .unwrap()
@@ -1053,25 +1021,8 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
     );
 }
 
-fn atif_matches_session(trajectory: &Value, session_id: &str) -> bool {
-    trajectory["session_id"] == json!(session_id)
-        || trajectory["extra"]["observed_events"]
-            .as_array()
-            .is_some_and(|events| {
-                events
-                    .iter()
-                    .any(|event| event_has_session_id(event, session_id))
-            })
-}
-
-fn event_has_session_id(event: &Value, session_id: &str) -> bool {
-    event["metadata"]["session_id"] == json!(session_id)
-        || event["data"]["session_id"] == json!(session_id)
-        || event["data"]["extra"]["session_id"] == json!(session_id)
-}
-
 #[tokio::test]
-async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
+async fn serve_listener_observability_plugin_records_supported_agent_hooks() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
     let _ = nemo_relay::plugin::clear_plugin_configuration();
 
@@ -1124,8 +1075,7 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
             "SessionEnd",
         ),
     ] {
-        let hook_events = vec![start_event, "UserPromptSubmit", end_event];
-        for hook_event_name in hook_events {
+        for hook_event_name in [start_event, "UserPromptSubmit", end_event] {
             let response = client
                 .post(format!("{url}{path}"))
                 .json(&json!({
@@ -1159,477 +1109,22 @@ async fn serve_listener_observability_plugin_records_non_hermes_hooks() {
     assert!(!turn_starts.contains(&"claude-code".to_string()));
 }
 
-#[tokio::test]
-async fn serve_listener_hermes_api_hooks_write_atof_category_profile_and_fidelity() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::clear_plugin_configuration();
-
-    let temp = tempfile::tempdir().unwrap();
-    let atof_dir = temp.path().join("atof");
-    std::fs::create_dir_all(&atof_dir).unwrap();
-    let mut config = test_config();
-    config.plugin_config = Some(json!({
-        "version": 1,
-        "components": [
-            {
-                "kind": "observability",
-                "enabled": true,
-                "config": {
-                    "version": 3,
-                    "atof": {
-                        "enabled": true,
-                        "sinks": [{
-                            "type": "file",
-                            "output_directory": atof_dir,
-                            "filename": "events.jsonl",
-                            "mode": "overwrite"
-                        }]
-                    }
-                }
-            }
-        ]
-    }));
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let handle =
-        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
-
-    wait_for_gateway(&url).await;
-    let client = test_http_client();
-
-    let response = client
-        .post(format!("{url}/hooks/hermes"))
-        .json(&json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "hermes-atof-exact",
-            "extra": {
-                "task_id": "task-1",
-                "api_request_id": "turn-1:api:2",
-                "api_call_count": 2,
-                "model": "qwen",
-                "provider": "custom",
-                "request": {
-                    "method": "POST",
-                    "body": {
-                        "model": "qwen",
-                        "messages": [
-                            { "role": "user", "content": "hello" }
-                        ],
-                        "tools": [
-                            { "type": "function", "function": { "name": "search_files" } }
-                        ]
-                    }
-                }
-            }
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = client
-        .post(format!("{url}/hooks/hermes"))
-        .json(&json!({
-            "hook_event_name": "post_api_request",
-            "session_id": "hermes-atof-exact",
-            "extra": {
-                "task_id": "task-1",
-                "api_request_id": "turn-1:api:2",
-                "api_call_count": 2,
-                "model": "qwen",
-                "response": {
-                    "model": "qwen",
-                    "finish_reason": "tool_calls",
-                    "assistant_message": {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call-1",
-                                "type": "function",
-                                "function": {
-                                    "name": "search_files",
-                                    "arguments": "{\"query\":\"needle\"}"
-                                }
-                            }
-                        ]
-                    },
-                    "usage": {
-                        "prompt_tokens": 10,
-                        "completion_tokens": 5,
-                        "cost": { "total": 0.0042 }
-                    }
-                }
-            }
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = client
-        .post(format!("{url}/hooks/hermes"))
-        .json(&json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "hermes-atof-lossy",
-            "extra": {
-                "task_id": "task-2",
-                "api_call_count": 4,
-                "model": "qwen",
-                "provider": "custom",
-                "request": null,
-                "message_count": 2
-            }
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    shutdown_tx.send(()).unwrap();
-    handle.await.unwrap().unwrap();
-
-    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
-    let llm_events = events
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|event| event["category"] == "llm")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        llm_events.len(),
-        4,
-        "expected Hermes LLM exports, got {llm_events:?}"
-    );
-
-    let start = llm_events
-        .iter()
-        .find(|event| {
-            event["scope_category"] == "start"
-                && event["metadata"]["api_call_id"] == json!("turn-1:api:2")
-        })
-        .unwrap();
-    assert_eq!(start["category_profile"]["model_name"], json!("qwen"));
-    assert_eq!(start["metadata"]["provider_payload_exact"], json!(true));
-    assert_eq!(
-        start["metadata"]["fidelity_source"],
-        json!("hermes_api_hooks_sanitized")
-    );
-    assert_eq!(
-        start["data"]["content"]["messages"][0]["content"],
-        json!("hello")
-    );
-    assert_eq!(
-        start["data"]["content"]["tools"][0]["function"]["name"],
-        json!("search_files")
-    );
-
-    let end = llm_events
-        .iter()
-        .find(|event| {
-            event["scope_category"] == "end"
-                && event["metadata"]["api_call_id"] == json!("turn-1:api:2")
-        })
-        .unwrap();
-    assert_eq!(end["category_profile"]["model_name"], json!("qwen"));
-    assert_eq!(end["metadata"]["provider_payload_exact"], json!(true));
-    assert_eq!(end["data"]["tool_calls"][0]["id"], json!("call-1"));
-    assert_eq!(
-        end["data"]["tool_calls"][0]["function"]["name"],
-        json!("search_files")
-    );
-    assert_eq!(end["data"]["usage"]["prompt_tokens"], json!(10));
-    assert_eq!(end["data"]["usage"]["completion_tokens"], json!(5));
-
-    let lossy_start = llm_events
-        .iter()
-        .find(|event| {
-            event["scope_category"] == "start"
-                && event["metadata"]["api_call_id"] == json!("hermes-atof-lossy:task-2:4")
-        })
-        .unwrap();
-    assert_eq!(lossy_start["category_profile"]["model_name"], json!("qwen"));
-    assert_eq!(
-        lossy_start["metadata"]["provider_payload_exact"],
-        json!(false)
-    );
-    assert_eq!(
-        lossy_start["data"]["content"]["fidelity"]["provider_payload_exact"],
-        json!(false)
-    );
-    assert_eq!(lossy_start["data"]["content"]["message_count"], json!(2));
+fn atif_matches_session(trajectory: &Value, session_id: &str) -> bool {
+    trajectory["session_id"] == json!(session_id)
+        || trajectory["extra"]["observed_events"]
+            .as_array()
+            .is_some_and(|events| {
+                events
+                    .iter()
+                    .any(|event| event_has_session_id(event, session_id))
+            })
 }
 
-#[tokio::test]
-async fn serve_listener_hermes_api_request_error_writes_lossy_atof_error_event() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::clear_plugin_configuration();
-
-    let temp = tempfile::tempdir().unwrap();
-    let atof_dir = temp.path().join("atof");
-    std::fs::create_dir_all(&atof_dir).unwrap();
-    let mut config = test_config();
-    config.plugin_config = Some(json!({
-        "version": 1,
-        "components": [
-            {
-                "kind": "observability",
-                "enabled": true,
-                "config": {
-                    "version": 3,
-                    "atof": {
-                        "enabled": true,
-                        "sinks": [{
-                            "type": "file",
-                            "output_directory": atof_dir,
-                            "filename": "events.jsonl",
-                            "mode": "overwrite"
-                        }]
-                    }
-                }
-            }
-        ]
-    }));
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let handle =
-        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
-
-    wait_for_gateway(&url).await;
-    let client = test_http_client();
-
-    let response = client
-        .post(format!("{url}/hooks/hermes"))
-        .json(&json!({
-            "hook_event_name": "pre_api_request",
-            "session_id": "hermes-atof-error",
-            "extra": {
-                "task_id": "task-err",
-                "api_request_id": "turn-1:api:3",
-                "api_call_count": 3,
-                "model": "qwen",
-                "provider": "custom",
-                "request": {
-                    "method": "POST",
-                    "body": {
-                        "model": "qwen",
-                        "messages": [
-                            { "role": "user", "content": "hello" }
-                        ]
-                    }
-                }
-            }
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = client
-        .post(format!("{url}/hooks/hermes"))
-        .json(&json!({
-            "hook_event_name": "api_request_error",
-            "session_id": "hermes-atof-error",
-            "extra": {
-                "task_id": "task-err",
-                "api_request_id": "turn-1:api:3",
-                "api_call_count": 3,
-                "model": "qwen",
-                "provider": "custom",
-                "status_code": 502,
-                "retry_count": 1,
-                "max_retries": 2,
-                "retryable": true,
-                "reason": "upstream",
-                "error": {
-                    "type": "BadGateway",
-                    "message": "gateway upstream error"
-                }
-            }
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    shutdown_tx.send(()).unwrap();
-    handle.await.unwrap().unwrap();
-
-    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
-    let llm_events = events
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|event| event["category"] == "llm")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        llm_events.len(),
-        2,
-        "expected Hermes error-path LLM exports, got {llm_events:?}"
-    );
-
-    let end = llm_events
-        .iter()
-        .find(|event| {
-            event["scope_category"] == "end"
-                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
-        })
-        .unwrap();
-    let start = llm_events
-        .iter()
-        .find(|event| {
-            event["scope_category"] == "start"
-                && event["metadata"]["api_call_id"] == json!("turn-1:api:3")
-        })
-        .unwrap();
-    assert_eq!(start["metadata"]["provider_payload_exact"], json!(true));
-    assert_eq!(
-        start["metadata"]["fidelity_source"],
-        json!("hermes_api_hooks_sanitized")
-    );
-    assert_eq!(
-        start["data"]["content"]["messages"][0]["content"],
-        json!("hello")
-    );
-    assert_eq!(end["category_profile"]["model_name"], json!("qwen"));
-    assert_eq!(end["metadata"]["provider_payload_exact"], json!(false));
-    assert_eq!(
-        end["metadata"]["fidelity_source"],
-        json!("hermes_api_hooks")
-    );
-    assert_eq!(end["data"]["status_code"], json!(502));
-    assert_eq!(end["data"]["retry_count"], json!(1));
-    assert_eq!(end["data"]["retryable"], json!(true));
-    assert_eq!(end["data"]["reason"], json!("upstream"));
-    assert_eq!(
-        end["data"]["error"]["message"],
-        json!("gateway upstream error")
-    );
+fn event_has_session_id(event: &Value, session_id: &str) -> bool {
+    event["metadata"]["session_id"] == json!(session_id)
+        || event["data"]["session_id"] == json!(session_id)
+        || event["data"]["extra"]["session_id"] == json!(session_id)
 }
-
-#[tokio::test]
-async fn serve_listener_hermes_post_tool_call_writes_atof_tool_events() {
-    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    let _ = nemo_relay::plugin::clear_plugin_configuration();
-
-    let temp = tempfile::tempdir().unwrap();
-    let atof_dir = temp.path().join("atof");
-    std::fs::create_dir_all(&atof_dir).unwrap();
-    let mut config = test_config();
-    config.plugin_config = Some(json!({
-        "version": 1,
-        "components": [
-            {
-                "kind": "observability",
-                "enabled": true,
-                "config": {
-                    "version": 3,
-                    "atof": {
-                        "enabled": true,
-                        "sinks": [{
-                            "type": "file",
-                            "output_directory": atof_dir,
-                            "filename": "events.jsonl",
-                            "mode": "overwrite"
-                        }]
-                    }
-                }
-            }
-        ]
-    }));
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let url = format!("http://{address}");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let handle =
-        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
-
-    wait_for_gateway(&url).await;
-    let client = test_http_client();
-
-    for payload in [
-        json!({
-            "hook_event_name": "on_session_start",
-            "session_id": "hermes-tool-atof"
-        }),
-        json!({
-            "hook_event_name": "pre_tool_call",
-            "session_id": "hermes-tool-atof",
-            "tool_name": "search_files",
-            "tool_input": { "query": "needle" },
-            "extra": {
-                "task_id": "task-1",
-                "tool_call_id": "call-search-1"
-            }
-        }),
-        json!({
-            "hook_event_name": "post_tool_call",
-            "session_id": "hermes-tool-atof",
-            "tool_name": "search_files",
-            "tool_input": { "query": "needle" },
-            "tool_response": { "total_count": 6 },
-            "extra": {
-                "task_id": "task-1",
-                "tool_call_id": "call-search-1"
-            }
-        }),
-        json!({
-            "hook_event_name": "on_session_finalize",
-            "session_id": "hermes-tool-atof"
-        }),
-    ] {
-        let response = client
-            .post(format!("{url}/hooks/hermes"))
-            .json(&payload)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    shutdown_tx.send(()).unwrap();
-    handle.await.unwrap().unwrap();
-
-    let events = std::fs::read_to_string(temp.path().join("atof/events.jsonl")).unwrap();
-    let tool_events = events
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|event| event["category"] == "tool")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        tool_events.len(),
-        2,
-        "expected Hermes tool start/end exports, got {tool_events:?}"
-    );
-
-    let start = tool_events
-        .iter()
-        .find(|event| event["scope_category"] == "start")
-        .unwrap();
-    assert_eq!(start["name"], json!("search_files"));
-    assert_eq!(
-        start["category_profile"]["tool_call_id"],
-        json!("call-search-1")
-    );
-    assert_eq!(start["data"]["query"], json!("needle"));
-
-    let end = tool_events
-        .iter()
-        .find(|event| event["scope_category"] == "end")
-        .unwrap();
-    assert_eq!(end["name"], json!("search_files"));
-    assert_eq!(
-        end["category_profile"]["tool_call_id"],
-        json!("call-search-1")
-    );
-    assert_eq!(end["data"]["total_count"], json!(6));
-}
-
 #[tokio::test]
 async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_and_usage() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
@@ -1783,7 +1278,7 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
         .post(format!("{url}/v1/messages"))
         .header("content-type", "application/json")
         .header("x-api-key", "sk-ant-test")
-        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .header("x-nemo-relay-session-id", "gateway-routed-atof")
         .json(&json!({
             "model": "claude-sonnet-4",
             "messages": [{"role": "user", "content": "Find the file."}],
@@ -1798,7 +1293,7 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
         .post(format!("{url}/v1/responses"))
         .header("content-type", "application/json")
         .header("authorization", "Bearer test")
-        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .header("x-nemo-relay-session-id", "gateway-routed-atof")
         .json(&json!({
             "model": "gpt-4o",
             "input": "Find the weather.",
@@ -1813,7 +1308,7 @@ async fn serve_listener_routed_gateway_wire_formats_write_atof_category_profile_
         .post(format!("{url}/v1/chat/completions"))
         .header("content-type", "application/json")
         .header("authorization", "Bearer test")
-        .header("x-nemo-relay-session-id", "hermes-routed-atof")
+        .header("x-nemo-relay-session-id", "gateway-routed-atof")
         .json(&json!({
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "Inspect the files."}],
@@ -2590,33 +2085,6 @@ async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     );
     assert_eq!(body["error"]["reason"], json!("blocked by policy"));
 }
-
-#[tokio::test]
-async fn hermes_hook_keeps_shell_hook_response_shape() {
-    let app = router(test_config());
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/hooks/hermes")
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "session_id": "hermes-1",
-                        "hook_event_name": "on_session_start"
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let body: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(body, json!({}));
-}
-
 #[tokio::test]
 async fn gateway_forwards_openai_json_without_rewriting_payload() {
     let upstream = spawn_upstream(false).await;

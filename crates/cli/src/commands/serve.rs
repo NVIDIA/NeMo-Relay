@@ -8,7 +8,7 @@ use clap::Args;
 
 #[derive(Debug, Clone, Default, Args)]
 pub(crate) struct ServerArgs {
-    /// Path replacing the user config layer; project and system config still apply
+    /// Path replacing the user config layer; system config still applies
     #[arg(long)]
     pub(super) config: Option<PathBuf>,
     /// Address for the gateway to listen on in daemon mode (default 127.0.0.1:4040)

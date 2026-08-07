@@ -1478,6 +1478,37 @@ fn test_pending_registration_records_rollback_failures() {
 }
 
 #[test]
+fn test_pending_rollbacks_ignore_delivery_only_errors() {
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let delivery_error = || {
+        PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+            "delivery failed".into(),
+        ))
+    };
+    {
+        let mut pending = PendingPluginRegistrations::new(Some(Arc::clone(&failures)));
+        pending.extend(vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "delivery-only-registration",
+            Box::new(delivery_error),
+        )]);
+    }
+    {
+        let mut pending =
+            PendingPluginRegistrationContext::new("fixture.".into(), Some(Arc::clone(&failures)));
+        pending
+            .context
+            .add_registration(PluginRegistration::new_with_outcome(
+                "fixture",
+                "delivery-only-context-registration",
+                Box::new(delivery_error),
+            ));
+    }
+
+    assert!(failures.lock().unwrap().is_empty());
+}
+
+#[test]
 fn test_checked_teardown_reports_unremoved_registrations() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1506,13 +1537,41 @@ fn test_checked_teardown_reports_unremoved_registrations() {
 }
 
 #[test]
-fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+fn test_teardown_marker_text_does_not_imply_successful_removal() {
     let _guard = lock_runtime_owner();
     reset_global();
     store_active_plugin_configuration(
         PluginConfig::default(),
         ConfigReport::default(),
         vec![PluginRegistration::new(
+            "fixture",
+            "stale-marker-callback",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(format!(
+                    "unrelated failure mentioning {}",
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                )))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("stale-marker-callback"), "{error}");
+    assert!(error.contains("could not be removed"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
             "fixture",
             "atif-shutdown",
             Box::new(|| {
@@ -1524,10 +1583,11 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
                     session_id: Some("session-123".into()),
                     count: 1,
                 });
-                Err(PluginError::RegistrationFailed(format!(
+                let error = PluginError::RegistrationFailed(format!(
                     "{}: atif.remote_delivery_failed (1)",
-                    crate::observability::plugin_component::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
-                )))
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                ));
+                PluginRegistrationCleanupOutcome::RemovedWithError(error)
             }),
         )],
     )
@@ -1535,7 +1595,9 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
 
     let outcome = clear_plugin_configuration_inner();
     assert!(outcome.callbacks_cleared);
-    assert!(outcome.result.is_err());
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("atif.remote_delivery_failed"), "{error}");
+    assert!(!error.contains("could not be removed"), "{error}");
     let report = active_plugin_report().expect("failed teardown should retain its report");
     assert_eq!(report.runtime_diagnostics.len(), 1);
     let diagnostic = &report.runtime_diagnostics[0];
@@ -1546,6 +1608,129 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
 
     clear_plugin_configuration_inner();
     assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    format!(
+                        "{}: otel.spans_dropped (2)",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    assert!(outcome.result.is_err());
+    reset_global();
+}
+
+#[test]
+fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                    format!(
+                        "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "atif-shutdown",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "atif.remote_delivery_failed".into(),
+                    component: "observability".into(),
+                    field: Some("storage[0]".into()),
+                    message: "HTTP 500".into(),
+                    session_id: Some("session-123".into()),
+                    count: 1,
+                });
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    "ATIF delivery failed".into(),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("ATIF delivery failed"),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("fixture registration 'atif-shutdown' reported a delivery failure"),
+        "{error}"
+    );
+    assert!(
+        !plugin_configuration_is_active().unwrap(),
+        "a replacement aborted by delivery failure must not leave a configuration active"
+    );
+    let report = active_plugin_report().expect("failed replacement should retain its report");
+    assert_eq!(report.runtime_diagnostics.len(), 1);
+    assert_eq!(
+        report.runtime_diagnostics[0].code,
+        "atif.remote_delivery_failed"
+    );
+    assert_eq!(
+        report.runtime_diagnostics[0].field.as_deref(),
+        Some("storage[0]")
+    );
+    assert_eq!(report.runtime_diagnostics[0].count, 1);
+
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .expect("delivery-only teardown errors must not block a later initialization");
     reset_global();
 }
 
@@ -2154,11 +2339,18 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     set_conflicting_runtime_owner_for_tests();
     for (registration, expected) in registrations.iter_mut().zip(expected_messages) {
         match (registration.deregister)() {
-            Err(PluginError::RegistrationFailed(message)) => {
+            PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                message,
+            )) => {
                 assert!(message.contains(expected), "{message}");
             }
-            Err(other) => panic!("unexpected deregistration failure: {other}"),
-            Ok(()) => panic!("expected deregistration to fail"),
+            PluginRegistrationCleanupOutcome::NotRemoved(other) => {
+                panic!("unexpected deregistration failure: {other}")
+            }
+            PluginRegistrationCleanupOutcome::Removed
+            | PluginRegistrationCleanupOutcome::RemovedWithError(_) => {
+                panic!("expected deregistration to fail")
+            }
         }
     }
 
@@ -2450,24 +2642,30 @@ fn test_plugin_config_loading_reports_read_parse_and_version_type_errors() {
 }
 
 #[test]
-fn test_default_plugin_config_paths_order_user_project_system() {
+fn test_default_plugin_config_paths_order_user_system() {
     let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join("project");
-    let child = project.join("nested");
     let user = dir.path().join("user");
-    let project_plugins = project.join(".nemo-relay/plugins.toml");
-    std::fs::create_dir_all(&child).unwrap();
-    std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
-    std::fs::write(&project_plugins, "version = 1\n").unwrap();
 
     assert_eq!(
-        default_plugin_config_paths(Some(&child), Some(user.clone())),
+        default_plugin_config_paths(Some(user.clone())),
         vec![
             user.join("plugins.toml"),
-            project_plugins,
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            system_config_dir().join("plugins.toml"),
         ]
     );
+}
+
+#[test]
+fn test_system_config_dir_matches_platform_convention() {
+    #[cfg(windows)]
+    {
+        let expected_base = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        assert_eq!(system_config_dir(), expected_base.join("nemo-relay"));
+    }
+    #[cfg(not(windows))]
+    assert_eq!(system_config_dir(), PathBuf::from("/etc/nemo-relay"));
 }
 
 #[cfg(unix)]

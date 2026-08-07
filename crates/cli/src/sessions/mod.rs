@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::http::HeaderMap;
-use nemo_relay::api::llm::{
-    LlmAttributes, LlmCallEndParams, LlmCallParams, LlmHandle, LlmRequest, llm_call, llm_call_end,
-};
+use nemo_relay::api::llm::{LlmAttributes, LlmCallEndParams, LlmHandle, LlmRequest, llm_call_end};
+#[cfg(test)]
+use nemo_relay::api::llm::{LlmCallParams, llm_call};
 use nemo_relay::api::runtime::{
     ScopeStackHandle, TASK_SCOPE_STACK, create_scope_stack, task_scope_push,
 };
@@ -41,7 +41,7 @@ use routing::*;
 pub(crate) use types::*;
 
 use crate::events::{
-    AgentKind, LlmEvent, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
+    AgentKind, LlmHintEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent,
 };
 
 const LLM_HINT_TTL: Duration = Duration::from_secs(300);
@@ -532,9 +532,9 @@ impl SessionManager {
 
     /// Returns true while any session still owns active observable work.
     ///
-    /// Host sessions can remain durable after their current turn ends: Codex may omit `SessionEnd`,
-    /// while Hermes keeps a session open for later resumption. A dormant agent scope must therefore
-    /// not keep the MCP-managed sidecar alive forever. Active turns, subagents, tools, LLMs, and
+    /// Host sessions can remain durable after their current turn ends because Codex may omit
+    /// `SessionEnd`. A dormant agent scope must therefore not keep the MCP-managed sidecar alive
+    /// forever. Active turns, subagents, tools, LLMs, and
     /// gateway calls still block idle shutdown; [`Self::close_all`] balances the dormant agent scope
     /// when the gateway exits.
     pub(crate) async fn has_open_sessions(&self) -> bool {
@@ -788,8 +788,6 @@ impl Session {
                     NormalizedEvent::SubagentStarted(event) => self.start_subagent(event).await,
                     NormalizedEvent::SubagentEnded(event) => self.end_subagent(event).await,
                     NormalizedEvent::LlmHint(event) => self.add_llm_hint(event),
-                    NormalizedEvent::LlmStarted(event) => self.start_hook_llm(event).await,
-                    NormalizedEvent::LlmEnded(event) => self.end_hook_llm(event).await,
                     NormalizedEvent::ToolStarted(event) => self.start_tool(event).await,
                     NormalizedEvent::ToolEnded(event) => self.end_tool(event).await,
                     NormalizedEvent::PromptSubmitted(event) => self.start_turn(event).await,
@@ -1428,90 +1426,6 @@ impl Session {
         Ok(())
     }
 
-    // Starts an LLM call from hook activity such as Hermes API request hooks. Duplicate call IDs are
-    // ignored so repeated pre hooks do not create parallel handles for one provider call. Aliased
-    // child-session LLMs carry their subagent owner in metadata and are resolved by
-    // `hook_llm_owner`.
-    async fn start_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
-        self.ensure_turn_started(event.metadata.clone())?;
-        if self.llms.contains_key(&event.api_call_id) {
-            return Ok(());
-        }
-        let (parent, metadata) = self.hook_llm_owner(event.metadata);
-        let handle = llm_call(
-            LlmCallParams::builder()
-                .name(event.provider.as_str())
-                .request(&LlmRequest {
-                    headers: Map::new(),
-                    content: event.request,
-                })
-                .parent_opt(parent.as_ref())
-                .attributes(LlmAttributes::empty())
-                .metadata(metadata)
-                .model_name_opt(event.model_name)
-                .build(),
-        )?;
-        self.llms.insert(event.api_call_id, handle);
-        Ok(())
-    }
-
-    // Ends a hook-observed LLM call, synthesizing a start if only the post hook arrives. The same
-    // alias metadata recovery used by `start_hook_llm` keeps post-only aliased child LLMs under the
-    // subagent instead of falling back to the root agent.
-    async fn end_hook_llm(&mut self, event: LlmEvent) -> Result<(), CliError> {
-        self.ensure_turn_started(event.metadata.clone())?;
-        let (parent, metadata) = self.hook_llm_owner(event.metadata);
-        let handle = match self.llms.remove(&event.api_call_id) {
-            Some(handle) => handle,
-            None => llm_call(
-                LlmCallParams::builder()
-                    .name(event.provider.as_str())
-                    .request(&LlmRequest {
-                        headers: Map::new(),
-                        content: event.request,
-                    })
-                    .parent_opt(parent.as_ref())
-                    .attributes(LlmAttributes::empty())
-                    .metadata(metadata.clone())
-                    .model_name_opt(event.model_name.clone())
-                    .build(),
-            )?,
-        };
-        let output = event.response;
-        let root_owned =
-            json_string_at(&metadata, &[&["llm_correlation_subagent_id"][..]]).is_none();
-        if root_owned {
-            self.record_turn_llm_output(output.clone());
-        }
-        llm_call_end(
-            LlmCallEndParams::builder()
-                .handle(&handle)
-                .response(output)
-                .metadata(metadata)
-                .build(),
-        )?;
-        Ok(())
-    }
-
-    // Recovers owner information stamped by alignment when a hook-originated LLM event came from
-    // an aliased child session. Gateway LLM calls have first-class owner resolution, but hook LLM
-    // events only carry metadata, so this is the bridge that keeps aliased child LLMs under the
-    // subagent instead of the root agent.
-    fn hook_llm_owner(&mut self, metadata: Value) -> (Option<ScopeHandle>, Value) {
-        let Some(subagent_id) = json_string_at(&metadata, &[&["llm_correlation_subagent_id"][..]])
-        else {
-            return (self.root_work_scope(), metadata);
-        };
-        let Some(scope) = self.subagents.get(&subagent_id).cloned() else {
-            return (self.root_work_scope(), metadata);
-        };
-        self.set_last_llm_owner(Some(subagent_id.clone()));
-        (
-            Some(scope),
-            merge_metadata(metadata, self.subagent_llm_metadata(&subagent_id)),
-        )
-    }
-
     // Starts a tool call under an explicit subagent when available, otherwise under the turn
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
@@ -1623,8 +1537,8 @@ impl Session {
         Ok(())
     }
 
-    // Hermes pre/post tool hooks can disagree on call IDs: pre hooks may omit the provider id
-    // while post hooks carry the final chat-completions tool id. When the ID misses but exactly
+    // Pre/post tool hooks can disagree on call IDs: pre hooks may omit the provider id while post
+    // hooks carry the final chat-completions tool id. When the ID misses but exactly
     // one active tool owned by the same subagent/root scope has the same name and arguments, close
     // that start instead of synthesizing a second zero-duration span.
     fn remove_tool_handle_for_event(&mut self, event: &ToolEvent) -> Option<ToolHandle> {

@@ -129,6 +129,15 @@ pub enum FlowError {
     /// An internal runtime error (e.g., lock poisoning).
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// An exception raised by a language-binding callback.
+    #[error("internal error: {message}")]
+    CallbackException {
+        /// Original binding-rendered exception message.
+        message: String,
+        /// Original language exception class name.
+        exception_type: String,
+    },
 }
 
 /// A specialized [`Result`](std::result::Result) type for NeMo Relay operations.
@@ -158,7 +167,15 @@ impl FlowError {
                 UpstreamFailureClass::InvalidRequest => "invalid_request",
                 UpstreamFailureClass::Other => "upstream_error",
             },
-            Self::Internal(_) => "internal_error",
+            Self::Internal(_) | Self::CallbackException { .. } => "internal_error",
+        }
+    }
+
+    /// Returns the originating language exception class, when available.
+    pub(crate) fn exception_type(&self) -> Option<&str> {
+        match self {
+            Self::CallbackException { exception_type, .. } => Some(exception_type),
+            _ => None,
         }
     }
 }

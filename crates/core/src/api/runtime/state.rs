@@ -243,6 +243,8 @@ pub struct NemoRelayContextState {
         SortedRegistry<ExecutionIntercept<LlmStreamExecutionFn>>,
     /// Global lifecycle subscribers notified after runtime events are emitted.
     pub(crate) event_subscribers: HashMap<String, EventSubscriberFn>,
+    /// Whether LLM start events retain complete sanitized request payloads.
+    pub(crate) observability_full_payloads_enabled: bool,
     /// Arbitrary binding- or integration-specific runtime extensions.
     pub(crate) extensions: HashMap<String, Box<dyn Any + Send + Sync>>,
 }
@@ -270,6 +272,7 @@ impl NemoRelayContextState {
             llm_execution_intercepts: SortedRegistry::new(),
             llm_stream_execution_intercepts: SortedRegistry::new(),
             event_subscribers: HashMap::new(),
+            observability_full_payloads_enabled: false,
             extensions: HashMap::new(),
         }
     }

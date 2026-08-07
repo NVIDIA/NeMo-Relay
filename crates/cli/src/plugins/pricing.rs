@@ -231,10 +231,9 @@ fn resolve_pricing(
 fn target_pricing_scope(scope: &ConfigurationScope) -> Result<TargetScope, CliError> {
     match scope {
         ConfigurationScope::Default | ConfigurationScope::User => Ok(TargetScope::User),
-        ConfigurationScope::Project => Ok(TargetScope::Project),
         ConfigurationScope::Global => Ok(TargetScope::Global),
         ConfigurationScope::Invalid => Err(CliError::Config(
-            "choose only one of --user, --project, or --global".into(),
+            "choose only one of --user or --global".into(),
         )),
     }
 }

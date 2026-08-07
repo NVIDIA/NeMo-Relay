@@ -1,20 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for CLI wheel and npm package assembly."""
+"""Tests for CLI wheel assembly."""
 
 import importlib.util
-import json
 import os
 import stat
-import subprocess
 import sys
-import tarfile
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from typing import IO
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("package_cli_bin", ROOT / "scripts" / "package-cli-bin.py")
@@ -24,15 +20,8 @@ sys.modules[SPEC.name] = PACKAGE_CLI_BIN
 SPEC.loader.exec_module(PACKAGE_CLI_BIN)
 
 
-def required_member(archive: tarfile.TarFile, name: str) -> IO[bytes]:
-    member = archive.extractfile(name)
-    if member is None:
-        raise AssertionError(f"archive is missing {name}")
-    return member
-
-
 class PackageCliBinTests(unittest.TestCase):
-    def test_packages_linux_binaries_for_python_and_npm(self) -> None:
+    def test_packages_linux_binaries_for_python(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
             binary = output / "nemo-relay"
@@ -44,10 +33,7 @@ class PackageCliBinTests(unittest.TestCase):
             try:
                 os.chdir(output)
                 wheel = PACKAGE_CLI_BIN.build_wheel(binary, gnu_platform, "0.7.0-rc.1", output)
-                native = PACKAGE_CLI_BIN.build_npm_platform(binary, gnu_platform, "0.7.0-rc.1", output)
                 musl_wheel = PACKAGE_CLI_BIN.build_wheel(binary, musl_platform, "0.7.0-rc.1", output)
-                musl_native = PACKAGE_CLI_BIN.build_npm_platform(binary, musl_platform, "0.7.0-rc.1", output)
-                launcher = PACKAGE_CLI_BIN.build_npm_launcher("0.7.0-rc.1", output)
             finally:
                 os.chdir(previous_directory)
 
@@ -62,48 +48,6 @@ class PackageCliBinTests(unittest.TestCase):
                 self.assertIn(b"Tag: py3-none-manylinux_2_17_x86_64", wheel_metadata)
 
             self.assertIn("0.7.0rc1-py3-none-musllinux_1_2_x86_64", musl_wheel.name)
-
-            self.assertEqual(native.name, "nemo-relay-bin-npm-linux-x64-0.7.0-rc.1.tgz")
-            with tarfile.open(native) as archive:
-                manifest = json.load(required_member(archive, "package/package.json"))
-                self.assertEqual(manifest["os"], ["linux"])
-                self.assertEqual(manifest["cpu"], ["x64"])
-                self.assertEqual(manifest["libc"], ["glibc"])
-                self.assertEqual(
-                    required_member(archive, "package/bin/nemo-relay").read(),
-                    b"test-binary",
-                )
-
-            self.assertEqual(musl_native.name, "nemo-relay-bin-npm-linux-x64-musl-0.7.0-rc.1.tgz")
-            with tarfile.open(musl_native) as archive:
-                manifest = json.load(required_member(archive, "package/package.json"))
-                self.assertEqual(manifest["libc"], ["musl"])
-
-            self.assertEqual(launcher.name, "nemo-relay-bin-npm-0.7.0-rc.1.tgz")
-            with tarfile.open(launcher) as archive:
-                manifest = json.load(required_member(archive, "package/package.json"))
-                self.assertEqual(manifest["bin"]["nemo-relay"], "bin/nemo-relay.js")
-                self.assertEqual(
-                    manifest["optionalDependencies"]["nemo-relay-cli-bin-linux-x64"],
-                    "0.7.0-rc.1",
-                )
-                self.assertEqual(
-                    manifest["optionalDependencies"]["nemo-relay-cli-bin-linux-x64-musl"],
-                    "0.7.0-rc.1",
-                )
-                launcher_path = output / "launcher/package/bin/nemo-relay.js"
-                launcher_path.parent.mkdir(parents=True)
-                launcher_path.write_bytes(required_member(archive, "package/bin/nemo-relay.js").read())
-
-            result = subprocess.run(
-                ["node", output / "launcher/package/bin/nemo-relay.js", "--version"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            self.assertEqual(result.returncode, 1)
-            self.assertIn("The native package nemo-relay-cli-bin-", result.stderr)
-            self.assertIn("is missing", result.stderr)
 
     def test_rejects_unsupported_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported package version"):

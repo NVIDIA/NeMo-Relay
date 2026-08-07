@@ -165,16 +165,26 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       }, (error) => {
         settlePublication();
         let message = 'unknown error';
+        let exceptionType = 'Error';
         try {
           if (typeof error === 'string') {
             message = error;
           } else if (error === null || (typeof error !== 'object' && typeof error !== 'function')) {
             message = String(error);
-          } else if (error != null && typeof error.message === 'string') {
-            message = error.message;
+          } else if (error != null) {
+            const errorMessage = error.message;
+            if (typeof errorMessage === 'string') {
+              message = errorMessage;
+            }
           }
         } catch {}
-        reject(message);
+        try {
+          const errorName = error?.name;
+          if (typeof errorName === 'string' && errorName.length > 0) {
+            exceptionType = errorName;
+          }
+        } catch {}
+        reject(message, exceptionType);
       });
     };
     eventSanitizerContext.run(token, invoke);
@@ -188,10 +198,20 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           return { ok: true, value: jsonValue(value === undefined ? null : value) };
         } catch (error) {
           let message = 'JavaScript callback failed';
+          let exceptionType = 'Error';
           try {
-            message = String(error?.message ?? error);
+            const errorMessage = error?.message;
+            if (typeof errorMessage === 'string') {
+              message = errorMessage;
+            }
           } catch {}
-          return { ok: false, error: message };
+          try {
+            const errorName = error?.name;
+            if (typeof errorName === 'string' && errorName.length > 0) {
+              exceptionType = errorName;
+            }
+          } catch {}
+          return { ok: false, error: message, exceptionType };
         }
       };
     },
@@ -212,11 +232,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       ) {
         if (error != null) {
           let message = 'unknown error';
+          let exceptionType = 'Error';
           try {
             message = String(error?.message ?? error);
           } catch {}
+          try {
+            const errorName = error?.name;
+            if (typeof errorName === 'string' && errorName.length > 0) {
+              exceptionType = errorName;
+            }
+          } catch {}
           if (typeof reject === 'function') {
-            reject(message);
+            reject(message, exceptionType);
           }
           return;
         }

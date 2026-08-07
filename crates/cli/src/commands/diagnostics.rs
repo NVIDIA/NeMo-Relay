@@ -66,7 +66,7 @@ fn execute_plugin_doctor(
     };
     if agents.is_empty() {
         return Err(CliError::Install(
-            "no installed Claude Code, Codex, or Hermes integration state was found".into(),
+            "no installed Claude Code or Codex integration state was found".into(),
         ));
     }
     let options = crate::installation::marketplace::plugin_doctor_options(install_dir);
