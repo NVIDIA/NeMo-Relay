@@ -131,6 +131,35 @@ def test_runtime_provenance_derives_classifier_target_from_plugin_config() -> No
     assert runtime_preparer_module.plugin_settings(config)["classifier_target"] == "judge"
 
 
+def test_offline_overrides_keep_classifier_pricing_aliases_distinct(tmp_path: Path) -> None:
+    output = tmp_path / "plugins.toml"
+    settings = runtime_preparer_module.render_config(
+        EXAMPLE_ROOT / "config" / "plugins.toml.in",
+        output,
+        {
+            "HERMES_COMMIT": "a" * 40,
+            "OPENINFERENCE_ENDPOINT": "http://127.0.0.1:4318/v1/traces",
+            "PHOENIX_PROJECT": "offline",
+            "EVAL_COHORT": "offline",
+        },
+        {
+            "provider_base_url": "http://127.0.0.1:8000/v1",
+            "strong_model": "phase2/fake-strong",
+            "weak_model": "phase2/fake-weak",
+            "judge_model": "phase2/fake-judge",
+        },
+    )
+    with output.open("rb") as stream:
+        config = tomllib.load(stream)
+    entries = config["components"][0]["config"]["sources"][0]["catalog"]["entries"]
+    assert settings["judge_model"] == "phase2/fake-judge"
+    assert {entry["model_id"] for entry in entries} == {
+        "phase2/fake-strong",
+        "phase2/fake-weak",
+        "phase2/fake-judge",
+    }
+
+
 def test_hermetic_runtime_requires_portable_ca_bundle(tmp_path: Path) -> None:
     marker = make_payload(tmp_path)
     (tmp_path / agent_module._HERMETIC_CA_BUNDLE_RELATIVE).unlink()

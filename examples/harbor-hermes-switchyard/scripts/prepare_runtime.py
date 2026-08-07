@@ -181,12 +181,12 @@ def render_config(
         plugin = config["plugins"]["dynamic"][0]["config"]
         old_models = {name: plugin["targets"][name]["model"] for name in ("strong", "weak", "judge")}
         for name in ("strong", "weak", "judge"):
-            override = "weak_model" if name == "judge" else f"{name}_model"
+            override = f"{name}_model"
             plugin["targets"][name]["model"] = test_overrides[override]
             plugin["targets"][name]["base_url"] = test_overrides["provider_base_url"]
         pricing = config["components"][0]["config"]["sources"][0]["catalog"]["entries"]
         replacement_models = {
-            old_models[name]: test_overrides["weak_model" if name == "judge" else f"{name}_model"]
+            old_models[name]: test_overrides[f"{name}_model"]
             for name in old_models
         }
         for entry in pricing:
@@ -207,6 +207,7 @@ def main() -> int:
     parser.add_argument("--test-provider-base-url")
     parser.add_argument("--test-strong-model")
     parser.add_argument("--test-weak-model")
+    parser.add_argument("--test-judge-model")
     parser.add_argument("--openinference-endpoint", required=True)
     parser.add_argument("--phoenix-project", required=True)
     parser.add_argument("--eval-cohort", required=True)
@@ -244,7 +245,7 @@ def main() -> int:
     phoenix_project = checked_label(args.phoenix_project, "phoenix_project")
     eval_cohort = checked_label(args.eval_cohort, "eval_cohort")
     plugin_template = (args.plugin_config_template or example_root / "config" / "plugins.toml.in").resolve(strict=True)
-    test_values = (args.test_provider_base_url, args.test_strong_model, args.test_weak_model)
+    test_values = (args.test_provider_base_url, args.test_strong_model, args.test_weak_model, args.test_judge_model)
     if any(test_values) and not all(test_values):
         raise ValueError("all test provider overrides must be supplied together")
     test_overrides = None
@@ -253,6 +254,7 @@ def main() -> int:
             "provider_base_url": checked_url(args.test_provider_base_url, "test_provider_base_url"),
             "strong_model": checked_label(args.test_strong_model, "test_strong_model"),
             "weak_model": checked_label(args.test_weak_model, "test_weak_model"),
+            "judge_model": checked_label(args.test_judge_model, "test_judge_model"),
         }
 
     config_path = runtime / "plugins.toml"
