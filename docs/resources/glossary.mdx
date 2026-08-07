@@ -528,7 +528,7 @@ the rest of the documentation can use them consistently.
 : A trace span is a timed observability record in a tracing backend. Exported
   NeMo Relay scopes, tool calls, LLM calls, and marks appear as spans when using
   a compatible OpenTelemetry projection. The `gen_ai` projection omits marks
-  and unsupported scope types.
+  and emits minimal internal spans for scopes without GenAI semantics.
 
 **Trajectory**
 : A trajectory is an ordered record of an agent run. In ATIF export, LLM events

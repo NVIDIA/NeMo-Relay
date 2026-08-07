@@ -1246,7 +1246,7 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 }
 
 #[test]
-fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
+fn gen_ai_projection_is_fixed_and_preserves_all_scope_parentage() {
     let (provider, exporter) = make_provider();
     let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
         provider,
@@ -1315,7 +1315,7 @@ fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    assert_eq!(spans.len(), 2);
+    assert_eq!(spans.len(), 3);
     let agent = spans
         .iter()
         .find(|span| span.name.as_ref() == "invoke_agent research-agent")
@@ -1324,9 +1324,15 @@ fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
         .iter()
         .find(|span| span.name.as_ref() == "execute_tool web-search")
         .unwrap();
+    let reranker = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "rerank")
+        .unwrap();
     assert_eq!(agent.span_kind, SpanKind::Internal);
+    assert_eq!(reranker.span_kind, SpanKind::Internal);
     assert_eq!(tool.span_kind, SpanKind::Internal);
-    assert_eq!(tool.parent_span_id, agent.span_context.span_id());
+    assert_eq!(reranker.parent_span_id, agent.span_context.span_id());
+    assert_eq!(tool.parent_span_id, reranker.span_context.span_id());
     assert!(agent.events.events.is_empty());
     assert!(spans.iter().all(|span| {
         span.attributes.iter().all(|attribute| {
@@ -1335,6 +1341,7 @@ fn gen_ai_projection_is_fixed_and_preserves_ancestry_through_omitted_scopes() {
         })
     }));
     let agent_attributes = attr_map(&agent.attributes);
+    assert!(reranker.attributes.is_empty());
     let tool_attributes = attr_map(&tool.attributes);
     assert_eq!(
         agent_attributes.get("gen_ai.operation.name"),
@@ -1383,7 +1390,6 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
         ),
     ] {
         let event = make_start_event(Uuid::now_v7(), None, name, scope_type, None);
-        assert!(crate::observability::otel_genai::supports(&event));
         assert_eq!(
             crate::observability::otel_genai::span_name(&event),
             expected_name
@@ -1394,9 +1400,24 @@ fn gen_ai_projection_uses_standard_operation_names_and_span_kinds() {
         );
     }
 
-    for unsupported in [ScopeType::Reranker, ScopeType::Guardrail] {
-        let event = make_start_event(Uuid::now_v7(), None, "unsupported", unsupported, None);
-        assert!(!crate::observability::otel_genai::supports(&event));
+    for generic in [
+        ScopeType::Function,
+        ScopeType::Reranker,
+        ScopeType::Guardrail,
+        ScopeType::Evaluator,
+        ScopeType::Custom,
+        ScopeType::Unknown,
+    ] {
+        let event = make_start_event(Uuid::now_v7(), None, "generic", generic, None);
+        assert_eq!(
+            crate::observability::otel_genai::span_name(&event),
+            "generic"
+        );
+        assert_eq!(
+            crate::observability::otel_genai::span_kind(&event),
+            SpanKind::Internal
+        );
+        assert!(crate::observability::otel_genai::start_attributes(&event).is_empty());
     }
 }
 
@@ -1558,7 +1579,7 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
     );
     assert_eq!(
         attributes.get("gen_ai.response.finish_reasons"),
-        Some(&"[\"tool_calls\"]".to_string())
+        Some(&"[\"tool_call\"]".to_string())
     );
     assert_eq!(
         attributes.get("gen_ai.usage.input_tokens"),
@@ -1682,7 +1703,12 @@ fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
         processor.force_flush().unwrap();
 
         let spans = exporter.get_finished_spans().unwrap();
-        assert_eq!(spans.len(), 2);
+        let expected_span_count = if otel_type == OpenTelemetryType::GenAi {
+            3
+        } else {
+            2
+        };
+        assert_eq!(spans.len(), expected_span_count);
         for span in &spans {
             assert_eq!(
                 attr_map(&span.attributes).get("error.type"),
@@ -1703,7 +1729,7 @@ fn failed_descendant_classification_and_exception_propagate_to_agent_span() {
 }
 
 #[test]
-fn suppressed_function_error_propagates_to_agent_span() {
+fn generic_function_error_propagates_to_agent_span() {
     let (provider, exporter) = make_provider();
     let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
         provider,
@@ -1750,8 +1776,19 @@ fn suppressed_function_error_propagates_to_agent_span() {
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    assert_eq!(spans.len(), 1);
-    let agent_span = &spans[0];
+    assert_eq!(spans.len(), 2);
+    let agent_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "invoke_agent agent")
+        .expect("expected agent span");
+    let function_span = spans
+        .iter()
+        .find(|span| span.name.as_ref() == "function")
+        .expect("expected generic function span");
+    assert_eq!(
+        function_span.parent_span_id,
+        agent_span.span_context.span_id()
+    );
     assert_eq!(
         attr_map(&agent_span.attributes).get("error.type"),
         Some(&"internal_error".to_string())
@@ -1769,7 +1806,7 @@ fn suppressed_function_error_propagates_to_agent_span() {
 }
 
 #[test]
-fn suppressed_parent_error_propagation_isolated_by_trace_id() {
+fn generic_parent_error_propagation_isolated_by_trace_id() {
     let (provider, exporter) = make_provider();
     let mut processor = OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
         provider,
@@ -1866,7 +1903,7 @@ fn suppressed_parent_error_propagation_isolated_by_trace_id() {
     processor.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    assert_eq!(spans.len(), 4);
+    assert_eq!(spans.len(), 6);
     for (agent_uuid, _, _, error_type, exception_type) in cases {
         let agent_span = spans
             .iter()

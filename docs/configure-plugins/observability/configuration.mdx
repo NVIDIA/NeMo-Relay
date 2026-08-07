@@ -28,6 +28,7 @@ enabled = true
 
 [components.config]
 version = 3
+enable_full_payloads = false
 
 [components.config.atof]
 enabled = true
@@ -77,6 +78,14 @@ loopback forms (`localhost`, names under `.localhost`, `127.0.0.0/8`, and `::1`)
 as the same host without resolving DNS. Query strings remain part of the
 destination. All endpoints are constructed before the plugin registers its
 fan-out subscriber.
+
+## Full LLM Payloads
+
+By default, repeated LLM start events contain only the current user turn. Set
+`enable_full_payloads = true` at the top level of the observability component
+config to retain complete sanitized request input and annotations on every LLM
+start event. This disables turn filtering only; credential removal and
+sanitizers still apply.
 
 ## Multi-Endpoint Lifecycle
 
@@ -152,7 +161,8 @@ config = plugin.PluginConfig(
                             service_name="agent-service",
                         )
                     ],
-                )
+                ),
+                enable_full_payloads=True,
             )
         )
     ]
@@ -175,6 +185,7 @@ const component = observability.ComponentSpec({
       }),
     ],
   }),
+  enable_full_payloads: true,
 });
 ```
 </Tab>
@@ -190,6 +201,7 @@ otel.Endpoints = []nemo_relay.ObservabilityOpenTelemetryEndpointConfig{
     ),
 }
 config.OpenTelemetry = &otel
+config.EnableFullPayloads = true
 component := nemo_relay.NewObservabilityComponentSpec(config)
 ```
 </Tab>

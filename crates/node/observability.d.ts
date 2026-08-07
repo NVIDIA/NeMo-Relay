@@ -94,6 +94,8 @@ export interface Config {
   atif?: AtifConfig;
   opentelemetry?: OpenTelemetrySectionConfig;
   policy?: ConfigPolicy;
+  /** Retain complete sanitized request data on every LLM start event. */
+  enable_full_payloads?: boolean;
 }
 
 export interface ComponentSpec {

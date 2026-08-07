@@ -15,6 +15,8 @@ type ObservabilityConfig struct {
 	Atif          *ObservabilityAtifConfig          `json:"atif,omitempty"`
 	OpenTelemetry *ObservabilityOpenTelemetryConfig `json:"opentelemetry,omitempty"`
 	Policy        *ConfigPolicy                     `json:"policy,omitempty"`
+	// EnableFullPayloads retains complete sanitized request data on every LLM start event.
+	EnableFullPayloads bool `json:"enable_full_payloads,omitempty"`
 }
 
 // ObservabilityOpenTelemetryConfig configures multiple typed OTLP endpoints.

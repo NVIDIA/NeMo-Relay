@@ -20,6 +20,10 @@ function tempDir(prefix) {
 describe('observability plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {
     assert.deepEqual(observability.defaultConfig(), { version: 3 });
+    assert.equal(
+      observability.ComponentSpec({ version: 3, enable_full_payloads: true }).config.enable_full_payloads,
+      true,
+    );
     assert.deepEqual(observability.atofConfig(), { enabled: false });
     assert.deepEqual(observability.atifConfig(), {
       enabled: false,

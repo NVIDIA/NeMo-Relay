@@ -956,8 +956,6 @@ pub(super) struct OtelEventProcessor {
     pub(super) active_spans: HashMap<Uuid, ActiveSpan>,
     pub(super) completed_span_contexts: HashMap<Uuid, SpanContext>,
     pub(super) completed_span_order: VecDeque<Uuid>,
-    suppressed_parent_contexts: HashMap<Uuid, SpanContext>,
-    suppressed_parent_order: VecDeque<Uuid>,
     provider: SdkTracerProvider,
     tracer: SdkTracer,
     otel_type: OpenTelemetryType,
@@ -1064,8 +1062,6 @@ impl OtelEventProcessor {
             active_spans: HashMap::new(),
             completed_span_contexts: HashMap::new(),
             completed_span_order: VecDeque::new(),
-            suppressed_parent_contexts: HashMap::new(),
-            suppressed_parent_order: VecDeque::new(),
             provider,
             tracer,
             otel_type,
@@ -1097,15 +1093,7 @@ impl OtelEventProcessor {
 
     fn process_start(&mut self, event: &Event) {
         self.remove_completed_span_context(event.uuid());
-        self.remove_suppressed_parent_context(event.uuid());
         let parent_context = self.parent_context(event);
-        if self.otel_type == OpenTelemetryType::GenAi && !super::otel_genai::supports(event) {
-            let parent_span_context = parent_context.span().span_context().clone();
-            if parent_span_context.is_valid() {
-                self.record_suppressed_parent_context(event.uuid(), parent_span_context);
-            }
-            return;
-        }
         let is_trace_root = !parent_context.span().span_context().is_valid();
         let start_model_name = model_name_for_llm_event(event);
         let span_name = match self.otel_type {
@@ -1161,7 +1149,6 @@ impl OtelEventProcessor {
 
     fn process_end(&mut self, event: &Event) {
         let Some(mut active_span) = self.active_spans.remove(&event.uuid()) else {
-            self.propagate_suppressed_error_metadata(event);
             return;
         };
         self.record_completed_span_context(event.uuid(), active_span.span_context.clone());
@@ -1234,26 +1221,6 @@ impl OtelEventProcessor {
         active_span
             .span
             .end_with_timestamp(to_system_time(*event.timestamp()));
-    }
-
-    fn propagate_suppressed_error_metadata(&mut self, event: &Event) {
-        if self.otel_type != OpenTelemetryType::GenAi
-            || !self.suppressed_parent_contexts.contains_key(&event.uuid())
-            || metadata_string(event, "otel.status_code") != Some("ERROR")
-        {
-            return;
-        }
-        let error_type = metadata_string(event, "error.type").map(ToOwned::to_owned);
-        let exception_type = metadata_string(event, "exception.type").map(ToOwned::to_owned);
-        let Some(parent_span) = self.find_parent_span_mut(event) else {
-            return;
-        };
-        if parent_span.descendant_error_type.is_none() {
-            parent_span.descendant_error_type = error_type;
-        }
-        if parent_span.descendant_exception_type.is_none() {
-            parent_span.descendant_exception_type = exception_type;
-        }
     }
 
     fn process_mark(&mut self, event: &Event) {
@@ -1348,12 +1315,6 @@ impl OtelEventProcessor {
         {
             return Context::new().with_remote_span_context(span_context.clone());
         }
-        if let Some(span_context) = event
-            .parent_uuid()
-            .and_then(|uuid| self.suppressed_parent_contexts.get(&uuid))
-        {
-            return Context::new().with_remote_span_context(span_context.clone());
-        }
         let Some(parent_uuid) = event.parent_uuid() else {
             return Context::new();
         };
@@ -1374,15 +1335,9 @@ impl OtelEventProcessor {
 
     fn parent_span_uuid(&self, event: &Event) -> Option<Uuid> {
         let parent_uuid = event.parent_uuid()?;
-        if self.active_spans.contains_key(&parent_uuid) {
-            return Some(parent_uuid);
-        }
-        let suppressed_parent = self.suppressed_parent_contexts.get(&parent_uuid)?;
-        self.active_spans.iter().find_map(|(uuid, active_span)| {
-            (active_span.span_context.trace_id() == suppressed_parent.trace_id()
-                && active_span.span_context.span_id() == suppressed_parent.span_id())
-            .then_some(*uuid)
-        })
+        self.active_spans
+            .contains_key(&parent_uuid)
+            .then_some(parent_uuid)
     }
 
     fn find_parent_span(&self, event: &Event) -> Option<&ActiveSpan> {
@@ -1401,12 +1356,6 @@ impl OtelEventProcessor {
             .retain(|completed_uuid| *completed_uuid != uuid);
     }
 
-    fn remove_suppressed_parent_context(&mut self, uuid: Uuid) {
-        self.suppressed_parent_contexts.remove(&uuid);
-        self.suppressed_parent_order
-            .retain(|suppressed_uuid| *suppressed_uuid != uuid);
-    }
-
     fn record_completed_span_context(&mut self, uuid: Uuid, span_context: SpanContext) {
         if self
             .completed_span_contexts
@@ -1418,21 +1367,6 @@ impl OtelEventProcessor {
         while self.completed_span_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
             if let Some(expired) = self.completed_span_order.pop_front() {
                 self.completed_span_contexts.remove(&expired);
-            }
-        }
-    }
-
-    fn record_suppressed_parent_context(&mut self, uuid: Uuid, span_context: SpanContext) {
-        if self
-            .suppressed_parent_contexts
-            .insert(uuid, span_context)
-            .is_none()
-        {
-            self.suppressed_parent_order.push_back(uuid);
-        }
-        while self.suppressed_parent_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
-            if let Some(expired) = self.suppressed_parent_order.pop_front() {
-                self.suppressed_parent_contexts.remove(&expired);
             }
         }
     }

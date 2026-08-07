@@ -34,7 +34,7 @@ const GEN_AI_RETRIEVAL_TOP_K: &str = "gen_ai.retrieval.top_k";
 const GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "gen_ai.usage.cache_creation.input_tokens";
 const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS: &str = "gen_ai.usage.cache_read.input_tokens";
 
-pub(super) fn supports(event: &Event) -> bool {
+fn has_gen_ai_semantics(event: &Event) -> bool {
     matches!(
         event.scope_type(),
         Some(
@@ -48,6 +48,9 @@ pub(super) fn supports(event: &Event) -> bool {
 }
 
 pub(super) fn span_name(event: &Event) -> String {
+    if !has_gen_ai_semantics(event) {
+        return event.name().to_string();
+    }
     let operation = operation_name(event);
     let qualifier = match event.scope_type() {
         Some(ScopeType::Agent) => Some(agent_name(event)),
@@ -65,11 +68,15 @@ pub(super) fn span_name(event: &Event) -> String {
 pub(super) fn span_kind(event: &Event) -> SpanKind {
     match event.scope_type() {
         Some(ScopeType::Agent | ScopeType::Tool) => SpanKind::Internal,
-        _ => SpanKind::Client,
+        Some(ScopeType::Llm | ScopeType::Embedder | ScopeType::Retriever) => SpanKind::Client,
+        _ => SpanKind::Internal,
     }
 }
 
 pub(super) fn start_attributes(event: &Event) -> Vec<KeyValue> {
+    if !has_gen_ai_semantics(event) {
+        return Vec::new();
+    }
     let mut attributes = Vec::new();
     attributes.push(KeyValue::new(
         semconv::GEN_AI_OPERATION_NAME,

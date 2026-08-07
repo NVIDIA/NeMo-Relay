@@ -534,8 +534,9 @@ also change:
 Remove `mark_projection`, `mark_exclude_names`, `attribute_mappings`,
 `semantic_selector`, and `capture_content`. Projection behavior is fixed. The
 `full` and `openinference` types retain their previous default mark behavior.
-The `gen_ai` type omits marks, rerankers, and unsupported scope types, and does
-not emit `nemo_relay.*` or opt-in content attributes. It targets the
+The `gen_ai` type omits marks and emits minimal internal spans for Relay scope
+types without GenAI semantics, preserving the original span parentage. It does
+not emit `nemo_relay.*` attributes. It targets the
 [OpenTelemetry GenAI semantic-conventions v1.42-era snapshot](https://github.com/open-telemetry/semantic-conventions-genai/tree/43633a68ef8f8ed87a1d5eb205990311ca708bf1).
 
 NeMo Relay also upgrades to OpenTelemetry Rust `0.32`.

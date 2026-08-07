@@ -31,6 +31,9 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if config.Version != 3 {
 		t.Fatalf("expected version 3, got %d", config.Version)
 	}
+	if config.EnableFullPayloads {
+		t.Fatal("full payloads should be disabled by default")
+	}
 	atof := NewObservabilityAtofConfig()
 	if atof.Enabled || len(atof.Sinks) != 0 {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
@@ -75,6 +78,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	config.Atof = &atof
 	config.Atif = &atif
 	config.OpenTelemetry = &otel
+	config.EnableFullPayloads = true
 	wrapped := ObservabilityComponent(config)
 	if wrapped.Kind != ObservabilityPluginKind || !wrapped.Enabled {
 		t.Fatalf("unexpected component wrapper: %#v", wrapped)
@@ -110,6 +114,9 @@ func TestObservabilityAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *
 
 func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec) {
 	t.Helper()
+	if wrapped.Config["enable_full_payloads"] != true {
+		t.Fatalf("expected full payload policy in serialized config, got %#v", wrapped.Config)
+	}
 	if _, ok := wrapped.Config["atof"].(map[string]any); !ok {
 		t.Fatalf("expected serialized ATOF config object, got %#v", wrapped.Config)
 	}
