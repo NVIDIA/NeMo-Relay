@@ -369,6 +369,69 @@ fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
 }
 
 #[test]
+fn dry_run_diagnostic_recognizes_supported_agent_executable_forms() {
+    let cases = [
+        (CodingAgent::ClaudeCode, "claude"),
+        (CodingAgent::ClaudeCode, "claude-code"),
+        (CodingAgent::ClaudeCode, "/opt/bin/claude"),
+        (CodingAgent::ClaudeCode, "/opt/bin/claude-code.exe"),
+        (CodingAgent::Codex, "codex"),
+        (CodingAgent::Codex, r"C:\tools\CODEX.CMD"),
+        (CodingAgent::Codex, r"C:\tools\codex.com"),
+        (CodingAgent::Hermes, "hermes"),
+        (CodingAgent::Hermes, "hermes-agent"),
+        (CodingAgent::Hermes, "/opt/bin/hermes-agent.bat"),
+    ];
+
+    for (agent, executable) in cases {
+        let command = vec![executable.to_string(), "synthetic argument".to_string()];
+        assert!(
+            run::possible_duplicate_agent_warning(agent, &command, run::InvocationForm::Run)
+                .is_some(),
+            "expected {executable:?} to duplicate {agent:?}"
+        );
+    }
+}
+
+#[test]
+fn dry_run_diagnostic_checks_only_the_first_forwarded_token_and_redacts_the_rest() {
+    for command in [
+        vec![],
+        vec!["-p".to_string(), "claude appears later".to_string()],
+        vec!["my-wrapper".to_string(), "claude".to_string()],
+        vec!["codex".to_string(), "claude".to_string()],
+    ] {
+        assert!(
+            run::possible_duplicate_agent_warning(
+                CodingAgent::ClaudeCode,
+                &command,
+                run::InvocationForm::Run,
+            )
+            .is_none(),
+            "unexpected duplicate for {command:?}"
+        );
+    }
+
+    let command = vec![
+        "/opt/bin/claude-code".to_string(),
+        "-p".to_string(),
+        "private synthetic value".to_string(),
+    ];
+    let warning = run::possible_duplicate_agent_warning(
+        CodingAgent::ClaudeCode,
+        &command,
+        run::InvocationForm::Shortcut,
+    )
+    .unwrap();
+    assert!(warning.contains("Diagnostic: possible_duplicate_agent_executable"));
+    assert!(warning.contains("Observed: nemo-relay claude --dry-run -- claude"));
+    assert!(warning.contains("Recommended: nemo-relay claude --dry-run --"));
+    assert!(warning.contains("<arguments redacted>"));
+    assert!(!warning.contains("/opt/bin/claude-code"));
+    assert!(!warning.contains("private synthetic value"));
+}
+
+#[test]
 fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
     let visited = std::cell::RefCell::new(Vec::new());
     let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {

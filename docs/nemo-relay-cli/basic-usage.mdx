@@ -81,15 +81,18 @@ arguments after `--`:
 nemo-relay run --agent claude -- -p "Review this change"
 ```
 
-If the selected executable is repeated after `--`, Relay warns and continues
-without modifying the command. Add `--dry-run` before `--` to inspect the
-resolved launch plan without running setup, starting the gateway, or launching
-the agent:
+Add `--dry-run` before `--` to validate and inspect the resolved launch plan
+without running setup, starting the gateway, or launching the agent. During
+dry-run validation, Relay warns when the selected executable is repeated after
+`--`:
 
 ```bash
 nemo-relay run --agent claude --dry-run -- claude
 nemo-relay claude --dry-run -- claude
 ```
+
+Live launches do not perform this diagnostic or rewrite forwarded arguments.
+The selected agent receives the arguments exactly as provided.
 
 Dry-run output includes forwarded arguments. Do not share it when those
 arguments contain prompts, credentials, or other sensitive values.

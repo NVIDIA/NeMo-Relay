@@ -3830,7 +3830,7 @@ command = "hermes --yolo chat"
 }
 
 #[test]
-fn invocation_diagnostic_cli_warns_without_rewriting_the_command() {
+fn invocation_diagnostic_cli_warns_during_dry_run_without_rewriting_the_plan() {
     let temp = tempfile::tempdir().unwrap();
     let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
     let config = temp.path().join("config.toml");
@@ -3871,7 +3871,7 @@ anthropic_base_url = "http://127.0.0.1:1"
         stderr.contains("possible_duplicate_agent_executable"),
         "{stderr}"
     );
-    assert!(stderr.contains("Relay will continue without modifying the command"));
+    assert!(stderr.contains("Dry-run validation will continue without launching the agent"));
     assert!(!stderr.contains("/opt/bin/claude-code.exe"));
     assert!(!stderr.contains("synthetic prompt"));
 
@@ -3887,6 +3887,45 @@ anthropic_base_url = "http://127.0.0.1:1"
     let diagnostic = diagnostic.to_string();
     assert!(!diagnostic.contains("/opt/bin/claude-code.exe"));
     assert!(!diagnostic.contains("synthetic prompt"));
+}
+
+#[test]
+fn invocation_diagnostic_does_not_preflight_live_launches() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[agents.claude]
+command = "nemo-relay-test-agent-that-does-not-exist"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "claude",
+            "--",
+            "claude",
+            "private synthetic value",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("error_kind=io"), "{stderr}");
 }
 
 #[test]
@@ -3963,20 +4002,16 @@ fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
     );
     assert!(
         stderr.contains(&format!(
-            "Observed: nemo-relay claude -- claude {}",
+            "Observed: nemo-relay claude --dry-run -- claude {}",
             quoted_redacted_arguments()
         )),
         "{stderr}"
     );
     assert!(
         stderr.contains(&format!(
-            "Recommended: nemo-relay claude -- {}",
+            "Recommended: nemo-relay claude --dry-run -- {}",
             quoted_redacted_arguments()
         )),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("Inspect without launching: nemo-relay claude --dry-run -- claude"),
         "{stderr}"
     );
     assert!(!stderr.contains("private synthetic value"), "{stderr}");

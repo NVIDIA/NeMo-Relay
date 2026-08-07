@@ -11,7 +11,13 @@ use super::serve::ServerArgs;
 use crate::agents::CodingAgent;
 use crate::error::CliError;
 
-mod invocation;
+const POSSIBLE_DUPLICATE_AGENT_EXECUTABLE: &str = "possible_duplicate_agent_executable";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InvocationForm {
+    Run,
+    Shortcut,
+}
 
 /// Args for an easy-path agent shortcut.
 #[derive(Debug, Clone, Args)]
@@ -65,8 +71,10 @@ pub(super) async fn execute(
     command: RunCommand,
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
-    if let Some(agent) = command.agent.map(Into::into) {
-        warn_for_possible_duplicate(agent, &command.command, invocation::InvocationForm::Run);
+    if command.dry_run
+        && let Some(agent) = command.agent.map(Into::into)
+    {
+        warn_for_possible_duplicate(agent, &command.command, InvocationForm::Run);
     }
     let inherited = server.to_runtime();
     crate::process::launcher::run(command.into_runtime(), Some(&inherited)).await
@@ -87,11 +95,9 @@ pub(super) async fn easy_path(
     command: EasyPathCommand,
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
-    warn_for_possible_duplicate(
-        agent,
-        &command.command,
-        invocation::InvocationForm::Shortcut,
-    );
+    if command.dry_run {
+        warn_for_possible_duplicate(agent, &command.command, InvocationForm::Shortcut);
+    }
     let inherited = server.to_runtime();
     // An explicit config path is the user's contract. Without one, setup is required only when
     // none of the normal discovery layers exists. Keep this interactive decision in the command
@@ -116,13 +122,77 @@ pub(super) async fn easy_path(
     crate::process::launcher::run(runtime, Some(&inherited)).await
 }
 
-fn warn_for_possible_duplicate(
+fn warn_for_possible_duplicate(agent: CodingAgent, command: &[String], form: InvocationForm) {
+    let Some(warning) = possible_duplicate_agent_warning(agent, command, form) else {
+        return;
+    };
+    let agent = agent.as_arg();
+    log::warn!(
+        target: "nemo_relay.cli",
+        event = "agent_invocation_warning",
+        diagnostic_code = POSSIBLE_DUPLICATE_AGENT_EXECUTABLE,
+        agent = agent,
+        duplicate_executable = agent,
+        confidence = "high",
+        action = "dry_run_warning",
+        command_modified = false,
+        arguments_redacted = true;
+        "Possible duplicate agent executable during dry-run validation"
+    );
+    super::print_invocation_warning(&warning);
+}
+
+pub(super) fn possible_duplicate_agent_warning(
     agent: CodingAgent,
     command: &[String],
-    form: invocation::InvocationForm,
-) {
-    if let Some(diagnostic) = invocation::DuplicateAgentExecutable::detect(agent, command, form) {
-        diagnostic.log();
-        super::print_invocation_warning(&diagnostic.format_warning());
+    form: InvocationForm,
+) -> Option<String> {
+    let executable = command.first()?;
+    if CodingAgent::infer(executable) != Some(agent) {
+        return None;
     }
+
+    let mut observed = relay_prefix(agent, form);
+    observed.extend(["--dry-run".into(), "--".into(), agent.as_arg().into()]);
+    if command.len() > 1 {
+        observed.push("<arguments redacted>".into());
+    }
+
+    let mut recommended = relay_prefix(agent, form);
+    recommended.extend(["--dry-run".into(), "--".into()]);
+    if command.len() > 1 {
+        recommended.push("<arguments redacted>".into());
+    }
+
+    Some(format!(
+        "WARNING: Possible duplicate agent executable after `--`.\n\
+         Diagnostic: {POSSIBLE_DUPLICATE_AGENT_EXECUTABLE}\n\
+         Duplicate executable: {}\n\
+         Observed: {}\n\
+         Recommended: {}\n\
+         Dry-run validation will continue without launching the agent.",
+        agent.as_arg(),
+        render_command(&observed),
+        render_command(&recommended),
+    ))
+}
+
+fn relay_prefix(agent: CodingAgent, form: InvocationForm) -> Vec<String> {
+    match form {
+        InvocationForm::Run => vec![
+            "nemo-relay".into(),
+            "run".into(),
+            "--agent".into(),
+            agent.as_arg().into(),
+        ],
+        InvocationForm::Shortcut => vec!["nemo-relay".into(), agent.as_arg().into()],
+    }
+}
+
+fn render_command(command: &[String]) -> String {
+    command
+        .iter()
+        .map(|argument| crate::process::shell_quote_arg_for_platform(argument, cfg!(windows)))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
