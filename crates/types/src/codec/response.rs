@@ -326,6 +326,17 @@ pub enum ApiSpecificResponse {
         content_blocks: Option<Vec<Json>>,
     },
 
+    /// OCI Generative AI-specific fields.
+    #[serde(rename = "oci_genai")]
+    OCIGenAI {
+        /// Chat response API format (`GENERIC` or `COHERE`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_format: Option<String>,
+        /// Model version reported on the `ChatResult` envelope.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_version: Option<String>,
+    },
+
     /// Custom/unknown API -- catch-all for user-implemented codecs.
     #[serde(rename = "custom")]
     Custom {

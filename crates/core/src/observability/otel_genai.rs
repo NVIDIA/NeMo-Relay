@@ -620,6 +620,9 @@ fn provider_from_normalized_request(event: &Event) -> Option<&'static str> {
         ApiSpecificRequest::OpenAIChat { .. } | ApiSpecificRequest::OpenAIResponses { .. } => {
             Some("openai")
         }
+        // Not an OTel well-known value yet; follows the dotted cloud-provider
+        // convention (`aws.bedrock`, `gcp.gemini`).
+        ApiSpecificRequest::OCIGenAI { .. } => Some("oci.genai"),
         ApiSpecificRequest::Custom { .. } => None,
     }
 }
