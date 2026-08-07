@@ -85,8 +85,8 @@ plugins = config.get("plugins", {}).get("dynamic", [])
 if len(plugins) != 1:
     raise SystemExit("plugin config must contain one dynamic plugin")
 targets = plugins[0].get("config", {}).get("targets", {})
-if set(targets) != {"strong", "weak"}:
-    raise SystemExit("plugin config must contain strong and weak targets")
+if set(targets) != {"strong", "weak", "judge"}:
+    raise SystemExit("plugin config must contain strong, weak, and judge targets")
 for target in targets.values():
     if target.get("header_env") != {"authorization": "SWITCHYARD_PROVIDER_AUTHORIZATION"}:
         raise SystemExit("plugin config must reference SWITCHYARD_PROVIDER_AUTHORIZATION")
