@@ -134,7 +134,7 @@ def test_secret_scan_finds_raw_key_within_artifact(tmp_path: Path) -> None:
 def test_receipt_provenance_validation_covers_every_staged_digest() -> None:
     module = load_validator()
     provenance = {
-        "nemo_relay": {"wheel_sha256": "relay"},
+        "nemo_relay": {"version": "0.7.1", "wheel_sha256": "relay"},
         "hermes": {"commit": "hermes"},
         "switchyard": {
             "commit": "switchyard",
@@ -148,7 +148,7 @@ def test_receipt_provenance_validation_covers_every_staged_digest() -> None:
         "dynamic_plugin_ids": ["nvidia.switchyard"],
         "relay_config_sha256": "config",
         "dependencies": {
-            "nemo_relay": {"version": "0.7.0", "wheel_sha256": "relay"},
+            "nemo_relay": {"version": "0.7.1", "wheel_sha256": "relay"},
             "hermes": {"commit": "hermes"},
             "switchyard": {
                 "commit": "switchyard",

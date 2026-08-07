@@ -121,7 +121,7 @@ def _hermetic_runtime_readiness_command(
         "runtime_ready=1; "
         f"for attempt in {attempt_numbers}; do "
         f'if {runtime}/bin/python -c "import importlib.metadata as m; '
-        "assert m.version('nemo-relay') == '0.7.0'\" "
+        "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\" "
         f"&& {runtime}/bin/hermes version; then "
         "runtime_ready=0; break; "
         "else runtime_ready=$?; fi; "
@@ -482,7 +482,7 @@ class HarborHermesAgent(Hermes):
                 'export PATH="$HOME/.local/bin:$PATH"; '
                 "hermes version; "
                 f'{install_dir}/venv/bin/python -c "import importlib.metadata as m; '
-                "assert m.version('nemo-relay') == '0.7.0'\""
+                "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\""
             ),
         )
 
@@ -514,7 +514,7 @@ class HarborHermesAgent(Hermes):
                 f"test \"$(sha256sum {shlex.quote(relay_wheel)} | cut -d' ' -f1)\" = "
                 f"{shlex.quote(self.relay_wheel_sha256)}; "
                 f'{relay_install} -c "import importlib.metadata as m; '
-                "assert m.version('nemo-relay') == '0.7.0'\""
+                "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0)\""
             ),
             timeout_sec=120,
         )
@@ -532,7 +532,7 @@ class HarborHermesAgent(Hermes):
                 f"{probe_python} -c "
                 + shlex.quote(
                     "import ctypes, importlib.metadata as m; "
-                    "assert m.version('nemo-relay') == '0.7.0'; "
+                    "assert tuple(map(int, m.version('nemo-relay').split('.'))) >= (0, 7, 0); "
                     f"library = ctypes.CDLL({switchyard_library!r}); "
                     "assert getattr(library, 'nemo_relay_register_plugin')"
                 )

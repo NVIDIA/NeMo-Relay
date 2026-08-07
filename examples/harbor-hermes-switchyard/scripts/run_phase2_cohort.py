@@ -28,6 +28,7 @@ _SCRIPT_ROOT = Path(__file__).resolve().parent
 if str(_SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_ROOT))
 import run_setup_admission as setup_admission  # noqa: E402
+from relay_version import wheel_version  # noqa: E402
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-cohort.v1"
 PLAN_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-plan.v1"
@@ -240,7 +241,7 @@ def load_hermetic_runtime(path: Path, args: argparse.Namespace) -> dict[str, Any
         "schema_version": HERMETIC_RUNTIME_SCHEMA,
         "status": "passed",
         "hermes_commit": EXPECTED_HERMES_COMMIT,
-        "relay_version": "0.7.0",
+        "relay_version": wheel_version(args.relay_wheel),
         "relay_wheel_sha256": sha256_file(args.relay_wheel),
         "relay_architecture": args.relay_architecture,
     }

@@ -57,4 +57,4 @@ def test_install_verifies_detached_commit_and_relay_release() -> None:
     assert "rev-parse HEAD" in source
     assert "/tmp/hermes-install-path/ffmpeg" in source
     assert "uv sync --frozen --extra all" in source
-    assert "m.version('nemo-relay') == '0.7.0'" in source
+    assert "m.version('nemo-relay').split('.')" in source

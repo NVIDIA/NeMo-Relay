@@ -276,7 +276,7 @@ def build_plan(args: argparse.Namespace, tasks: list[Task], payload: dict[str, A
     runtime = args.runtime_root
     provenance_path = runtime / "provenance.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    relay_wheels = sorted((runtime / "wheels").glob("nemo_relay-0.7.0-*.whl"))
+    relay_wheels = sorted((runtime / "wheels").glob("nemo_relay-*.whl"))
     if len(relay_wheels) != 1:
         raise ValueError(f"expected one Relay wheel below {runtime / 'wheels'}")
     libraries = sorted((runtime / "switchyard-plugin").glob("*.so"))

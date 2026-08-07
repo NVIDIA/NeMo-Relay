@@ -16,16 +16,15 @@ import sys
 import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
-from zipfile import ZipFile
 
 import tomli_w
+from relay_version import RELAY_REQUIREMENT, require_supported_version, wheel_version
 
 HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
 HERMES_REF = "feat/relay-native-plugin-init"
 HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
 SWITCHYARD_REPOSITORY = "https://github.com/bbednarski9/Switchyard.git"
 SWITCHYARD_COMMIT = "8daac03edf8544144833af1fd009b3da737715bc"
-RELAY_VERSION = "0.7.0"
 SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 
 
@@ -76,28 +75,22 @@ def download_relay_wheel(destination: Path, architecture: str) -> Path:
             "abi3",
             "--dest",
             str(destination),
-            f"nemo-relay=={RELAY_VERSION}",
+            RELAY_REQUIREMENT,
         ],
         check=True,
     )
-    wheels = sorted(destination.glob("nemo_relay-0.7.0-*.whl"))
+    wheels = sorted(destination.glob("nemo_relay-*.whl"))
     if len(wheels) != 1:
         raise RuntimeError(f"expected one Relay wheel, found {len(wheels)}")
     return wheels[0]
 
 
-def verify_relay_wheel(path: Path, architecture: str) -> None:
-    if not path.is_file() or not path.name.startswith("nemo_relay-0.7.0-"):
-        raise ValueError("Relay wheel must be a nemo_relay-0.7.0 wheel")
+def verify_relay_wheel(path: Path, architecture: str) -> str:
+    if not path.is_file() or not path.name.startswith("nemo_relay-"):
+        raise ValueError("Relay wheel must be a nemo_relay wheel")
     if "manylinux" not in path.name or architecture not in path.name:
         raise ValueError(f"Relay wheel must target Linux {architecture}")
-    with ZipFile(path) as wheel:
-        metadata_names = [name for name in wheel.namelist() if name.endswith(".dist-info/METADATA")]
-        if len(metadata_names) != 1:
-            raise ValueError("Relay wheel has an ambiguous METADATA payload")
-        metadata = wheel.read(metadata_names[0]).decode("utf-8", errors="strict")
-    if "Name: nemo-relay\n" not in metadata or "Version: 0.7.0\n" not in metadata:
-        raise ValueError("Relay wheel metadata does not identify nemo-relay==0.7.0")
+    return wheel_version(path)
 
 
 def verify_native_library(path: Path, architecture: str) -> None:
@@ -227,14 +220,14 @@ def main() -> int:
 
     if args.relay_wheel:
         source_wheel = args.relay_wheel.expanduser().resolve()
-        verify_relay_wheel(source_wheel, args.relay_architecture)
+        relay_version = verify_relay_wheel(source_wheel, args.relay_architecture)
         wheel_dir = runtime / "wheels"
         wheel_dir.mkdir(mode=0o700)
         relay_wheel = wheel_dir / source_wheel.name
         shutil.copy2(source_wheel, relay_wheel)
     else:
         relay_wheel = download_relay_wheel(runtime / "wheels", args.relay_architecture)
-        verify_relay_wheel(relay_wheel, args.relay_architecture)
+        relay_version = verify_relay_wheel(relay_wheel, args.relay_architecture)
 
     openinference_endpoint = checked_url(args.openinference_endpoint, "openinference_endpoint")
     phoenix_project = checked_label(args.phoenix_project, "phoenix_project")
@@ -272,7 +265,7 @@ def main() -> int:
     provenance = {
         "schema_version": "harbor-hermes-switchyard.phase1.v1",
         "nemo_relay": {
-            "version": RELAY_VERSION,
+            "version": relay_version,
             "architecture": args.relay_architecture,
             "wheel": relay_wheel.name,
             "wheel_sha256": sha256(relay_wheel),

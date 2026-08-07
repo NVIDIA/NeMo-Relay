@@ -20,6 +20,11 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+from relay_version import wheel_version
+
 from harbor.job import Job
 from harbor.models.job.config import DatasetConfig, JobConfig
 from harbor.models.task.task import Task as HarborTask
@@ -273,7 +278,7 @@ def validate_relay_runtime(
     components = {component["kind"]: component for component in relay_config.get("components", [])}
     plugin_id = switchyard_manifest.get("plugin", {}).get("id")
     if (
-        provenance.get("nemo_relay", {}).get("version") != "0.7.0"
+        provenance.get("nemo_relay", {}).get("version") != wheel_version(relay_wheel)
         or provenance.get("nemo_relay", {}).get("wheel_sha256") != sha256_file(relay_wheel)
         or provenance.get("switchyard", {}).get("library_sha256") is None
         or compatibility.get("status") != "passed"
@@ -285,7 +290,7 @@ def validate_relay_runtime(
         raise ValueError("Relay/Hermes/Switchyard smoke wiring did not pass")
     return {
         "status": "passed",
-        "relay_version": "0.7.0",
+        "relay_version": provenance["nemo_relay"]["version"],
         "relay_wheel_sha256": provenance["nemo_relay"]["wheel_sha256"],
         "switchyard_library_sha256": provenance["switchyard"]["library_sha256"],
         "plugin_config_template_sha256": provenance["plugin_config_template_sha256"],

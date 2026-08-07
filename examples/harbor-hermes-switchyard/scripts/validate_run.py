@@ -8,7 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
+
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+from relay_version import require_supported_version
 from typing import Any, Iterable
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.validation.v1"
@@ -147,8 +153,13 @@ def validate_receipt_provenance(receipt: dict[str, Any], provenance: dict[str, A
     provenance_relay = provenance.get("nemo_relay", {})
     provenance_hermes = provenance.get("hermes", {})
     provenance_switchyard = provenance.get("switchyard", {})
-    if relay.get("version") != "0.7.0":
-        errors.append("receipt did not record nemo-relay==0.7.0")
+    if relay.get("version") != provenance_relay.get("version"):
+        errors.append("receipt Relay version does not match runtime provenance")
+    else:
+        try:
+            require_supported_version(relay.get("version", ""))
+        except ValueError:
+            errors.append("receipt did not record nemo-relay>=0.7.0")
     if relay.get("wheel_sha256") != provenance_relay.get("wheel_sha256"):
         errors.append("Relay wheel digest does not match runtime provenance")
     if receipt.get("relay_config_sha256") != provenance.get("relay_config_sha256"):

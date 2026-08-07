@@ -18,9 +18,15 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
+
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+from relay_version import wheel_version
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.hermetic-runtime.v1"
 DEFAULT_HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
@@ -149,7 +155,7 @@ chmod 0755 /opt/hermes-runtime/bin/python /opt/hermes-runtime/bin/hermes \
 
 /opt/hermes-runtime/bin/hermes version
 /opt/hermes-runtime/bin/python -c \
-  'import importlib.metadata as m; assert m.version("nemo-relay") == "0.7.0"'
+  'import importlib.metadata as m; assert tuple(map(int, m.version("nemo-relay").split("."))) >= (0, 7, 0)'
 '''
     env = os.environ.copy()
     env.update({"UV_VERSION": UV_VERSION, "PYTHON_VERSION": PYTHON_VERSION})
@@ -240,7 +246,7 @@ def main() -> int:
             "hermes_repository": args.hermes_repository,
             "hermes_ref": args.hermes_ref,
             "hermes_commit": args.hermes_commit,
-            "relay_version": "0.7.0",
+            "relay_version": wheel_version(relay_wheel),
             "relay_wheel_sha256": sha256_file(relay_wheel),
             "relay_architecture": expected_arch,
             "builder_image": BUILDER_IMAGE,

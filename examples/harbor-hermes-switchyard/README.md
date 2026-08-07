@@ -1,7 +1,7 @@
 # Harbor + Hermes + Switchyard evaluation
 
 This example runs one complete Terminal-Bench 2.0 cohort through Harbor and
-Hermes. Hermes owns an in-process NeMo Relay 0.7.0 runtime; Relay loads the
+Hermes. Hermes owns an in-process NeMo Relay runtime satisfying `nemo-relay>=0.7.0`; Relay loads the
 Switchyard native plugin, and Switchyard selects and calls the configured
 provider route. It runs one resumable 89-task cohort. Multi-cohort execution
 and result aggregation are intentionally out of scope for this example.
@@ -10,13 +10,13 @@ and result aggregation are intentionally out of scope for this example.
 
 | Dependency | Input used by this example |
 |---|---|
-| NeMo Relay | Released `nemo-relay==0.7.0` platform wheel, installed by digest rather than from this source checkout. |
+| NeMo Relay | Latest released `nemo-relay>=0.7.0` platform wheel, installed by digest rather than from this source checkout. |
 | Hermes | `bbednarski9/hermes-agent`, detached commit `efb63e714abc436af88af9b0d6734751c199aa6d` from PR #77915. |
 | Switchyard | `bbednarski9/Switchyard`, detached commit `8daac03edf8544144833af1fd009b3da737715bc` from PR #270. |
 | Harbor | `harbor==0.18.0`, local export of dataset `terminal-bench@2.0`. |
 
 Every source checkout is detached and verified. The Hermes installer is
-followed by `uv sync --frozen`, then the selected Relay 0.7.0 wheel is
+followed by `uv sync --frozen`, then the selected released Relay wheel is
 force-installed without dependencies and verified by digest.
 
 ## 2. Request and lifecycle ownership
@@ -76,7 +76,7 @@ reaching a provider.
 
 - Linux or macOS, Bash, Python 3.11+, Docker, and `tmux`;
 - a local, immutable Terminal-Bench 2.0 dataset export containing 89 tasks;
-- a Switchyard plugin bundle and Relay 0.7.0 wheel matching Docker's
+- a Switchyard plugin bundle and released Relay wheel satisfying `nemo-relay>=0.7.0`, matching Docker's
   architecture (`x86_64` or `aarch64`);
 - a Phoenix endpoint accepting OTLP/HTTP OpenInference traces; and
 - provider and registry access for the full cohort. The all-89 admission uses

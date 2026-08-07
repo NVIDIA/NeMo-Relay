@@ -83,8 +83,8 @@ docker run --rm \
       /tmp/hermes/bin/uv sync --frozen --extra all
     cd /
     /tmp/hermes-agent-src/venv/bin/python -c \
-      "import importlib.metadata as m; assert m.version(\"nemo-relay\") == \"0.7.0\""
-    relay_wheel="$(find /runtime/wheels -maxdepth 1 -type f -name "nemo_relay-0.7.0-*.whl" -print)"
+      "import importlib.metadata as m; assert tuple(map(int, m.version(\"nemo-relay\").split(\".\"))) >= (0, 7, 0)"
+    relay_wheel="$(find /runtime/wheels -maxdepth 1 -type f -name "nemo_relay-*.whl" -print)"
     test -n "$relay_wheel"
     expected_wheel_sha="$(python3 -c "import json; print(json.load(open(\"/runtime/provenance.json\"))[\"nemo_relay\"][\"wheel_sha256\"])")"
     test "$(sha256sum "$relay_wheel" | cut -d" " -f1)" = "$expected_wheel_sha"

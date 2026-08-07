@@ -11,9 +11,15 @@ import importlib.metadata
 import json
 import os
 import re
+import sys
 import time
 import tomllib
 from pathlib import Path
+
+_SCRIPT_ROOT = Path(__file__).resolve().parent
+if str(_SCRIPT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_ROOT))
+from relay_version import require_supported_version
 from typing import Any
 
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase1.v1"
@@ -117,8 +123,10 @@ def initialize(args: argparse.Namespace, root: Path) -> None:
             "completion_marker_written": False,
         },
     }
-    if receipt["dependencies"]["nemo_relay"]["version"] != "0.7.0":
-        raise RuntimeError("Hermes environment did not install nemo-relay==0.7.0")
+    try:
+        require_supported_version(receipt["dependencies"]["nemo_relay"]["version"])
+    except ValueError as error:
+        raise RuntimeError("Hermes environment did not install a supported nemo-relay release") from error
     (root / "relay" / "atif").mkdir(mode=0o700, parents=True, exist_ok=True)
     (root / "diagnostics").mkdir(mode=0o700, parents=True, exist_ok=True)
     atomic_json(root / "direct-hermes-receipt.json", receipt)
