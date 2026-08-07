@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -32,14 +31,8 @@ const (
 )
 
 var (
-	goNativePluginFixtureOnce sync.Once
-	goNativePluginFixturePath string
-	goNativePluginFixtureErr  error
-	goWorkerPluginFixtureOnce sync.Once
-	goWorkerPluginFixturePath string
-	goWorkerPluginFixtureErr  error
-	workspacePackagePattern   = regexp.MustCompile(`(?ms)^[\t ]*\[workspace\.package\][\t ]*(?:#[^\r\n]*)?\r?\n(.*?)(?:^[\t ]*\[|\z)`)
-	workspaceVersionPattern   = regexp.MustCompile(`(?m)^[\t ]*version[\t ]*=[\t ]*(?:"([^"\r\n]+)"|'([^'\r\n]+)')[\t ]*(?:#[^\r\n]*)?\r?$`)
+	workspacePackagePattern = regexp.MustCompile(`(?ms)^[\t ]*\[workspace\.package\][\t ]*(?:#[^\r\n]*)?\r?\n(.*?)(?:^[\t ]*\[|\z)`)
+	workspaceVersionPattern = regexp.MustCompile(`(?m)^[\t ]*version[\t ]*=[\t ]*(?:"([^"\r\n]+)"|'([^'\r\n]+)')[\t ]*(?:#[^\r\n]*)?\r?$`)
 )
 
 func withPluginActivationStubs(t *testing.T) {
@@ -586,7 +579,7 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	}
 	library := goNativePluginFixture(t)
 	manifest := writeGoNativePluginManifest(t, library)
-	pluginsTOML := configureNativePluginProject(t)
+	pluginsTOML := configureNativePluginUserConfig(t)
 	staticRegistrations, staticCallbacks := registerStaticFixturePlugin(t)
 
 	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
@@ -621,14 +614,68 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	assertMissingNativePluginFails(t)
 }
 
-func configureNativePluginProject(t *testing.T) string {
+func TestInitializeWithDynamicPluginsIgnoresProjectPluginConfig(t *testing.T) {
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(clearConfigurationErrorFmt, err)
+	}
+	library := goNativePluginFixture(t)
+	manifest := writeGoNativePluginManifest(t, library)
+	configureNativePluginProjectConfig(t)
+	staticRegistrations, staticCallbacks := registerStaticFixturePlugin(t)
+
+	activation, report, err := InitializeWithDynamicPlugins(NewPluginConfig(), []DynamicPluginActivationSpec{{
+		PluginID:    "fixture_native",
+		Kind:        DynamicPluginKindRustDynamic,
+		ManifestRef: manifest,
+		Config:      map[string]any{},
+	}})
+	if err != nil {
+		t.Fatalf(initializePluginsErrorFmt, err)
+	}
+	defer func() {
+		if err := activation.Close(); err != nil {
+			t.Errorf("deferred Close() error = %v", err)
+		}
+	}()
+	if len(report.Diagnostics) != 0 {
+		t.Fatalf("activation diagnostics = %#v, want none", report.Diagnostics)
+	}
+	if staticRegistrations.Load() != 0 {
+		t.Fatalf("static registrations = %d, want 0", staticRegistrations.Load())
+	}
+
+	transformed, err := ToolRequestIntercepts("go-native-tool", json.RawMessage(`{"input":true}`))
+	if err != nil {
+		t.Fatalf("ToolRequestIntercepts() error = %v", err)
+	}
+	var transformedObject map[string]any
+	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
+		t.Fatalf("transformed tool args are invalid JSON: %v", err)
+	}
+	if transformedObject["native_plugin"] != true || transformedObject["go_static_base"] != nil {
+		t.Fatalf("transformed tool args = %s, want only native-plugin marker", transformed)
+	}
+	if staticCallbacks.Load() != 0 {
+		t.Fatalf("static callbacks = %d, want 0", staticCallbacks.Load())
+	}
+}
+
+func configureNativePluginUserConfig(t *testing.T) string {
 	t.Helper()
 	projectDir := t.TempDir()
-	projectConfigDir := filepath.Join(projectDir, ".nemo-relay")
-	if err := os.MkdirAll(projectConfigDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll(project config) error = %v", err)
+	legacyPluginsTOML := filepath.Join(projectDir, ".nemo-relay", "plugins.toml")
+	if err := os.MkdirAll(filepath.Dir(legacyPluginsTOML), 0o700); err != nil {
+		t.Fatalf("MkdirAll(legacy project config) error = %v", err)
 	}
-	pluginsTOML := filepath.Join(projectConfigDir, "plugins.toml")
+	if err := os.WriteFile(legacyPluginsTOML, []byte("components = ["), 0o600); err != nil {
+		t.Fatalf("WriteFile(legacy project plugins.toml) error = %v", err)
+	}
+	xdgConfigHome := filepath.Join(projectDir, "xdg")
+	userConfigDir := filepath.Join(xdgConfigHome, "nemo-relay")
+	if err := os.MkdirAll(userConfigDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(user config) error = %v", err)
+	}
+	pluginsTOML := filepath.Join(userConfigDir, "plugins.toml")
 	const staticKind = "go.fixture.static_base"
 	fileConfig := fmt.Sprintf(`version = 1
 
@@ -637,7 +684,7 @@ kind = %q
 enabled = true
 
 [components.config]
-source = "project-file"
+source = "user-file"
 `, staticKind)
 	if err := os.WriteFile(pluginsTOML, []byte(fileConfig), 0o600); err != nil {
 		t.Fatalf("WriteFile(plugins.toml) error = %v", err)
@@ -654,8 +701,47 @@ source = "project-file"
 			t.Errorf("restore working directory error = %v", err)
 		}
 	})
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(projectDir, "xdg"))
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 	return pluginsTOML
+}
+
+func configureNativePluginProjectConfig(t *testing.T) {
+	t.Helper()
+	projectDir := t.TempDir()
+	projectPluginsTOML := filepath.Join(projectDir, ".nemo-relay", "plugins.toml")
+	if err := os.MkdirAll(filepath.Dir(projectPluginsTOML), 0o700); err != nil {
+		t.Fatalf("MkdirAll(project config) error = %v", err)
+	}
+	const staticKind = "go.fixture.static_base"
+	projectConfig := fmt.Sprintf(`version = 1
+
+[[components]]
+kind = %q
+enabled = true
+
+[components.config]
+source = "project-file"
+`, staticKind)
+	if err := os.WriteFile(projectPluginsTOML, []byte(projectConfig), 0o600); err != nil {
+		t.Fatalf("WriteFile(project plugins.toml) error = %v", err)
+	}
+	xdgConfigHome := filepath.Join(projectDir, "xdg")
+	if err := os.MkdirAll(xdgConfigHome, 0o700); err != nil {
+		t.Fatalf("MkdirAll(XDG config home) error = %v", err)
+	}
+	previousCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(projectDir); err != nil {
+		t.Fatalf("Chdir(project) error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previousCWD); err != nil {
+			t.Errorf("restore working directory error = %v", err)
+		}
+	})
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 }
 
 func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
@@ -665,8 +751,8 @@ func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
 	staticCallbacks := &atomic.Int32{}
 	if err := RegisterPlugin(staticKind, PluginFuncs{
 		RegisterFunc: func(config map[string]any, ctx *PluginContext) error {
-			if config["source"] != "project-file" {
-				return fmt.Errorf("static plugin config = %#v, want project-file source", config)
+			if config["source"] != "user-file" {
+				return fmt.Errorf("static plugin config = %#v, want user-file source", config)
 			}
 			staticRegistrations.Add(1)
 			return ctx.RegisterToolRequestIntercept(
@@ -875,95 +961,41 @@ func createUnclosedPluginActivation(t *testing.T, specs []DynamicPluginActivatio
 
 func goNativePluginFixture(t *testing.T) string {
 	t.Helper()
-	goNativePluginFixtureOnce.Do(func() {
-		goNativePluginFixturePath, goNativePluginFixtureErr = buildGoNativePluginFixture()
-	})
-	if goNativePluginFixtureErr != nil {
-		t.Fatal(goNativePluginFixtureErr)
-	}
-	return goNativePluginFixturePath
-}
-
-func buildGoNativePluginFixture() (string, error) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		return "", err
-	}
-	sourceRoot, err := os.MkdirTemp("", "nemo-relay-go-native-plugin-")
-	if err != nil {
-		return "", err
-	}
-	defer os.RemoveAll(sourceRoot)
-	fixtureRoot := filepath.Join(sourceRoot, "native_plugin")
-	if err := os.MkdirAll(filepath.Join(fixtureRoot, "src"), 0o700); err != nil {
-		return "", err
-	}
-	fixtureSource := filepath.Join(repoRoot, "crates", "core", "tests", "fixtures", "native_plugin")
-	manifestBytes, err := os.ReadFile(filepath.Join(fixtureSource, cargoManifestName))
-	if err != nil {
-		return "", err
-	}
-	pluginPath := filepath.Join(repoRoot, "crates", "plugin")
-	manifestContents := strings.Replace(string(manifestBytes), `nemo-relay-plugin = { path = "../../../../plugin" }`, fmt.Sprintf("nemo-relay-plugin = { path = %q }", pluginPath), 1)
-	manifest := filepath.Join(fixtureRoot, cargoManifestName)
-	if err := os.WriteFile(manifest, []byte(manifestContents), 0o600); err != nil {
-		return "", err
-	}
-	librarySource, err := os.ReadFile(filepath.Join(fixtureSource, "src", "lib.rs"))
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(fixtureRoot, "src", "lib.rs"), librarySource, 0o600); err != nil {
-		return "", err
-	}
-	target := filepath.Join(repoRoot, "target")
-	cargo := os.Getenv("CARGO")
-	if cargo == "" {
-		cargo = "cargo"
-	}
-	command := exec.Command(cargo, "build", "--quiet", "--manifest-path", manifest, "--target-dir", target)
-	if output, err := command.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("build native plugin fixture: %w\n%s", err, output)
-	}
-	fixturePath := filepath.Join(target, "debug", goNativeLibraryName())
-	if _, err := os.Stat(fixturePath); err != nil {
-		return "", fmt.Errorf("native plugin fixture output: %w", err)
-	}
-	return fixturePath, nil
+	return preparedPluginFixture(t, "NEMO_RELAY_TEST_NATIVE_PLUGIN")
 }
 
 func goWorkerPluginFixture(t *testing.T) string {
 	t.Helper()
-	goWorkerPluginFixtureOnce.Do(func() {
+	return preparedPluginFixture(t, "NEMO_RELAY_TEST_WORKER_PLUGIN")
+}
+
+func preparedPluginFixture(t *testing.T, environment string) string {
+	t.Helper()
+	path := os.Getenv(environment)
+	if path == "" {
 		repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 		if err != nil {
-			goWorkerPluginFixtureErr = err
-			return
+			t.Fatal(err)
 		}
-		manifest := filepath.Join(repoRoot, "crates", "core", "tests", "fixtures", "worker_plugin", cargoManifestName)
-		target := filepath.Join(repoRoot, "target")
-		cargo := os.Getenv("CARGO")
-		if cargo == "" {
-			cargo = "cargo"
+		filename := "nemo-relay-worker-plugin-fixture"
+		if environment == "NEMO_RELAY_TEST_NATIVE_PLUGIN" {
+			switch runtime.GOOS {
+			case "windows":
+				filename = "nemo_relay_plugin_fixture.dll"
+			case "darwin":
+				filename = "libnemo_relay_plugin_fixture.dylib"
+			default:
+				filename = "libnemo_relay_plugin_fixture.so"
+			}
+		} else if runtime.GOOS == "windows" {
+			filename += ".exe"
 		}
-		command := exec.Command(cargo, "build", "--quiet", "--locked", "--manifest-path", manifest, "--target-dir", target)
-		if output, err := command.CombinedOutput(); err != nil {
-			goWorkerPluginFixtureErr = fmt.Errorf("build worker plugin fixture: %w\n%s", err, output)
-			return
-		}
-		executable := "nemo-relay-worker-plugin-fixture"
-		if runtime.GOOS == "windows" {
-			executable += ".exe"
-		}
-		goWorkerPluginFixturePath = filepath.Join(target, "debug", executable)
-		if _, err := os.Stat(goWorkerPluginFixturePath); err != nil {
-			goWorkerPluginFixtureErr = fmt.Errorf("worker plugin fixture output: %w", err)
-		}
-	})
-	if goWorkerPluginFixtureErr != nil {
-		t.Fatal(goWorkerPluginFixtureErr)
+		path = filepath.Join(repoRoot, "target", "test-plugin-fixtures", "debug", filename)
 	}
-	return goWorkerPluginFixturePath
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("plugin test fixture %q is missing; run `just build-test-plugin-fixtures`: %v", path, err)
+	}
+	return path
 }
 
 func writeGoNativePluginManifest(t *testing.T, library string) string {
@@ -1101,16 +1133,5 @@ func TestWorkspaceVersionFromCargoTOML(t *testing.T) {
 				t.Fatalf("workspaceVersionFromCargoTOML() = %q, want %q", got, test.want)
 			}
 		})
-	}
-}
-
-func goNativeLibraryName() string {
-	switch runtime.GOOS {
-	case "windows":
-		return "nemo_relay_plugin_fixture.dll"
-	case "darwin":
-		return "libnemo_relay_plugin_fixture.dylib"
-	default:
-		return "libnemo_relay_plugin_fixture.so"
 	}
 }

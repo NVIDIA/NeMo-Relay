@@ -70,6 +70,13 @@ fn test_status_from_error_maps_variants_and_sets_message() {
             FlowError::Internal("boom".into()),
             NemoRelayStatus::Internal,
         ),
+        (
+            FlowError::CallbackException {
+                message: "callback boom".into(),
+                exception_type: "ValueError".into(),
+            },
+            NemoRelayStatus::Internal,
+        ),
         (FlowError::ScopeStackEmpty, NemoRelayStatus::ScopeStackEmpty),
     ];
 

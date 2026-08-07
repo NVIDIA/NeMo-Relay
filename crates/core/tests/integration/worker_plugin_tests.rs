@@ -4,8 +4,7 @@
 //! Integration coverage for gRPC worker dynamic plugins.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
 use nemo_relay::api::event::{Event, ScopeCategory};
@@ -1319,34 +1318,22 @@ impl BuiltWorkerFixture {
 
 fn build_fixture_worker() -> BuiltWorkerFixture {
     enable_operational_logs();
-    static FIXTURE_BINARY: OnceLock<PathBuf> = OnceLock::new();
-    let binary_path = FIXTURE_BINARY.get_or_init(|| {
-        let fixture_dir = fixture_root();
-        let target_root =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/worker-plugin-fixture");
-        let target_dir = target_root.join("target");
-        let manifest = fixture_dir.join("Cargo.toml");
-        let status = Command::new("cargo")
-            .arg("build")
-            .arg("--quiet")
-            .arg("--locked")
-            .arg("--manifest-path")
-            .arg(&manifest)
-            .arg("--target-dir")
-            .arg(&target_dir)
-            .status()
-            .expect("fixture worker build should start");
-        assert!(status.success(), "fixture worker build should succeed");
-        let binary_path = target_dir.join("debug").join(format!(
-            "nemo-relay-worker-plugin-fixture{}",
-            std::env::consts::EXE_SUFFIX
-        ));
-        assert!(binary_path.exists(), "fixture worker binary should exist");
-        binary_path
-    });
-    BuiltWorkerFixture {
-        binary_path: binary_path.clone(),
-    }
+    let binary_path = std::env::var_os("NEMO_RELAY_TEST_WORKER_PLUGIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/test-plugin-fixtures/debug")
+                .join(format!(
+                    "nemo-relay-worker-plugin-fixture{}",
+                    std::env::consts::EXE_SUFFIX
+                ))
+        });
+    assert!(
+        binary_path.exists(),
+        "fixture worker binary is missing; run `just build-test-plugin-fixtures`: {}",
+        binary_path.display()
+    );
+    BuiltWorkerFixture { binary_path }
 }
 
 fn write_manifest(binary: &Path) -> (TempDir, PathBuf) {
@@ -1458,10 +1445,6 @@ impl Drop for EnvVarGuard {
             }
         }
     }
-}
-
-fn fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/worker_plugin")
 }
 
 fn find_event<'a>(

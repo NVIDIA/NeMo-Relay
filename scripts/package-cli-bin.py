@@ -2,18 +2,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Package a prebuilt NeMo Relay CLI binary for PyPI and npm."""
+"""Package a prebuilt NeMo Relay CLI binary for PyPI."""
 
 from __future__ import annotations
 
 import argparse
 import base64
 import hashlib
-import io
-import json
 import os
 import stat
-import tarfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,17 +27,8 @@ class Platform:
     """Describe one supported CLI distribution platform."""
 
     target: str
-    npm_suffix: str
-    npm_os: str
-    npm_cpu: str
     wheel_platforms: tuple[str, ...]
     executable: str
-    libc: str | None = None
-
-    @property
-    def npm_package(self) -> str:
-        """Return the npm package name for this platform."""
-        return f"{PACKAGE_NAME}-{self.npm_suffix}"
 
 
 PLATFORMS = {
@@ -48,61 +36,36 @@ PLATFORMS = {
     for platform in (
         Platform(
             "x86_64-unknown-linux-gnu",
-            "linux-x64",
-            "linux",
-            "x64",
             ("manylinux_2_17_x86_64",),
             "nemo-relay",
-            "glibc",
         ),
         Platform(
             "aarch64-unknown-linux-gnu",
-            "linux-arm64",
-            "linux",
-            "arm64",
             ("manylinux_2_17_aarch64",),
             "nemo-relay",
-            "glibc",
         ),
         Platform(
             "x86_64-unknown-linux-musl",
-            "linux-x64-musl",
-            "linux",
-            "x64",
             ("musllinux_1_2_x86_64",),
             "nemo-relay",
-            "musl",
         ),
         Platform(
             "aarch64-unknown-linux-musl",
-            "linux-arm64-musl",
-            "linux",
-            "arm64",
             ("musllinux_1_2_aarch64",),
             "nemo-relay",
-            "musl",
         ),
         Platform(
             "aarch64-apple-darwin",
-            "darwin-arm64",
-            "darwin",
-            "arm64",
             ("macosx_11_0_arm64",),
             "nemo-relay",
         ),
         Platform(
             "x86_64-pc-windows-msvc",
-            "win32-x64",
-            "win32",
-            "x64",
             ("win_amd64",),
             "nemo-relay.exe",
         ),
         Platform(
             "aarch64-pc-windows-msvc",
-            "win32-arm64",
-            "win32",
-            "arm64",
             ("win_arm64",),
             "nemo-relay.exe",
         ),
@@ -190,109 +153,6 @@ def build_wheel(binary: Path, platform: Platform, version: str, output: Path) ->
     return destination
 
 
-def add_tar_bytes(archive: tarfile.TarFile, path: str, content: bytes, mode: int = 0o644) -> None:
-    """Add one regular file to an npm tarball."""
-    info = tarfile.TarInfo(path)
-    info.size = len(content)
-    info.mode = mode
-    archive.addfile(info, io.BytesIO(content))
-
-
-def build_npm_platform(binary: Path, platform: Platform, version: str, output: Path) -> Path:
-    """Build an OS- and CPU-constrained npm package containing the CLI binary."""
-    filename = f"nemo-relay-bin-npm-{platform.npm_suffix}-{version}.tgz"
-    destination = output / filename
-    manifest = {
-        "name": platform.npm_package,
-        "version": version,
-        "description": f"{SUMMARY} ({platform.npm_os} {platform.npm_cpu})",
-        "os": [platform.npm_os],
-        "cpu": [platform.npm_cpu],
-        "files": [f"bin/{platform.executable}"],
-        "license": LICENSE,
-        "repository": {"type": "git", "url": f"git+{REPOSITORY}.git"},
-    }
-    if platform.libc is not None:
-        manifest["libc"] = [platform.libc]
-    with tarfile.open(destination, "w:gz") as archive:
-        add_tar_bytes(archive, "package/package.json", json.dumps(manifest, indent=2).encode() + b"\n")
-        add_tar_bytes(
-            archive,
-            f"package/bin/{platform.executable}",
-            binary.read_bytes(),
-            mode=0o755,
-        )
-        add_tar_bytes(archive, "package/LICENSE", (ROOT / "LICENSE").read_bytes())
-    return destination
-
-
-def launcher_source() -> bytes:
-    """Return the Node.js launcher that selects the installed native package."""
-    mapping: dict[str, dict[str, dict[str, str]]] = {}
-    for platform in PLATFORMS.values():
-        key = f"{platform.npm_os}-{platform.npm_cpu}"
-        libc = platform.libc or "default"
-        mapping.setdefault(key, {})[libc] = {
-            "package": platform.npm_package,
-            "executable": platform.executable,
-        }
-    return (
-        "#!/usr/bin/env node\n"
-        "// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n"
-        "// SPDX-License-Identifier: Apache-2.0\n\n"
-        "const { spawnSync } = require('node:child_process');\n"
-        "const path = require('node:path');\n\n"
-        f"const platforms = {json.dumps(mapping, indent=2)};\n"
-        "const key = `${process.platform}-${process.arch}`;\n"
-        "const libc = process.platform === 'linux'\n"
-        "  ? (process.report?.getReport?.().header.glibcVersionRuntime ? 'glibc' : 'musl')\n"
-        "  : 'default';\n"
-        "const selected = platforms[key]?.[libc] ?? platforms[key]?.default;\n"
-        "if (!selected) {\n"
-        "  console.error(`nemo-relay-cli-bin does not support ${process.platform}/${process.arch}`);\n"
-        "  process.exit(1);\n"
-        "}\n"
-        "let manifest;\n"
-        "try {\n"
-        "  manifest = require.resolve(`${selected.package}/package.json`);\n"
-        "} catch (error) {\n"
-        "  console.error(\n"
-        "    `The native package ${selected.package} is missing. ` +\n"
-        "      'Reinstall nemo-relay-cli-bin without omitting optional dependencies.',\n"
-        "  );\n"
-        "  process.exit(1);\n"
-        "}\n"
-        "const executable = path.join(path.dirname(manifest), 'bin', selected.executable);\n"
-        "const result = spawnSync(executable, process.argv.slice(2), { stdio: 'inherit' });\n"
-        "if (result.error) {\n"
-        "  console.error(`Failed to start ${executable}: ${result.error.message}`);\n"
-        "  process.exit(1);\n"
-        "}\n"
-        "process.exit(result.status === null ? 1 : result.status);\n"
-    ).encode()
-
-
-def build_npm_launcher(version: str, output: Path) -> Path:
-    """Build the portable npm launcher package."""
-    destination = output / f"nemo-relay-bin-npm-{version}.tgz"
-    manifest = {
-        "name": PACKAGE_NAME,
-        "version": version,
-        "description": SUMMARY,
-        "bin": {"nemo-relay": "bin/nemo-relay.js"},
-        "files": ["bin/nemo-relay.js"],
-        "engines": {"node": ">=24.0.0"},
-        "optionalDependencies": {platform.npm_package: version for platform in PLATFORMS.values()},
-        "license": LICENSE,
-        "repository": {"type": "git", "url": f"git+{REPOSITORY}.git"},
-    }
-    with tarfile.open(destination, "w:gz") as archive:
-        add_tar_bytes(archive, "package/package.json", json.dumps(manifest, indent=2).encode() + b"\n")
-        add_tar_bytes(archive, "package/bin/nemo-relay.js", launcher_source(), mode=0o755)
-        add_tar_bytes(archive, "package/LICENSE", (ROOT / "LICENSE").read_bytes())
-    return destination
-
-
 def parse_args() -> argparse.Namespace:
     """Parse CLI package assembly arguments."""
     parser = argparse.ArgumentParser()
@@ -300,25 +160,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target", choices=sorted(PLATFORMS), required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--npm-launcher", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
-    """Build the wheel and npm artifacts requested on the command line."""
+    """Build the wheel requested on the command line."""
     args = parse_args()
     if not args.binary.is_file():
         raise SystemExit(f"CLI binary does not exist: {args.binary}")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     platform = PLATFORMS[args.target]
-    artifacts = [
-        build_wheel(args.binary, platform, args.version, args.output_dir),
-        build_npm_platform(args.binary, platform, args.version, args.output_dir),
-    ]
-    if args.npm_launcher:
-        artifacts.append(build_npm_launcher(args.version, args.output_dir))
-    for artifact in artifacts:
-        print(artifact)
+    print(build_wheel(args.binary, platform, args.version, args.output_dir))
 
 
 if __name__ == "__main__":

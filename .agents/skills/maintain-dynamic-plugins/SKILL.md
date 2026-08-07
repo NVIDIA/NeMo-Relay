@@ -59,6 +59,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 ## Validation
 
 ```bash
+just build-test-plugin-fixtures
 cargo test -p nemo-relay-types
 cargo test -p nemo-relay-plugin
 cargo test -p nemo-relay-worker-proto
@@ -69,6 +70,11 @@ just test-rust
 just test-python
 just docs
 ```
+
+The canonical `just test-rust`, `just test-python`, and `just test-go` recipes
+prepare plugin fixtures automatically. Run `just build-test-plugin-fixtures`
+before raw focused native or worker plugin tests; fixture compilation must not
+happen inside an individual test case.
 
 For broad runtime or public API changes, run the full `validate-change` matrix.
 

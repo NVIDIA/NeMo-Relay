@@ -1293,7 +1293,9 @@ fn status_from_flow_error(err: FlowError) -> NemoRelayStatus {
         FlowError::InvalidArgument(_) => NemoRelayStatus::InvalidArg,
         FlowError::ScopeStackEmpty => NemoRelayStatus::ScopeStackEmpty,
         FlowError::GuardrailRejected(_) => NemoRelayStatus::GuardrailRejected,
-        FlowError::Upstream(_) | FlowError::Internal(_) => NemoRelayStatus::Internal,
+        FlowError::Upstream(_) | FlowError::Internal(_) | FlowError::CallbackException { .. } => {
+            NemoRelayStatus::Internal
+        }
     }
 }
 

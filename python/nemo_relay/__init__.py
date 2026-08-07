@@ -77,6 +77,7 @@ Example::
 
 from __future__ import annotations
 
+import atexit
 import contextvars
 import typing
 from collections.abc import Callable as AbcCallable
@@ -119,6 +120,7 @@ from nemo_relay._native import (
     ToolAttributes,
     ToolExecutionInterceptOutcome,
     ToolHandle,
+    _shutdown_default_logging,
 )
 from nemo_relay._native import (
     capture_propagation_context as _capture_propagation_context,
@@ -135,6 +137,8 @@ from nemo_relay._native import restore_thread_scope_stack as _restore_thread_sco
 from nemo_relay._native import scope_stack_active as _native_scope_stack_active
 from nemo_relay._native import set_thread_scope_stack as _set_thread_scope_stack
 from nemo_relay._native import sync_thread_scope_stack as _sync_thread_scope_stack
+
+atexit.register(_shutdown_default_logging)
 
 #: Scalar JSON leaf values accepted in NeMo Relay payloads. This alias has no
 #: runtime behavior; it exists to document and type JSON-compatible public API

@@ -29,8 +29,7 @@ pub(crate) async fn hook_forward(command: HookForwardRequest) -> Result<(), CliE
         return Ok(());
     }
     validate_optional_json("session metadata", command.session_metadata.as_deref())?;
-    let fail_closed =
-        command.fail_closed || std::env::var("NEMO_RELAY_FAIL_CLOSED").ok().as_deref() == Some("1");
+    let fail_closed = command.failure_policy.fail_closed();
     let destination = hook_destination(&command);
     let persistent = match persistent_gateway(&destination) {
         Ok(persistent) => persistent,

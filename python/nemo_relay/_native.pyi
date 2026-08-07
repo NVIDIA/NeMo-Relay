@@ -32,6 +32,8 @@ _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 
+def _shutdown_default_logging() -> None: ...
+
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
     category_profile: _JsonObject | None

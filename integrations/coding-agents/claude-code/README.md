@@ -77,7 +77,7 @@ nemo-relay run \
 
 ## Shared Config
 
-Use `.nemo-relay/config.toml` for project defaults or
+Use `$XDG_CONFIG_HOME/nemo-relay/config.toml` or
 `~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
@@ -85,8 +85,8 @@ Use `.nemo-relay/config.toml` for project defaults or
 command = "claude"
 ```
 
-Configure observability with `nemo-relay plugins edit --project` or
-`.nemo-relay/plugins.toml`:
+Configure observability with `nemo-relay plugins edit` or the XDG user
+`plugins.toml`:
 
 ```toml
 version = 1
@@ -183,7 +183,7 @@ nemo-relay install claude-code
 installs `nemo-relay-plugin` at user scope, and enables Claude Code provider
 routing through NeMo Relay. Its plugin MCP process immediately starts or reuses
 the shared native gateway on `127.0.0.1:47632` and heartbeats it while MCP stdio
-remains open. Codex, Claude Code, and configured Hermes MCP clients can share
+remains open. Codex and Claude Code MCP clients can share
 that gateway.
 
 The generated MCP entry sets `alwaysLoad: true`, so Claude Code waits

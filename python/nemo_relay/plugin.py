@@ -11,8 +11,13 @@ per component by the runtime, so end users do not provide instance ids.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import tomllib
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
 
 from nemo_relay import (
@@ -417,6 +422,114 @@ class PluginHostActivation:
         await self.close()
 
 
+def load_dynamic_plugin_activation_specs(
+    plugin_config_path: str | os.PathLike[str],
+) -> list[DynamicPluginActivationSpec]:
+    """Load dynamic activation specs from one standard ``plugins.toml``.
+
+    Args:
+        plugin_config_path: Explicit path to the ``plugins.toml`` file.
+
+    Returns:
+        Activation specs for every ``[[plugins.dynamic]]`` record, in file
+        order. Manifest paths are resolved relative to ``plugins.toml`` and
+        each plugin's identifier and execution lane come from its manifest.
+
+    Behavior:
+        This 0.7 compatibility helper parses one explicit file only. It does
+        not perform standard discovery, inspect CLI lifecycle state, provision
+        worker environments, change enablement, or activate plugins. It is
+        planned for deprecation after a unified file-backed initializer is
+        available. Keep its use localized and pass the result to
+        :func:`initialize_with_dynamic_plugins`.
+    """
+    source = Path(os.fspath(plugin_config_path)).resolve()
+    document = _load_plugin_toml(source, "plugin TOML")
+    version = document.get("version", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
+        raise ValueError(f"plugin config version {version!r} in {source} is unsupported; expected 1")
+    plugins = document.get("plugins", {})
+    if not isinstance(plugins, dict):
+        raise ValueError(f"invalid dynamic plugin config in {source}: 'plugins' must be a table")
+    plugins = cast(dict[str, object], plugins)
+    dynamic_plugins = plugins.get("dynamic", [])
+    if not isinstance(dynamic_plugins, list):
+        raise ValueError(f"invalid dynamic plugin config in {source}: 'plugins.dynamic' must be an array of tables")
+
+    specs: list[DynamicPluginActivationSpec] = []
+    seen_plugin_ids: set[str] = set()
+    for index, entry in enumerate(dynamic_plugins):
+        if not isinstance(entry, dict):
+            raise ValueError(f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}] must be a table")
+        entry = cast(dict[str, object], entry)
+        unknown_fields = sorted(set(entry) - {"manifest", "config"})
+        if unknown_fields:
+            raise ValueError(
+                f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}] has unknown fields: "
+                + ", ".join(unknown_fields)
+            )
+        manifest_ref = entry.get("manifest")
+        if not isinstance(manifest_ref, str) or not manifest_ref.strip():
+            raise ValueError(
+                f"invalid dynamic plugin config in {source}: "
+                f"plugins.dynamic[{index}].manifest must be a non-empty string"
+            )
+        manifest_path = Path(manifest_ref)
+        if not manifest_path.is_absolute():
+            manifest_path = source.parent / manifest_path
+        manifest_path = manifest_path.resolve()
+
+        manifest = _load_plugin_toml(manifest_path, "dynamic plugin manifest")
+        identity = manifest.get("plugin")
+        if not isinstance(identity, dict):
+            raise ValueError(f"invalid dynamic plugin manifest in {manifest_path}: 'plugin' must be a table")
+        identity = cast(dict[str, object], identity)
+        plugin_id = identity.get("id")
+        if not isinstance(plugin_id, str) or not plugin_id.strip():
+            raise ValueError(
+                f"invalid dynamic plugin manifest in {manifest_path}: 'plugin.id' must be a non-empty string"
+            )
+        plugin_id = plugin_id.strip()
+        kind = identity.get("kind")
+        if kind not in ("rust_dynamic", "worker"):
+            raise ValueError(
+                f"invalid dynamic plugin manifest in {manifest_path}: 'plugin.kind' must be 'rust_dynamic' or 'worker'"
+            )
+        if plugin_id in seen_plugin_ids:
+            raise ValueError(f"duplicate dynamic plugin id {plugin_id!r} in {source}")
+        seen_plugin_ids.add(plugin_id)
+
+        config = entry.get("config", {})
+        if not isinstance(config, dict):
+            raise ValueError(
+                f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}].config must be a table"
+            )
+        try:
+            normalized_config = cast(JsonObject, json.loads(json.dumps(config, allow_nan=False)))
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                f"invalid dynamic plugin config in {source}: "
+                f"plugins.dynamic[{index}].config must contain JSON values: {error}"
+            ) from error
+        specs.append(
+            DynamicPluginActivationSpec(
+                plugin_id=plugin_id,
+                kind=cast(DynamicPluginKind, kind),
+                manifest_ref=str(manifest_path),
+                config=normalized_config,
+            )
+        )
+    return specs
+
+
+def _load_plugin_toml(path: Path, description: str) -> dict[str, object]:
+    try:
+        with path.open("rb") as file:
+            return cast(dict[str, object], tomllib.load(file))
+    except tomllib.TOMLDecodeError as error:
+        raise ValueError(f"invalid {description} in {path}: {error}") from error
+
+
 def validate(config: PluginConfig | JsonObject) -> ConfigReport:
     """Validate a plugin configuration without changing runtime state.
 
@@ -452,7 +565,7 @@ async def initialize(config: PluginConfig | JsonObject) -> ConfigReport:
 
 async def initialize_with_dynamic_plugins(
     config: PluginConfig | JsonObject,
-    dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject],
+    dynamic_plugins: Sequence[DynamicPluginActivationSpec | JsonObject],
 ) -> PluginHostActivation:
     """Initialize registered components with dynamic plugins as one owned host.
 
@@ -607,6 +720,7 @@ __all__ = [
     "PluginContext",
     "PluginHostActivation",
     "Plugin",
+    "load_dynamic_plugin_activation_specs",
     "initialize_with_dynamic_plugins",
     "clear",
     "clear_async",

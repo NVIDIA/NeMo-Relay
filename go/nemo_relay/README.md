@@ -110,6 +110,12 @@ import (
 )
 
 func main() {
+	defer func() {
+		if err := nemo.ShutdownLogging(); err != nil {
+			log.Printf("shut down NeMo Relay logging: %v", err)
+		}
+	}()
+
 	if err := nemo.RegisterSubscriber("printer", func(event nemo.Event) {
 		fmt.Printf("%s %s\n", event.Kind(), event.Name())
 		fmt.Println(string(event.JSON()))

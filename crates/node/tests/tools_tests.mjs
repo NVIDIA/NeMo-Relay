@@ -380,11 +380,11 @@ describe('Tool execute', () => {
 
       await assert.rejects(
         () =>
-          toolCallExecuteAsync(
+          toolCallExecute(
             'exec_status_error_tool',
             {},
-            async () => {
-              throw new Error('tool status failure');
+            () => {
+              throw new TypeError('tool status failure');
             },
             null,
             null,
@@ -416,6 +416,7 @@ describe('Tool execute', () => {
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
       assert.equal(errorEnd.metadata['error.type'], 'internal_error');
+      assert.equal(errorEnd.metadata['exception.type'], 'TypeError');
     } finally {
       deregisterSubscriber('node_tool_status_metadata_sub');
     }

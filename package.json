@@ -7,8 +7,7 @@
   },
   "workspaces": [
     "crates/node",
-    "integrations/openclaw",
-    "packages/cli-bin"
+    "integrations/openclaw"
   ],
   "devDependencies": {
     "fern-api": "5.57.0",
