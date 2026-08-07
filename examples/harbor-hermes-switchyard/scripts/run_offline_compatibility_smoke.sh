@@ -11,7 +11,7 @@ image="${OFFLINE_COMPAT_IMAGE:-python:3.11-bookworm}"
 platform="${OFFLINE_COMPAT_PLATFORM:-linux/amd64}"
 hermes_repository="${HERMES_REPOSITORY:-https://github.com/bbednarski9/hermes-agent.git}"
 hermes_ref="${HERMES_REF:-feat/relay-native-plugin-init}"
-hermes_commit="${HERMES_COMMIT:-efb63e714abc436af88af9b0d6734751c199aa6d}"
+hermes_commit="${HERMES_COMMIT:-a3d472f0e6bdc376df87b1436a461c4796db6747}"
 
 if [[ -z "$run_root" || "$run_root" != /* ]]; then
   echo "usage: $0 /absolute/prepared-run-root" >&2

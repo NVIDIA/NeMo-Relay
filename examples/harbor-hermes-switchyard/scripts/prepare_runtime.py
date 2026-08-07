@@ -22,7 +22,7 @@ from relay_version import RELAY_REQUIREMENT, require_supported_version, wheel_ve
 
 HERMES_REPOSITORY = "https://github.com/bbednarski9/hermes-agent.git"
 HERMES_REF = "feat/relay-native-plugin-init"
-HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
+HERMES_COMMIT = "a3d472f0e6bdc376df87b1436a461c4796db6747"
 SWITCHYARD_REPOSITORY = "https://github.com/bbednarski9/Switchyard.git"
 SWITCHYARD_COMMIT = "8daac03edf8544144833af1fd009b3da737715bc"
 SAFE_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")

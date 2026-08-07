@@ -33,7 +33,7 @@ from relay_version import wheel_version  # noqa: E402
 SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-cohort.v1"
 PLAN_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-plan.v1"
 TASK_STATE_SCHEMA_VERSION = "harbor-hermes-switchyard.phase2-task-state.v1"
-EXPECTED_HERMES_COMMIT = "efb63e714abc436af88af9b0d6734751c199aa6d"
+EXPECTED_HERMES_COMMIT = "a3d472f0e6bdc376df87b1436a461c4796db6747"
 HERMETIC_RUNTIME_SCHEMA = "harbor-hermes-switchyard.hermetic-runtime.v1"
 INFRASTRUCTURE_PATTERNS = (
     "apt-get update && apt-get install",

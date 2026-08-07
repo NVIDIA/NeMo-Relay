@@ -260,7 +260,7 @@ fi
     --model "openai/$hermes_caller_model" \
     --ak "repository_url=https://github.com/bbednarski9/hermes-agent.git" \
     --ak "repository_ref=feat/relay-native-plugin-init" \
-    --ak "commit=efb63e714abc436af88af9b0d6734751c199aa6d" \
+    --ak "commit=a3d472f0e6bdc376df87b1436a461c4796db6747" \
     --ak "relay_config_path=$run_root/runtime/plugins.toml" \
     --ak "switchyard_bundle_dir=$run_root/runtime/switchyard-plugin" \
     --ak "relay_wheel_path=$relay_wheel_path" \

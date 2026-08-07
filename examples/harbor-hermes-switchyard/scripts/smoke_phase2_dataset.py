@@ -133,7 +133,7 @@ async def validate_local_dataset(
                         kwargs={
                             "repository_url": "https://github.com/bbednarski9/hermes-agent.git",
                             "repository_ref": "feat/relay-native-plugin-init",
-                            "commit": "efb63e714abc436af88af9b0d6734751c199aa6d",
+                            "commit": "a3d472f0e6bdc376df87b1436a461c4796db6747",
                             "relay_config_path": "/smoke/runtime/plugins.toml",
                             "switchyard_bundle_dir": "/smoke/runtime/switchyard-plugin",
                             "relay_wheel_path": "/smoke/runtime/nemo-relay.whl",
