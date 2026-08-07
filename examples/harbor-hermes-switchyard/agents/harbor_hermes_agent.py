@@ -192,7 +192,7 @@ def _validate_relay_config(path: Path) -> None:
     algorithm = plugin_config.get("algorithm")
     expected_algorithm = {
         "kind": "llm_classifier",
-        "classifier_target": "weak",
+        "classifier_target": "judge",
         "weak_target": "weak",
         "strong_target": "strong",
         "base_threshold": 0.5,
@@ -206,8 +206,8 @@ def _validate_relay_config(path: Path) -> None:
         raise ValueError("the Switchyard OpenAI default target must be strong")
 
     targets = plugin_config.get("targets")
-    if not isinstance(targets, dict) or set(targets) != {"strong", "weak"}:
-        raise ValueError("Switchyard must define exactly the strong and weak targets")
+    if not isinstance(targets, dict) or set(targets) != {"strong", "weak", "judge"}:
+        raise ValueError("Switchyard must define exactly the strong, weak, and judge targets")
     provider_models: set[str] = set()
     for name, target in targets.items():
         if not isinstance(target, dict):
@@ -234,8 +234,8 @@ def _validate_relay_config(path: Path) -> None:
         authorization_env = header_env.get("authorization") if isinstance(header_env, dict) else None
         if not isinstance(authorization_env, str) or not _ENV_NAME.fullmatch(authorization_env):
             raise ValueError(f"Switchyard target {name!r} must source authorization from an environment variable")
-    if len(provider_models) != 2:
-        raise ValueError("Switchyard strong and weak targets must use distinct models")
+    if len(provider_models) != 3:
+        raise ValueError("Switchyard strong, weak, and judge targets must use distinct models")
 
     pricing = _find_named_component(config, "pricing")
     pricing_config = pricing.get("config")

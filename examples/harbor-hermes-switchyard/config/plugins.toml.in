@@ -32,7 +32,7 @@ read_accounting = "included_in_prompt_tokens"
 
 [[components.config.sources.catalog.entries]]
 provider = "openai"
-model_id = "aws/anthropic/bedrock-claude-sonnet-4-6"
+model_id = "azure/anthropic/claude-sonnet-4-6"
 currency = "USD"
 unit = "per_token"
 pricing_as_of = "2026-05-27"

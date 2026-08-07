@@ -116,6 +116,10 @@ def test_setup_admission_binds_agent_source() -> None:
     assert admission_module.sha256_file(expected) == agent_module._sha256(expected)
 
 
+def test_bridge_accepts_current_classifier_routing_contract() -> None:
+    agent_module._validate_relay_config(EXAMPLE_ROOT / "config" / "plugins.toml.in")
+
+
 def test_hermetic_runtime_requires_portable_ca_bundle(tmp_path: Path) -> None:
     marker = make_payload(tmp_path)
     (tmp_path / agent_module._HERMETIC_CA_BUNDLE_RELATIVE).unlink()
