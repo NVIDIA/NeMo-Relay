@@ -298,11 +298,16 @@ jobs:
         if: ${{ matrix.build_image == '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
-          set -e
-          cargo build --release --target "${{ matrix.target }}" -p nemo-relay-cli
+          set -euo pipefail
+          target="${{ matrix.target }}"
+          cargo build --release --target "$target" -p nemo-relay-cli
+          # Rust's musl targets default to a static CRT, which cannot emit a cdylib.
+          if [[ "$target" == *-unknown-linux-musl ]]; then
+            export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-feature=-crt-static"
+          fi
           cargo build --locked --release \
             --manifest-path plugins/pii-rampart/Cargo.toml \
-            --target "${{ matrix.target }}" \
+            --target "$target" \
             --target-dir target
 
       - name: Build CLI release binary in manylinux
