@@ -60,6 +60,13 @@ pub(super) async fn execute(
     command: RunCommand,
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
+    if let Some(agent) = command.agent.map(Into::into) {
+        warn_for_possible_duplicate(
+            agent,
+            &command.command,
+            crate::diagnostics::invocation::InvocationForm::Run,
+        );
+    }
     let inherited = server.to_runtime();
     crate::process::launcher::run(command.into_runtime(), Some(&inherited)).await
 }
@@ -79,6 +86,11 @@ pub(super) async fn easy_path(
     command: EasyPathCommand,
     server: &ServerArgs,
 ) -> Result<ExitCode, CliError> {
+    warn_for_possible_duplicate(
+        agent,
+        &command.command,
+        crate::diagnostics::invocation::InvocationForm::Shortcut,
+    );
     let inherited = server.to_runtime();
     // An explicit config path is the user's contract. Without one, setup is required only when
     // none of the normal discovery layers exists. Keep this interactive decision in the command
@@ -101,4 +113,17 @@ pub(super) async fn easy_path(
         command: command.command,
     };
     crate::process::launcher::run(runtime, Some(&inherited)).await
+}
+
+fn warn_for_possible_duplicate(
+    agent: CodingAgent,
+    command: &[String],
+    form: crate::diagnostics::invocation::InvocationForm,
+) {
+    if let Some(diagnostic) =
+        crate::diagnostics::invocation::DuplicateAgentExecutable::detect(agent, command, form)
+    {
+        diagnostic.log();
+        super::print_invocation_warning(&diagnostic.format_warning());
+    }
 }

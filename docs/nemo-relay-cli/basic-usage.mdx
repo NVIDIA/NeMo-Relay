@@ -74,6 +74,33 @@ instead of the built-in shortcut:
 nemo-relay run -- codex
 ```
 
+When `--agent` or an agent shortcut already selects the host, pass only that
+host's arguments after `--`. For example, use:
+
+```bash
+nemo-relay run --agent claude -- -p "Review this change"
+```
+
+Do not repeat the selected executable as the first argument:
+
+```bash
+nemo-relay run --agent claude -- claude -p "Review this change"
+```
+
+Relay reports `possible_duplicate_agent_executable` when the first argument
+after `--` resolves to the agent that Relay already selected. The warning is
+advisory: Relay does not reject or rewrite the command. It does not inspect
+later arguments or prompt content.
+
+Use the invocation doctor to compare the observed and recommended command
+without launching an agent. Arguments are redacted by default; request the full
+command only when it is safe to display potentially sensitive values:
+
+```bash
+nemo-relay doctor invocation --agent claude -- claude -p "Review this change"
+nemo-relay doctor invocation --agent claude --show-full-command -- claude -p "Review this change"
+```
+
 For Claude Code and Codex, transparent mode leaves the caller's source settings,
 selected profile, and installed plugin state unchanged. A process marker makes
 any installed Relay MCP borrow the wrapper-owned dynamic gateway. Claude's

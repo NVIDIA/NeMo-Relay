@@ -3815,6 +3815,205 @@ command = "hermes --yolo chat"
 }
 
 #[test]
+fn invocation_diagnostic_cli_warns_without_rewriting_the_command() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[upstream]
+openai_base_url = "http://127.0.0.1:1"
+anthropic_base_url = "http://127.0.0.1:1"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "claude",
+            "--dry-run",
+            "--",
+            "/opt/bin/claude-code.exe",
+            "-p",
+            "synthetic prompt",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Relay will continue without modifying the command"));
+    assert!(!stderr.contains("/opt/bin/claude-code.exe"));
+    assert!(!stderr.contains("synthetic prompt"));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("/opt/bin/claude-code.exe -p synthetic prompt"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn invocation_diagnostic_cli_ignores_agent_names_after_a_different_first_token() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[upstream]
+openai_base_url = "http://127.0.0.1:1"
+anthropic_base_url = "http://127.0.0.1:1"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "claude",
+            "--dry-run",
+            "--",
+            "-p",
+            "compare claude with codex",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn invocation_diagnostic_cli_doctor_requires_opt_in_for_full_output() {
+    let safe = Command::new(gateway_bin())
+        .args([
+            "doctor",
+            "invocation",
+            "--agent",
+            "claude",
+            "--",
+            "claude",
+            "-p",
+            "private synthetic value",
+        ])
+        .output()
+        .unwrap();
+    assert!(safe.status.success());
+    let safe_stdout = String::from_utf8_lossy(&safe.stdout);
+    assert!(safe_stdout.contains("<arguments redacted>"));
+    assert!(!safe_stdout.contains("private synthetic value"));
+
+    let full = Command::new(gateway_bin())
+        .args([
+            "doctor",
+            "invocation",
+            "--agent",
+            "claude",
+            "--show-full-command",
+            "--",
+            "claude",
+            "-p",
+            "private synthetic value",
+        ])
+        .output()
+        .unwrap();
+    assert!(full.status.success());
+    let full_stdout = String::from_utf8_lossy(&full.stdout);
+    assert!(full_stdout.contains("private synthetic value"));
+    assert!(full_stdout.contains("recommended = nemo-relay run --agent claude -- -p"));
+}
+
+#[test]
+fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["claude", "--", "claude", "-p", "private synthetic value"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Observed: nemo-relay claude -- claude '<arguments redacted>'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Recommended: nemo-relay claude -- '<arguments redacted>'"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "Doctor (safe): nemo-relay doctor invocation --agent claude --shortcut -- claude"
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("setup requires a TTY"), "{stderr}");
+    assert!(!stderr.contains("private synthetic value"), "{stderr}");
+}
+
+#[test]
+fn invocation_diagnostic_cli_doctor_reports_no_duplicate() {
+    let output = Command::new(gateway_bin())
+        .args([
+            "doctor",
+            "invocation",
+            "--agent",
+            "claude",
+            "--",
+            "-p",
+            "synthetic prompt",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("code = none"), "{stdout}");
+    assert!(stdout.contains("selected_agent = claude"), "{stdout}");
+    assert!(
+        stdout.contains("result = no duplicate agent executable detected"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("possible_duplicate_agent_executable"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn cli_run_dry_run_rejects_missing_explicit_config() {
     let temp = tempfile::tempdir().unwrap();
     let missing = temp.path().join("missing-config.toml");

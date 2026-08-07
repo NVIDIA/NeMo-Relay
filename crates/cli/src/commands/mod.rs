@@ -102,6 +102,10 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
     })
 }
 
+fn print_invocation_warning(warning: &str) {
+    eprintln!("{warning}");
+}
+
 async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {
     let cli = Cli::parse();
     let command_name = cli

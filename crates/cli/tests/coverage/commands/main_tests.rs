@@ -346,6 +346,33 @@ fn doctor_accepts_offline_flag() {
 }
 
 #[test]
+fn invocation_diagnostic_parser_accepts_doctor_without_runtime_probe_flags() {
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "doctor",
+        "invocation",
+        "--agent",
+        "claude",
+        "--",
+        "claude",
+        "-p",
+        "synthetic prompt",
+    ])
+    .unwrap();
+    match cli.command {
+        Some(Command::Doctor(command)) => assert!(matches!(
+            command.command,
+            Some(diagnostics::DoctorSubcommand::Invocation(_))
+        )),
+        other => panic!("expected doctor invocation command, got {other:?}"),
+    }
+
+    assert!(
+        Cli::try_parse_from(["nemo-relay", "doctor", "invocation", "--agent", "claude",]).is_err()
+    );
+}
+
+#[test]
 fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
     let visited = std::cell::RefCell::new(Vec::new());
     let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {

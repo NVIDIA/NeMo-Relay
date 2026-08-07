@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Args;
+use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 
 use super::install::InstallTarget;
@@ -12,7 +12,10 @@ use super::root::AgentArg;
 use crate::error::CliError;
 
 #[derive(Debug, Clone, Args)]
+#[command(args_conflicts_with_subcommands = true)]
 pub(crate) struct DoctorCommand {
+    #[command(subcommand)]
+    pub(crate) command: Option<DoctorSubcommand>,
     #[arg(value_enum, conflicts_with = "plugin")]
     pub(crate) agent: Option<AgentArg>,
     #[arg(long, value_enum)]
@@ -28,6 +31,27 @@ pub(crate) struct DoctorCommand {
     pub(crate) offline: bool,
 }
 
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum DoctorSubcommand {
+    /// Inspect an agent invocation without launching it.
+    Invocation(InvocationDoctorCommand),
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct InvocationDoctorCommand {
+    #[arg(long, value_enum)]
+    agent: AgentArg,
+    #[arg(long)]
+    shortcut: bool,
+    #[arg(
+        long,
+        help = "Display the complete invocation; arguments may contain sensitive data"
+    )]
+    show_full_command: bool,
+    #[arg(last = true, required = true)]
+    command: Vec<String>,
+}
+
 #[derive(Debug, Clone, Args)]
 pub(crate) struct AgentsCommand {
     #[arg(long)]
@@ -39,6 +63,9 @@ pub(super) async fn execute(
     server: &super::serve::ServerArgs,
     logging_fallback_error: Option<&CliError>,
 ) -> Result<ExitCode, CliError> {
+    if let Some(DoctorSubcommand::Invocation(invocation)) = command.command {
+        return execute_invocation_doctor(invocation);
+    }
     if let Some(plugin) = command.plugin {
         return execute_plugin_doctor(plugin, command.install_dir, command.json);
     }
@@ -51,6 +78,31 @@ pub(super) async fn execute(
         logging_fallback_error,
     )
     .await
+}
+
+fn execute_invocation_doctor(command: InvocationDoctorCommand) -> Result<ExitCode, CliError> {
+    let agent = command.agent.into();
+    let form = if command.shortcut {
+        crate::diagnostics::invocation::InvocationForm::Shortcut
+    } else {
+        crate::diagnostics::invocation::InvocationForm::Run
+    };
+    match crate::diagnostics::invocation::DuplicateAgentExecutable::detect(
+        agent,
+        &command.command,
+        form,
+    ) {
+        Some(diagnostic) => {
+            println!("{}", diagnostic.format_doctor(command.show_full_command));
+        }
+        None => {
+            println!(
+                "INVOCATION DIAGNOSTIC\ncode = none\nselected_agent = {}\nresult = no duplicate agent executable detected",
+                agent.as_arg()
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn execute_plugin_doctor(
