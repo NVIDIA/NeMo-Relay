@@ -10,6 +10,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::detectors::BuiltinDetector;
+
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
         .expect("Rampart email pattern must compile")
@@ -27,6 +29,10 @@ static IPV4_CANDIDATE: LazyLock<Regex> = LazyLock::new(|| {
 static MAC_ADDRESS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b(?:(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}|(?:[0-9A-Fa-f]{2}-){5}[0-9A-Fa-f]{2})\b")
         .expect("Rampart MAC address pattern must compile")
+});
+static PHONE_CANDIDATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(BuiltinDetector::Phone.regex_pattern())
+        .expect("built-in phone detector pattern must compile")
 });
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,7 +138,37 @@ fn detect_structured(raw: &str) -> Vec<StructuredSpan> {
     }
     detect_ipv6(raw, &mut spans);
     detect_regex_entities(raw, "IP_ADDRESS", &MAC_ADDRESS, &mut spans);
+    detect_phone(raw, &mut spans);
     spans
+}
+
+fn detect_phone(raw: &str, spans: &mut Vec<StructuredSpan>) {
+    for candidate in PHONE_CANDIDATE.find_iter(raw) {
+        let value = candidate.as_str();
+        let start = if candidate.start() > 0
+            && raw.as_bytes()[candidate.start() - 1] == b'('
+            && value.contains(')')
+        {
+            candidate.start() - 1
+        } else {
+            candidate.start()
+        };
+        let digit_count = value.chars().filter(char::is_ascii_digit).count();
+        let has_phone_formatting = value.starts_with('+')
+            || value
+                .chars()
+                .any(|character| matches!(character, '(' | ')' | ' ' | '.' | '-'));
+        if (10..=15).contains(&digit_count)
+            && has_phone_formatting
+            && has_text_boundaries(raw, start, candidate.end())
+        {
+            spans.push(StructuredSpan {
+                start,
+                end: candidate.end(),
+                label: "PHONE",
+            });
+        }
+    }
 }
 
 fn detect_digit_entities(raw: &str) -> Vec<StructuredSpan> {
@@ -257,6 +293,14 @@ fn has_network_boundaries(raw: &str, start: usize, end: usize) -> bool {
         && !raw[end..].chars().next().is_some_and(invalid_boundary)
 }
 
+fn has_text_boundaries(raw: &str, start: usize, end: usize) -> bool {
+    !raw[..start]
+        .chars()
+        .next_back()
+        .is_some_and(char::is_alphanumeric)
+        && !raw[end..].chars().next().is_some_and(char::is_alphanumeric)
+}
+
 fn merge_spans(mut spans: Vec<StructuredSpan>) -> Vec<StructuredSpan> {
     spans.sort_by_key(|span| (span.start, Reverse(span.end), span.label));
     let mut merged: Vec<StructuredSpan> = Vec::new();
@@ -346,13 +390,34 @@ mod tests {
                 ("IP_ADDRESS", "00-1B-44-11-3A-B7"),
             ]
         );
-        assert!(
+        assert_eq!(
             labels_and_text(
                 "invalid 999.0.0.1, time 12:34:56, opcode ff:00, \
                  phone 415-555-2671, and address 31 Birchwood Avenue"
-            )
-            .is_empty()
+            ),
+            [("PHONE", "415-555-2671")]
         );
+    }
+
+    #[test]
+    fn detects_formatted_phone_numbers_without_matching_plain_identifiers() {
+        for value in [
+            "+1 415-555-2671",
+            "415-555-2671",
+            "(415) 555-2671",
+            "+14155552671",
+        ] {
+            assert_eq!(labels_and_text(value), [("PHONE", value)], "{value}");
+        }
+
+        for value in [
+            "Order 12345 is ready",
+            "build 1234567890",
+            "release 2026-08-03",
+            "abc415-555-2671xyz",
+        ] {
+            assert!(labels_and_text(value).is_empty(), "{value}");
+        }
     }
 
     #[test]

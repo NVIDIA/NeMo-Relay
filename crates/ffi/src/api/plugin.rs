@@ -20,7 +20,6 @@ use super::{
 };
 use crate::api::event_registry::Surface;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-use nemo_relay_pii_redaction::rampart::register_rampart_pii_component;
 
 struct FfiHostedPluginUserData {
     ptr: *mut libc::c_void,
@@ -134,10 +133,6 @@ fn ensure_pii_redaction_component_registered() -> std::result::Result<(), NemoRe
     register_pii_redaction_component().map_err(|err| status_from_plugin_error(&err))
 }
 
-fn ensure_rampart_pii_component_registered() -> std::result::Result<(), NemoRelayStatus> {
-    register_rampart_pii_component().map_err(|err| status_from_plugin_error(&err))
-}
-
 fn parse_plugin_config(
     config_json: *const c_char,
 ) -> std::result::Result<PluginConfig, NemoRelayStatus> {
@@ -242,9 +237,6 @@ pub unsafe extern "C" fn nemo_relay_initialize_with_dynamic_plugins(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    if let Err(status) = ensure_rampart_pii_component_registered() {
-        return status;
-    }
     let config = match parse_plugin_config(config_json) {
         Ok(config) => config,
         Err(status) => return status,
@@ -335,9 +327,6 @@ pub unsafe extern "C" fn nemo_relay_validate_plugin_config(
     if let Err(status) = ensure_pii_redaction_component_registered() {
         return status;
     }
-    if let Err(status) = ensure_rampart_pii_component_registered() {
-        return status;
-    }
     let config_value = match c_str_to_json(config_json) {
         Some(value) => value,
         None => return NemoRelayStatus::InvalidJson,
@@ -378,9 +367,6 @@ pub unsafe extern "C" fn nemo_relay_initialize_plugins(
         return status;
     }
     if let Err(status) = ensure_pii_redaction_component_registered() {
-        return status;
-    }
-    if let Err(status) = ensure_rampart_pii_component_registered() {
         return status;
     }
     let config_value = match c_str_to_json(config_json) {
@@ -460,9 +446,6 @@ pub unsafe extern "C" fn nemo_relay_list_plugin_kinds_json(
         return status;
     }
     if let Err(status) = ensure_pii_redaction_component_registered() {
-        return status;
-    }
-    if let Err(status) = ensure_rampart_pii_component_registered() {
         return status;
     }
     let kinds_json = match serde_json::to_value(list_plugin_kinds()) {

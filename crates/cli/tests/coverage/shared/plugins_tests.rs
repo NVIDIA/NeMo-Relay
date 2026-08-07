@@ -17,7 +17,6 @@ use nemo_relay::plugins::nemo_guardrails::component::{
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
-use nemo_relay_pii_redaction::rampart::{RAMPART_PII_PLUGIN_KIND, RampartPiiConfig};
 use serde_json::Map;
 use std::path::PathBuf;
 
@@ -425,25 +424,6 @@ fn assert_pii_local_editor_fields(local: &EditorSchema) {
     );
     assert_eq!(
         local.field("max_latency_ms").unwrap().kind,
-        EditorFieldKind::Integer
-    );
-}
-
-#[test]
-fn typed_editor_model_contains_rampart_pii_options() {
-    let schema = RampartPiiConfig::editor_schema();
-    assert!(!schema.fields.iter().any(|field| field.name == "version"));
-    assert_eq!(
-        schema.field("model_path").unwrap().kind,
-        EditorFieldKind::String
-    );
-    assert_eq!(schema.field("codec").unwrap().kind, EditorFieldKind::Enum);
-    assert_eq!(
-        schema.field("target_path_patterns").unwrap().kind,
-        EditorFieldKind::List
-    );
-    assert_eq!(
-        schema.field("inference_batch_size").unwrap().kind,
         EditorFieldKind::Integer
     );
 }
@@ -1455,62 +1435,6 @@ fn editor_save_preserves_unknown_pii_redaction_fields_and_prunes_version() {
     assert_eq!(builtin.get("future_builtin"), Some(&json!("preserve")));
     let local = component.config["local"].as_object().unwrap();
     assert_eq!(local.get("future_local"), Some(&json!("preserve")));
-}
-
-#[test]
-fn editor_save_preserves_unknown_rampart_pii_fields_and_prunes_version() {
-    let mut config = PluginConfig {
-        components: vec![PluginComponentSpec {
-            kind: RAMPART_PII_PLUGIN_KIND.to_string(),
-            enabled: true,
-            config: json!({
-                "version": 1,
-                "model_path": "/models/rampart",
-                "target_paths": ["/message"],
-                "future_top_level": "preserve"
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-        }],
-        ..PluginConfig::default()
-    };
-
-    let mut rampart = component_rampart_pii_state(&config).unwrap();
-    set_struct_field(
-        &mut rampart.config,
-        "model_path",
-        json!("/srv/models/rampart"),
-    )
-    .unwrap();
-    set_struct_field(
-        &mut rampart.config,
-        "target_paths",
-        json!(["/message", "/metadata/note"]),
-    )
-    .unwrap();
-    rampart.set_enabled(false);
-    store_rampart_pii_state(&mut config, &rampart).unwrap();
-
-    let component = config
-        .components
-        .iter()
-        .find(|component| component.kind == RAMPART_PII_PLUGIN_KIND)
-        .unwrap();
-    assert!(!component.enabled);
-    assert!(!component.config.contains_key("version"));
-    assert_eq!(
-        component.config.get("model_path"),
-        Some(&json!("/srv/models/rampart"))
-    );
-    assert_eq!(
-        component.config.get("future_top_level"),
-        Some(&json!("preserve"))
-    );
-    assert_eq!(
-        component.config.get("target_paths"),
-        Some(&json!(["/message", "/metadata/note"]))
-    );
 }
 
 #[test]

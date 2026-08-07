@@ -1,19 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! In-process Rampart PII redaction plugin.
+//! Rampart PII model and sanitizer support for the opt-in native plugin.
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use nemo_relay::codec::resolve::supported_codec_names;
 use nemo_relay::plugin::{
-    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
-    PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
-    apply_global_config_policy, deregister_plugin, register_plugin,
+    ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, PluginError, Result as PluginResult,
+    UnsupportedBehavior,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
@@ -27,6 +24,10 @@ use model::RampartDetector;
 use sanitizer::{
     RampartSanitizer, event_sanitize_callback, llm_sanitize_request_callback,
     llm_sanitize_response_callback, tool_sanitize_callback,
+};
+
+use nemo_relay::api::runtime::{
+    EventSanitizeFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, ToolSanitizeFn,
 };
 
 /// Plugin kind for in-process Rampart PII redaction.
@@ -44,41 +45,7 @@ const MAX_LABEL_BYTES: usize = 128;
 const MAX_REPLACEMENT_BYTES: usize = 1024;
 const MAX_WINDOWS_PER_PAYLOAD: usize = 16;
 
-/// One configured Rampart PII component.
-#[derive(Debug, Clone)]
-pub struct ComponentSpec {
-    /// Whether the component should be activated.
-    pub enabled: bool,
-    /// Component-local Rampart configuration.
-    pub config: RampartPiiConfig,
-}
-
-impl ComponentSpec {
-    /// Creates an enabled Rampart PII component spec.
-    pub fn new(config: RampartPiiConfig) -> Self {
-        Self {
-            enabled: true,
-            config,
-        }
-    }
-}
-
-impl From<ComponentSpec> for PluginComponentSpec {
-    fn from(value: ComponentSpec) -> Self {
-        let Json::Object(config) = serde_json::to_value(value.config)
-            .expect("Rampart PII config should serialize to an object")
-        else {
-            unreachable!("Rampart PII config must serialize to an object");
-        };
-        PluginComponentSpec {
-            kind: RAMPART_PII_PLUGIN_KIND.to_string(),
-            enabled: value.enabled,
-            config,
-        }
-    }
-}
-
-/// Configuration for the in-process Rampart PII component.
+/// Configuration for the opt-in Rampart PII native plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RampartPiiConfig {
@@ -174,132 +141,104 @@ impl Default for RampartPiiConfig {
     }
 }
 
-nemo_relay::editor_config! {
-    impl RampartPiiConfig {
-        model_path => { label: "model_path", kind: String },
-        input => { label: "input", kind: Boolean },
-        output => { label: "output", kind: Boolean },
-        mark => { label: "mark", kind: Boolean },
-        tool_input => { label: "tool_input", kind: Boolean },
-        tool_output => { label: "tool_output", kind: Boolean },
-        priority => { label: "priority", kind: Integer },
-        codec => {
-            label: "codec",
-            kind: Enum,
-            values: ["openai_chat", "openai_responses", "anthropic_messages"],
-            optional: true,
-        },
-        preset => {
-            label: "preset",
-            kind: Enum,
-            values: ["trajectory_context"],
-            optional: true,
-        },
-        target_paths => {
-            label: "target_paths",
-            kind: List,
-            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
-        },
-        target_path_patterns => {
-            label: "target_path_patterns",
-            kind: List,
-            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
-        },
-        min_score => { label: "min_score", kind: Float },
-        excluded_labels => {
-            label: "excluded_labels",
-            kind: List,
-            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
-        },
-        replacement => { label: "replacement", kind: String },
-        custom_mark_payload_policy => {
-            label: "custom_mark_payload_policy",
-            kind: Enum,
-            values: ["preserve", "redact_all_leaves"],
-        },
-        max_windows_per_payload => { label: "max_windows_per_payload", kind: Integer },
-        inference_batch_size => { label: "inference_batch_size", kind: Integer },
-        policy => {
-            label: "policy",
-            kind: Section,
-            nested: ConfigPolicy,
-            default: ConfigPolicy,
-        },
+/// Async sanitizer callbacks backed by one loaded Rampart model.
+///
+/// This bundle is used by the separately distributed native plugin. Keeping
+/// the inference implementation here lets the static and dynamic adapters
+/// share the same selection, codec, admission, and fail-closed behavior.
+#[derive(Clone)]
+pub struct RampartMiddlewareCallbacks {
+    priority: i32,
+    mark: Option<EventSanitizeFn>,
+    tool_input: Option<ToolSanitizeFn>,
+    tool_output: Option<ToolSanitizeFn>,
+    input: Option<LlmSanitizeRequestFn>,
+    output: Option<LlmSanitizeResponseFn>,
+    scope_start: Option<EventSanitizeFn>,
+    scope_end: Option<EventSanitizeFn>,
+}
+
+impl RampartMiddlewareCallbacks {
+    /// Middleware priority configured for every Rampart sanitizer surface.
+    #[must_use]
+    pub fn priority(&self) -> i32 {
+        self.priority
+    }
+
+    /// Mark-event sanitizer, when enabled.
+    #[must_use]
+    pub fn mark(&self) -> Option<EventSanitizeFn> {
+        self.mark.clone()
+    }
+
+    /// Tool-request sanitizer, when enabled.
+    #[must_use]
+    pub fn tool_input(&self) -> Option<ToolSanitizeFn> {
+        self.tool_input.clone()
+    }
+
+    /// Tool-response sanitizer, when enabled.
+    #[must_use]
+    pub fn tool_output(&self) -> Option<ToolSanitizeFn> {
+        self.tool_output.clone()
+    }
+
+    /// LLM-request sanitizer, when enabled.
+    #[must_use]
+    pub fn input(&self) -> Option<LlmSanitizeRequestFn> {
+        self.input.clone()
+    }
+
+    /// LLM-response sanitizer, when enabled.
+    #[must_use]
+    pub fn output(&self) -> Option<LlmSanitizeResponseFn> {
+        self.output.clone()
+    }
+
+    /// Scope-start sanitizer, when an input surface is enabled.
+    #[must_use]
+    pub fn scope_start(&self) -> Option<EventSanitizeFn> {
+        self.scope_start.clone()
+    }
+
+    /// Scope-end sanitizer, when an output surface is enabled.
+    #[must_use]
+    pub fn scope_end(&self) -> Option<EventSanitizeFn> {
+        self.scope_end.clone()
     }
 }
 
-struct RampartPiiPlugin;
-
-impl Plugin for RampartPiiPlugin {
-    fn plugin_kind(&self) -> &str {
-        RAMPART_PII_PLUGIN_KIND
-    }
-
-    fn allows_multiple_components(&self) -> bool {
-        false
-    }
-
-    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        validate_rampart_pii_config(plugin_config, None)
-    }
-
-    fn validate_with_policy(
-        &self,
-        plugin_config: &Map<String, Json>,
-        policy: &ConfigPolicy,
-    ) -> Vec<ConfigDiagnostic> {
-        validate_rampart_pii_config(plugin_config, Some(policy))
-    }
-
-    fn register<'a>(
-        &'a self,
-        plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
-        let parsed = parse_config(plugin_config);
-        Box::pin(async move {
-            let config = parsed?;
-            enforce_activation_invariants(&config)?;
-            let model_path = PathBuf::from(&config.model_path);
-            let max_windows = config.max_windows_per_payload;
-            let batch_size = config.inference_batch_size;
-            let detector = tokio::task::spawn_blocking(move || {
-                RampartDetector::load(model_path, max_windows, batch_size)
-            })
-            .await
-            .map_err(|error| {
-                PluginError::Internal(format!("Rampart model initialization task failed: {error}"))
-            })??;
-            let sanitizer = RampartSanitizer::new(config.clone(), Arc::new(detector))?;
-            register_sanitizers(&config, sanitizer, ctx)?;
-            log::info!(
-                target: "nemo_relay.plugin",
-                event = "plugin_resource_validation_completed",
-                plugin_kind = RAMPART_PII_PLUGIN_KIND,
-                model_id = RAMPART_MODEL_ID,
-                model_revision = RAMPART_MODEL_REVISION,
-                resource_count = 1;
-                "Rampart PII model loaded in the Relay process"
-            );
-            Ok(())
-        })
-    }
+/// Validate one Rampart component config without loading model files.
+#[must_use]
+pub fn validate_config(plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+    validate_rampart_pii_config(plugin_config)
 }
 
-/// Registers the `pii_rampart` component kind.
-pub fn register_rampart_pii_component() -> PluginResult<()> {
-    match register_plugin(Arc::new(RampartPiiPlugin)) {
-        Ok(()) => Ok(()),
-        Err(PluginError::RegistrationFailed(message)) if message.contains("already registered") => {
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
-}
-
-/// Deregisters the `pii_rampart` component kind.
-pub fn deregister_rampart_pii_component() -> bool {
-    deregister_plugin(RAMPART_PII_PLUGIN_KIND)
+/// Load the configured Rampart model and construct its async middleware.
+///
+/// Native plugin activation is synchronous, so model loading happens during
+/// explicit plugin activation rather than on the first managed call.
+pub fn load_middleware(
+    plugin_config: &Map<String, Json>,
+) -> PluginResult<RampartMiddlewareCallbacks> {
+    let config = parse_config(plugin_config)?;
+    enforce_activation_invariants(&config)?;
+    let detector = RampartDetector::load(
+        PathBuf::from(&config.model_path),
+        config.max_windows_per_payload,
+        config.inference_batch_size,
+    )?;
+    let middleware = build_middleware(config, Arc::new(detector))?;
+    log::info!(
+        target: "nemo_relay.plugin",
+        event = "plugin_resource_validation_completed",
+        plugin_kind = RAMPART_PII_PLUGIN_KIND,
+        model_id = RAMPART_MODEL_ID,
+        model_revision = RAMPART_MODEL_REVISION,
+        resource_count = 1;
+        "Rampart PII model loaded in the Relay process"
+    );
+    Ok(middleware)
 }
 
 /// Returns the JSON Schema for Rampart PII configuration.
@@ -309,61 +248,34 @@ pub fn rampart_pii_config_schema() -> Json {
         .expect("Rampart PII config schema should serialize")
 }
 
-fn register_sanitizers(
-    config: &RampartPiiConfig,
-    sanitizer: RampartSanitizer,
-    ctx: &mut PluginRegistrationContext,
-) -> PluginResult<()> {
-    if config.mark {
-        ctx.register_mark_sanitize_guardrail(
-            "mark",
-            config.priority,
-            event_sanitize_callback(sanitizer.clone(), None),
-        )?;
-    }
-    if config.tool_input {
-        ctx.register_tool_sanitize_request_guardrail(
-            "tool_input",
-            config.priority,
-            tool_sanitize_callback(sanitizer.clone()),
-        )?;
-    }
-    if config.tool_output {
-        ctx.register_tool_sanitize_response_guardrail(
-            "tool_output",
-            config.priority,
-            tool_sanitize_callback(sanitizer.clone()),
-        )?;
-    }
-    if config.input {
-        ctx.register_llm_sanitize_request_guardrail(
-            "input",
-            config.priority,
-            llm_sanitize_request_callback(sanitizer.clone()),
-        )?;
-    }
-    if config.input || config.tool_input {
-        ctx.register_scope_sanitize_start_guardrail(
-            "scope_start",
-            config.priority,
-            event_sanitize_callback(sanitizer.clone(), Some((config.input, config.tool_input))),
-        )?;
-    }
-    if config.output {
-        ctx.register_llm_sanitize_response_guardrail(
-            "output",
-            config.priority,
-            llm_sanitize_response_callback(sanitizer.clone()),
-        )?;
-    }
-    if config.output || config.tool_output {
-        ctx.register_scope_sanitize_end_guardrail(
-            "scope_end",
-            config.priority,
-            event_sanitize_callback(sanitizer, Some((config.output, config.tool_output))),
-        )?;
-    }
-    Ok(())
+fn build_middleware(
+    config: RampartPiiConfig,
+    detector: Arc<RampartDetector>,
+) -> PluginResult<RampartMiddlewareCallbacks> {
+    let sanitizer = RampartSanitizer::new(config.clone(), detector)?;
+    Ok(RampartMiddlewareCallbacks {
+        priority: config.priority,
+        mark: config
+            .mark
+            .then(|| event_sanitize_callback(sanitizer.clone(), None)),
+        tool_input: config
+            .tool_input
+            .then(|| tool_sanitize_callback(sanitizer.clone())),
+        tool_output: config
+            .tool_output
+            .then(|| tool_sanitize_callback(sanitizer.clone())),
+        input: config
+            .input
+            .then(|| llm_sanitize_request_callback(sanitizer.clone())),
+        output: config
+            .output
+            .then(|| llm_sanitize_response_callback(sanitizer.clone())),
+        scope_start: (config.input || config.tool_input).then(|| {
+            event_sanitize_callback(sanitizer.clone(), Some((config.input, config.tool_input)))
+        }),
+        scope_end: (config.output || config.tool_output)
+            .then(|| event_sanitize_callback(sanitizer, Some((config.output, config.tool_output)))),
+    })
 }
 
 fn parse_config(plugin_config: &Map<String, Json>) -> PluginResult<RampartPiiConfig> {
@@ -372,11 +284,8 @@ fn parse_config(plugin_config: &Map<String, Json>) -> PluginResult<RampartPiiCon
     })
 }
 
-fn validate_rampart_pii_config(
-    plugin_config: &Map<String, Json>,
-    global_policy: Option<&ConfigPolicy>,
-) -> Vec<ConfigDiagnostic> {
-    let mut config = match parse_config(plugin_config) {
+fn validate_rampart_pii_config(plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+    let config = match parse_config(plugin_config) {
         Ok(config) => config,
         Err(error) => {
             return vec![ConfigDiagnostic {
@@ -388,10 +297,6 @@ fn validate_rampart_pii_config(
             }];
         }
     };
-    if let Some(global_policy) = global_policy {
-        config.policy = apply_global_config_policy(config.policy, global_policy);
-    }
-
     let mut diagnostics = Vec::new();
     let supported = [
         "version",
@@ -773,7 +678,7 @@ mod tests {
 
     #[test]
     fn validates_explicit_model_and_content_paths() {
-        assert!(validate_rampart_pii_config(&valid_config(), None).is_empty());
+        assert!(validate_rampart_pii_config(&valid_config()).is_empty());
 
         let mut config = valid_config();
         config.insert("model_path".into(), Json::String("relative/model".into()));
@@ -781,7 +686,7 @@ mod tests {
             "target_path_patterns".into(),
             serde_json::json!(["/messages/pre*fix/content"]),
         );
-        let diagnostics = validate_rampart_pii_config(&config, None);
+        let diagnostics = validate_rampart_pii_config(&config);
         assert!(
             diagnostics
                 .iter()
@@ -803,21 +708,21 @@ mod tests {
             "max_windows_per_payload".into(),
             Json::from(MAX_WINDOWS_PER_PAYLOAD),
         );
-        assert!(validate_rampart_pii_config(&config, None).is_empty());
+        assert!(validate_rampart_pii_config(&config).is_empty());
 
         config.insert(
             "max_windows_per_payload".into(),
             Json::from(MAX_WINDOWS_PER_PAYLOAD + 1),
         );
         assert!(
-            validate_rampart_pii_config(&config, None)
+            validate_rampart_pii_config(&config)
                 .iter()
                 .any(|item| item.field.as_deref() == Some("max_windows_per_payload"))
         );
 
         config.insert("max_windows_per_payload".into(), Json::from(0_usize));
         assert!(
-            validate_rampart_pii_config(&config, None)
+            validate_rampart_pii_config(&config)
                 .iter()
                 .any(|item| item.field.as_deref() == Some("max_windows_per_payload"))
         );
@@ -834,7 +739,7 @@ mod tests {
             unreachable!()
         };
 
-        assert!(validate_rampart_pii_config(&config, None).is_empty());
+        assert!(validate_rampart_pii_config(&config).is_empty());
     }
 
     #[test]
@@ -842,7 +747,7 @@ mod tests {
         let mut config = valid_config();
         config.insert("preset".into(), Json::String("trajectory_context".into()));
         assert!(
-            validate_rampart_pii_config(&config, None)
+            validate_rampart_pii_config(&config)
                 .iter()
                 .any(|item| item.field.as_deref() == Some("preset"))
         );
@@ -850,7 +755,7 @@ mod tests {
         config.remove("target_path_patterns");
         config.insert("preset".into(), Json::String("unknown".into()));
         assert!(
-            validate_rampart_pii_config(&config, None)
+            validate_rampart_pii_config(&config)
                 .iter()
                 .any(|item| item.field.as_deref() == Some("preset"))
         );
@@ -860,7 +765,7 @@ mod tests {
             "custom_mark_payload_policy".into(),
             Json::String("redact_all_leaves".into()),
         );
-        let diagnostics = validate_rampart_pii_config(&config, None);
+        let diagnostics = validate_rampart_pii_config(&config);
         assert!(
             diagnostics
                 .iter()
@@ -868,8 +773,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn registration_enforces_safety_invariants_when_policy_warns() {
+    #[test]
+    fn activation_invariants_remain_errors_when_policy_warns() {
         let cases = [
             (
                 "target_paths",
@@ -896,7 +801,7 @@ mod tests {
                 serde_json::json!({"unsupported_value": "warn"}),
             );
             config.insert(field.into(), value);
-            let diagnostics = validate_rampart_pii_config(&config, None);
+            let diagnostics = validate_rampart_pii_config(&config);
             assert!(
                 diagnostics.iter().any(|diagnostic| {
                     diagnostic.level == DiagnosticLevel::Warning
@@ -905,28 +810,13 @@ mod tests {
                 "expected a warning for {field}: {diagnostics:?}"
             );
 
-            let plugin = RampartPiiPlugin;
-            let mut context = PluginRegistrationContext::with_namespace("rampart-test::");
-            let error = plugin
-                .register(&config, &mut context)
-                .await
-                .expect_err("unsafe configuration must fail registration");
+            let parsed = parse_config(&config).expect("diagnostic input should deserialize");
+            let error = enforce_activation_invariants(&parsed)
+                .expect_err("unsafe configuration must fail activation");
             assert!(
                 error.to_string().contains(expected),
                 "unexpected registration error for {field}: {error}"
             );
         }
-    }
-
-    #[test]
-    fn component_spec_uses_independent_plugin_kind() {
-        let spec: PluginComponentSpec = ComponentSpec::new(RampartPiiConfig {
-            model_path: "/tmp/rampart".into(),
-            target_paths: vec!["/message".into()],
-            ..RampartPiiConfig::default()
-        })
-        .into();
-        assert_eq!(spec.kind, RAMPART_PII_PLUGIN_KIND);
-        assert_ne!(spec.kind, crate::component::PII_REDACTION_PLUGIN_KIND);
     }
 }

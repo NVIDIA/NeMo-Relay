@@ -49,10 +49,6 @@
       "types": "./pii_redaction.d.ts",
       "default": "./pii_redaction.js"
     },
-    "./pii_rampart": {
-      "types": "./pii_rampart.d.ts",
-      "default": "./pii_rampart.js"
-    },
     "./model_pricing": {
       "types": "./model_pricing.d.ts",
       "default": "./model_pricing.js"

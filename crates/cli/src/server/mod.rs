@@ -30,7 +30,6 @@ use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 #[cfg(feature = "switchyard")]
 use nemo_relay_adaptive::{AdaptiveConfig, plugin_component::ADAPTIVE_PLUGIN_KIND};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-use nemo_relay_pii_redaction::rampart::register_rampart_pii_component;
 #[cfg(feature = "switchyard")]
 use nemo_relay_switchyard::{
     SWITCHYARD_PLUGIN_KIND, SwitchyardConfig, register_switchyard_component,
@@ -863,7 +862,6 @@ impl ServerPluginActivation {
 pub(crate) enum PluginComponentSetupError {
     Adaptive(String),
     PiiRedaction(String),
-    RampartPii(String),
     #[cfg(feature = "switchyard")]
     Switchyard(String),
     #[cfg(feature = "switchyard")]
@@ -877,7 +875,6 @@ impl PluginComponentSetupError {
         match self {
             Self::Adaptive(_) => "Adaptive plugin",
             Self::PiiRedaction(_) => "PII redaction plugin",
-            Self::RampartPii(_) => "Rampart PII plugin",
             #[cfg(feature = "switchyard")]
             Self::Switchyard(_) => "Switchyard plugin",
             #[cfg(feature = "switchyard")]
@@ -889,7 +886,7 @@ impl PluginComponentSetupError {
 
     pub(crate) fn diagnostic_details(&self) -> String {
         match self {
-            Self::Adaptive(error) | Self::PiiRedaction(error) | Self::RampartPii(error) => {
+            Self::Adaptive(error) | Self::PiiRedaction(error) => {
                 format!("registration failed: {error}")
             }
             #[cfg(feature = "switchyard")]
@@ -913,9 +910,6 @@ impl std::fmt::Display for PluginComponentSetupError {
                     formatter,
                     "PII redaction plugin registration failed: {error}"
                 )
-            }
-            Self::RampartPii(error) => {
-                write!(formatter, "Rampart PII plugin registration failed: {error}")
             }
             #[cfg(feature = "switchyard")]
             Self::Switchyard(error) => {
@@ -945,9 +939,6 @@ pub(crate) fn register_and_validate_plugin_components(
     }
     if let Err(error) = register_pii_redaction_component() {
         errors.push(PluginComponentSetupError::PiiRedaction(error.to_string()));
-    }
-    if let Err(error) = register_rampart_pii_component() {
-        errors.push(PluginComponentSetupError::RampartPii(error.to_string()));
     }
     #[cfg(feature = "switchyard")]
     if let Err(error) = register_switchyard_component() {

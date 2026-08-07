@@ -23,7 +23,6 @@
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-use nemo_relay_pii_redaction::rampart::register_rampart_pii_component;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
@@ -64,11 +63,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_pii_redaction_component().map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to register PII redaction plugin component: {e}"
-        ))
-    })?;
-    register_rampart_pii_component().map_err(|e| {
-        pyo3::exceptions::PyRuntimeError::new_err(format!(
-            "failed to register Rampart PII plugin component: {e}"
         ))
     })?;
     py_types::register(m)?;

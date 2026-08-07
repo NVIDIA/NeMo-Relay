@@ -179,10 +179,6 @@ fn edit_component_field(
             edit_config_field(theme, &mut state.config, field)?;
             state.mark_config_touched();
         }
-        EditableComponent::RampartPii(state) => {
-            edit_config_field(theme, &mut state.config, field)?;
-            state.mark_config_touched();
-        }
         #[cfg(feature = "switchyard")]
         EditableComponent::Switchyard(state) => {
             edit_config_field(theme, &mut state.config, field)?;

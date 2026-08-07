@@ -75,7 +75,6 @@ use nemo_relay_adaptive::context_helpers::set_latency_sensitivity as adaptive_se
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-use nemo_relay_pii_redaction::rampart::register_rampart_pii_component;
 
 use crate::callable;
 use crate::callback_factory;
@@ -147,8 +146,6 @@ fn init() {
         .expect("node adaptive plugin component registration should succeed");
     register_pii_redaction_component()
         .expect("node pii redaction plugin component registration should succeed");
-    register_rampart_pii_component()
-        .expect("node Rampart PII plugin component registration should succeed");
 }
 
 #[cfg(not(test))]

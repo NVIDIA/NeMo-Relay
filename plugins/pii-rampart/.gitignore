@@ -1,4 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-examples/python-grpc-worker-plugin/nemo_relay_python_grpc_worker_example/worker.py text eol=lf
+/target/
+/Cargo.lock
+/relay-plugin.local.toml

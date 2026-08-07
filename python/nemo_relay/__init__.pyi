@@ -32,7 +32,6 @@ from nemo_relay import intercepts as intercepts
 from nemo_relay import llm as llm
 from nemo_relay import model_pricing as model_pricing
 from nemo_relay import observability as observability
-from nemo_relay import pii_rampart as pii_rampart
 from nemo_relay import pii_redaction as pii_redaction
 from nemo_relay import plugin as plugin
 from nemo_relay import scope as scope
