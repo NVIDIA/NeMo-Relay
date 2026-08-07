@@ -921,9 +921,7 @@ async fn observability_http_exporter_check(
     } else {
         probe_http_endpoint(label, url, probe_mode).await
     };
-    if !probe_mode.is_offline() {
-        check.details = format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
-    }
+    check.details = format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
     check
 }
 
