@@ -61,11 +61,11 @@
     "question": "Run the Relay try-now path in this repository, but it already has .nemo-relay/config.toml and plugins.toml that another developer uses.",
     "expected_skill": "nemo-relay-get-started",
     "expected_script": null,
-    "ground_truth": "The agent explains that repository-local .nemo-relay files are ignored by default, inspects the XDG user configuration and higher-precedence system policy, proposes a user-scoped merge that preserves unrelated settings, and obtains confirmation before writing any Relay configuration.",
+    "ground_truth": "The agent explains that repository-local .nemo-relay/config.toml and plugins.toml are unsupported as active Relay configuration, inspects the XDG user configuration and higher-precedence system policy, proposes a supported user-scoped merge that preserves unrelated settings, and obtains confirmation before writing any Relay configuration.",
     "expected_behavior": [
-      "The agent reports that the existing repository-local configuration is ignored unless selected explicitly",
+      "The agent reports that the existing repository-local configuration is unsupported and will not be created, edited, merged, or trusted",
       "The agent checks the XDG user configuration and higher-precedence system policy",
-      "The agent previews a merge into the user plugins.toml instead of replacing it or editing an ignored project file",
+      "The agent previews a merge into the user plugins.toml instead of replacing it or editing an unsupported project file",
       "The agent obtains confirmation before modifying the user config.toml or plugins.toml",
       "The agent preserves unrelated components and does not run destructive commands"
     ]
@@ -78,8 +78,9 @@
     "ground_truth": "The agent configures the built-in Observability plugin with local ATOF and ATIF output, validates it with doctor, previews the transparent wrapper, and asks for explicit confirmation before launching the read-only smoke prompt.",
     "expected_behavior": [
       "The agent enables ATOF JSONL and ATIF trajectory output in separate local directories",
-      "The agent uses XDG user scope and shows the proposed configuration before writing it",
+      "The agent uses supported user or explicit configuration and shows the proposed configuration before writing it",
       "The agent runs or recommends nemo-relay doctor codex --json and a --dry-run --print preview",
+      "The agent confirms that the dry-run preview does not depend on repository-local .nemo-relay/config.toml or .nemo-relay/plugins.toml",
       "The agent shows a deterministic smoke prompt that exercises a shell tool without inspecting files, environment variables, processes, credentials, network resources, or system configuration, and asks immediately before the live Codex launch",
       "The agent explains that the launch may consume model quota and does not launch without consent"
     ]
@@ -135,11 +136,12 @@
     "question": "The wrapped Claude session completed, but .nemo-relay/atof and .nemo-relay/atif are empty. Should I reinstall everything?",
     "expected_skill": "nemo-relay-get-started",
     "expected_script": null,
-    "ground_truth": "The agent preserves the successful CLI and agent launch boundary, explains that repository-local .nemo-relay files are ignored by default, and uses doctor plus targeted checks for XDG user plugin discovery, output permissions, hook loading, gateway routing, and session finalization instead of broad reinstallation.",
+    "ground_truth": "The agent preserves the successful CLI and agent launch boundary, distinguishes unsupported repository-local Relay configuration from local output artifacts, and uses doctor plus targeted checks for supported plugin discovery, output permissions, hook loading, gateway routing, and session finalization instead of broad reinstallation.",
     "expected_behavior": [
       "The agent does not recommend reinstalling every package after a successful wrapped launch",
       "The agent uses nemo-relay doctor claude --json or equivalent targeted diagnostics",
-      "The agent checks XDG user plugin activation, system configuration precedence, ignored project configuration, and writable user output directories",
+      "The agent checks supported user or explicit plugin activation, system configuration precedence, unsupported project configuration files, and writable output directories",
+      "The agent explains that .nemo-relay/atof and .nemo-relay/atif are output directories, not project configuration layers",
       "The agent checks hook loading, gateway routing, and Claude session end before declaring each exporter broken",
       "The agent reports which capture boundary worked and which output boundary failed"
     ]
