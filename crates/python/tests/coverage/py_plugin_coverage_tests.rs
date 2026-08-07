@@ -165,6 +165,7 @@ fn async_clear_binding_completes_on_python_event_loop() {
     let _python = crate::test_support::init_python_test();
     let _plugin_test_state = lock_plugin_test_state_for_tests();
     Python::attach(|py| {
+        let first_clear_state = plugin_configuration_clear_state();
         let module = PyModule::new(py, "_plugin_async_clear").unwrap();
         register(&module).unwrap();
         let helpers = load_module(
@@ -175,6 +176,19 @@ async def clear(module):
 "#,
         );
         with_event_loop(py, |event_loop| {
+            let clear = helpers
+                .getattr("clear")
+                .unwrap()
+                .call1((module.clone(),))
+                .unwrap();
+            event_loop
+                .call_method1("run_until_complete", (clear,))
+                .unwrap();
+        });
+        let second_clear_state = plugin_configuration_clear_state();
+        assert!(!Arc::ptr_eq(&first_clear_state, &second_clear_state));
+
+        with_event_loop(py, |event_loop| {
             let clear = helpers.getattr("clear").unwrap().call1((module,)).unwrap();
             event_loop
                 .call_method1("run_until_complete", (clear,))
@@ -182,6 +196,22 @@ async def clear(module):
         });
         assert!(active_plugin_report_py(py).unwrap().bind(py).is_none());
     });
+}
+
+#[test]
+fn stale_async_clear_completion_keeps_the_newer_state() {
+    let _plugin_test_state = lock_plugin_test_state_for_tests();
+    let older = plugin_configuration_clear_state();
+    let newer = Arc::new(PluginConfigurationClearState::new());
+    *PLUGIN_CONFIGURATION_CLEAR_STATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::clone(&newer);
+
+    reset_plugin_configuration_clear_state_if(&older);
+
+    let newer_state_remained_current = Arc::ptr_eq(&plugin_configuration_clear_state(), &newer);
+    reset_plugin_configuration_clear_state();
+    assert!(newer_state_remained_current);
 }
 
 #[test]

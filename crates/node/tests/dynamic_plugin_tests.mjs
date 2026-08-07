@@ -207,11 +207,10 @@ describe('dynamic plugin host', () => {
   it('layers plugins.toml static base components with dynamic plugins', async () => {
     const staticKind = 'node.fixture.static-base';
     const projectRoot = path.join(tempRoot, 'file-static-base-project');
-    const projectConfigDirectory = path.join(projectRoot, '.nemo-relay');
     const isolatedUserConfig = path.join(projectRoot, 'xdg');
-    const pluginsToml = path.join(projectConfigDirectory, 'plugins.toml');
-    mkdirSync(projectConfigDirectory, { recursive: true });
-    mkdirSync(isolatedUserConfig, { recursive: true });
+    const userConfigDirectory = path.join(isolatedUserConfig, 'nemo-relay');
+    const pluginsToml = path.join(userConfigDirectory, 'plugins.toml');
+    mkdirSync(userConfigDirectory, { recursive: true });
     writeFileSync(
       pluginsToml,
       `version = 1

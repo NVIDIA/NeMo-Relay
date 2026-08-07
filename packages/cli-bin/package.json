@@ -1,7 +1,0 @@
-{
-  "name": "nemo-relay-cli-bin",
-  "version": "0.8.0",
-  "description": "Prebuilt NeMo Relay command-line interface.",
-  "private": true,
-  "license": "Apache-2.0"
-}

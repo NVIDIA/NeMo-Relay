@@ -118,16 +118,20 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
     let relay = Path::new("/tmp/NeMo $Relay`test'/bin/nemo-relay");
     let generation = Path::new("/tmp/generation");
     assert_eq!(
-        persistent_hook_command_for_platform(relay, generation, TEST_GENERATION_TOKEN, false),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:47632 --generation-file /tmp/generation --generation-token test-generation"
+        persistent_hook_commands_for_platform(relay, generation, TEST_GENERATION_TOKEN, false)
+            .for_event("on_session_start"),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:47632 --generation-file /tmp/generation --generation-token test-generation --fail-open"
     );
     assert_eq!(
-        crate::hooks::decode_windows_hook_command(&persistent_hook_command_for_platform(
-            Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
-            Path::new(r"C:\Temp\generation"),
-            TEST_GENERATION_TOKEN,
-            true,
-        ))
+        crate::hooks::decode_windows_hook_command(
+            persistent_hook_commands_for_platform(
+                Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
+                Path::new(r"C:\Temp\generation"),
+                TEST_GENERATION_TOKEN,
+                true,
+            )
+            .for_event("pre_tool_call")
+        )
         .unwrap(),
         vec![
             r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe",
@@ -139,25 +143,29 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
             r"C:\Temp\generation",
             "--generation-token",
             TEST_GENERATION_TOKEN,
+            "--fail-closed",
         ]
     );
     assert_eq!(
-        crate::hooks::transparent_hook_forward_command_for_platform(
+        crate::hooks::transparent_hook_forward_commands_for_platform(
             relay,
             CodingAgent::Hermes,
             "http://127.0.0.1:1234",
             false,
-        ),
-        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:1234 --transparent-run"
+        )
+        .for_event("on_session_start"),
+        "'/tmp/NeMo $Relay`test'\\''/bin/nemo-relay' hook-forward hermes --gateway-url http://127.0.0.1:1234 --transparent-run --fail-open"
     );
-    let encoded = persistent_hook_command_for_platform(
+    let encoded = persistent_hook_commands_for_platform(
         Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
         Path::new(r"C:\Temp\generation"),
         TEST_GENERATION_TOKEN,
         true,
     );
-    assert!(is_persistent_relay_hook_command(&encoded));
-    let encoded_codex = crate::hooks::persistent_hook_forward_command_for_platform(
+    assert!(is_persistent_relay_hook_command(
+        encoded.for_event("pre_tool_call")
+    ));
+    let encoded_codex = crate::hooks::persistent_hook_forward_commands_for_platform(
         Path::new(r"C:\Program Files\NeMo 100%\bin\nemo-relay.exe"),
         CodingAgent::Codex,
         Path::new(r"C:\Temp\generation"),
@@ -165,7 +173,9 @@ fn hook_command_round_trips_paths_and_platform_metacharacters() {
         true,
     );
     assert_ne!(encoded, encoded_codex);
-    assert!(!is_persistent_relay_hook_command(&encoded_codex));
+    assert!(!is_persistent_relay_hook_command(
+        encoded_codex.for_event("PreToolUse")
+    ));
 }
 
 #[test]
@@ -200,7 +210,7 @@ fn persistent_config_migrates_owned_state_and_preserves_unrelated_config() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let command = persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let legacy_command = format!("{} hook-forward hermes", relay.display());
     let mut legacy_hooks = serde_json::Map::new();
     for event in CodingAgent::Hermes.hook_events() {
@@ -264,7 +274,7 @@ fn persistent_config_migrates_owned_state_and_preserves_unrelated_config() {
     );
     assert_eq!(
         merged["hooks"]["on_session_start"][1]["command"],
-        json!(command)
+        json!(command.for_event("on_session_start"))
     );
     assert_eq!(
         merged["hooks"]["custom_event"][0]["command"],
@@ -275,7 +285,7 @@ fn persistent_config_migrates_owned_state_and_preserves_unrelated_config() {
         assert_eq!(
             groups
                 .iter()
-                .filter(|group| group["command"] == json!(command))
+                .filter(|group| group["command"] == json!(command.for_event(event)))
                 .count(),
             1,
             "event {event}"
@@ -288,7 +298,7 @@ fn persistent_config_rejects_a_foreign_server_with_the_reserved_name() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let command = persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let existing = r#"
 model: keep-me
 mcp_servers:
@@ -317,7 +327,7 @@ fn manual_same_named_mcp_and_hooks_are_never_claimed() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let command = persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let manual = serde_yaml::to_string(&json!({
         "mcp_servers": {
             MCP_SERVER_NAME: {"command": relay, "args": ["mcp"], "env": {"CUSTOM": "keep"}}
@@ -373,21 +383,15 @@ fn modern_mcp_generation_proves_ownership_independently_of_hook_completeness() {
     let mut root = persistent_config(
         None,
         &relay,
-        &persistent_hook_command(&relay, &generation, "hook-token").unwrap(),
+        &persistent_hook_commands(&relay, &generation, "hook-token").unwrap(),
         &generation,
         "mcp-token",
         &[],
     )
     .unwrap();
     assert_eq!(
-        owned_install_command(&root, &relay, Some(&generation))
-            .unwrap()
-            .as_deref(),
-        Some(
-            persistent_hook_command(&relay, &generation, "mcp-token")
-                .unwrap()
-                .as_str()
-        )
+        owned_install_command(&root, &relay, Some(&generation)).unwrap(),
+        Some(persistent_hook_commands(&relay, &generation, "mcp-token").unwrap())
     );
 
     root["mcp_servers"][MCP_SERVER_NAME]["command"] = json!(temp.path().join("other/nemo-relay"));
@@ -396,6 +400,43 @@ fn modern_mcp_generation_proves_ownership_independently_of_hook_completeness() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn persistent_config_migrates_modern_single_command_hooks_to_explicit_policies() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let generation = temp.path().join(GENERATION_FILE_NAME);
+    let commands = persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let mut installed = persistent_config(
+        None,
+        &relay,
+        &commands,
+        &generation,
+        TEST_GENERATION_TOKEN,
+        &[],
+    )
+    .unwrap();
+    let legacy = commands.legacy().unwrap();
+    for event in CodingAgent::Hermes.hook_events() {
+        installed["hooks"][event][0]["command"] = json!(legacy);
+    }
+
+    let migrated = persistent_config(
+        Some(&serde_yaml::to_string(&installed).unwrap()),
+        &relay,
+        &commands,
+        &generation,
+        TEST_GENERATION_TOKEN,
+        &[],
+    )
+    .unwrap();
+
+    for event in CodingAgent::Hermes.hook_events() {
+        let hooks = migrated["hooks"][event].as_array().unwrap();
+        assert_eq!(hooks.len(), 1, "event {event}");
+        assert_eq!(hooks[0]["command"], json!(commands.for_event(event)));
+    }
 }
 
 #[test]
@@ -425,7 +466,7 @@ fn trusted_hooks_migrates_only_relay_approvals_and_records_every_event() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let command = persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let existing = json!({
         "schema": 7,
         "approvals": [
@@ -435,9 +476,10 @@ fn trusted_hooks_migrates_only_relay_approvals_and_records_every_event() {
         ]
     });
     let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let legacy = crate::hooks::GeneratedHookCommands::uniform("nemo-relay hook-forward hermes");
     let merged = trusted_hooks(
         Some(&serde_json::to_string(&existing).unwrap()),
-        Some("nemo-relay hook-forward hermes"),
+        Some(&legacy),
         &command,
         &relay,
         now,
@@ -455,7 +497,10 @@ fn trusted_hooks_migrates_only_relay_approvals_and_records_every_event() {
     for event in CodingAgent::Hermes.hook_events() {
         let entries = approvals
             .iter()
-            .filter(|entry| entry["event"] == json!(event) && entry["command"] == json!(command))
+            .filter(|entry| {
+                entry["event"] == json!(event)
+                    && entry["command"] == json!(command.for_event(event))
+            })
             .collect::<Vec<_>>();
         assert_eq!(entries.len(), 1, "event {event}");
         assert_eq!(
@@ -471,7 +516,7 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let command = persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let mut config = persistent_config(
         None,
         &relay,
@@ -481,7 +526,8 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
         &[],
     )
     .unwrap();
-    config["hooks"]["unexpected_event"] = json!([{"command": command, "timeout": 30}]);
+    config["hooks"]["unexpected_event"] =
+        json!([{"command": command.for_event("on_session_start"), "timeout": 30}]);
     let error = verify_hook_definitions(&config, &command).unwrap_err();
     assert!(error.contains("unexpected Relay hook"));
     let mut malformed = persistent_config(
@@ -493,14 +539,15 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
         &[],
     )
     .unwrap();
-    malformed["hooks"]["unexpected_event"] = json!({"command": command});
+    malformed["hooks"]["unexpected_event"] =
+        json!({"command": command.for_event("on_session_start")});
     let error = verify_hook_definitions(&malformed, &command).unwrap_err();
     assert!(error.contains("must be an array"));
 
     let mut allowlist = trusted_hooks(None, None, &command, &relay, UNIX_EPOCH).unwrap();
     allowlist["approvals"].as_array_mut().unwrap().push(json!({
         "event": "unexpected_event",
-        "command": command,
+        "command": command.for_event("on_session_start"),
         "approved_at": "1970-01-01T00:00:00.000000Z"
     }));
     let path = temp.path().join("shell-hooks-allowlist.json");
@@ -513,12 +560,25 @@ fn verification_rejects_relay_handlers_and_approvals_on_unexpected_events() {
         .as_array_mut()
         .unwrap()
         .push(json!({
-            "command": command,
+            "command": command.for_event("on_session_start"),
             "approved_at": "1970-01-01T00:00:00.000000Z"
         }));
     std::fs::write(&path, serde_json::to_vec(&missing_event).unwrap()).unwrap();
     let error = verify_trust(&path, &command).unwrap_err();
     assert!(error.contains("missing its event"));
+
+    let mut wrong_policy = trusted_hooks(None, None, &command, &relay, UNIX_EPOCH).unwrap();
+    wrong_policy["approvals"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "event": "pre_tool_call",
+            "command": command.for_event("on_session_start"),
+            "approved_at": "1970-01-01T00:00:00.000000Z"
+        }));
+    std::fs::write(&path, serde_json::to_vec(&wrong_policy).unwrap()).unwrap();
+    let error = verify_trust(&path, &command).unwrap_err();
+    assert!(error.contains("unexpected Relay hook approval"));
 }
 
 #[test]
@@ -526,7 +586,7 @@ fn hermes_structure_and_trust_validation_cover_exact_failure_shapes() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
     let generation = temp.path().join(GENERATION_FILE_NAME);
-    let command = persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+    let command = persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
 
     let error = trusted_hooks(
         Some(r#"{"approvals": {}}"#),
@@ -617,13 +677,15 @@ fn install_is_verified_idempotent_and_rotates_the_generation() {
 
     let config = yaml(&paths.config);
     let second_command =
-        persistent_hook_command(&relay, &paths.generation, &second_generation).unwrap();
+        persistent_hook_commands(&relay, &paths.generation, &second_generation).unwrap();
     assert_eq!(
         config["hooks"]["on_session_start"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|group| group["command"] == json!(second_command))
+            .filter(|group| {
+                group["command"] == json!(second_command.for_event("on_session_start"))
+            })
             .count(),
         1
     );
@@ -955,6 +1017,41 @@ fn uninstall_removes_only_relay_owned_hermes_state() {
 }
 
 #[test]
+fn uninstall_removes_orphaned_generated_approval_without_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let relay = relay_binary(temp.path());
+    let paths = paths(&temp.path().join("hermes"));
+    let commands =
+        persistent_hook_commands(&relay, &paths.generation, TEST_GENERATION_TOKEN).unwrap();
+    std::fs::create_dir_all(paths.allowlist.parent().unwrap()).unwrap();
+    std::fs::write(
+        &paths.allowlist,
+        serde_json::to_vec(&json!({
+            "approvals": [
+                {
+                    "event": "pre_tool_call",
+                    "command": commands.for_event("pre_tool_call")
+                },
+                {
+                    "event": "custom_event",
+                    "command": "custom-hook"
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let removed = uninstall_persistent_with(paths.clone(), atomic_write).unwrap();
+
+    assert_eq!(removed, vec![paths.allowlist.clone()]);
+    assert_eq!(
+        json_file(&paths.allowlist)["approvals"],
+        json!([{"event": "custom_event", "command": "custom-hook"}])
+    );
+}
+
+#[test]
 fn uninstall_rolls_back_every_file_when_commit_fails() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
@@ -1084,11 +1181,11 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
         &roots[2].config,
         serde_yaml::to_string(&json!({
             "hooks": {
-                "on_session_start": [{"command": persistent_hook_command(
+                "on_session_start": [{"command": persistent_hook_commands(
                     &relay,
                     &roots[2].generation,
                     TEST_GENERATION_TOKEN
-                ).unwrap()}]
+                ).unwrap().for_event("on_session_start")}]
             }
         }))
         .unwrap(),
@@ -1099,11 +1196,11 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
         serde_json::to_vec(&json!({
             "approvals": [{
                 "event": "on_session_start",
-                "command": persistent_hook_command(
+                "command": persistent_hook_commands(
                     &relay,
                     &roots[3].generation,
                     TEST_GENERATION_TOKEN
-                ).unwrap()
+                ).unwrap().for_event("on_session_start")
             }]
         }))
         .unwrap(),
@@ -1124,7 +1221,7 @@ fn persistent_state_detection_recognizes_each_relay_owned_surface() {
 fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() {
     let temp = tempfile::tempdir().unwrap();
     let relay = relay_binary(temp.path());
-    let command = crate::hooks::transparent_hook_forward_command(
+    let command = crate::hooks::transparent_hook_forward_commands(
         &relay,
         CodingAgent::Hermes,
         "http://127.0.0.1:1234",
@@ -1132,7 +1229,7 @@ fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() 
     .unwrap();
     let generation = temp.path().join(GENERATION_FILE_NAME);
     let persistent_command =
-        persistent_hook_command(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
+        persistent_hook_commands(&relay, &generation, TEST_GENERATION_TOKEN).unwrap();
     let mut existing = persistent_config(
         None,
         &relay,
@@ -1172,7 +1269,7 @@ fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() 
             groups
                 .iter()
                 .filter_map(|group| group.get("command").and_then(Value::as_str))
-                .filter(|candidate| **candidate == command)
+                .filter(|candidate| *candidate == command.for_event(event))
                 .count(),
             1,
             "event {event}"
@@ -1180,7 +1277,7 @@ fn transparent_config_suppresses_only_the_managed_mcp_and_uses_one_relay_hook() 
         assert!(
             groups
                 .iter()
-                .any(|group| group["command"] == json!(command))
+                .any(|group| group["command"] == json!(command.for_event(event)))
         );
     }
     assert!(
@@ -1345,21 +1442,18 @@ fn hermes_uninstall_and_verification_reject_malformed_or_residual_state() {
     .unwrap();
 
     let config = yaml(&hermes_paths.config);
-    let command = config["hooks"]["on_session_start"][0]["command"]
-        .as_str()
-        .unwrap()
-        .to_string();
     let token = InstallGeneration::capture(hermes_paths.generation.clone())
         .unwrap()
         .token()
         .to_owned();
+    let command = persistent_hook_commands(&relay, &hermes_paths.generation, &token).unwrap();
     let expected_environment = forwarded_environment_names(&[], None);
 
     let mut duplicate_hook = config.clone();
     duplicate_hook["hooks"]["on_session_start"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"command": command}));
+        .push(json!({"command": command.for_event("on_session_start")}));
     let error = verify_hook_definitions(&duplicate_hook, &command).unwrap_err();
     assert!(
         error.contains("exactly one trusted Relay handler"),
@@ -1406,15 +1500,12 @@ fn hermes_uninstall_and_verification_reject_malformed_or_residual_state() {
         atomic_write,
     )
     .unwrap();
-    let config = yaml(&hermes_paths.config);
-    let command = config["hooks"]["on_session_start"][0]["command"]
-        .as_str()
-        .unwrap()
-        .to_string();
     let expected_token = InstallGeneration::capture(hermes_paths.generation.clone())
         .unwrap()
         .token()
         .to_owned();
+    let command =
+        persistent_hook_commands(&relay, &hermes_paths.generation, &expected_token).unwrap();
     crate::installation::generation::write_new_generation(&hermes_paths.generation).unwrap();
     let error = verify_install(
         &hermes_paths,
@@ -1447,18 +1538,18 @@ fn hermes_uninstall_verifier_identifies_each_residual_owned_surface() {
     install_persistent_with(paths.clone(), &relay, &[], None, UNIX_EPOCH, atomic_write).unwrap();
 
     let command = owned_command_from_config(&yaml(&paths.config), Some(&paths.generation));
-    let error = verify_uninstall(&paths, command.as_deref()).unwrap_err();
+    let error = verify_uninstall(&paths, command.as_ref()).unwrap_err();
     assert!(error.contains("generation fence still exists"), "{error}");
 
     std::fs::remove_file(&paths.generation).unwrap();
-    let error = verify_uninstall(&paths, command.as_deref()).unwrap_err();
+    let error = verify_uninstall(&paths, command.as_ref()).unwrap_err();
     assert!(
         error.contains("managed Hermes Relay config still exists"),
         "{error}"
     );
 
     std::fs::remove_file(&paths.config).unwrap();
-    let error = verify_uninstall(&paths, command.as_deref()).unwrap_err();
+    let error = verify_uninstall(&paths, command.as_ref()).unwrap_err();
     assert!(
         error.contains("managed Hermes Relay trust approval still exists"),
         "{error}"

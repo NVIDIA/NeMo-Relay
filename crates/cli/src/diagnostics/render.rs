@@ -21,7 +21,6 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
             .explicit
             .as_ref()
             .is_some_and(|layer| matches!(layer.status, Status::Fail))
-        || matches!(report.configuration.workspace.status, Status::Fail)
         || matches!(report.configuration.global.status, Status::Fail)
         || matches!(report.configuration.system.status, Status::Fail)
         || matches!(report.configuration.plugin_resolution.status, Status::Fail)
@@ -48,7 +47,11 @@ pub(super) fn report_has_warn(report: &DoctorReport) -> bool {
             .explicit
             .as_ref()
             .is_some_and(|layer| matches!(layer.status, Status::Warn))
-        || matches!(report.configuration.workspace.status, Status::Warn)
+        || report
+            .configuration
+            .unsupported_project_files
+            .iter()
+            .any(|layer| matches!(layer.status, Status::Warn))
         || matches!(report.configuration.global.status, Status::Warn)
         || matches!(report.configuration.system.status, Status::Warn)
         || matches!(report.configuration.plugin_resolution.status, Status::Warn)
@@ -100,10 +103,6 @@ pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport
         out.push_str(&format!("    Explicit   {}\n", format_layer(explicit)));
     }
     out.push_str(&format!(
-        "    Workspace  {}\n",
-        format_layer(&report.configuration.workspace)
-    ));
-    out.push_str(&format!(
         "    Global     {}\n",
         format_layer(&report.configuration.global)
     ));
@@ -111,6 +110,15 @@ pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport
         "    System     {}\n",
         format_layer(&report.configuration.system)
     ));
+    for (index, layer) in report
+        .configuration
+        .unsupported_project_files
+        .iter()
+        .enumerate()
+    {
+        let label = if index == 0 { "Unsupported" } else { "" };
+        out.push_str(&format!("    {label:<11}{}\n", format_layer(layer)));
+    }
     out.push_str(&format!(
         "    Upstream   openai={} anthropic={}\n",
         report.configuration.upstream_auth.openai.as_str(),

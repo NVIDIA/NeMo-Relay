@@ -31,6 +31,9 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if config.Version != 3 {
 		t.Fatalf("expected version 3, got %d", config.Version)
 	}
+	if config.EnableFullPayloads {
+		t.Fatal("full payloads should be disabled by default")
+	}
 	atof := NewObservabilityAtofConfig()
 	if atof.Enabled || len(atof.Sinks) != 0 {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
@@ -71,10 +74,17 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces"),
 	}
 	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
+	maxQueueSize := uint64(4096)
+	maxExportBatchSize := uint64(256)
+	scheduledDelayMillis := uint64(750)
+	otel.Endpoints[0].MaxQueueSize = &maxQueueSize
+	otel.Endpoints[0].MaxExportBatchSize = &maxExportBatchSize
+	otel.Endpoints[0].ScheduledDelayMillis = &scheduledDelayMillis
 
 	config.Atof = &atof
 	config.Atif = &atif
 	config.OpenTelemetry = &otel
+	config.EnableFullPayloads = true
 	wrapped := ObservabilityComponent(config)
 	if wrapped.Kind != ObservabilityPluginKind || !wrapped.Enabled {
 		t.Fatalf("unexpected component wrapper: %#v", wrapped)
@@ -110,6 +120,9 @@ func TestObservabilityAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *
 
 func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec) {
 	t.Helper()
+	if wrapped.Config["enable_full_payloads"] != true {
+		t.Fatalf("expected full payload policy in serialized config, got %#v", wrapped.Config)
+	}
 	if _, ok := wrapped.Config["atof"].(map[string]any); !ok {
 		t.Fatalf("expected serialized ATOF config object, got %#v", wrapped.Config)
 	}
@@ -137,6 +150,28 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	}
 	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {
 		t.Fatalf("expected OpenTelemetry header_env in serialized config: %#v", wrapped.Config)
+	}
+	if otelEndpoints[0].(map[string]any)["max_queue_size"] != float64(4096) ||
+		otelEndpoints[0].(map[string]any)["max_export_batch_size"] != float64(256) ||
+		otelEndpoints[0].(map[string]any)["scheduled_delay_millis"] != float64(750) {
+		t.Fatalf("expected OpenTelemetry batch settings in serialized config: %#v", wrapped.Config)
+	}
+}
+
+func TestObservabilityOpenTelemetryEndpointPreservesExplicitZeroBatchSettings(t *testing.T) {
+	zero := uint64(0)
+	config := NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces")
+	config.MaxQueueSize = &zero
+	config.MaxExportBatchSize = &zero
+	config.ScheduledDelayMillis = &zero
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal OpenTelemetry endpoint config: %v", err)
+	}
+	for _, field := range []string{"max_queue_size", "max_export_batch_size", "scheduled_delay_millis"} {
+		if !strings.Contains(string(payload), `"`+field+`":0`) {
+			t.Fatalf("expected explicit zero %s in serialized config: %s", field, payload)
+		}
 	}
 }
 

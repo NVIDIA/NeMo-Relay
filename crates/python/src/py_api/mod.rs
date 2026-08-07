@@ -62,6 +62,12 @@ fn to_py_err(e: FlowError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 }
 
+#[pyfunction(name = "_shutdown_default_logging")]
+fn py_shutdown_default_logging(py: Python<'_>) -> PyResult<()> {
+    py.detach(nemo_relay::logging::shutdown_default_logging)
+        .map_err(to_py_err)
+}
+
 fn python_event_loop_running(py: Python<'_>) -> PyResult<bool> {
     match py.import("asyncio")?.call_method0("get_running_loop") {
         Ok(_) => Ok(true),
@@ -2083,6 +2089,8 @@ fn scope_deregister_subscriber(scope_uuid: &str, name: &str) -> PyResult<bool> {
 
 /// Register all API functions into the given `PyModule`.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(py_shutdown_default_logging, m)?)?;
+
     // Scope stack creation / binding / query
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;

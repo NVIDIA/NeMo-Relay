@@ -47,6 +47,7 @@ cargo test -p nemo-relay
 cargo test -p nemo-relay-adaptive
 
 # Dynamic plugin crates when touched
+just build-test-plugin-fixtures
 cargo test -p nemo-relay-types
 cargo test -p nemo-relay-plugin
 cargo test -p nemo-relay-worker-proto

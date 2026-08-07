@@ -133,7 +133,7 @@ pub(crate) async fn collect_report(
     };
 
     Ok(DoctorReport {
-        schema_version: 1,
+        schema_version: 2,
         binary_version: env!("CARGO_PKG_VERSION"),
         target_agent: target_agent.map(|agent| agent.as_arg().to_string()),
         environment: collect_environment(),
@@ -163,19 +163,14 @@ fn collect_configuration(
     plugin_diagnostics: &PluginConfigurationDiagnostics,
 ) -> ConfigurationInfo {
     let explicit_config = gateway_overrides.config.is_some();
-    let workspace_path = cwd
-        .and_then(crate::configuration::find_project_config)
-        .or_else(|| cwd.map(|p| p.join(".nemo-relay").join("config.toml")))
-        .unwrap_or_else(|| PathBuf::from(".nemo-relay/config.toml"));
     // Use the same XDG-aware resolver the config loader uses, so doctor reports the path the
     // runtime would actually read instead of a hard-coded `$HOME/.config/nemo-relay`.
     let global_path = crate::configuration::user_config_dir()
         .map(|dir| dir.join("config.toml"))
         .or_else(|| home.map(|h| h.join(".config").join("nemo-relay").join("config.toml")))
         .unwrap_or_else(|| PathBuf::from("~/.config/nemo-relay/config.toml"));
-    let system_path = PathBuf::from("/etc/nemo-relay/config.toml");
+    let system_path = crate::configuration::system_config_dir().join("config.toml");
     let explicit = gateway_overrides.config.as_deref().map(layer_status);
-    let workspace = layer_status(&workspace_path);
     let global = if explicit_config {
         replaced_user_layer_status(&global_path)
     } else {
@@ -190,9 +185,9 @@ fn collect_configuration(
 
     ConfigurationInfo {
         explicit,
-        workspace,
         global,
         system,
+        unsupported_project_files: unsupported_project_files(cwd),
         upstream_auth,
         plugin_configs: diagnostic_plugin_config_paths(
             gateway_overrides.config.as_ref(),
@@ -224,6 +219,26 @@ fn collect_configuration(
             })
             .collect(),
     }
+}
+
+fn unsupported_project_files(cwd: Option<&Path>) -> Vec<ConfigLayer> {
+    let Some(cwd) = cwd else {
+        return Vec::new();
+    };
+    cwd.ancestors()
+        .flat_map(|ancestor| {
+            let directory = ancestor.join(".nemo-relay");
+            ["config.toml", "plugins.toml", ".dynamic-plugins.json"]
+                .map(move |filename| directory.join(filename))
+        })
+        .filter(|path| path.is_file())
+        .map(|path| ConfigLayer {
+            path,
+            status: Status::Warn,
+            active: false,
+            details: "unsupported project file; ignored by Relay; move configuration to a user or system location, or select a config file explicitly".into(),
+        })
+        .collect()
 }
 
 fn plugin_resolution_check(

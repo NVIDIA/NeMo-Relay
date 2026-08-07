@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use chrono::{DateTime, Utc};
@@ -88,6 +88,29 @@ use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
 use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
 
+static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NODE_ENVIRONMENT_LIFECYCLE_LOCK: StdMutex<()> = StdMutex::new(());
+
+fn register_node_environment() -> FlowResult<()> {
+    let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    nemo_relay::logging::initialize_default_logging()?;
+    NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
+    Ok(())
+}
+
+fn cleanup_node_environment() {
+    let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
+        && let Err(error) = nemo_relay::logging::shutdown_default_logging()
+    {
+        eprintln!("nemo-relay: operational logging shutdown failed: {error}");
+    }
+}
+
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(
@@ -127,7 +150,12 @@ fn init() {
 
 #[cfg(not(test))]
 #[napi_derive::module_exports]
-fn install_well_known_symbol_methods(exports: JsObject, env: Env) -> napi::Result<()> {
+fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::Result<()> {
+    register_node_environment().map_err(to_napi_err)?;
+    if let Err(error) = env.add_env_cleanup_hook((), |_| cleanup_node_environment()) {
+        cleanup_node_environment();
+        return Err(error);
+    }
     let activation: JsFunction = exports.get_named_property("DynamicPluginActivation")?;
     let activation = activation.coerce_to_object()?;
     let mut prototype: JsObject = activation.get_named_property("prototype")?;

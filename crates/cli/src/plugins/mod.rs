@@ -151,7 +151,7 @@ fn save_document(
             .any(DynamicPluginEditorState::has_persisted_secrets)
     {
         return Err(CliError::Config(
-            "global plugin configuration cannot contain schema-declared secret values; use a user or project plugin config".into(),
+            "global plugin configuration cannot contain schema-declared secret values; use a user plugin config".into(),
         ));
     }
     for plugin in dynamic_plugins {

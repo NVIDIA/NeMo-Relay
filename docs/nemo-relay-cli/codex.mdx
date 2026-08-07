@@ -171,8 +171,10 @@ process-tree cleanup guarantees.
 
 Persistent plugin mode loads system and user Relay configuration only. It does
 not load a project's `.nemo-relay` files. The sidecar starts in the user Relay
-configuration directory, so relative exporter paths are deterministic. Use a
-transparent `nemo-relay run` when project-specific configuration is required.
+configuration directory, so relative exporter paths are deterministic. When
+configuration belongs with a repository, use `nemo-relay --config
+path/to/config.toml run`; Relay selects its sibling `plugins.toml`
+automatically.
 
 The generated MCP entry forwards variable names, never values, for provider
 credentials, Relay runtime settings, common OpenTelemetry, AWS, proxy, and
@@ -236,7 +238,8 @@ marketplace notes.
 
 ## Configure Transparent Runs
 
-Create `.nemo-relay/config.toml` for project defaults:
+Create `$XDG_CONFIG_HOME/nemo-relay/config.toml` (or
+`~/.config/nemo-relay/config.toml`) for user defaults:
 
 ```toml
 [upstream]
@@ -246,8 +249,8 @@ openai_base_url = "https://api.openai.com/v1"
 command = "codex"
 ```
 
-Then configure observability with `nemo-relay plugins edit --project` or
-`.nemo-relay/plugins.toml`:
+Then configure observability with `nemo-relay plugins edit` or the XDG user
+`plugins.toml`:
 
 ```toml
 version = 1
@@ -261,7 +264,7 @@ enabled = true
 output_directory = ".nemo-relay/atif"
 ```
 
-Run `nemo-relay run --agent codex` to use project-specific configuration. The
+Run `nemo-relay run --agent codex` to use the configuration. The
 ATIF files from this example are written under the project at
 `.nemo-relay/atif`.
 
@@ -269,8 +272,8 @@ ATIF files from this example are written under the project at
 
 Create `~/.config/nemo-relay/config.toml`, or
 `$XDG_CONFIG_HOME/nemo-relay/config.toml` when `XDG_CONFIG_HOME` is set, for
-persistent provider defaults. Use `nemo-relay plugins edit` without
-`--project` to write user-scoped observability configuration. For example, set
+persistent provider defaults. Use `nemo-relay plugins edit` to write
+user-scoped observability configuration. For example, set
 the ATIF output directory to `atif`:
 
 ```toml
@@ -285,8 +288,8 @@ enabled = true
 output_directory = "atif"
 ```
 
-The persistent sidecar deliberately ignores project layers, merges only system
-and user configuration, and starts in the user Relay configuration directory.
+The persistent sidecar uses the same system-over-user configuration model and
+starts in the user Relay configuration directory.
 The relative output directory in this example resolves to
 `$XDG_CONFIG_HOME/nemo-relay/atif`, or `~/.config/nemo-relay/atif` when
 `XDG_CONFIG_HOME` is not set.

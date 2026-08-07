@@ -5,56 +5,23 @@
 
 use std::path::{Path, PathBuf};
 
-use clap::ValueEnum;
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::agents::CodingAgent;
 use crate::error::CliError;
 use crate::plugins::{ConfigurationScope, PluginsEditRequest};
 
-/// Where the setup saves its output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub(crate) enum ConfigScope {
-    /// `./.nemo-relay/config.toml` (walked-up workspace dir).
-    Project,
-    /// `~/.config/nemo-relay/config.toml` (or `$XDG_CONFIG_HOME/nemo-relay/config.toml`).
-    Global,
-    /// Both project and global; project takes precedence per merge order.
-    Both,
-}
-
-impl ConfigScope {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Project => "project   ./.nemo-relay/config.toml          (recommended)",
-            Self::Global => "global    ~/.config/nemo-relay/config.toml",
-            Self::Both => "both      project overrides global",
-        }
-    }
-}
-
-/// Maps the base setup scope to the plugin editor target for the guided continuation.
-///
-/// An explicit plugin path follows the runtime contract and wins over the wizard scope. Without
-/// one, `Project` and `Both` configure the project `plugins.toml`, while `Global` configures the
-/// user `plugins.toml`.
-pub(crate) fn plugins_edit_command_for_scope(
-    scope: ConfigScope,
-    explicit_path: Option<PathBuf>,
-) -> PluginsEditRequest {
-    let scope = match (&explicit_path, scope) {
-        (Some(_), _) => ConfigurationScope::User,
-        (None, ConfigScope::Project | ConfigScope::Both) => ConfigurationScope::Project,
-        (None, ConfigScope::Global) => ConfigurationScope::User,
-    };
+/// Maps setup to the plugin editor target for the guided continuation. An explicit plugin path
+/// follows the runtime contract and wins over the user file.
+pub(crate) fn plugins_edit_command(explicit_path: Option<PathBuf>) -> PluginsEditRequest {
     PluginsEditRequest {
-        scope,
+        scope: ConfigurationScope::User,
         explicit_path,
     }
 }
 
 /// Returns the exact command a user runs to resume plugin setup after skipping the continuation.
-pub(crate) fn plugins_resume_command(scope: ConfigScope, explicit_path: Option<&Path>) -> String {
+pub(crate) fn plugins_resume_command(explicit_path: Option<&Path>) -> String {
     if let Some(path) = explicit_path {
         let path = crate::process::shell_quote_arg_for_platform(
             &path.display().to_string(),
@@ -62,16 +29,12 @@ pub(crate) fn plugins_resume_command(scope: ConfigScope, explicit_path: Option<&
         );
         return format!("nemo-relay --plugin-config-path {path} plugins edit");
     }
-    match scope {
-        ConfigScope::Project | ConfigScope::Both => "nemo-relay plugins edit --project".into(),
-        ConfigScope::Global => "nemo-relay plugins edit".into(),
-    }
+    "nemo-relay plugins edit".into()
 }
 
 /// Resolved answers from setup. Built either by `prompt_user` (interactive) or by tests.
 #[derive(Debug, Clone)]
 pub(crate) struct SetupAnswers {
-    pub scope: ConfigScope,
     pub agents: Vec<CodingAgent>,
 }
 
@@ -127,7 +90,7 @@ pub(crate) fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
     Some(agents_table)
 }
 
-/// Writes the setup's TOML document to the scope-appropriate path(s).
+/// Writes the setup's TOML document to the user configuration path.
 ///
 /// When `merge_scope` is `Some(agent)`, an existing `config.toml` at the target path is parsed
 /// and only the single `[agents.<agent>]` block owned by THIS wizard run is replaced. Other
@@ -139,33 +102,20 @@ pub(crate) fn build_agents_table(answers: &SetupAnswers) -> Option<Table> {
 /// tempdirs.
 pub(crate) fn save_config(
     doc: &DocumentMut,
-    scope: ConfigScope,
-    cwd: &Path,
     home: &Path,
     merge_scope: Option<CodingAgent>,
 ) -> Result<Vec<PathBuf>, CliError> {
-    let mut written = Vec::new();
-    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
-        let project_dir = cwd.join(".nemo-relay");
-        std::fs::create_dir_all(&project_dir)?;
-        let path = project_dir.join("config.toml");
-        write_or_merge(&path, doc, merge_scope)?;
-        written.push(path);
-    }
-    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
-        let global_dir = global_config_dir(home);
-        std::fs::create_dir_all(&global_dir)?;
-        let path = global_dir.join("config.toml");
-        write_or_merge(&path, doc, merge_scope)?;
-        written.push(path);
-    }
-    Ok(written)
+    let user_dir = user_config_dir(home);
+    std::fs::create_dir_all(&user_dir)?;
+    let path = user_dir.join("config.toml");
+    write_or_merge(&path, doc, merge_scope)?;
+    Ok(vec![path])
 }
 
-// Resolves the global nemo-relay config directory. Prefers `$XDG_CONFIG_HOME/nemo-relay` (matches
+// Resolves the user nemo-relay config directory. Prefers `$XDG_CONFIG_HOME/nemo-relay` (matches
 // `config::user_config_dir`), falling back to `<home>/.config/nemo-relay`. Tests that pass a
 // tempdir for `home` get hermetic paths unless they set XDG_CONFIG_HOME explicitly.
-pub(crate) fn global_config_dir(home: &Path) -> PathBuf {
+pub(crate) fn user_config_dir(home: &Path) -> PathBuf {
     if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
         return PathBuf::from(base).join("nemo-relay");
     }
@@ -235,32 +185,20 @@ pub(crate) fn merge_agents_entry(dst: &mut DocumentMut, src: &DocumentMut, agent
     agents_table.insert(agent_key, src_agent.clone());
 }
 
-/// Removes the project `config.toml` (or just one agent's block within it).
+/// Removes the user `config.toml` (or just one agent's block within it).
 ///
-/// `agent_hint = None` deletes the whole project config file. `agent_hint = Some(agent)` parses
+/// `agent_hint = None` deletes the whole user config file. `agent_hint = Some(agent)` parses
 /// the existing file and removes only `[agents.<agent>]`, leaving every other section intact.
-/// In both cases this targets the *project* layer; global and system layers are left to direct
-/// editing because they typically aren't owned by the wizard.
-pub(crate) fn reset(scope: ConfigScope, agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
-    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
-        let cwd = std::env::current_dir()?;
-        reset_config_path(
-            &cwd.join(".nemo-relay").join("config.toml"),
-            "project",
-            agent_hint,
-        )?;
-    }
-    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
-        let home = home_dir().ok_or_else(|| {
-            CliError::Config("cannot resolve the home directory for global reset".into())
-        })?;
-        reset_config_path(
-            &global_config_dir(&home).join("config.toml"),
-            "global",
-            agent_hint,
-        )?;
-    }
-    Ok(())
+/// System configuration is left to direct editing because it is not owned by the wizard.
+pub(crate) fn reset(agent_hint: Option<CodingAgent>) -> Result<(), CliError> {
+    let home = home_dir().ok_or_else(|| {
+        CliError::Config("cannot resolve the home directory for user reset".into())
+    })?;
+    reset_config_path(
+        &user_config_dir(&home).join("config.toml"),
+        "user",
+        agent_hint,
+    )
 }
 
 fn reset_config_path(
@@ -318,49 +256,22 @@ fn reset_config_path(
 /// unparseable the defaults are all-empty and the wizard behaves like a first-run setup.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Defaults {
-    pub(crate) scope: Option<ConfigScope>,
     pub(crate) agents: Vec<CodingAgent>,
 }
 
 impl Defaults {
     pub(crate) fn has_any(&self) -> bool {
-        self.scope.is_some() || !self.agents.is_empty()
+        !self.agents.is_empty()
     }
 }
 
-/// Reads the highest-precedence existing config file and derives wizard defaults from it.
-/// Workspace config wins over global; if both exist, scope defaults to `Both`. Missing or
-/// malformed files yield `None` (the wizard then behaves as if no config existed).
+/// Reads the user config file and derives wizard defaults from it. Missing or malformed files
+/// yield `None` (the wizard then behaves as if no config existed).
 pub(crate) fn read_existing_defaults() -> Option<Defaults> {
-    let cwd = std::env::current_dir().ok()?;
-    let home = home_dir();
-
-    let workspace_path = cwd.join(".nemo-relay").join("config.toml");
-    let global_path = home
-        .as_ref()
-        .map(|h| global_config_dir(h).join("config.toml"));
-
-    let workspace_exists = workspace_path.exists();
-    let global_exists = global_path.as_ref().is_some_and(|p| p.exists());
-
-    let read_doc =
-        |path: &Path| -> Option<DocumentMut> { std::fs::read_to_string(path).ok()?.parse().ok() };
-
-    let doc = match (workspace_exists, global_exists) {
-        (true, _) => read_doc(&workspace_path)?,
-        (false, true) => read_doc(global_path.as_ref()?)?,
-        (false, false) => return None,
-    };
-
-    let scope = match (workspace_exists, global_exists) {
-        (true, true) => Some(ConfigScope::Both),
-        (true, false) => Some(ConfigScope::Project),
-        (false, true) => Some(ConfigScope::Global),
-        (false, false) => None,
-    };
+    let path = user_config_dir(&home_dir()?).join("config.toml");
+    let doc: DocumentMut = std::fs::read_to_string(path).ok()?.parse().ok()?;
 
     Some(Defaults {
-        scope,
         agents: read_agents_from_doc(&doc),
     })
 }
@@ -388,15 +299,8 @@ pub(crate) fn agent_key_and_command(agent: CodingAgent) -> (&'static str, &'stat
     (agent.as_arg(), agent.executable())
 }
 
-pub(crate) fn preview_paths(scope: ConfigScope, cwd: &Path, home: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if matches!(scope, ConfigScope::Project | ConfigScope::Both) {
-        paths.push(cwd.join(".nemo-relay").join("config.toml"));
-    }
-    if matches!(scope, ConfigScope::Global | ConfigScope::Both) {
-        paths.push(global_config_dir(home).join("config.toml"));
-    }
-    paths
+pub(crate) fn preview_paths(home: &Path) -> Vec<PathBuf> {
+    vec![user_config_dir(home).join("config.toml")]
 }
 
 pub(crate) fn home_dir() -> Option<PathBuf> {
