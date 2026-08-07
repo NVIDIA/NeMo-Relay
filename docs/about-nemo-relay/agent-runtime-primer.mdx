@@ -59,24 +59,23 @@ behavior without changing the Relay host.
 
 ## One Agent Run, Two Views
 
-Consider an agent that reads a file and then asks an LLM to summarize it:
+Consider an Agent that reads a file and then asks an LLM to summarize it:
 
 1. Relay opens an Agent scope under the root scope.
-2. The file read runs in a Tool scope under the Agent scope.
-3. After the Tool scope ends, the model request runs in an LLM scope under the
-   same Agent scope.
+2. The managed file read emits Tool start and end events beneath the Agent scope.
+3. After the Tool lifecycle ends, the managed model request emits LLM start and
+   end events beneath the same Agent scope.
 4. Relay ends the Agent scope when the run completes.
 
-Scopes are active as a stack. During the file read, the stack is
-`root -> agent -> tool`. During the model request, it is
-`root -> agent -> llm`. Ending the current Tool or LLM scope pops it from the
-stack and restores the Agent scope as the active owner.
+Scopes are active as a stack. The stack remains `root -> agent` during both
+managed calls. Tool and LLM handles identify their lifecycle events, but managed
+calls do not push those handles onto the scope stack.
 
 Events are recorded separately from the active stack. Relay emits parent-linked
-start and end events for the Agent, Tool, and LLM scopes. Those records remain
-in an event tree after the active scope has closed. A mark records a
-point-in-time fact under the active scope; it does not add another entry to the
-scope stack.
+start and end events for the Agent scope and the Tool and LLM lifecycles. Those
+records remain in an event tree after the Agent scope has closed. A mark records
+a point-in-time fact under the active scope or managed lifecycle; it does not
+add another entry to the scope stack.
 
 <MermaidStyles />
 
@@ -86,15 +85,15 @@ parent-linked event tree.
 ```mermaid
 flowchart LR
   subgraph Active[Active Scope Stack Snapshots]
-    toolStack["root -> agent -> tool"]
-    llmStack["root -> agent -> llm"]
-    toolStack -->|tool ends; LLM starts| llmStack
+    toolStack["root -> agent<br/>(file read)"]
+    llmStack["root -> agent<br/>(model request)"]
+    toolStack -->|Tool lifecycle ends; LLM lifecycle starts| llmStack
   end
 
   subgraph Recorded[Parent-Linked Event Tree]
     agent["Agent scope events"]
-    tool["Tool scope events"]
-    llm["LLM scope events"]
+    tool["Tool lifecycle events"]
+    llm["LLM lifecycle events"]
     mark["Mark event"]
     agent --> tool
     agent --> llm
