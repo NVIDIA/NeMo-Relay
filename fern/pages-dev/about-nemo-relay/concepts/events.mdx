@@ -1,7 +1,7 @@
 ---
 title: "Events"
-description: ""
-position: 2
+description: "Understand ATOF lifecycle events, fields, relationships, and delivery."
+position: 4
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -34,13 +34,25 @@ Emitted when lifecycle work starts or ends. `scope_category` is `start` or
 Emitted for named runtime checkpoints that are not full start/end lifecycle
 pairs.
 
+| Behavior | `scope` | `mark` |
+| --- | --- | --- |
+| Duration | Represents work with a start and end time | Represents one point in time |
+| Pairing | Start and end share a UUID | No paired event |
+| Parentage | Child of the scope active when work starts | Child of the scope active when recorded |
+| Typical uses | Agent, tool, LLM, or function execution | Session start, compaction, skill-load attempt, or other checkpoint |
+
 The coding-agent CLI emits one `session.start` mark when a session lifecycle
 begins. Its metadata includes the logical harness `session_id`, the Relay-owned
 `session_instance_id`, and any configured session metadata such as `user_id`.
 The mark does not copy the native startup-hook payload or force a turn scope to
 open.
 
-## Shared Envelope
+For example, a tool scope and a checkpoint recorded by the same agent can carry
+the same `parent_uuid`. The tool start and end share the tool's `uuid`; the mark
+has its own UUID and no matching end event. Consumers can rely on these
+structural fields without inspecting application-defined `data`.
+
+## Fields Common to Every Event
 
 Every event carries a shared envelope:
 
@@ -73,8 +85,8 @@ subscriber work.
 
 ## Semantic Meaning
 
-These sections describe how event shapes and relationships should be interpreted by
-consumers.
+These sections describe how consumers should interpret event fields and
+relationships.
 
 ### Start and End Pairing
 
@@ -129,12 +141,11 @@ annotations are part of the canonical event JSON under `category_profile` when
 they are present, so ATOF JSONL export and in-process subscriber JSON expose the
 same payload shape. Request annotations use the owning agent's freshness state.
 
-### Event Contract Boundary
+### Event Handoff
 
-The event is the canonical envelope and handoff point for subscribers and
-exporters. Consumers should prefer typed event fields, binding helpers, and
-annotated request or response data before falling back to raw payload
-re-reading.
+Subscribers and exporters receive the completed event after sanitization.
+Consumers should prefer typed event fields, binding helpers, and annotated
+request or response data before reading raw payloads again.
 
 Before that handoff, event sanitizers can replace `data`, `category_profile`,
 and `metadata`. The runtime keeps identity, lifecycle, category, timestamp,
@@ -144,7 +155,7 @@ ordering.
 
 Events preserve runtime facts. They do not decide which scope owns a call, how
 replay or cost policy is applied, how redaction policy is configured, how
-streams are blocked, or how exporter-specific semantic projection works. Those
+streams are blocked, or how an exporter maps fields into its output format. Those
 decisions stay in the session, codec, plugin, guardrail, or exporter layer that
 owns them.
 
@@ -153,8 +164,12 @@ owns them.
 NeMo Relay automatically records an on-demand skill-load attempt when an
 instrumented tool explicitly names a skill or requests a complete `SKILL.md`
 read. The following payload excerpt shows the stable skill-load fields.
-Standard fields from the [shared envelope](#shared-envelope), such as
+Standard [fields common to every event](#fields-common-to-every-event), such as
 `atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
+
+Detection only affects observability. An unsupported or unrecognized read still
+runs normally, but Relay emits no skill-load mark. Skill-load, first-use, and
+reuse analytics can therefore undercount actual loads.
 
 <Warning>
 Automatic skill-load extraction is best effort. Relay emits `skill.load` only
@@ -215,6 +230,12 @@ suffixes and argument fields:
 - Argument fields: `path`, `file_path`, `filepath`, `filename`, `file`,
   `paths`, `uri`, and `absolute_path`.
 
+A shell wrapper is a shell command that launches a supported reader as its
+command string. For example, Relay can inspect
+`bash -lc 'cat ./skills/review/SKILL.md'` or
+`pwsh -Command 'Get-Content ./skills/review/SKILL.md -Raw'`. Relay unwraps at
+most one supported layer before applying the reader rules.
+
 For shell reads, Relay recognizes the following direct shell tool names after
 normalizing case and nonalphanumeric separators:
 
@@ -266,6 +287,15 @@ The mark has these lifecycle semantics:
 - Relay emits at most one mark for each skill in a tool call. A later tool call
   that attempts the same load emits another mark.
 
+The three related facts are intentionally distinct:
+
+- `skill.load` records an attempt detected before execution.
+- The tool end event records whether execution succeeded.
+- `skill.load.inferred` records a prompt expansion that Relay could not confirm
+  as a file read.
+
+Consumers should not treat any one of them as proof of the others.
+
 Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`, and
 tool calls made through the Rust, Python, Node.js, Go/FFI, LangChain, LangGraph,
 and Deep Agents paths use this observed contract. The existing Deep Agents
@@ -281,7 +311,7 @@ Claude Code provides it. Keep inferred and observed counts separate.
 
 Exporters handle the mark as follows:
 
-- ATOF preserves the canonical mark event.
+- ATOF preserves the mark event.
 - ATIF omits marks because it models trajectory steps rather than independent
   point-in-time events.
 - The `full` and `openinference` OpenTelemetry projections use their fixed
@@ -296,5 +326,5 @@ the runtime record important state transitions even when there is no full nested
 callback to wrap. Subscriber delivery is downstream from event construction and
 does not block the emitting call on native bindings.
 
-ATOF export writes this raw canonical event stream. ATIF and the typed
+ATOF export writes the raw ATOF event stream. ATIF and the typed
 OpenTelemetry formats are downstream projections over the same events.
