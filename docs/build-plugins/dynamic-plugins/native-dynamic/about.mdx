@@ -205,7 +205,7 @@ use nemo_relay_plugin::{
 };
 
 let buffered_target = target.clone();
-context.register_async_llm_execution_v2("route", 0, move |_name, request, next| {
+context.register_async_llm_execution_intercept("route", 0, move |_name, request, next| {
     let target = buffered_target.clone();
     async move {
         next.call(LlmContinuationInvocationV2 { request, target })
@@ -215,7 +215,7 @@ context.register_async_llm_execution_v2("route", 0, move |_name, request, next| 
 })?;
 
 let stream_target = target.clone();
-context.register_async_llm_stream_execution_v2(
+context.register_async_llm_stream_execution_intercept(
     "route-stream",
     0,
     move |_name, request, next| {
@@ -233,6 +233,12 @@ context.register_async_llm_stream_execution_v2(
     },
 )?;
 ```
+
+The versioned `register_async_llm_execution_v2` and
+`register_async_llm_stream_execution_v2` methods are aliases for the same
+native API v2 behavior. Existing synchronous
+`register_llm_execution_intercept` and
+`register_llm_stream_execution_intercept` callbacks remain unchanged.
 
 Use `LlmContinuationV2::call_passthrough` to invoke the ordinary untargeted
 downstream continuation for a buffered call. For streaming, return

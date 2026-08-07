@@ -544,6 +544,40 @@ unsafe extern "C" fn drop_safe_v2_callback<F>(user_data: *mut c_void) {
 }
 
 impl PluginContext<'_> {
+    /// Registers a Future-returning typed LLM execution intercept.
+    ///
+    /// Relay polls the Future cooperatively and maps its result to the native
+    /// completion lifecycle.
+    pub fn register_async_llm_execution_intercept<F, Fut>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(String, LlmRequest, LlmContinuationV2) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Json>> + Send + 'static,
+    {
+        self.register_async_llm_execution_v2(name, priority, callback)
+    }
+
+    /// Registers a Future-returning typed LLM stream execution intercept.
+    ///
+    /// Relay polls the Future and any plugin-produced stream cooperatively and
+    /// applies bounded backpressure.
+    pub fn register_async_llm_stream_execution_intercept<F, Fut>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(String, LlmRequest, LlmStreamContinuationV2) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<LlmStreamExecutionOutcomeV2>> + Send + 'static,
+    {
+        self.register_async_llm_stream_execution_v2(name, priority, callback)
+    }
+
     /// Registers a safe asynchronous native API v2 buffered LLM execution callback.
     ///
     /// The callback receives owned Rust values and a cloneable continuation.

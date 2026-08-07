@@ -6763,7 +6763,7 @@ where
     Fut: Future<Output = std::result::Result<Json, String>> + Send + 'static,
 {
     let mut ctx = test_context(&host.v3.v1);
-    ctx.register_async_llm_execution_v2(name, 0, callback)
+    ctx.register_async_llm_execution_intercept(name, 0, callback)
         .unwrap();
     let registration = take_safe_v2_buffered_registration();
     let state = invoke_safe_v2_buffered(
@@ -6787,7 +6787,7 @@ where
     Fut: Future<Output = std::result::Result<LlmStreamExecutionOutcomeV2, String>> + Send + 'static,
 {
     let mut ctx = test_context(&host.v3.v1);
-    ctx.register_async_llm_stream_execution_v2(name, 0, callback)
+    ctx.register_async_llm_stream_execution_intercept(name, 0, callback)
         .unwrap();
     let registration = take_safe_v2_stream_registration();
     let state = invoke_safe_v2_streaming(
@@ -6934,18 +6934,22 @@ fn safe_v2_buffered_registration_wraps_targeted_and_passthrough_calls() {
     let _guard = begin_test();
     let host = test_host_v4();
     let mut ctx = test_context(&host.v3.v1);
-    ctx.register_async_llm_execution_v2("safe-buffered", 7, |name, request, next| async move {
-        assert_eq!(name, "managed-llm");
-        let targeted = next
-            .call(LlmContinuationInvocationV2 {
-                request: request.clone(),
-                target: safe_v2_target(),
-            })
-            .await
-            .map_err(|error| format!("{error:?}"))?;
-        let passthrough = next.call_passthrough(request).await?;
-        Ok(json!({ "targeted": targeted, "passthrough": passthrough }))
-    })
+    ctx.register_async_llm_execution_intercept(
+        "safe-buffered",
+        7,
+        |name, request, next| async move {
+            assert_eq!(name, "managed-llm");
+            let targeted = next
+                .call(LlmContinuationInvocationV2 {
+                    request: request.clone(),
+                    target: safe_v2_target(),
+                })
+                .await
+                .map_err(|error| format!("{error:?}"))?;
+            let passthrough = next.call_passthrough(request).await?;
+            Ok(json!({ "targeted": targeted, "passthrough": passthrough }))
+        },
+    )
     .unwrap();
     let registration = take_safe_v2_buffered_registration();
     assert_eq!(registration.name, "safe-buffered");

@@ -112,8 +112,8 @@ nemo_relay_plugin::nemo_relay_plugin_v2!(
 ```
 
 Set `compat.native_api = "2"` in `relay-plugin.toml`. Rust plugins normally use
-`PluginContext::register_async_llm_execution_v2` and
-`PluginContext::register_async_llm_stream_execution_v2`. The SDK owns the C
+`PluginContext::register_async_llm_execution_intercept` and
+`PluginContext::register_async_llm_stream_execution_intercept`. The SDK owns the C
 callback trampolines, host strings, JSON conversion, panic isolation, output
 settlement, cancellation, and handle release.
 
@@ -125,7 +125,7 @@ use nemo_relay_plugin::{
 };
 
 let buffered_target = target.clone();
-ctx.register_async_llm_execution_v2("route", 0, move |_name, request, next| {
+ctx.register_async_llm_execution_intercept("route", 0, move |_name, request, next| {
     let target = buffered_target.clone();
     async move {
         next.call(LlmContinuationInvocationV2 { request, target })
@@ -134,7 +134,7 @@ ctx.register_async_llm_execution_v2("route", 0, move |_name, request, next| {
     }
 })?;
 
-ctx.register_async_llm_stream_execution_v2("route-stream", 0, move |_name, request, next| {
+ctx.register_async_llm_stream_execution_intercept("route-stream", 0, move |_name, request, next| {
     let target = target.clone();
     async move {
         let provider = next
@@ -146,6 +146,12 @@ ctx.register_async_llm_stream_execution_v2("route-stream", 0, move |_name, reque
     }
 })?;
 ```
+
+The versioned `register_async_llm_execution_v2` and
+`register_async_llm_stream_execution_v2` names remain aliases for the same
+native API v2 behavior. Existing synchronous
+`register_llm_execution_intercept` and
+`register_llm_stream_execution_intercept` callbacks remain unchanged.
 
 To invoke the ordinary untargeted downstream continuation for a buffered
 request, call `LlmContinuationV2::call_passthrough`. For streaming, return
