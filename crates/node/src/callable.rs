@@ -1271,20 +1271,32 @@ fn create_js_event_subscriber_function(
         let completed = Arc::new(AtomicBool::new(false));
         let completed_callback = Arc::clone(&completed);
         let callback_name = name.clone();
-        let complete = create_js_subscriber_completion_callback(
-            &ctx.env,
-            callback_name,
+        let complete = complete_subscriber_callback_on_error(
             callback_id,
-            completed_callback,
+            create_js_subscriber_completion_callback(
+                &ctx.env,
+                callback_name,
+                callback_id,
+                completed_callback,
+            ),
         )?;
-        let event = unsafe {
-            JsUnknown::from_raw_unchecked(
+        let event = complete_subscriber_callback_on_error(callback_id, unsafe {
+            Ok(JsUnknown::from_raw_unchecked(
                 ctx.env.raw(),
                 Json::to_napi_value(ctx.env.raw(), event)?,
-            )
-        };
+            ))
+        })?;
         let complete = unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), complete.raw()) };
         Ok(vec![event, complete])
+    })
+}
+
+fn complete_subscriber_callback_on_error<T>(
+    callback_id: u64,
+    result: napi::Result<T>,
+) -> napi::Result<T> {
+    result.inspect_err(|_| {
+        complete_js_subscriber_callback(callback_id);
     })
 }
 
@@ -1588,4 +1600,29 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
             })
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscriber_callback_completion_is_idempotent() {
+        let callback_id = reserve_js_subscriber_callback();
+        complete_js_subscriber_callback(callback_id);
+        complete_js_subscriber_callback(callback_id);
+
+        assert!(flush_js_subscriber_callbacks().is_ok());
+    }
+
+    #[test]
+    fn subscriber_callback_preparation_errors_release_pending_ids() {
+        for message in ["completion callback", "event conversion"] {
+            let callback_id = reserve_js_subscriber_callback();
+            let result: napi::Result<()> = Err(napi::Error::from_reason(message));
+
+            assert!(complete_subscriber_callback_on_error(callback_id, result).is_err());
+            assert!(flush_js_subscriber_callbacks().is_ok());
+        }
+    }
 }
