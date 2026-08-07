@@ -4,7 +4,8 @@
 """Tests for built-in codec Python classes and LlmResponseCodec protocol.
 
 Covers:
-- Built-in codec construction (OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec, GeminiGenerateContentCodec)
+- Built-in codec construction for OpenAIChatCodec, OpenAIResponsesCodec,
+  AnthropicMessagesCodec, and GeminiGenerateContentCodec
 - Built-in codec decode/encode/decode_response methods for all four providers
 - LlmResponseCodec protocol
 - response_codec parameter accepts object (not string)
