@@ -41,6 +41,7 @@ INFRASTRUCTURE_PATTERNS = (
     "connection refused",
     "connection reset",
     "connection timed out",
+    "command failed (exit 137)",
     "connecterror",
     "context deadline exceeded",
     "docker build failed",
