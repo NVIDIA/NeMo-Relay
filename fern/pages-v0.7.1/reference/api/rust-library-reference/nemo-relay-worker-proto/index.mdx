@@ -1,0 +1,27 @@
+---
+title: "nemo-relay-worker-proto"
+sidebar-title: "nemo-relay-worker-proto"
+description: "Versioned gRPC protocol for NeMo Relay out-of-process worker plugins."
+position: 7
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Versioned gRPC protocol for NeMo Relay out-of-process worker plugins.
+
+The protobuf schema owns transport control flow. Relay data transfer objects are carried as JSON envelopes so `nemo-relay-types` remains the shared source of truth for event, LLM, tool, scope, and plugin diagnostic data shapes.
+
+## Modules
+
+- [v1](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1): Generated protobuf and gRPC service definitions.
+
+## Constants
+
+- [WORKER_PROTOCOL_GRPC_V1](/reference/api/rust-library-reference/nemo-relay-worker-proto/constant-worker-protocol-grpc-v1): Stable worker protocol identifier accepted by `compat.worker_protocol`.
+
+## Functions
+
+- [decode_json_envelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-decode-json-envelope): Decodes a JSON envelope into the requested DTO type.
+- [json_envelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/fn-json-envelope): Creates a JSON envelope from a serializable DTO.

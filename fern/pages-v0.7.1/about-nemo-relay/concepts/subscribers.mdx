@@ -1,0 +1,252 @@
+---
+title: "Subscribers"
+description: "Understand NeMo Relay subscribers, delivery behavior, scope visibility, and exporter roles."
+position: 5
+---
+import { MermaidStyles } from "@/components/MermaidStyles";
+
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page explains how subscribers consume lifecycle events without changing runtime
+execution.
+
+## What Subscribers Are
+
+Subscribers are consumers of the NeMo Relay event stream. They receive emitted
+lifecycle events and use them for observation, forwarding, export, or analysis.
+On native Rust, Python, Node.js, and FFI surfaces, event-producing calls enqueue
+subscriber delivery on a process-wide background dispatcher and return without
+waiting for subscriber callbacks or exporter work.
+
+## How Subscribers Relate to Events
+
+Events describe what happened. Subscribers are the components that watch those
+events.
+
+In this documentation, an event is **emitted** when the runtime submits it for
+subscriber dispatch. An event is **delivered** to a subscriber when its callback
+runs. An event is **exported** when an exporter completes the downstream work
+defined by its API. On native targets, these are separate milestones.
+
+That separation matters:
+
+- The runtime can emit one canonical event stream
+- Native event calls stay non-blocking for subscriber work
+- Many subscribers can consume that same stream
+- Observability behavior stays downstream from execution semantics
+
+## Registration Levels
+
+Middleware and subscribers can be registered at different levels depending on their
+lifetime and visibility.
+
+### Global Subscribers
+
+Global subscribers remain active process-wide until they are removed.
+
+### Scope-Local Subscribers
+
+Scope-local subscribers are owned by one active scope and disappear when that
+scope closes.
+
+Deregistering a subscriber affects future emissions. Events that were already
+emitted carry a subscriber snapshot, so queued callbacks from that snapshot can
+still run after deregistration.
+
+### Plugin-Installed Subscribers
+
+Plugins can install subscribers as reusable, configuration-driven runtime
+components.
+
+## What Subscribers Consume
+
+Subscribers consume the canonical event stream. They do not define the event
+model. They react to it.
+
+This lets plain subscribers, exporters, and tracing adapters share one runtime
+source of truth.
+
+## Common Subscriber Roles
+
+Subscribers are commonly used for in-process observation, counters, debugging, and
+exporter handoff.
+
+### In-Process Observation
+
+Some subscribers stay inside the process and power custom logging, analytics, or
+debugging logic.
+
+#### Host Integration Event JSON
+
+For host integrations that need a serialized event payload, use the event
+object's canonical JSON helpers instead of reconstructing payloads from native
+attributes. Python subscribers can call `event.to_dict()` or `event.to_json()`
+from the callback while still using the normal subscriber registration API.
+
+This pattern is useful when an agent runtime, framework adapter, or plugin host
+already has its own lifecycle hooks but wants NeMo Relay to be the shared
+telemetry representation. The host integration maps those hooks into NeMo Relay
+scopes, LLM calls, tool calls, or marks. NeMo Relay emits the canonical ATOF event
+stream, and each subscriber chooses whether to consume the native event object,
+the canonical JSON helper, or an exporter-specific translation.
+
+<MermaidStyles />
+
+```mermaid
+flowchart
+    Host[Host Integration]
+
+    subgraph NeMoFlow[NeMo Relay]
+        direction TB
+        Binding[Binding API]
+        Core[Rust Core Runtime]
+        Events[Canonical ATOF Event Stream]
+        Dispatcher[Async Subscriber Dispatcher]
+        Observer[In-Process Subscriber]
+        Json[Canonical Event JSON]
+        Exporters[Exporter Subscribers]
+        Backends[JSONL / ATIF / OTLP]
+
+        Binding -->|emits scopes, tools, LLMs, marks| Core
+        Core --> Events
+        Events --> Dispatcher
+        Dispatcher --> Observer
+        Observer -->|to_dict / to_json / JSON| Json
+        Dispatcher --> Exporters
+        Exporters --> Backends
+    end
+
+    Host -->|maps lifecycle hooks| Binding
+    Json -. host consumes canonical telemetry .-> Host
+```
+
+The important boundary is that subscribers do not define the event schema. They
+receive the runtime event and can serialize it through the binding helper when
+they need a stable JSON payload. Exporter subscribers, such as the ATOF JSONL
+exporter, consume the same event stream and serialize the same canonical event
+shape for their target backend.
+
+Native subscribers are invoked by one process-wide worker thread in FIFO event
+order and subscriber snapshot order.
+
+<Warning>
+Subscriber callbacks are not re-entrant. Do not invoke a NeMo Relay API that
+runs middleware, flushes subscriber delivery, waits on an exporter, or clears
+plugins from a subscriber callback. Scope APIs remain supported: callbacks may
+create, push, or pop scopes at any nesting level and may replace the active
+scope stack with an arbitrary stack. Emitting a new event is the only
+supported operation that can enqueue additional callback work; Relay queues
+that event behind the active publication instead of recursively delivering it.
+</Warning>
+
+## Waiting for Delivery
+
+An event-producing call returning is not a delivery barrier. These guarantees
+apply when you call a barrier outside a native subscriber callback. Use the
+following milestones to choose the barrier that matches the output you need to
+observe:
+
+| Milestone | What It Establishes | What It Does Not Establish |
+|---|---|---|
+| Event-producing call returns | The runtime call completed. On native targets, the runtime normally queues subscriber work for background dispatch. | Subscriber callbacks ran, exporter work completed, or output is visible or durable. |
+| Subscriber flush returns | All native subscriber callbacks queued before the flush call have completed. | Exporter-owned workers drained or a remote backend accepted the data. |
+| Exporter barrier returns | The runtime drained the shared subscriber queue, and the exporter completed its documented `force_flush()`, `export()`, or equivalent operation. For a worker-backed exporter, that operation can stop after its configured timeout. | Exactly-once delivery, machine-crash durability, confirmed completion by a worker that timed out, or success beyond the exporter's documented error and timeout behavior. |
+| Plugin clear or exporter shutdown returns | NeMo Relay completed the component's documented graceful teardown steps, or reported an error. | Retention if the process terminates before teardown completes or completion by a worker that timed out during teardown. |
+| Process terminates before a barrier | You can observe only callback side effects and exporter work that completed before termination. | Retention of queued subscriber callbacks or pending exporter work. |
+
+Use the subscriber flush API when application shutdown, tests, or examples must
+observe side effects from callbacks that were already queued before the barrier:
+
+- Rust: `nemo_relay::api::subscriber::flush_subscribers()?`
+- Python: `nemo_relay.subscribers.flush()` from synchronous code, or
+  `await nemo_relay.subscribers.flush_async()` from an `asyncio` task
+- Node.js: `await flushSubscribers()`, then await an event-loop tick for JavaScript
+  callback side effects
+- FFI: `nemo_relay_flush_subscribers()`
+
+Events emitted concurrently after the flush barrier are not covered by that
+call. Exporters with their own workers or batch processors require the
+exporter-specific flush, export, or shutdown operation described in
+[Observability](/configure-plugins/observability/about).
+
+<Warning>
+Do not invoke a subscriber flush, an exporter barrier, or plugin clear from a
+subscriber, event-sanitizer, conditional-guardrail, request-intercept, or
+execution-intercept callback. These operations are not supported there and do
+not establish a valid delivery barrier; depending on the binding or exporter,
+they can also create a wait cycle. Run them after the callback returns.
+
+Queued tool and LLM observability sanitizers are a narrow exception: Python and
+Node.js permit a subscriber flush call there, but it returns without waiting
+for the sanitizer's own publication.
+
+If the process terminates before subscriber delivery and exporter teardown
+complete, queued telemetry can be lost. Returning from the event-producing API
+does not make that telemetry crash-safe.
+
+</Warning>
+
+### Forwarding and Export
+
+Some subscribers translate the event stream into external formats or transport
+it to another system.
+
+### Analytics and Diagnostics
+
+Some subscribers derive measurements, trajectories, or diagnostics from the
+event stream without affecting execution behavior.
+
+## Built-In Subscriber Examples
+
+These examples show how built-in subscriber patterns relate to custom subscribers and
+exporters.
+
+### Custom Subscribers
+
+A plain custom subscriber is the right choice when you want in-process handling
+of the canonical event stream.
+
+### Agent Trajectory Interchange Format (ATIF) Exporter
+
+The [Agent Trajectory Interchange Format (ATIF) exporter](/configure-plugins/observability/atif)
+collects lifecycle events and emits trajectory artifacts for offline analysis,
+replay, or debugging.
+
+### Agent Trajectory Observability Format (ATOF) JSONL Exporter
+
+The [Agent Trajectory Observability Format (ATOF) JSONL exporter](/configure-plugins/observability/atof)
+writes the canonical event stream to a native filesystem path as one raw ATOF
+event per line.
+
+### OpenTelemetry Subscriber
+
+The OpenTelemetry subscriber maps runtime events into OTLP traces for tracing
+backends. Each subscriber uses one `full`, `gen_ai`, or `openinference`
+projection. Select `openinference` for model-centric OpenInference semantics;
+there is no separate OpenInference subscriber.
+
+Detailed setup, configuration, and API shape for this subscriber belongs in
+[Observability](/configure-plugins/observability/about).
+For configuration-driven setup, use the built-in
+[`observability` plugin](/configure-plugins/observability/configuration)
+to install ATOF, ATIF, and typed OpenTelemetry exporters from one plugin
+component.
+
+## Practical Guidance
+
+Use these practices when applying the concept in application or integration code.
+
+- Use a plain subscriber when you want in-process custom behavior.
+- Flush subscribers before inspecting printed output, captured lists, or other
+  custom callback side effects.
+- Use the exporter's documented barrier before inspecting exporter output.
+- Clear plugin-managed exporters during graceful shutdown.
+- Use `event.to_dict()` or `event.to_json()` when a host runtime or exporter
+  needs the canonical event JSON shape in-process.
+- Use a scope-local subscriber when the observation should disappear with the
+  owning scope.
+- Use a plugin-installed subscriber when the behavior should be reusable and
+  config-driven.
+- Use an exporter-oriented subscriber when the event stream should leave the
+  process.

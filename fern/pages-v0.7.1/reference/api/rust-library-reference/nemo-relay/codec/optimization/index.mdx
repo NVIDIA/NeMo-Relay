@@ -1,0 +1,31 @@
+---
+title: "Module optimization"
+sidebar-title: "optimization"
+description: "Re-exported plugin-neutral LLM optimization data types."
+position: 5
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+Re-exported plugin-neutral LLM optimization data types.
+
+## Structs
+
+- [LlmOptimizationContribution](/reference/api/rust-library-reference/nemo-relay/codec/optimization/struct-llmoptimizationcontribution): One optimizer's evidence for a change to an LLM call.
+- [LlmOptimizationKind](/reference/api/rust-library-reference/nemo-relay/codec/optimization/struct-llmoptimizationkind): Open, forward-compatible optimization classification.
+- [LlmOptimizationModel](/reference/api/rust-library-reference/nemo-relay/codec/optimization/struct-llmoptimizationmodel): Model identity used for counterfactual and effective pricing.
+- [LlmOptimizationModelTransition](/reference/api/rust-library-reference/nemo-relay/codec/optimization/struct-llmoptimizationmodeltransition): A model change proposed or applied by an optimizer.
+- [LlmOptimizationSummary](/reference/api/rust-library-reference/nemo-relay/codec/optimization/struct-llmoptimizationsummary): Close-time accounting attached to the normalized LLM response.
+- [LlmOptimizationTokenImpact](/reference/api/rust-library-reference/nemo-relay/codec/optimization/struct-llmoptimizationtokenimpact): Shared token evidence that Relay can aggregate without understanding a plugin payload.
+- [LlmOptimizationTokens](/reference/api/rust-library-reference/nemo-relay/codec/optimization/struct-llmoptimizationtokens): Token quantities retained independently from pricing arithmetic.
+
+## Enums
+
+- [LlmOptimizationEvidenceQuality](/reference/api/rust-library-reference/nemo-relay/codec/optimization/enum-llmoptimizationevidencequality): Whether token evidence was observed directly or estimated.
+- [LlmOptimizationSummaryStatus](/reference/api/rust-library-reference/nemo-relay/codec/optimization/enum-llmoptimizationsummarystatus): Completeness of close-time optimization accounting.
+
+## Traits
+
+- [LlmOptimizationPayload](/reference/api/rust-library-reference/nemo-relay/codec/optimization/trait-llmoptimizationpayload): Trait implemented by typed plugin payloads embedded in an optimization contribution.
