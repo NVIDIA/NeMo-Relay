@@ -94,14 +94,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
 
-Copy and protect the environment file outside the checkout. Replace every
+Copy and protect the environment file at the example root. Replace every
 placeholder, including the complete provider Authorization header. Do not
 source this file into the interactive shell used to start `tmux`.
 
 ```bash
-cp .env.example /absolute/private/.env
-chmod 0600 /absolute/private/.env
-./scripts/validate_phase2_environment.sh /absolute/private/.env
+cp .env.example .env
+chmod 0600 .env
+./scripts/validate_phase2_environment.sh .env
 ```
 
 The validator reports names and paths only. It rejects legacy secret-file
@@ -119,7 +119,7 @@ For the commands below, enter a short-lived shell with tracing disabled:
 ```bash
 set +x
 set -a
-source /absolute/private/.env
+source .env
 set +a
 set +x
 ```
@@ -248,9 +248,7 @@ active cohort. No environment file or secret is copied into the snapshot.
 
 ```bash
 exit  # only when returning from the short-lived admission shell above
-./scripts/launch_phase2_tmux.sh \
-  /absolute/private/.env \
-  harbor-hermes-switchyard-phase2-run-1
+./scripts/launch_phase2_tmux.sh harbor-hermes-switchyard-phase2-run-1
 ```
 
 Operational commands:
@@ -273,7 +271,7 @@ tmux send-keys -t harbor-hermes-switchyard-phase2-run-1 C-c
 # After the old session exits, resume from the run-bound snapshot. This also
 # works after a checkout update or host reboot.
 /absolute/path/to/phase2-run-root/runtime-harness/scripts/launch_phase2_tmux.sh \
-  /absolute/private/.env \
+  /absolute/path/to/examples/harbor-hermes-switchyard/.env \
   harbor-hermes-switchyard-phase2-run-1
 ```
 

@@ -7,10 +7,11 @@ set +x
 
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="${TERMINAL_BENCH_ENV_FILE:-${1:-}}"
-if [[ -z "$env_file" || "$env_file" != /* ]]; then
-  echo "TERMINAL_BENCH_ENV_FILE must be an absolute path" >&2
+if [[ -z "$env_file" || ! -f "$env_file" ]]; then
+  echo "TERMINAL_BENCH_ENV_FILE must reference an existing environment file" >&2
   exit 2
 fi
+env_file="$(cd "$(dirname "$env_file")" && pwd)/$(basename "$env_file")"
 
 "$example_root/scripts/validate_phase2_environment.sh" "$env_file"
 set -a

@@ -314,6 +314,8 @@ def test_durable_supervisor_owns_the_coordinator_process_group() -> None:
 def test_tmux_launcher_projects_only_the_protected_file_path() -> None:
     launcher = (EXAMPLE_ROOT / "scripts" / "launch_phase2_tmux.sh").read_text(encoding="utf-8")
     child = (EXAMPLE_ROOT / "scripts" / "run_phase2_from_env.sh").read_text(encoding="utf-8")
+    assert 'env_file="$example_root/.env"' in launcher
+    assert 'usage: $0 [env-file] tmux-session-name' in launcher
     assert '-e "TERMINAL_BENCH_ENV_FILE=$env_file"' in launcher
     assert 'source "$env_file"' not in launcher
     assert "tmux has-session" in launcher

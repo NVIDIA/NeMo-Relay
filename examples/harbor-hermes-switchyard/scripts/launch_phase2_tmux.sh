@@ -5,12 +5,21 @@
 set -euo pipefail
 
 example_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-env_file="${1:-}"
-session="${2:-}"
-if [[ -z "$env_file" || "$env_file" != /* || -z "$session" ]]; then
-  echo "usage: $0 /absolute/.env tmux-session-name" >&2
+if [[ "$#" -eq 1 ]]; then
+  env_file="$example_root/.env"
+  session="$1"
+elif [[ "$#" -eq 2 ]]; then
+  env_file="$1"
+  session="$2"
+else
+  echo "usage: $0 [env-file] tmux-session-name" >&2
   exit 2
 fi
+if [[ ! -f "$env_file" ]]; then
+  echo "Phase 2 environment file does not exist: $env_file" >&2
+  exit 2
+fi
+env_file="$(cd "$(dirname "$env_file")" && pwd)/$(basename "$env_file")"
 if [[ ! "$session" =~ ^[A-Za-z0-9_.-]+$ ]]; then
   echo "tmux session name may contain only letters, digits, dot, underscore, and dash" >&2
   exit 2

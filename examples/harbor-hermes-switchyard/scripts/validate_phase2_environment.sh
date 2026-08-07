@@ -6,10 +6,11 @@ set -euo pipefail
 set +x
 
 env_file="${1:-}"
-if [[ -z "$env_file" || "$env_file" != /* || ! -f "$env_file" ]]; then
-  echo "usage: $0 /absolute/.env" >&2
+if [[ -z "$env_file" || ! -f "$env_file" ]]; then
+  echo "usage: $0 .env" >&2
   exit 2
 fi
+env_file="$(cd "$(dirname "$env_file")" && pwd)/$(basename "$env_file")"
 if mode="$(stat -f '%Lp' "$env_file" 2>/dev/null)"; then
   :
 else
