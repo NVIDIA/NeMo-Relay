@@ -317,6 +317,14 @@ jobs:
           # Rust's musl targets default to a static CRT, which cannot emit a cdylib.
           if [[ "$target" == *-unknown-linux-musl ]]; then
             export RUSTFLAGS="${RUSTFLAGS:+${RUSTFLAGS} }-C target-feature=-crt-static"
+            case "$target" in
+              x86_64-unknown-linux-musl)
+                export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+                ;;
+              aarch64-unknown-linux-musl)
+                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc
+                ;;
+            esac
           fi
           cargo build --locked --release \
             --manifest-path plugins/pii-rampart/Cargo.toml \
