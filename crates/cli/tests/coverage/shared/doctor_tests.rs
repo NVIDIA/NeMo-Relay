@@ -1201,11 +1201,16 @@ async fn opentelemetry_doctor_skips_live_network_probes_offline() {
 
     assert_eq!(checks.len(), 2);
     assert!(checks.iter().all(|check| check.status == Status::Info));
-    assert!(checks.iter().all(|check| {
-        check
+    assert!(
+        checks[0]
             .details
-            .contains("live network probe skipped (--offline)")
-    }));
+            .contains("endpoints[0] (gen_ai): live network probe skipped (--offline)")
+    );
+    assert!(
+        checks[1]
+            .details
+            .contains("endpoints[1] (openinference): live network probe skipped (--offline)")
+    );
 }
 
 #[tokio::test]
@@ -1229,8 +1234,10 @@ async fn opentelemetry_doctor_offline_still_rejects_malformed_endpoints() {
     .await;
 
     assert_eq!(checks.len(), 2);
-    assert!(checks[0].details.contains("invalid gRPC endpoint"));
-    assert!(checks[1].details.contains("invalid OTLP HTTP endpoint"));
+    assert!(checks[0].details.starts_with("endpoints[0] (gen_ai): "));
+    assert!(checks[0].details.contains("gRPC endpoint"));
+    assert!(checks[1].details.starts_with("endpoints[1] (full): "));
+    assert!(checks[1].details.contains("OTLP HTTP endpoint"));
     assert!(checks.iter().all(|check| check.status == Status::Fail));
 }
 

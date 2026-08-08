@@ -1227,48 +1227,7 @@ pub fn wrap_js_event_subscriber(
 ) -> napi::Result<EventSubscriberFn> {
     let callback = safe_subscriber_callback(env, &callback)?;
     let queue_error_name = name.clone();
-    let mut func = callback.create_threadsafe_function::<
-        JsSubscriberCallbackCall,
-        JsUnknown,
-        _,
-        ErrorStrategy::CalleeHandled,
-    >(0, move |ctx: ThreadSafeCallContext<JsSubscriberCallbackCall>| {
-        let JsSubscriberCallbackCall { event, callback_id } = ctx.value;
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_callback = Arc::clone(&completed);
-        let callback_name = name.clone();
-        let complete = ctx.env.create_function_from_closure(
-            "__nemo_relay_complete_subscriber_callback",
-            move |ctx| {
-                if completed_callback
-                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                    .is_ok()
-                {
-                    if ctx.length > 0 {
-                        match ctx.get::<String>(0) {
-                            Ok(message) => record_callback_error(format!(
-                                "nemo_relay: JS event subscriber '{callback_name}' failed: {message}"
-                            )),
-                            Err(error) => record_callback_error(format!(
-                                "nemo_relay: failed to read JS event subscriber \
-                                 '{callback_name}' failure: {error}"
-                            )),
-                        }
-                    }
-                    complete_js_subscriber_callback(callback_id);
-                }
-                ctx.env.get_undefined()
-            },
-        )?;
-        let event = unsafe {
-            JsUnknown::from_raw_unchecked(
-                ctx.env.raw(),
-                Json::to_napi_value(ctx.env.raw(), event)?,
-            )
-        };
-        let complete = unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), complete.raw()) };
-        Ok(vec![event, complete])
-    })?;
+    let mut func = create_js_event_subscriber_function(&callback, name)?;
     func.unref(env)?;
     let func = Arc::new(func);
     Ok(Arc::new(move |event: &Event| {
@@ -1296,6 +1255,81 @@ pub fn wrap_js_event_subscriber(
             complete_js_subscriber_callback(callback_id);
         }
     }))
+}
+
+fn create_js_event_subscriber_function(
+    callback: &JsFunction,
+    name: String,
+) -> napi::Result<ThreadsafeFunction<JsSubscriberCallbackCall, ErrorStrategy::CalleeHandled>> {
+    callback.create_threadsafe_function::<
+        JsSubscriberCallbackCall,
+        JsUnknown,
+        _,
+        ErrorStrategy::CalleeHandled,
+    >(0, move |ctx: ThreadSafeCallContext<JsSubscriberCallbackCall>| {
+        let JsSubscriberCallbackCall { event, callback_id } = ctx.value;
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_callback = Arc::clone(&completed);
+        let callback_name = name.clone();
+        let complete = complete_subscriber_callback_on_error(
+            callback_id,
+            create_js_subscriber_completion_callback(
+                &ctx.env,
+                callback_name,
+                callback_id,
+                completed_callback,
+            ),
+        )?;
+        let event = complete_subscriber_callback_on_error(callback_id, unsafe {
+            Ok(JsUnknown::from_raw_unchecked(
+                ctx.env.raw(),
+                Json::to_napi_value(ctx.env.raw(), event)?,
+            ))
+        })?;
+        let complete = unsafe { JsUnknown::from_raw_unchecked(ctx.env.raw(), complete.raw()) };
+        Ok(vec![event, complete])
+    })
+}
+
+fn complete_subscriber_callback_on_error<T>(
+    callback_id: u64,
+    result: napi::Result<T>,
+) -> napi::Result<T> {
+    result.inspect_err(|_| {
+        complete_js_subscriber_callback(callback_id);
+    })
+}
+
+fn create_js_subscriber_completion_callback(
+    env: &Env,
+    callback_name: String,
+    callback_id: u64,
+    completed_callback: Arc<AtomicBool>,
+) -> napi::Result<JsFunction> {
+    env.create_function_from_closure("__nemo_relay_complete_subscriber_callback", move |ctx| {
+        if completed_callback
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            record_js_subscriber_callback_error(&ctx, &callback_name);
+            complete_js_subscriber_callback(callback_id);
+        }
+        ctx.env.get_undefined()
+    })
+}
+
+fn record_js_subscriber_callback_error(ctx: &napi::CallContext, callback_name: &str) {
+    if ctx.length == 0 {
+        return;
+    }
+    match ctx.get::<String>(0) {
+        Ok(message) => record_callback_error(format!(
+            "nemo_relay: JS event subscriber '{callback_name}' failed: {message}"
+        )),
+        Err(error) => record_callback_error(format!(
+            "nemo_relay: failed to read JS event subscriber '{callback_name}' failure: {error}"
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------

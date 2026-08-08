@@ -453,45 +453,55 @@ fn lossy_gemini_part(part: &Json, plain_text_parts: &mut usize) -> bool {
         return true;
     };
     match data_key {
-        "text" => {
-            if !object.get("text").is_some_and(Json::is_string) {
-                return true;
-            }
-            if object.len() == 1 {
-                *plain_text_parts += 1;
-            }
-            false
-        }
-        "functionCall" => {
-            object.keys().any(|key| key != "functionCall")
-                || match object.get("functionCall").and_then(Json::as_object) {
-                    Some(fc) => {
-                        fc.keys()
-                            .any(|key| !matches!(key.as_str(), "name" | "id" | "args"))
-                            || fc.get("args").is_some_and(|args| !args.is_object())
-                    }
-                    None => true,
-                }
-        }
-        "functionResponse" => {
-            object.keys().any(|key| key != "functionResponse")
-                || match object.get("functionResponse").and_then(Json::as_object) {
-                    Some(fr) => {
-                        fr.keys().any(|key| {
-                            !matches!(key.as_str(), "id" | "name" | "response" | "parts")
-                        }) || match (
-                            fr.get("id").and_then(Json::as_str),
-                            fr.get("name").and_then(Json::as_str),
-                        ) {
-                            (Some(id), Some(name)) => id != name,
-                            _ => false,
-                        }
-                    }
-                    None => true,
-                }
-        }
+        "text" => lossy_gemini_text_part(object, plain_text_parts),
+        "functionCall" => lossy_gemini_function_call_part(object),
+        "functionResponse" => lossy_gemini_function_response_part(object),
         _ => false,
     }
+}
+
+fn lossy_gemini_text_part(
+    object: &serde_json::Map<String, Json>,
+    plain_text_parts: &mut usize,
+) -> bool {
+    if !object.get("text").is_some_and(Json::is_string) {
+        return true;
+    }
+    if object.len() == 1 {
+        *plain_text_parts += 1;
+    }
+    false
+}
+
+fn lossy_gemini_function_call_part(object: &serde_json::Map<String, Json>) -> bool {
+    object.keys().any(|key| key != "functionCall")
+        || match object.get("functionCall").and_then(Json::as_object) {
+            Some(call) => {
+                call.keys()
+                    .any(|key| !matches!(key.as_str(), "name" | "id" | "args"))
+                    || call.get("args").is_some_and(|args| !args.is_object())
+            }
+            None => true,
+        }
+}
+
+fn lossy_gemini_function_response_part(object: &serde_json::Map<String, Json>) -> bool {
+    object.keys().any(|key| key != "functionResponse")
+        || match object.get("functionResponse").and_then(Json::as_object) {
+            Some(response) => {
+                response
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "id" | "name" | "response" | "parts"))
+                    || match (
+                        response.get("id").and_then(Json::as_str),
+                        response.get("name").and_then(Json::as_str),
+                    ) {
+                        (Some(id), Some(name)) => id != name,
+                        _ => false,
+                    }
+            }
+            None => true,
+        }
 }
 
 fn is_gemini_part_data_key(key: &str) -> bool {
