@@ -30,13 +30,14 @@ use crate::api::runtime::{
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
     MiddlewareContinuationContext, with_active_event_uuid,
 };
-use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
+use crate::api::runtime::{ScopeStackHandle, capture_traceparent, current_scope_stack};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_error,
-    metadata_with_otel_status, resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
-    snapshot_event_sanitizers, snapshot_event_subscribers,
+    ensure_runtime_owner, inject_dynamo_session_ids, inject_traceparent, inject_traceparent_value,
+    metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
+    run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -141,6 +142,10 @@ pub struct CreateLlmHandleParams<'a> {
     /// Logical provider or model family name. Gateway-managed provider calls
     /// should pass the provider route name, for example `anthropic.messages`.
     pub name: &'a str,
+    /// Optional UUID reserved before request interception so outbound
+    /// propagation can identify the emitted LLM span.
+    #[builder(default)]
+    pub uuid: Option<Uuid>,
     /// Optional parent scope UUID.
     #[builder(default)]
     pub parent_uuid: Option<uuid::Uuid>,
@@ -1441,8 +1446,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     }
 
     let request_codec = codec.clone();
+    let llm_uuid = Uuid::now_v7();
     let optimization_recorder = LlmOptimizationRecorder::default();
-    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
+    let (mut intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         scope_llm_optimization_recorder(optimization_recorder.clone(), async {
             run_request_intercepts_with_codec_and_recorder(
                 &name,
@@ -1457,6 +1463,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
+            .uuid(llm_uuid)
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
             .attributes(attributes)
             .data_opt(data.clone())
@@ -1478,6 +1485,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         &lifecycle_subscribers,
     )
     .await?;
+    inject_traceparent(&mut intercepted_request, handle.uuid)?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers).await?;
     handle
         .optimization_recorder
@@ -1650,8 +1658,9 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     }
 
     let request_codec = codec.clone();
+    let llm_uuid = Uuid::now_v7();
     let optimization_recorder = LlmOptimizationRecorder::default();
-    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
+    let (mut intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         scope_llm_optimization_recorder(optimization_recorder.clone(), async {
             run_request_intercepts_with_codec_and_recorder(
                 &name,
@@ -1666,6 +1675,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
+            .uuid(llm_uuid)
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
             .attributes(attributes)
             .data_opt(data.clone())
@@ -1687,6 +1697,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         &lifecycle_subscribers,
     )
     .await?;
+    inject_traceparent(&mut intercepted_request, handle.uuid)?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers).await?;
     handle
         .optimization_recorder
@@ -1797,6 +1808,9 @@ pub async fn llm_request_intercepts(
     )
     .await?;
     inject_dynamo_session_ids(&mut outcome.request);
+    if let Ok(traceparent) = capture_traceparent() {
+        inject_traceparent_value(&mut outcome.request, traceparent);
+    }
     Ok(outcome)
 }
 

@@ -3550,6 +3550,45 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
 }
 
 #[tokio::test]
+async fn managed_llm_injects_runtime_owned_traceparent() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+    let captured = Arc::new(Mutex::new(None::<LlmRequest>));
+    let captured_request = captured.clone();
+    let request = LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("TraceParent".to_string(), json!("user-value")),
+            ("TRACEPARENT".to_string(), json!("duplicate")),
+        ]),
+        content: json!({"prompt": "hello"}),
+    };
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("traceparent-test")
+            .request(request)
+            .func(Arc::new(move |request| {
+                *captured_request.lock().unwrap() = Some(request);
+                Box::pin(async { Ok(json!({"ok": true})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    let request = captured.lock().unwrap().take().unwrap();
+    assert_eq!(request.headers.len(), 1);
+    let traceparent = request
+        .headers
+        .get("traceparent")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(traceparent.starts_with("00-"));
+    assert!(traceparent.ends_with("-01"));
+    assert_eq!(traceparent.len(), 55);
+}
+
+#[tokio::test]
 async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();

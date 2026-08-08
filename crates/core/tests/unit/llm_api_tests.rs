@@ -395,11 +395,15 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
 
     let provider_requests = provider_requests.lock().unwrap();
     assert_eq!(provider_requests.len(), 2);
-    assert!(
-        provider_requests
-            .iter()
-            .all(|provider| provider == &request)
-    );
+    assert!(provider_requests.iter().all(|provider| {
+        provider.content == request.content
+            && provider.headers.get("x-request-id") == request.headers.get("x-request-id")
+            && provider
+                .headers
+                .get("traceparent")
+                .and_then(Json::as_str)
+                .is_some_and(|value| value.starts_with("00-") && value.ends_with("-01"))
+    }));
 
     assert!(deregister_llm_sanitize_request_guardrail("credential-header-redaction").unwrap());
     assert!(deregister_subscriber("credential-header-redaction").unwrap());

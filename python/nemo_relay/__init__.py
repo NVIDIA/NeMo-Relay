@@ -129,6 +129,7 @@ from nemo_relay._native import (
     capture_propagation_context_with_root as _capture_propagation_context_with_root,
 )
 from nemo_relay._native import capture_thread_scope_stack as _capture_thread_scope_stack
+from nemo_relay._native import capture_traceparent as _capture_traceparent
 from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
@@ -441,6 +442,15 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
     return _capture_propagation_context_with_root(root_uuid)
 
 
+def capture_traceparent() -> str:
+    """Capture the current Relay context as a W3C ``traceparent`` value."""
+    get_scope_stack()
+    parent_uuid = _propagation_parent_var.get()
+    if parent_uuid:
+        return PropagationContext(parent_uuid).to_traceparent()
+    return _capture_traceparent()
+
+
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack:
     """Create an isolated stack seeded from a received propagation context."""
     return _create_scope_stack_from_propagation(context)
@@ -578,6 +588,7 @@ __all__ = [
     "create_scope_stack",
     "capture_propagation_context",
     "capture_propagation_context_with_root",
+    "capture_traceparent",
     "create_scope_stack_from_propagation",
     "fork_asyncio_context",
     "get_scope_stack",

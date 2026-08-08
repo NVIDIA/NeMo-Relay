@@ -6,9 +6,10 @@ use super::{
     capture_thread_scope_stack, clear_last_error, create_scope_stack, json_to_c_string,
     restore_thread_scope_stack, scope_stack_active, set_last_error, set_thread_scope_stack,
 };
+use crate::convert::str_to_c_string;
 use nemo_relay::api::runtime::{
     PropagationContext, capture_propagation_context, capture_propagation_context_with_root,
-    create_scope_stack_from_propagation,
+    capture_traceparent, create_scope_stack_from_propagation,
 };
 use uuid::Uuid;
 
@@ -113,6 +114,64 @@ pub unsafe extern "C" fn nemo_relay_capture_propagation_context_with_root_json(
     }) {
         Ok(context) => {
             unsafe { *out = json_to_c_string(&context) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
+}
+
+/// Capture the current Relay context as a W3C `traceparent` header value.
+///
+/// The returned string must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `out` must be a valid, writable pointer to a C-string output slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_capture_traceparent(out: *mut *mut c_char) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    match capture_traceparent() {
+        Ok(value) => {
+            unsafe { *out = str_to_c_string(&value) };
+            NemoRelayStatus::Ok
+        }
+        Err(error) => {
+            set_last_error(&error.to_string());
+            NemoRelayStatus::from(&error)
+        }
+    }
+}
+
+/// Convert a rooted propagation-context JSON value to a W3C `traceparent`.
+///
+/// The returned string must be freed with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `context_json` must point to a valid NUL-terminated C string and `out` must
+/// be a valid, writable pointer to a C-string output slot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_propagation_context_to_traceparent(
+    context_json: *const c_char,
+    out: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if out.is_null() {
+        set_last_error("out pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let value = match c_str_to_string(context_json) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    match PropagationContext::from_json(&value).and_then(|context| context.to_traceparent()) {
+        Ok(value) => {
+            unsafe { *out = str_to_c_string(&value) };
             NemoRelayStatus::Ok
         }
         Err(error) => {

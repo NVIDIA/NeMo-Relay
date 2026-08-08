@@ -39,6 +39,13 @@ recent explicit `Agent` scopes in the active scope stack and ignores the implici
 scope. When present, Relay uses the harness session metadata, otherwise, it uses application
 scope names. No plugin or configuration is required.
 
+Relay also adds a W3C `traceparent` header to every managed buffered or
+streaming LLM provider request. The value is derived from the same Relay IDs
+used by OpenTelemetry export, so downstream HTTP spans can remain aligned with
+the Relay LLM span. Any existing `traceparent` values are replaced by the
+runtime-owned value. Use `capture_traceparent()` when an application needs to
+inject the current context into an arbitrary HTTP payload.
+
 If you want Relay to add cost estimates, initialize the built-in `pricing`
 plugin before the LLM call and attach a response codec that decodes `model` and
 token `usage` from the provider response. Provider- or framework-reported cost
