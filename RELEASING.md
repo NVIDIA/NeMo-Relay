@@ -33,7 +33,7 @@ The release pipeline publishes these package surfaces from a tag push:
 | crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-switchyard`, `nemo-relay-ffi`, `nemo-relay-cli` |
 | PyPI | `nemo-relay` wheels and source distribution, `nemo-relay-plugin` and `nemo-relay-cli-bin` wheels |
 | npm | `nemo-relay-node` and its seven platform packages, and `nemo-relay-openclaw` |
-| GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, Node npm tarballs, and checksums |
+| GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, Node npm tarballs, Rampart native plugin archives, and checksums |
 | Fern | The documentation site |
 
 Go remains source-first. There is no separate Go package-manager publication
@@ -70,6 +70,9 @@ NeMo Relay versions are anchored on the workspace SemVer in the repository root
   stays `dynamic = ["version"]` in the repository, and the packaging recipe
   writes a concrete version into `pyproject.toml` and `crates/python/Cargo.toml`
   in the ephemeral packaging workspace.
+- The standalone `plugins/pii-rampart/Cargo.toml` package version and its local
+  path dependency versions in `plugins/pii-rampart/Cargo.lock` track the same
+  project version.
 
 For non-tag CI builds, packaging recipes append a commit-derived suffix:
 
@@ -181,6 +184,8 @@ The helper updates:
    [`package-lock.json`](package-lock.json) to the same release version.
 5. The Python `nemo-relay-cli-bin` metadata, including the exact
    `nemo-relay[cli]` dependency version.
+6. The standalone Rampart plugin manifest and its local path dependency lock
+   entries.
 Review docs and snippets that mention explicit versions, including:
 
 - [`README.md`](README.md)
@@ -216,7 +221,8 @@ just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 packa
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python-sdist
 ```
 
-The Rampart native plugin package takes an already-built platform library. For
+The Rampart native plugin package takes an already-built platform library and
+uses `cargo-about` to generate attributions from its standalone lockfile. For
 example, on Apple Silicon:
 
 ```bash

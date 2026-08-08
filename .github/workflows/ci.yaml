@@ -302,6 +302,7 @@ jobs:
 
           (
             cd release-assets
+            shopt -s nullglob
             expect_count() {
               local expected="$1"
               local label="$2"

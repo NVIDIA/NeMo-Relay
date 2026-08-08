@@ -74,6 +74,11 @@ RUST_HEADER = (
     + "Regenerate with `./scripts/generate_attributions.sh rust`.\n\n"
 )
 
+RAMPART_RUST_HEADER = RUST_HEADER.replace(
+    "`./scripts/generate_attributions.sh rust`",
+    "`./scripts/generate_attributions.sh rust-rampart <output>`",
+)
+
 PYTHON_HEADER = f"""{ATTRIBUTIONS_MD_LICENSE_PREFIX}
 
 # Third-Party Software Attributions (Python)
@@ -237,8 +242,9 @@ def _render_python_package(
         parts.append(MARKDOWN_CODE_BLOCK_END)
 
 
-def _cargo_workspace_members() -> set[str]:
+def _cargo_workspace_members(manifest_path: Path | None = None) -> set[str]:
     """Return Cargo package IDs for the current workspace members."""
+    manifest_path = manifest_path or ROOT / "Cargo.toml"
     proc = subprocess.run(  # noqa: S607
         [
             "cargo",
@@ -246,7 +252,7 @@ def _cargo_workspace_members() -> set[str]:
             "--format-version=1",
             "--no-deps",
             "--manifest-path",
-            str(ROOT / "Cargo.toml"),
+            str(manifest_path),
         ],
         cwd=ROOT,
         capture_output=True,
@@ -257,10 +263,11 @@ def _cargo_workspace_members() -> set[str]:
     return {str(member) for member in metadata.get("workspace_members", [])}
 
 
-def _cargo_fetch_locked() -> None:
+def _cargo_fetch_locked(manifest_path: Path | None = None) -> None:
     """Ensure locked registry crate sources are available for fallback license file reads."""
+    manifest_path = manifest_path or ROOT / "Cargo.toml"
     subprocess.run(  # noqa: S607
-        ["cargo", "fetch", "--locked", "--manifest-path", str(ROOT / "Cargo.toml")],
+        ["cargo", "fetch", "--locked", "--manifest-path", str(manifest_path)],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -268,9 +275,10 @@ def _cargo_fetch_locked() -> None:
     )
 
 
-def _cargo_metadata() -> dict[str, Any]:
+def _cargo_metadata(manifest_path: Path | None = None) -> dict[str, Any]:
     """Return full Cargo metadata for the all-features workspace graph."""
-    _cargo_fetch_locked()
+    manifest_path = manifest_path or ROOT / "Cargo.toml"
+    _cargo_fetch_locked(manifest_path)
     proc = subprocess.run(  # noqa: S607
         [
             "cargo",
@@ -278,7 +286,7 @@ def _cargo_metadata() -> dict[str, Any]:
             "--format-version=1",
             "--all-features",
             "--manifest-path",
-            str(ROOT / "Cargo.toml"),
+            str(manifest_path),
         ],
         cwd=ROOT,
         capture_output=True,
@@ -288,9 +296,10 @@ def _cargo_metadata() -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(proc.stdout))
 
 
-def _cargo_about_json() -> dict[str, Any]:
+def _cargo_about_json(manifest_path: Path | None = None) -> dict[str, Any]:
     """Generate cargo-about JSON for the workspace dependency graph."""
-    _cargo_fetch_locked()
+    manifest_path = manifest_path or ROOT / "Cargo.toml"
+    _cargo_fetch_locked(manifest_path)
     proc = subprocess.run(  # noqa: S607
         [
             "cargo",
@@ -299,7 +308,9 @@ def _cargo_about_json() -> dict[str, Any]:
             "--format",
             "json",
             "-m",
-            str(ROOT / "Cargo.toml"),
+            str(manifest_path),
+            "--config",
+            str(ROOT / "about.toml"),
             "--all-features",
             "--workspace",
             "--fail",
@@ -317,9 +328,10 @@ def _rust_package_key(name: str, version: str) -> tuple[str, str]:
     return name, version
 
 
-def _cargo_lock_registry_package_keys() -> set[tuple[str, str]]:
+def _cargo_lock_registry_package_keys(lock_path: Path | None = None) -> set[tuple[str, str]]:
     """Return third-party package keys from Cargo.lock."""
-    with open(ROOT / "Cargo.lock", "rb") as f:
+    lock_path = lock_path or ROOT / "Cargo.lock"
+    with open(lock_path, "rb") as f:
         lock: dict[str, Any] = tomllib.load(f)
 
     keys: set[tuple[str, str]] = set()
@@ -332,9 +344,9 @@ def _cargo_lock_registry_package_keys() -> set[tuple[str, str]]:
     return keys
 
 
-def _cargo_metadata_packages_by_key() -> dict[tuple[str, str], dict[str, Any]]:
+def _cargo_metadata_packages_by_key(manifest_path: Path | None = None) -> dict[tuple[str, str], dict[str, Any]]:
     """Return Cargo metadata package records keyed by package name and version."""
-    metadata = _cargo_metadata()
+    metadata = _cargo_metadata(manifest_path)
     packages: dict[tuple[str, str], dict[str, Any]] = {}
     for pkg in cast(list[dict[str, Any]], metadata.get("packages", [])):
         name = str(pkg.get("name") or "")
@@ -412,10 +424,15 @@ def _render_rust_metadata_fallback_attribution(crate: dict[str, Any]) -> tuple[s
     return name, version, "".join(parts)
 
 
-def _rust_missing_cargo_about_packages(rendered_keys: set[tuple[str, str]]) -> list[dict[str, Any]]:
+def _rust_missing_cargo_about_packages(
+    rendered_keys: set[tuple[str, str]],
+    *,
+    manifest_path: Path | None = None,
+    lock_path: Path | None = None,
+) -> list[dict[str, Any]]:
     """Return Cargo.lock packages that cargo-about did not render."""
-    lock_keys = _cargo_lock_registry_package_keys()
-    metadata_by_key = _cargo_metadata_packages_by_key()
+    lock_keys = _cargo_lock_registry_package_keys(lock_path)
+    metadata_by_key = _cargo_metadata_packages_by_key(manifest_path)
     missing: list[dict[str, Any]] = []
     for key in sorted(lock_keys - rendered_keys, key=lambda item: (item[0].lower(), item[1])):
         pkg = metadata_by_key.get(key)
@@ -469,9 +486,16 @@ def _render_rust_crate_attribution(
     return name, version, rendered
 
 
-def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str]) -> str:
+def _render_rust_attributions(
+    data: dict[str, Any],
+    workspace_members: set[str],
+    *,
+    manifest_path: Path | None = None,
+    lock_path: Path | None = None,
+    header: str = RUST_HEADER,
+) -> str:
     """Render Rust attributions for every non-workspace package in Cargo.lock."""
-    parts: list[str] = [RUST_HEADER]
+    parts: list[str] = [header]
     rendered_crates: list[tuple[str, str, str]] = []
     rendered_keys: set[tuple[str, str]] = set()
     for license_group in cast(list[dict[str, Any]], data.get("licenses", [])):
@@ -488,7 +512,11 @@ def _render_rust_attributions(data: dict[str, Any], workspace_members: set[str])
                 rendered_keys.add(_rust_package_key(rendered[0], rendered[1]))
                 rendered_crates.append(rendered)
 
-    for crate in _rust_missing_cargo_about_packages(rendered_keys):
+    for crate in _rust_missing_cargo_about_packages(
+        rendered_keys,
+        manifest_path=manifest_path,
+        lock_path=lock_path,
+    ):
         rendered = _render_rust_metadata_fallback_attribution(crate)
         rendered_keys.add(_rust_package_key(rendered[0], rendered[1]))
         rendered_crates.append(rendered)
@@ -907,6 +935,30 @@ def cmd_rust() -> int:
     return 0
 
 
+def cmd_rust_rampart(output: Path) -> int:
+    """Generate Rust attributions for the standalone Rampart plugin workspace."""
+    manifest_path = ROOT / "plugins/pii-rampart/Cargo.toml"
+    lock_path = manifest_path.with_name("Cargo.lock")
+    metadata = _cargo_metadata(manifest_path)
+    local_packages = {
+        str(package["id"])
+        for package in cast(list[dict[str, Any]], metadata.get("packages", []))
+        if package.get("source") is None
+    }
+    rendered = _render_rust_attributions(
+        _cargo_about_json(manifest_path),
+        local_packages,
+        manifest_path=manifest_path,
+        lock_path=lock_path,
+        header=RAMPART_RUST_HEADER,
+    )
+    output = output.resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(rendered, encoding="utf-8")
+    print(f"Wrote {output}", file=sys.stderr)
+    return 0
+
+
 def cmd_python() -> int:
     """Generate ATTRIBUTIONS-Python.md from the current locked install plus archive fallback."""
     out = ROOT / "ATTRIBUTIONS-Python.md"
@@ -1183,11 +1235,15 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("rust", help="ATTRIBUTIONS-Rust.md from Cargo.lock")
+    rampart = sub.add_parser("rust-rampart", help="Rampart plugin Rust attributions")
+    rampart.add_argument("--output", type=Path, required=True)
     sub.add_parser("python", help="ATTRIBUTIONS-Python.md from uv.lock")
     sub.add_parser("node", help="ATTRIBUTIONS-Node.md from package-lock.json")
     args = p.parse_args()
     if args.cmd == "rust":
         return cmd_rust()
+    if args.cmd == "rust-rampart":
+        return cmd_rust_rampart(args.output)
     if args.cmd == "python":
         return cmd_python()
     if args.cmd == "node":

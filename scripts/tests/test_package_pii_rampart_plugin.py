@@ -29,7 +29,6 @@ def fixture_repository(root: Path) -> Path:
     repository = root / "repository"
     plugin = repository / "plugins/pii-rampart"
     plugin.mkdir(parents=True)
-    (repository / "ATTRIBUTIONS-Rust.md").write_text("attributions\n")
     (repository / "LICENSE").write_text("license\n")
     (plugin / "README.md").write_text("readme\n")
     (plugin / "config.schema.json").write_text("{}\n")
@@ -64,9 +63,12 @@ class PackagePiiRampartPluginTests(unittest.TestCase):
                 repository = fixture_repository(root)
                 library = root / PACKAGE.library_name(target)
                 library.write_bytes(b"native-plugin")
+                attributions = root / "ATTRIBUTIONS-Rust.md"
+                attributions.write_text("attributions\n")
                 args = SimpleNamespace(
                     repository=repository,
                     library=library,
+                    attributions=attributions,
                     target=target,
                     version="0.8.0",
                     output_dir=root / "output",
@@ -122,8 +124,15 @@ class PackagePiiRampartPluginTests(unittest.TestCase):
             repository = fixture_repository(root)
             library = root / "wrong.so"
             library.write_bytes(b"native-plugin")
+            attributions = root / "ATTRIBUTIONS-Rust.md"
+            attributions.write_text("attributions\n")
             with self.assertRaisesRegex(ValueError, "does not match"):
-                PACKAGE.archive_entries(repository, library, "x86_64-unknown-linux-gnu")
+                PACKAGE.archive_entries(
+                    repository,
+                    library,
+                    attributions,
+                    "x86_64-unknown-linux-gnu",
+                )
 
     def test_rejects_unsupported_target(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported target"):
@@ -136,9 +145,12 @@ class PackagePiiRampartPluginTests(unittest.TestCase):
             target = "x86_64-unknown-linux-gnu"
             library = root / PACKAGE.library_name(target)
             library.write_bytes(b"native-plugin")
+            attributions = root / "ATTRIBUTIONS-Rust.md"
+            attributions.write_text("attributions\n")
             args = SimpleNamespace(
                 repository=repository,
                 library=library,
+                attributions=attributions,
                 target=target,
                 version="../../escape",
                 output_dir=root / "output",

@@ -7,6 +7,7 @@ version = "0.8.0"
 edition = "2024"
 publish = false
 description = "Opt-in native Rampart PII redaction plugin for NeMo Relay"
+license = "Apache-2.0"
 
 [workspace]
 

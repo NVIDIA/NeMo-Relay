@@ -16,7 +16,7 @@ wait synchronously on model inference.
 
 ## Install a release archive
 
-GitHub releases provide one Rampart plugin archive for each supported Relay CLI
+GitHub releases provide one Rampart plugin archive for each supported Rampart
 target. Extract the archive, then register its materialized manifest:
 
 ```bash
@@ -47,7 +47,7 @@ Copy `relay-plugin.toml` to `relay-plugin.local.toml` and replace
 | Windows | `nemo_relay_pii_rampart_plugin.dll` |
 
 Replace `<artifact-sha256>` with the lowercase SHA-256 digest of that library.
-You can also create the same archive produced by CI:
+Install `cargo-about`, then create the same archive produced by CI:
 
 ```bash
 just package-pii-rampart-plugin \

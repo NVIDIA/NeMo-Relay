@@ -1647,9 +1647,17 @@ package-pii-rampart-plugin library target version="":
         version="$(read_workspace_version)"
     fi
     package_dir="$(prepare_package_dir pii-rampart-plugin)"
+    attribution_dir="$(mktemp -d)"
+    cleanup_attribution_dir() {
+        rm -rf "$attribution_dir"
+    }
+    trap cleanup_attribution_dir EXIT
+    bash scripts/generate_attributions.sh \
+        rust-rampart "$attribution_dir/ATTRIBUTIONS-Rust.md"
     "$(uv_python_executable)" scripts/package-pii-rampart-plugin.py build \
         --repository "$NEMO_RELAY_REPO_ROOT" \
         --library "{{ library }}" \
+        --attributions "$attribution_dir/ATTRIBUTIONS-Rust.md" \
         --target "{{ target }}" \
         --version "$version" \
         --output-dir "$package_dir"

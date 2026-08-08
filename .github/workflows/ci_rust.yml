@@ -257,6 +257,7 @@ jobs:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
           target: ${{ matrix.target }}
+          components: clippy
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -273,6 +274,18 @@ jobs:
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
+      - name: Install Rampart attribution generator
+        if: ${{ matrix.package_rampart }}
+        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        with:
+          tool: cargo-about@${{ steps.ci-config.outputs.cargo_about_version }}
+
+      - name: Install Rampart dependency auditor
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        with:
+          tool: cargo-deny@${{ steps.ci-config.outputs.cargo_deny_version }}
+
       - name: Set package versions
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         env:
@@ -286,6 +299,21 @@ jobs:
           fi
           just set-cargo-version "$version"
           printf 'NEMO_RELAY_CLI_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Check standalone Rampart plugin
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          cargo clippy --locked \
+            --manifest-path plugins/pii-rampart/Cargo.toml \
+            --target-dir target \
+            --all-targets \
+            -- -D warnings
+          cargo test --locked \
+            --manifest-path plugins/pii-rampart/Cargo.toml \
+            --target-dir target
+          cargo deny --manifest-path plugins/pii-rampart/Cargo.toml check
 
       - name: Install musl tools
         if: ${{ startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-musl') }}
@@ -344,6 +372,13 @@ jobs:
                 --manifest-path plugins/pii-rampart/Cargo.toml \
                 --target "$RAMPART_TARGET" \
                 --target-dir target/pii-rampart-musllinux
+              NEMO_RELAY_TEST_RAMPART_LIBRARY="$PWD/target/pii-rampart-musllinux/$RAMPART_TARGET/release/libnemo_relay_pii_rampart_plugin.so" \
+                cargo test --locked \
+                  --manifest-path plugins/pii-rampart/Cargo.toml \
+                  --target "$RAMPART_TARGET" \
+                  --target-dir target/pii-rampart-musllinux \
+                  native_plugin_entrypoint_registers_with_relay_host \
+                  -- --ignored --exact
               destination="target/$RAMPART_TARGET/release"
               mkdir -p "$destination"
               cp \
@@ -351,7 +386,7 @@ jobs:
                 "$destination/"
             '
 
-      - name: Build CLI release binary in manylinux
+      - name: Build release artifacts in manylinux
         if: ${{ matrix.build_image != '' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -370,7 +405,30 @@ jobs:
                 --manifest-path plugins/pii-rampart/Cargo.toml \
                 --target "${{ matrix.target }}" \
                 --target-dir target
+              NEMO_RELAY_TEST_RAMPART_LIBRARY="$PWD/target/${{ matrix.target }}/release/libnemo_relay_pii_rampart_plugin.so" \
+                cargo test --locked \
+                  --manifest-path plugins/pii-rampart/Cargo.toml \
+                  --target "${{ matrix.target }}" \
+                  --target-dir target \
+                  native_plugin_entrypoint_registers_with_relay_host \
+                  -- --ignored --exact
             '
+
+      - name: Smoke-test Rampart native registration
+        if: ${{ matrix.package_rampart && matrix.build_image == '' && !contains(matrix.platform, 'musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          library="libnemo_relay_pii_rampart_plugin.dylib"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            library="nemo_relay_pii_rampart_plugin.dll"
+          fi
+          NEMO_RELAY_TEST_RAMPART_LIBRARY="$PWD/target/${{ matrix.target }}/release/$library" \
+            cargo test --locked \
+              --manifest-path plugins/pii-rampart/Cargo.toml \
+              --target-dir target \
+              native_plugin_entrypoint_registers_with_relay_host \
+              -- --ignored --exact
 
       - name: Stage CLI binary artifact
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}

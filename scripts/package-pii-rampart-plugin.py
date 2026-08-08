@@ -31,7 +31,6 @@ TARGET_LIBRARIES = {
     "x86_64-pc-windows-msvc": "nemo_relay_pii_rampart_plugin.dll",
 }
 PACKAGE_FILES = {
-    "ATTRIBUTIONS-Rust.md": Path("ATTRIBUTIONS-Rust.md"),
     "LICENSE": Path("LICENSE"),
     "README.md": Path("plugins/pii-rampart/README.md"),
     "config.schema.json": Path("plugins/pii-rampart/config.schema.json"),
@@ -74,7 +73,7 @@ def render_manifest(template: Path, library: str, digest: str) -> bytes:
     return text.encode()
 
 
-def archive_entries(repository: Path, library: Path, target: str) -> dict[str, bytes]:
+def archive_entries(repository: Path, library: Path, attributions: Path, target: str) -> dict[str, bytes]:
     """Collect the complete, normalized package contents."""
     expected_library = library_name(target)
     if library.name != expected_library:
@@ -83,6 +82,7 @@ def archive_entries(repository: Path, library: Path, target: str) -> dict[str, b
         raise FileNotFoundError(f"plugin library does not exist: {library}")
 
     entries = {name: (repository / source).read_bytes() for name, source in PACKAGE_FILES.items()}
+    entries["ATTRIBUTIONS-Rust.md"] = attributions.read_bytes()
     digest = sha256(library)
     entries["relay-plugin.toml"] = render_manifest(
         repository / "plugins/pii-rampart/relay-plugin.toml", expected_library, digest
@@ -133,7 +133,7 @@ def build_archive(args: argparse.Namespace) -> Path:
     library = args.library.resolve()
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    entries = archive_entries(repository, library, args.target)
+    entries = archive_entries(repository, library, args.attributions.resolve(), args.target)
     extension = ".zip" if args.target.endswith("windows-msvc") else ".tar.gz"
     destination = output_dir / (f"nemo-relay-pii-rampart-plugin-{args.target}-{args.version}{extension}")
     if extension == ".zip":
@@ -252,6 +252,7 @@ def parser() -> argparse.ArgumentParser:
     build = subcommands.add_parser("build", help="build a plugin distribution archive")
     build.add_argument("--repository", type=Path, default=Path.cwd())
     build.add_argument("--library", type=Path, required=True)
+    build.add_argument("--attributions", type=Path, required=True)
     build.add_argument("--target", required=True)
     build.add_argument("--version", required=True)
     build.add_argument("--output-dir", type=Path, required=True)

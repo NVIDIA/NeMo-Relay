@@ -108,6 +108,51 @@ fn config_schema_matches_activation_invariants() {
 }
 
 #[test]
+#[ignore = "requires a built native library"]
+fn native_plugin_entrypoint_registers_with_relay_host() {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build registration-test runtime")
+        .block_on(run_registration_test());
+}
+
+async fn run_registration_test() {
+    let library = plugin_library();
+    let manifest_dir = TempDir::new().expect("create manifest directory");
+    let manifest = write_manifest(manifest_dir.path(), &library);
+    let missing_model = manifest_dir.path().join("missing-model");
+    let config = json!({
+        "model_path": missing_model,
+        "preset": "trajectory_context"
+    })
+    .as_object()
+    .expect("plugin config is an object")
+    .clone();
+
+    let error = match PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "pii_rampart".into(),
+            kind: DynamicPluginKind::RustDynamic,
+            manifest_ref: manifest.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config,
+        }],
+    )
+    .await
+    {
+        Ok(_) => panic!("Rampart activation unexpectedly accepted a missing model"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains("Rampart model directory") && message.contains("is unavailable"),
+        "activation did not reach Rampart model validation: {error}"
+    );
+}
+
+#[test]
 #[ignore = "requires a built native library and the pinned Rampart model snapshot"]
 fn native_plugin_redacts_observability_without_mutating_calls() {
     tokio::runtime::Builder::new_multi_thread()
