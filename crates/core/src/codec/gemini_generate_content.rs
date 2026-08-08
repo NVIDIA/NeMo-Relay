@@ -576,198 +576,215 @@ fn system_instruction_text(val: &Json) -> Option<String> {
 /// - `functionCall` parts (model role) → `Message::Assistant { tool_calls: Some([…]) }`
 /// - text parts → plain message content
 fn gemini_content_to_messages(content: &Json) -> Result<Vec<Message>> {
-    // Each contents item must be a JSON object.
     let obj = content.as_object().ok_or_else(|| {
         FlowError::InvalidArgument("Gemini contents item must be an object".into())
     })?;
+    let role = gemini_content_role(obj)?;
+    let parts = obj.get("parts").and_then(Json::as_array).ok_or_else(|| {
+        FlowError::InvalidArgument("Gemini contents item must have an array 'parts' field".into())
+    })?;
+    let (fr_parts, fn_call_parts) = validate_gemini_content_parts(parts)?;
+    validate_gemini_content_roles(role, &fr_parts, &fn_call_parts)?;
+    if !fr_parts.is_empty() {
+        return gemini_function_response_messages(parts, &fr_parts);
+    }
+    let content = gemini_parts_to_message_content(parts, "request")?;
+    if !fn_call_parts.is_empty() {
+        return gemini_function_call_messages(content, &fn_call_parts);
+    }
+    Ok(vec![gemini_plain_message(role, content)])
+}
 
-    // Role is optional; absent role defaults to "user" per Google's REST spec.
-    // When present it must be a string; only "user" and "model" are accepted.
-    let role = match obj.get("role") {
-        None => "user",
-        Some(Json::String(s)) if s == "user" => "user",
-        Some(Json::String(s)) if s == "model" => "model",
-        Some(Json::String(other)) => {
-            return Err(FlowError::InvalidArgument(format!(
-                "Gemini contents item has unsupported role '{other}'; expected 'user' or 'model'"
-            )));
-        }
-        Some(_) => {
-            return Err(FlowError::InvalidArgument(
-                "Gemini contents item 'role' must be a string".into(),
-            ));
-        }
-    };
+fn gemini_content_role(obj: &serde_json::Map<String, Json>) -> Result<&str> {
+    match obj.get("role") {
+        None => Ok("user"),
+        Some(Json::String(role)) if role == "user" || role == "model" => Ok(role),
+        Some(Json::String(other)) => Err(FlowError::InvalidArgument(format!(
+            "Gemini contents item has unsupported role '{other}'; expected 'user' or 'model'"
+        ))),
+        Some(_) => Err(FlowError::InvalidArgument(
+            "Gemini contents item 'role' must be a string".into(),
+        )),
+    }
+}
 
-    // `parts` is required and must be an array.
-    let parts = obj
-        .get("parts")
-        .ok_or_else(|| {
-            FlowError::InvalidArgument("Gemini contents item is missing 'parts'".into())
-        })?
-        .as_array()
-        .ok_or_else(|| {
-            FlowError::InvalidArgument("Gemini contents item 'parts' must be an array".into())
-        })?;
-
-    // Validate each part; collect functionResponse and functionCall parts with
-    // strict name checks so invalid items surface as errors rather than silent drops.
-    let mut fr_parts: Vec<&Json> = Vec::new();
-    let mut fn_call_parts: Vec<&Json> = Vec::new();
-
+fn validate_gemini_content_parts(parts: &[Json]) -> Result<(Vec<&Json>, Vec<&Json>)> {
+    let mut responses = Vec::new();
+    let mut calls = Vec::new();
     for part in parts {
         let part_obj = part.as_object().ok_or_else(|| {
             FlowError::InvalidArgument("Gemini parts item must be an object".into())
         })?;
-        let data_key = validate_single_gemini_part_data_field(part_obj, "request")?;
-        if data_key == Some("functionResponse") {
-            let fr = part.get("functionResponse").unwrap();
-            let fr_obj = fr.as_object().ok_or_else(|| {
-                FlowError::InvalidArgument("Gemini functionResponse must be an object".into())
-            })?;
-            let name = fr_obj.get("name").and_then(Json::as_str).unwrap_or("");
-            if name.is_empty() {
+        match validate_single_gemini_part_data_field(part_obj, "request")? {
+            Some("functionResponse") => {
+                validate_gemini_function_response_part(part)?;
+                responses.push(part);
+            }
+            Some("functionCall") => {
+                validate_gemini_function_call_part(part)?;
+                calls.push(part);
+            }
+            Some("text") if part.get("text").is_some_and(|value| !value.is_string()) => {
                 return Err(FlowError::InvalidArgument(
-                    "Gemini functionResponse is missing a non-empty 'name'".into(),
+                    "Gemini parts item 'text' must be a string".into(),
                 ));
             }
-            // `response` is required and must be an object (Gemini spec).
-            match fr_obj.get("response") {
-                None => {
-                    return Err(FlowError::InvalidArgument(
-                        "Gemini functionResponse is missing required 'response'".into(),
-                    ));
-                }
-                Some(r) if !r.is_object() => {
-                    return Err(FlowError::InvalidArgument(
-                        "Gemini functionResponse.response must be an object".into(),
-                    ));
-                }
-                _ => {}
-            }
-            if let Some(nested_parts) = fr_obj.get("parts") {
-                let nested_parts = nested_parts.as_array().ok_or_else(|| {
-                    FlowError::InvalidArgument(
-                        "Gemini functionResponse.parts must be an array".into(),
-                    )
-                })?;
-                for nested_part in nested_parts {
-                    validate_gemini_nested_function_response_part(nested_part)?;
-                }
-            }
-            parse_optional_id(fr_obj, "functionResponse")?;
-            fr_parts.push(part);
-        } else if data_key == Some("functionCall") {
-            let fc = part.get("functionCall").unwrap();
-            let fc_obj = fc.as_object().ok_or_else(|| {
-                FlowError::InvalidArgument("Gemini functionCall must be an object".into())
-            })?;
-            let name = fc_obj.get("name").and_then(Json::as_str).unwrap_or("");
-            if name.is_empty() {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini functionCall is missing a non-empty 'name'".into(),
-                ));
-            }
-            if fc_obj.get("args").is_some_and(|a| !a.is_object()) {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini functionCall.args must be an object".into(),
-                ));
-            }
-            fn_call_parts.push(part);
-        } else if data_key == Some("text") && part.get("text").is_some_and(|v| !v.is_string()) {
-            // A plain text part with a non-string text value has no lossless encoding.
-            return Err(FlowError::InvalidArgument(
-                "Gemini parts item 'text' must be a string".into(),
-            ));
+            _ => {}
         }
     }
-
-    // A content item must not mix functionResponse and functionCall parts.
-    if !fr_parts.is_empty() && !fn_call_parts.is_empty() {
+    if !responses.is_empty() && !calls.is_empty() {
         return Err(FlowError::InvalidArgument(
             "Gemini contents item must not contain both functionResponse and functionCall parts"
                 .into(),
         ));
     }
-    // functionResponse belongs in user-role turns only.
-    if !fr_parts.is_empty() && role != "user" {
+    Ok((responses, calls))
+}
+
+fn validate_gemini_function_response_part(part: &Json) -> Result<()> {
+    let response = part
+        .get("functionResponse")
+        .and_then(Json::as_object)
+        .ok_or_else(|| {
+            FlowError::InvalidArgument("Gemini functionResponse must be an object".into())
+        })?;
+    if response
+        .get("name")
+        .and_then(Json::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(FlowError::InvalidArgument(
+            "Gemini functionResponse is missing a non-empty 'name'".into(),
+        ));
+    }
+    match response.get("response") {
+        None => {
+            return Err(FlowError::InvalidArgument(
+                "Gemini functionResponse is missing required 'response'".into(),
+            ));
+        }
+        Some(value) if !value.is_object() => {
+            return Err(FlowError::InvalidArgument(
+                "Gemini functionResponse.response must be an object".into(),
+            ));
+        }
+        Some(_) => {}
+    }
+    if let Some(parts) = response.get("parts") {
+        for part in parts.as_array().ok_or_else(|| {
+            FlowError::InvalidArgument("Gemini functionResponse.parts must be an array".into())
+        })? {
+            validate_gemini_nested_function_response_part(part)?;
+        }
+    }
+    parse_optional_id(response, "functionResponse")?;
+    Ok(())
+}
+
+fn validate_gemini_function_call_part(part: &Json) -> Result<()> {
+    let call = part
+        .get("functionCall")
+        .and_then(Json::as_object)
+        .ok_or_else(|| {
+            FlowError::InvalidArgument("Gemini functionCall must be an object".into())
+        })?;
+    if call
+        .get("name")
+        .and_then(Json::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return Err(FlowError::InvalidArgument(
+            "Gemini functionCall is missing a non-empty 'name'".into(),
+        ));
+    }
+    if call.get("args").is_some_and(|args| !args.is_object()) {
+        return Err(FlowError::InvalidArgument(
+            "Gemini functionCall.args must be an object".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_gemini_content_roles(role: &str, responses: &[&Json], calls: &[&Json]) -> Result<()> {
+    if !responses.is_empty() && role != "user" {
         return Err(FlowError::InvalidArgument(format!(
             "Gemini functionResponse parts must be in a 'user' role content item, got '{role}'"
         )));
     }
-    // functionCall belongs in model-role turns only.
-    if !fn_call_parts.is_empty() && role != "model" {
+    if !calls.is_empty() && role != "model" {
         return Err(FlowError::InvalidArgument(format!(
             "Gemini functionCall parts must be in a 'model' role content item, got '{role}'"
         )));
     }
+    Ok(())
+}
 
-    // --- functionResponse parts (tool results sent as a user turn) ---
-    if !fr_parts.is_empty() {
-        // Reject sibling visible/native parts — they would be silently lost because we
-        // return only tool messages from this branch.
-        let has_visible_or_native_content = parts.iter().any(|p| {
-            p.get("functionResponse").is_none()
-                && p.get("thought").and_then(Json::as_bool) != Some(true)
-        });
-        if has_visible_or_native_content {
-            return Err(FlowError::InvalidArgument(
-                "Gemini contents item must not mix functionResponse with visible/native parts"
-                    .into(),
-            ));
-        }
-        let mut msgs = Vec::with_capacity(fr_parts.len());
-        for fr_part in fr_parts {
-            let fr = fr_part.get("functionResponse").unwrap();
-            let name = fr.get("name").and_then(|v| v.as_str()).unwrap().to_string();
-            let fr_obj = fr.as_object().unwrap(); // validated above
-            let id = parse_optional_id(fr_obj, "functionResponse")?.unwrap_or_else(|| name.clone());
-            let content = gemini_function_response_to_message_content(fr)?;
-            msgs.push(Message::Tool {
-                content,
-                tool_call_id: id,
-            });
-        }
-        return Ok(msgs);
+fn gemini_function_response_messages(parts: &[Json], responses: &[&Json]) -> Result<Vec<Message>> {
+    if parts.iter().any(|part| {
+        part.get("functionResponse").is_none()
+            && part.get("thought").and_then(Json::as_bool) != Some(true)
+    }) {
+        return Err(FlowError::InvalidArgument(
+            "Gemini contents item must not mix functionResponse with visible/native parts".into(),
+        ));
     }
-
-    // Thought parts carry internal reasoning — exclude from visible content.
-    let content_opt = gemini_parts_to_message_content(parts, "request")?;
-
-    // --- functionCall parts (model invoking a tool) ---
-    if !fn_call_parts.is_empty() {
-        let mut tool_calls: Vec<ToolCall> = Vec::with_capacity(fn_call_parts.len());
-        for p in &fn_call_parts {
-            let fc = p.get("functionCall").unwrap(); // guaranteed by validation loop above
-            let fc_map = fc.as_object().unwrap();
-            let name = fc_map
+    responses
+        .iter()
+        .map(|part| {
+            let response = part
+                .get("functionResponse")
+                .and_then(Json::as_object)
+                .unwrap();
+            let name = response
                 .get("name")
                 .and_then(Json::as_str)
                 .unwrap()
                 .to_string();
-            let id = parse_optional_id(fc_map, "functionCall")?.unwrap_or_else(|| name.clone());
-            let args = fc_map
+            let id = parse_optional_id(response, "functionResponse")?.unwrap_or(name);
+            Ok(Message::Tool {
+                content: gemini_function_response_to_message_content(
+                    part.get("functionResponse").unwrap(),
+                )?,
+                tool_call_id: id,
+            })
+        })
+        .collect()
+}
+
+fn gemini_function_call_messages(
+    content: Option<MessageContent>,
+    calls: &[&Json],
+) -> Result<Vec<Message>> {
+    let tool_calls = calls
+        .iter()
+        .map(|part| {
+            let call = part.get("functionCall").and_then(Json::as_object).unwrap();
+            let name = call.get("name").and_then(Json::as_str).unwrap().to_string();
+            let id = parse_optional_id(call, "functionCall")?.unwrap_or_else(|| name.clone());
+            let args = call
                 .get("args")
                 .cloned()
                 .unwrap_or_else(|| Json::Object(Default::default()));
-            let arguments = serde_json::to_string(&args).unwrap_or_else(|_| "{}".into());
-            tool_calls.push(ToolCall {
+            Ok(ToolCall {
                 id,
                 call_type: "function".into(),
-                function: FunctionCall { name, arguments },
-            });
-        }
+                function: FunctionCall {
+                    name,
+                    arguments: serde_json::to_string(&args).unwrap_or_else(|_| "{}".into()),
+                },
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(vec![Message::Assistant {
+        content,
+        tool_calls: Some(tool_calls),
+        name: None,
+    }])
+}
 
-        return Ok(vec![Message::Assistant {
-            content: content_opt,
-            tool_calls: Some(tool_calls),
-            name: None,
-        }]);
-    }
-
-    // --- plain text message (user or model) ---
-    let content = content_opt.unwrap_or_else(|| MessageContent::Text(String::new()));
-    let msg = if role == "model" {
+fn gemini_plain_message(role: &str, content: Option<MessageContent>) -> Message {
+    let content = content.unwrap_or_else(|| MessageContent::Text(String::new()));
+    if role == "model" {
         Message::Assistant {
             content: Some(content),
             tool_calls: None,
@@ -778,8 +795,7 @@ fn gemini_content_to_messages(content: &Json) -> Result<Vec<Message>> {
             content,
             name: None,
         }
-    };
-    Ok(vec![msg])
+    }
 }
 
 /// Build the `functionCall` JSON object for a single normalized tool call.
@@ -1362,186 +1378,10 @@ impl LlmCodec for GeminiGenerateContentCodec {
             .as_object()
             .ok_or_else(|| FlowError::Internal("request content is not an object".into()))?;
 
-        let mut messages: Vec<Message> = Vec::new();
+        let messages = decode_gemini_messages(obj)?;
+        let params = decode_gemini_generation_params(obj)?;
 
-        // Validate and decode systemInstruction when present.
-        if let Some(sys_val) = obj.get("systemInstruction") {
-            validate_system_instruction(sys_val)?;
-            if let Some(text) = system_instruction_text(sys_val) {
-                let msg = serde_json::from_value::<Message>(
-                    serde_json::json!({"role": "system", "content": text}),
-                )
-                .map_err(|e| {
-                    FlowError::Internal(format!("Gemini system instruction decode: {e}"))
-                })?;
-                messages.push(msg);
-            }
-        }
-
-        // `contents` is required; a present-but-non-array value is malformed.
-        match obj.get("contents") {
-            None => {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini request is missing contents".into(),
-                ));
-            }
-            Some(v) if !v.is_array() => {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini request contents must be an array".into(),
-                ));
-            }
-            Some(arr) => {
-                for content in arr.as_array().unwrap() {
-                    messages.extend(gemini_content_to_messages(content)?);
-                }
-            }
-        }
-
-        // generationConfig → GenerationParams
-        let gen_config = match obj.get("generationConfig") {
-            Some(v) if !v.is_object() => {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini generationConfig must be an object".into(),
-                ));
-            }
-            other => other,
-        };
-        let temperature = match gen_config.and_then(|c| c.get("temperature")) {
-            None => None,
-            Some(v) => Some(v.as_f64().ok_or_else(|| {
-                FlowError::InvalidArgument("Gemini temperature must be a number".into())
-            })?),
-        };
-        let top_p = match gen_config.and_then(|c| c.get("topP")) {
-            None => None,
-            Some(v) => Some(v.as_f64().ok_or_else(|| {
-                FlowError::InvalidArgument("Gemini topP must be a number".into())
-            })?),
-        };
-        let max_tokens = match gen_config.and_then(|c| c.get("maxOutputTokens")) {
-            None => None,
-            Some(v) => Some(v.as_u64().ok_or_else(|| {
-                FlowError::InvalidArgument(
-                    "Gemini maxOutputTokens must be a non-negative integer".into(),
-                )
-            })?),
-        };
-        let stop = match gen_config.and_then(|c| c.get("stopSequences")) {
-            None => None,
-            Some(v) => {
-                let parsed = serde_json::from_value::<Vec<String>>(v.clone()).ok();
-                if parsed.is_none() {
-                    return Err(FlowError::InvalidArgument(
-                        "Gemini stopSequences must be an array of strings".into(),
-                    ));
-                }
-                parsed
-            }
-        };
-
-        let params =
-            if temperature.is_some() || max_tokens.is_some() || top_p.is_some() || stop.is_some() {
-                Some(GenerationParams {
-                    temperature,
-                    max_tokens,
-                    top_p,
-                    stop,
-                })
-            } else {
-                None
-            };
-
-        // tools[].functionDeclarations → Vec<ToolDefinition>
-        // Non-modeled fields (parametersJsonSchema, responseJsonSchema, response, behavior, …)
-        // are captured into FunctionDefinition.extra so they survive encode.
-        const MODELED_FD_KEYS: &[&str] = &["name", "description", "parameters"];
-
-        let tools: Option<Vec<ToolDefinition>> = match obj.get("tools") {
-            None => None,
-            Some(v) if !v.is_array() => {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini tools must be an array".into(),
-                ));
-            }
-            Some(v) => {
-                let arr = v.as_array().unwrap();
-                let mut defs: Vec<ToolDefinition> = Vec::new();
-                for group in arr {
-                    let group_obj = group.as_object().ok_or_else(|| {
-                        FlowError::InvalidArgument("Gemini tools[] entry must be an object".into())
-                    })?;
-                    let has_function_declarations = group_obj.contains_key("functionDeclarations");
-                    if let Some(fds_val) = group_obj.get("functionDeclarations") {
-                        let fds = fds_val.as_array().ok_or_else(|| {
-                            FlowError::InvalidArgument(
-                                "Gemini functionDeclarations must be an array".into(),
-                            )
-                        })?;
-                        for fd in fds {
-                            if !fd.is_object() {
-                                return Err(FlowError::InvalidArgument(
-                                    "Gemini functionDeclaration entry must be an object".into(),
-                                ));
-                            }
-                            let name = fd
-                                .get("name")
-                                .and_then(|n| n.as_str())
-                                .filter(|s| !s.is_empty())
-                                .ok_or_else(|| {
-                                    FlowError::InvalidArgument(
-                                        "Gemini functionDeclaration must have a non-empty 'name'"
-                                            .into(),
-                                    )
-                                })?
-                                .to_string();
-                            let description = match fd.get("description") {
-                                None => None,
-                                Some(Json::String(s)) => Some(s.clone()),
-                                Some(_) => {
-                                    return Err(FlowError::InvalidArgument(
-                                        "Gemini functionDeclaration.description must be a string"
-                                            .into(),
-                                    ));
-                                }
-                            };
-                            let parameters = fd.get("parameters").cloned();
-                            let extra: serde_json::Map<String, Json> = fd
-                                .as_object()
-                                .map(|o| {
-                                    o.iter()
-                                        .filter(|(k, _)| !MODELED_FD_KEYS.contains(&k.as_str()))
-                                        .map(|(k, v)| (k.clone(), v.clone()))
-                                        .collect()
-                                })
-                                .unwrap_or_default();
-                            defs.push(ToolDefinition::Function {
-                                function: FunctionDefinition {
-                                    name,
-                                    description,
-                                    parameters,
-                                    strict: None,
-                                    extra,
-                                },
-                                extra: Default::default(),
-                            });
-                        }
-                    }
-                    let native_value = if has_function_declarations {
-                        gemini_native_tool_fields(group_obj)
-                    } else {
-                        Some(group.clone())
-                    };
-                    if let Some(value) = native_value {
-                        defs.push(ToolDefinition::ProviderNative {
-                            provider: GEMINI_PROVIDER.into(),
-                            kind: gemini_native_tool_kind(&value),
-                            value,
-                        });
-                    }
-                }
-                if defs.is_empty() { None } else { Some(defs) }
-            }
-        };
+        let tools = decode_gemini_tools(obj)?;
 
         // All unrecognized top-level keys go into extra.
         let extra: serde_json::Map<String, Json> = obj
@@ -1550,15 +1390,7 @@ impl LlmCodec for GeminiGenerateContentCodec {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        let model = match obj.get("model") {
-            None => None,
-            Some(Json::String(s)) => Some(s.clone()),
-            Some(_) => {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini request 'model' must be a string".into(),
-                ));
-            }
-        };
+        let model = decode_gemini_model(obj)?;
 
         Ok(AnnotatedLlmRequest {
             messages,
@@ -2318,33 +2150,13 @@ fn merge_gemini_original_parts(
     let mut content_emitted = false;
 
     for orig_part in orig_parts {
-        let is_thought = orig_part.get("thought").and_then(Json::as_bool) == Some(true);
-        let is_content_part = !is_thought
-            && orig_part.get("functionCall").is_none()
-            && orig_part.get("functionResponse").is_none();
-
-        if orig_part.get("functionCall").is_some() {
-            if let Some(rebuilt) = rebuilt_fn_calls.next() {
-                parts.push(rebuilt);
-            }
-        } else if is_content_part {
-            if let Some(replacement) = new_content_parts.next() {
-                parts.push(replacement_content_part(
-                    orig_part,
-                    replacement,
-                    content_is_parts_form,
-                ));
-                content_emitted = true;
-            } else if !content_is_parts_form
-                && (orig_part.get("text").is_none()
-                    || (orig_part.get("text").is_some()
-                        && orig_part.get("thoughtSignature").is_some()))
-            {
-                parts.push(orig_part.clone());
-            }
-        } else {
-            parts.push(orig_part.clone());
-        }
+        content_emitted |= merge_gemini_original_part(
+            orig_part,
+            &mut new_content_parts,
+            &mut rebuilt_fn_calls,
+            content_is_parts_form,
+            &mut parts,
+        );
     }
 
     let remaining_content_parts: Vec<Json> = new_content_parts.collect();
@@ -2360,6 +2172,218 @@ fn merge_gemini_original_parts(
         parts.push(serde_json::json!({"text": ""}));
     }
     parts
+}
+
+fn merge_gemini_original_part(
+    orig_part: &Json,
+    new_content_parts: &mut impl Iterator<Item = Json>,
+    rebuilt_fn_calls: &mut impl Iterator<Item = Json>,
+    content_is_parts_form: bool,
+    parts: &mut Vec<Json>,
+) -> bool {
+    if orig_part.get("functionCall").is_some() {
+        if let Some(rebuilt) = rebuilt_fn_calls.next() {
+            parts.push(rebuilt);
+        }
+        return false;
+    }
+    let is_thought = orig_part.get("thought").and_then(Json::as_bool) == Some(true);
+    let is_content_part = !is_thought && orig_part.get("functionResponse").is_none();
+    if !is_content_part {
+        parts.push(orig_part.clone());
+        return false;
+    }
+    if let Some(replacement) = new_content_parts.next() {
+        parts.push(replacement_content_part(
+            orig_part,
+            replacement,
+            content_is_parts_form,
+        ));
+        return true;
+    }
+    if !content_is_parts_form
+        && (orig_part.get("text").is_none()
+            || (orig_part.get("text").is_some() && orig_part.get("thoughtSignature").is_some()))
+    {
+        parts.push(orig_part.clone());
+    }
+    false
+}
+
+fn decode_gemini_messages(obj: &serde_json::Map<String, Json>) -> Result<Vec<Message>> {
+    let mut messages = Vec::new();
+    if let Some(system) = obj.get("systemInstruction") {
+        validate_system_instruction(system)?;
+        if let Some(text) = system_instruction_text(system) {
+            messages.push(
+                serde_json::from_value(serde_json::json!({
+                    "role": "system",
+                    "content": text,
+                }))
+                .map_err(|e| {
+                    FlowError::Internal(format!("Gemini system instruction decode: {e}"))
+                })?,
+            );
+        }
+    }
+    let contents = obj
+        .get("contents")
+        .ok_or_else(|| FlowError::InvalidArgument("Gemini request is missing contents".into()))?;
+    let contents = contents.as_array().ok_or_else(|| {
+        FlowError::InvalidArgument("Gemini request contents must be an array".into())
+    })?;
+    for content in contents {
+        messages.extend(gemini_content_to_messages(content)?);
+    }
+    Ok(messages)
+}
+
+fn decode_gemini_generation_params(
+    obj: &serde_json::Map<String, Json>,
+) -> Result<Option<GenerationParams>> {
+    let config = match obj.get("generationConfig") {
+        Some(value) if !value.is_object() => {
+            return Err(FlowError::InvalidArgument(
+                "Gemini generationConfig must be an object".into(),
+            ));
+        }
+        value => value,
+    };
+    let temperature =
+        decode_gemini_f64(config, "temperature", "Gemini temperature must be a number")?;
+    let top_p = decode_gemini_f64(config, "topP", "Gemini topP must be a number")?;
+    let max_tokens = config
+        .and_then(|value| value.get("maxOutputTokens"))
+        .map(|value| {
+            value.as_u64().ok_or_else(|| {
+                FlowError::InvalidArgument(
+                    "Gemini maxOutputTokens must be a non-negative integer".into(),
+                )
+            })
+        })
+        .transpose()?;
+    let stop = config
+        .and_then(|value| value.get("stopSequences"))
+        .map(|value| {
+            serde_json::from_value::<Vec<String>>(value.clone()).map_err(|_| {
+                FlowError::InvalidArgument(
+                    "Gemini stopSequences must be an array of strings".into(),
+                )
+            })
+        })
+        .transpose()?;
+    if temperature.is_none() && top_p.is_none() && max_tokens.is_none() && stop.is_none() {
+        Ok(None)
+    } else {
+        Ok(Some(GenerationParams {
+            temperature,
+            max_tokens,
+            top_p,
+            stop,
+        }))
+    }
+}
+
+fn decode_gemini_f64(config: Option<&Json>, key: &str, error: &str) -> Result<Option<f64>> {
+    config
+        .and_then(|value| value.get(key))
+        .map(|value| {
+            value
+                .as_f64()
+                .ok_or_else(|| FlowError::InvalidArgument(error.into()))
+        })
+        .transpose()
+}
+
+fn decode_gemini_tools(obj: &serde_json::Map<String, Json>) -> Result<Option<Vec<ToolDefinition>>> {
+    let Some(value) = obj.get("tools") else {
+        return Ok(None);
+    };
+    let groups = value
+        .as_array()
+        .ok_or_else(|| FlowError::InvalidArgument("Gemini tools must be an array".into()))?;
+    let mut definitions = Vec::new();
+    for group in groups {
+        decode_gemini_tool_group(group, &mut definitions)?;
+    }
+    Ok((!definitions.is_empty()).then_some(definitions))
+}
+
+fn decode_gemini_tool_group(group: &Json, definitions: &mut Vec<ToolDefinition>) -> Result<()> {
+    let group_obj = group.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("Gemini tools[] entry must be an object".into())
+    })?;
+    let has_declarations = group_obj.contains_key("functionDeclarations");
+    if let Some(value) = group_obj.get("functionDeclarations") {
+        let declarations = value.as_array().ok_or_else(|| {
+            FlowError::InvalidArgument("Gemini functionDeclarations must be an array".into())
+        })?;
+        for declaration in declarations {
+            definitions.push(decode_gemini_function_definition(declaration)?);
+        }
+    }
+    let native_value = has_declarations
+        .then(|| gemini_native_tool_fields(group_obj))
+        .flatten()
+        .or_else(|| (!has_declarations).then(|| group.clone()));
+    if let Some(value) = native_value {
+        definitions.push(ToolDefinition::ProviderNative {
+            provider: GEMINI_PROVIDER.into(),
+            kind: gemini_native_tool_kind(&value),
+            value,
+        });
+    }
+    Ok(())
+}
+
+fn decode_gemini_function_definition(fd: &Json) -> Result<ToolDefinition> {
+    const MODELED_FUNCTION_DEFINITION_KEYS: &[&str] = &["name", "description", "parameters"];
+    let fd_obj = fd.as_object().ok_or_else(|| {
+        FlowError::InvalidArgument("Gemini functionDeclaration entry must be an object".into())
+    })?;
+    let name = fd_obj
+        .get("name")
+        .and_then(Json::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            FlowError::InvalidArgument(
+                "Gemini functionDeclaration must have a non-empty 'name'".into(),
+            )
+        })?;
+    let description = match fd_obj.get("description") {
+        None => None,
+        Some(Json::String(value)) => Some(value.clone()),
+        Some(_) => {
+            return Err(FlowError::InvalidArgument(
+                "Gemini functionDeclaration.description must be a string".into(),
+            ));
+        }
+    };
+    let extra = fd_obj
+        .iter()
+        .filter(|(key, _)| !MODELED_FUNCTION_DEFINITION_KEYS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Ok(ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: name.to_string(),
+            description,
+            parameters: fd_obj.get("parameters").cloned(),
+            strict: None,
+            extra,
+        },
+        extra: Default::default(),
+    })
+}
+
+fn decode_gemini_model(obj: &serde_json::Map<String, Json>) -> Result<Option<String>> {
+    match obj.get("model") {
+        None => Ok(None),
+        Some(Json::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(FlowError::InvalidArgument(
+            "Gemini request 'model' must be a string".into(),
+        )),
+    }
 }
 
 fn patch_gemini_visible_content(
@@ -2476,75 +2500,8 @@ fn patch_gemini_tools(
     obj: &mut serde_json::Map<String, Json>,
     tools: Option<&Vec<ToolDefinition>>,
 ) -> Result<()> {
-    // Build functionDeclaration objects and provider-native Gemini tool groups.
-    let fn_declarations: Vec<Json> = {
-        let mut out = Vec::new();
-        if let Some(ts) = tools {
-            for td in ts {
-                match td {
-                    ToolDefinition::Function { function: fd, .. } => {
-                        if fd.name.is_empty() {
-                            return Err(FlowError::InvalidArgument(
-                                "Gemini encoder: FunctionDefinition.name must be non-empty".into(),
-                            ));
-                        }
-                        if fd.strict.is_some() {
-                            return Err(FlowError::InvalidArgument(
-                                "Gemini encoder: FunctionDefinition.strict is not supported; \
-                                 remove it or use a provider-native extra field"
-                                    .into(),
-                            ));
-                        }
-                        // Start with extra (provider-native fields), then overlay modeled fields.
-                        let mut fdobj: serde_json::Map<String, Json> = fd.extra.clone();
-                        fdobj.insert("name".into(), Json::String(fd.name.clone()));
-                        if let Some(ref desc) = fd.description {
-                            fdobj.insert("description".into(), Json::String(desc.clone()));
-                        }
-                        if let Some(ref params) = fd.parameters {
-                            fdobj.insert("parameters".into(), params.clone());
-                        }
-                        out.push(Json::Object(fdobj));
-                    }
-                    ToolDefinition::ProviderNative {
-                        provider, kind: _, ..
-                    } if provider == GEMINI_PROVIDER => {}
-                    ToolDefinition::ProviderNative { provider, kind, .. } => {
-                        return Err(FlowError::InvalidArgument(format!(
-                            "Gemini encoder: ProviderNative tool '{kind}' (provider '{provider}') \
-                             cannot be represented on the Gemini surface"
-                        )));
-                    }
-                }
-            }
-        }
-        out
-    };
-    let native_groups: Vec<Json> = tools
-        .into_iter()
-        .flatten()
-        .filter_map(|td| match td {
-            ToolDefinition::ProviderNative {
-                provider, value, ..
-            } if provider == GEMINI_PROVIDER => Some(value),
-            _ => None,
-        })
-        .map(|value| {
-            if !value.is_object() {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini encoder: ProviderNative tool value must be an object".into(),
-                ));
-            }
-            if value.get("functionDeclarations").is_some() {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini encoder: ProviderNative tool value must not contain \
-                     functionDeclarations; use ToolDefinition::Function instead"
-                        .into(),
-                ));
-            }
-            Ok(value.clone())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let fn_declarations = gemini_function_declarations(tools)?;
+    let native_groups = gemini_native_tool_groups(tools)?;
 
     // Walk the original tools array in order: replace the FIRST functionDeclarations
     // group with the rebuilt list, merge any native sibling fields through the
@@ -2573,45 +2530,94 @@ fn patch_gemini_tools(
              recovered. Use provider-native extra fields to manage multi-group tools."
         )));
     }
-    let mut new_groups: Vec<Json> = Vec::with_capacity(orig_tools.len());
+    let new_groups = rebuild_gemini_tool_groups(&orig_tools, &fn_declarations, &native_groups);
+
+    if new_groups.is_empty() {
+        obj.remove("tools");
+    } else {
+        obj.insert("tools".into(), Json::Array(new_groups));
+    }
+    Ok(())
+}
+
+fn gemini_function_declarations(tools: Option<&Vec<ToolDefinition>>) -> Result<Vec<Json>> {
+    tools.into_iter().flatten().filter_map(|tool| match tool {
+        ToolDefinition::Function { function, .. } => Some(gemini_function_declaration(function)),
+        ToolDefinition::ProviderNative { provider, .. } if provider == GEMINI_PROVIDER => None,
+        ToolDefinition::ProviderNative { provider, kind, .. } => Some(Err(FlowError::InvalidArgument(
+            format!("Gemini encoder: ProviderNative tool '{kind}' (provider '{provider}') cannot be represented on the Gemini surface")
+        ))),
+    }).collect()
+}
+
+fn gemini_function_declaration(fd: &FunctionDefinition) -> Result<Json> {
+    if fd.name.is_empty() {
+        return Err(FlowError::InvalidArgument(
+            "Gemini encoder: FunctionDefinition.name must be non-empty".into(),
+        ));
+    }
+    if fd.strict.is_some() {
+        return Err(FlowError::InvalidArgument(
+            "Gemini encoder: FunctionDefinition.strict is not supported; remove it or use a provider-native extra field".into(),
+        ));
+    }
+    let mut object = fd.extra.clone();
+    object.insert("name".into(), Json::String(fd.name.clone()));
+    if let Some(description) = &fd.description {
+        object.insert("description".into(), Json::String(description.clone()));
+    }
+    if let Some(parameters) = &fd.parameters {
+        object.insert("parameters".into(), parameters.clone());
+    }
+    Ok(Json::Object(object))
+}
+
+fn gemini_native_tool_groups(tools: Option<&Vec<ToolDefinition>>) -> Result<Vec<Json>> {
+    tools
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| match tool {
+            ToolDefinition::ProviderNative {
+                provider, value, ..
+            } if provider == GEMINI_PROVIDER => Some(validate_gemini_native_tool_group(value)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn validate_gemini_native_tool_group(value: &Json) -> Result<Json> {
+    if !value.is_object() {
+        return Err(FlowError::InvalidArgument(
+            "Gemini encoder: ProviderNative tool value must be an object".into(),
+        ));
+    }
+    if value.get("functionDeclarations").is_some() {
+        return Err(FlowError::InvalidArgument(
+            "Gemini encoder: ProviderNative tool value must not contain functionDeclarations; use ToolDefinition::Function instead".into(),
+        ));
+    }
+    Ok(value.clone())
+}
+
+fn rebuild_gemini_tool_groups(
+    orig_tools: &[Json],
+    fn_declarations: &[Json],
+    native_groups: &[Json],
+) -> Vec<Json> {
+    let mut new_groups = Vec::with_capacity(orig_tools.len());
     let mut fn_group_placed = false;
     let mut native_used = vec![false; native_groups.len()];
-    for orig_group in &orig_tools {
-        if orig_group.get("functionDeclarations").is_some() {
-            if !fn_group_placed {
-                let native_sibling_keys = gemini_native_tool_keys(orig_group);
-                let mut group = serde_json::Map::new();
-                if !fn_declarations.is_empty() {
-                    group.insert(
-                        "functionDeclarations".into(),
-                        Json::Array(fn_declarations.clone()),
-                    );
-                }
-                if !native_sibling_keys.is_empty()
-                    && let Some(native_group) = take_matching_native_group(
-                        &native_groups,
-                        &mut native_used,
-                        &native_sibling_keys,
-                    )
-                    && let Some(native_obj) = native_group.as_object()
-                {
-                    group.extend(native_obj.clone());
-                }
-                if !group.is_empty() {
-                    new_groups.push(Json::Object(group));
-                }
-                fn_group_placed = true;
-            }
-            // Unreachable: the fn_decl_group_count > 1 guard above returns Err before
-            // this loop when tools changed, and this function is only called when tools
-            // changed. A second functionDeclarations group can never be reached here.
-        } else {
-            let native_keys = gemini_native_tool_keys(orig_group);
-            if let Some(native_group) =
-                take_matching_native_group(&native_groups, &mut native_used, &native_keys)
-            {
-                new_groups.push(native_group);
-            }
+    for orig_group in orig_tools {
+        let (placed, group) = rebuild_gemini_tool_group(
+            orig_group,
+            fn_declarations,
+            native_groups,
+            &mut native_used,
+            fn_group_placed,
+        );
+        fn_group_placed |= placed;
+        if let Some(group) = group {
+            new_groups.push(group);
         }
     }
     if !fn_group_placed && !fn_declarations.is_empty() {
@@ -2621,16 +2627,53 @@ fn patch_gemini_tools(
         native_groups
             .iter()
             .enumerate()
-            .filter(|(idx, _)| !native_used[*idx])
+            .filter(|(index, _)| !native_used[*index])
             .map(|(_, group)| group.clone()),
     );
+    new_groups
+}
 
-    if new_groups.is_empty() {
-        obj.remove("tools");
-    } else {
-        obj.insert("tools".into(), Json::Array(new_groups));
+fn rebuild_gemini_tool_group(
+    orig_group: &Json,
+    fn_declarations: &[Json],
+    native_groups: &[Json],
+    native_used: &mut [bool],
+    fn_group_placed: bool,
+) -> (bool, Option<Json>) {
+    if orig_group.get("functionDeclarations").is_some() {
+        if fn_group_placed {
+            return (false, None);
+        }
+        let mut group = serde_json::Map::new();
+        if !fn_declarations.is_empty() {
+            group.insert(
+                "functionDeclarations".into(),
+                Json::Array(fn_declarations.to_vec()),
+            );
+        }
+        merge_gemini_native_sibling_group(orig_group, native_groups, native_used, &mut group);
+        return (true, (!group.is_empty()).then_some(Json::Object(group)));
     }
-    Ok(())
+    let group = take_matching_native_group(
+        native_groups,
+        native_used,
+        &gemini_native_tool_keys(orig_group),
+    );
+    (false, group)
+}
+
+fn merge_gemini_native_sibling_group(
+    orig_group: &Json,
+    native_groups: &[Json],
+    native_used: &mut [bool],
+    group: &mut serde_json::Map<String, Json>,
+) {
+    let keys = gemini_native_tool_keys(orig_group);
+    if let Some(native_group) = take_matching_native_group(native_groups, native_used, &keys)
+        && let Some(native_obj) = native_group.as_object()
+    {
+        group.extend(native_obj.clone());
+    }
 }
 
 /// Overlay extra-field changes from `annotated` onto `obj`, guided by `baseline`.
@@ -2745,113 +2788,8 @@ impl GeminiGenerateContentStreamingState {
     }
 
     fn observe(&mut self, event: &Json) -> Result<()> {
-        if let Some(candidates) = event.get("candidates").and_then(Json::as_array)
-            && let Some(candidate) = candidates.first()
-        {
-            if candidates.len() > 1 {
-                return Err(FlowError::InvalidArgument(
-                    "Gemini streaming chunks with multiple candidates are not supported".into(),
-                ));
-            }
-            let candidate_obj = candidate.as_object().ok_or_else(|| {
-                FlowError::InvalidArgument("Gemini streaming candidate must be an object".into())
-            })?;
-            let index = candidate_obj
-                .get("index")
-                .ok_or_else(|| {
-                    FlowError::InvalidArgument(
-                        "Gemini streaming candidate index is required".into(),
-                    )
-                })?
-                .as_u64()
-                .ok_or_else(|| {
-                    FlowError::InvalidArgument(
-                        "Gemini streaming candidate index must be an unsigned integer".into(),
-                    )
-                })?;
-            if let Some(previous_index) = self.candidate_index {
-                if previous_index != index {
-                    return Err(FlowError::InvalidArgument(
-                        "Gemini streaming candidate index changed across chunks".into(),
-                    ));
-                }
-            } else {
-                if index != 0 {
-                    return Err(FlowError::InvalidArgument(
-                        "Gemini streaming only supports candidate index 0".into(),
-                    ));
-                }
-                self.candidate_index = Some(index);
-            }
-
-            if let Some(parts) = candidate_obj
-                .get("content")
-                .and_then(|c| c.get("parts"))
-                .and_then(Json::as_array)
-            {
-                for part in parts {
-                    if !part.is_object() {
-                        return Err(FlowError::InvalidArgument(
-                            "Gemini streaming parts entry must be an object".into(),
-                        ));
-                    }
-                    let part_obj = part.as_object().unwrap();
-                    let data_key = validate_single_gemini_part_data_field(part_obj, "streaming")?;
-                    // Preserve thought parts in the provider-native aggregate; the response
-                    // decoder filters them out of the normalized message.
-                    if part.get("thought").and_then(Json::as_bool) == Some(true) {
-                        self.parts.push(part.clone());
-                        continue;
-                    }
-
-                    match data_key {
-                        Some("text") => {
-                            let text_val = part.get("text").unwrap();
-                            match text_val.as_str() {
-                                Some(s) => {
-                                    self.push_text_part(s, part_obj);
-                                }
-                                None => {
-                                    return Err(FlowError::InvalidArgument(
-                                        "Gemini streaming parts[].text must be a string".into(),
-                                    ));
-                                }
-                            }
-                        }
-                        Some("functionCall") => {
-                            self.parts.push(part.clone());
-                        }
-                        Some("functionResponse") => {
-                            return Err(FlowError::InvalidArgument(
-                                "Gemini streaming response parts must not contain functionResponse"
-                                    .into(),
-                            ));
-                        }
-                        Some(_) | None => {
-                            self.parts.push(part.clone());
-                        }
-                    }
-                }
-            }
-            if let Some(reason_val) = candidate.get("finishReason") {
-                match reason_val.as_str() {
-                    Some(s) => self.finish_reason = Some(s.to_string()),
-                    None => {
-                        return Err(FlowError::InvalidArgument(
-                            "Gemini streaming candidate finishReason must be a string".into(),
-                        ));
-                    }
-                }
-            }
-            // Collect candidate-level metadata fields (safetyRatings, groundingMetadata,
-            // citationMetadata, avgLogprobs, etc.) that non-streaming decode preserves
-            // in ApiSpecificResponse::GeminiGenerateContent.  Later chunks overwrite earlier ones for
-            // the same key (last-wins), matching the non-streaming behaviour.
-            for (k, v) in candidate_obj {
-                if !matches!(k.as_str(), "content" | "finishReason" | "index") {
-                    self.candidate_extra.insert(k.clone(), v.clone());
-                }
-            }
+        if let Some(candidates) = event.get("candidates").and_then(Json::as_array) {
+            self.observe_candidate(candidates)?;
         }
         if let Some(usage) = event.get("usageMetadata") {
             self.usage_metadata = Some(usage.clone());
@@ -2875,6 +2813,118 @@ impl GeminiGenerateContentStreamingState {
                     ));
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn observe_candidate(&mut self, candidates: &[Json]) -> Result<()> {
+        let Some(candidate) = candidates.first() else {
+            return Ok(());
+        };
+        if candidates.len() > 1 {
+            return Err(FlowError::InvalidArgument(
+                "Gemini streaming chunks with multiple candidates are not supported".into(),
+            ));
+        }
+        let candidate_obj = candidate.as_object().ok_or_else(|| {
+            FlowError::InvalidArgument("Gemini streaming candidate must be an object".into())
+        })?;
+        self.observe_candidate_index(candidate_obj)?;
+        if let Some(parts) = candidate_obj
+            .get("content")
+            .and_then(|content| content.get("parts"))
+            .and_then(Json::as_array)
+        {
+            self.observe_parts(parts)?;
+        }
+        self.observe_finish_reason(candidate)?;
+        for (key, value) in candidate_obj {
+            if !matches!(key.as_str(), "content" | "finishReason" | "index") {
+                self.candidate_extra.insert(key.clone(), value.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn observe_candidate_index(&mut self, candidate: &serde_json::Map<String, Json>) -> Result<()> {
+        let index = candidate
+            .get("index")
+            .ok_or_else(|| {
+                FlowError::InvalidArgument("Gemini streaming candidate index is required".into())
+            })?
+            .as_u64()
+            .ok_or_else(|| {
+                FlowError::InvalidArgument(
+                    "Gemini streaming candidate index must be an unsigned integer".into(),
+                )
+            })?;
+        match self.candidate_index {
+            Some(previous) if previous != index => Err(FlowError::InvalidArgument(
+                "Gemini streaming candidate index changed across chunks".into(),
+            )),
+            Some(_) => Ok(()),
+            None if index == 0 => {
+                self.candidate_index = Some(index);
+                Ok(())
+            }
+            None => Err(FlowError::InvalidArgument(
+                "Gemini streaming only supports candidate index 0".into(),
+            )),
+        }
+    }
+
+    fn observe_parts(&mut self, parts: &[Json]) -> Result<()> {
+        for part in parts {
+            let part_obj = part.as_object().ok_or_else(|| {
+                FlowError::InvalidArgument("Gemini streaming parts entry must be an object".into())
+            })?;
+            let data_key = validate_single_gemini_part_data_field(part_obj, "streaming")?;
+            if part.get("thought").and_then(Json::as_bool) == Some(true) {
+                self.parts.push(part.clone());
+            } else {
+                self.observe_part(part, part_obj, data_key)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn observe_part(
+        &mut self,
+        part: &Json,
+        part_obj: &serde_json::Map<String, Json>,
+        data_key: Option<&str>,
+    ) -> Result<()> {
+        match data_key {
+            Some("text") => {
+                let text = part.get("text").and_then(Json::as_str).ok_or_else(|| {
+                    FlowError::InvalidArgument(
+                        "Gemini streaming parts[].text must be a string".into(),
+                    )
+                })?;
+                self.push_text_part(text, part_obj);
+            }
+            Some("functionResponse") => {
+                return Err(FlowError::InvalidArgument(
+                    "Gemini streaming response parts must not contain functionResponse".into(),
+                ));
+            }
+            _ => self.parts.push(part.clone()),
+        }
+        Ok(())
+    }
+
+    fn observe_finish_reason(&mut self, candidate: &Json) -> Result<()> {
+        if let Some(reason) = candidate.get("finishReason") {
+            self.finish_reason = Some(
+                reason
+                    .as_str()
+                    .ok_or_else(|| {
+                        FlowError::InvalidArgument(
+                            "Gemini streaming candidate finishReason must be a string".into(),
+                        )
+                    })?
+                    .to_string(),
+            );
         }
         Ok(())
     }

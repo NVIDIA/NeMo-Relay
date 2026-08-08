@@ -99,12 +99,21 @@ fn overlay_gemini_response(mut payload: Json, annotated: &AnnotatedLlmResponse) 
         return payload;
     };
 
-    if let Some(message_parts) = gemini_message_parts_for_overlay(annotated.message.as_ref()) {
+    overlay_gemini_message_parts(parts, annotated.message.as_ref());
+
+    // Overlay functionCall parts.
+    overlay_gemini_tool_calls(parts, annotated.tool_calls.as_deref());
+
+    payload
+}
+
+fn overlay_gemini_message_parts(parts: &mut Vec<Json>, message: Option<&MessageContent>) {
+    if let Some(message_parts) = gemini_message_parts_for_overlay(message) {
         let mut sanitized = message_parts.into_iter();
         parts.retain_mut(|part| {
-            let is_thought = part.get("thought").and_then(Json::as_bool) == Some(true);
-            let is_tool_call = part.get("functionCall").is_some();
-            if is_thought || is_tool_call {
+            if part.get("thought").and_then(Json::as_bool) == Some(true)
+                || part.get("functionCall").is_some()
+            {
                 return true;
             }
             let Some(next) = sanitized.next() else {
@@ -114,63 +123,59 @@ fn overlay_gemini_response(mut payload: Json, annotated: &AnnotatedLlmResponse) 
             true
         });
         parts.extend(sanitized);
-    } else {
-        // Overlay fallback text into the first visible text part.  The normalized
-        // text may contain embedded newlines, so splitting would confuse text
-        // content with Gemini part boundaries.
-        let message_text = annotated_message_text(annotated.message.as_ref());
-        let mut wrote_text = false;
-        parts.retain_mut(|part| {
-            let is_thought = part.get("thought").and_then(Json::as_bool) == Some(true);
-            if part.get("text").is_none() || is_thought {
-                return true;
-            }
-            let Some(p) = part.as_object_mut() else {
-                return false;
-            };
-            if wrote_text {
-                return false;
-            }
-            let Some(text) = message_text.as_deref() else {
-                return false;
-            };
-            set_optional_string_field(p, "text", Some(text));
-            wrote_text = true;
-            true
-        });
+        return;
     }
 
-    // Overlay functionCall parts.
-    if let Some(tool_calls) = annotated.tool_calls.as_deref() {
-        let mut sanitized = tool_calls.iter();
-        parts.retain_mut(|part| {
-            let Some(fc) = part
-                .as_object_mut()
-                .and_then(|p| p.get_mut("functionCall"))
-                .and_then(Json::as_object_mut)
-            else {
-                return true; // not a functionCall part — keep
-            };
-            let Some(sc) = sanitized.next() else {
-                return false; // no sanitized call left — remove this part
-            };
-            if fc.contains_key("id") {
-                set_optional_string_field(fc, "id", Some(sc.id.as_str()));
-            }
-            set_optional_string_field(fc, "name", Some(sc.name.as_str()));
-            fc.insert("args".into(), sc.arguments.clone());
-            true
-        });
-    } else {
-        // No tool calls in sanitized response: remove all functionCall parts.
+    let message_text = annotated_message_text(message);
+    let mut wrote_text = false;
+    parts.retain_mut(|part| {
+        if part.get("text").is_none() || part.get("thought").and_then(Json::as_bool) == Some(true) {
+            return true;
+        }
+        let Some(part) = part.as_object_mut() else {
+            return false;
+        };
+        let Some(text) = message_text.as_deref() else {
+            return false;
+        };
+        if wrote_text {
+            return false;
+        }
+        set_optional_string_field(part, "text", Some(text));
+        wrote_text = true;
+        true
+    });
+}
+
+fn overlay_gemini_tool_calls(parts: &mut Vec<Json>, tool_calls: Option<&[ResponseToolCall]>) {
+    let Some(tool_calls) = tool_calls else {
         parts.retain(|part| {
             part.as_object()
-                .map(|p| !p.contains_key("functionCall"))
+                .map(|object| !object.contains_key("functionCall"))
                 .unwrap_or(true)
         });
-    }
+        return;
+    };
 
-    payload
+    let mut sanitized = tool_calls.iter();
+    parts.retain_mut(|part| {
+        let Some(function_call) = part
+            .as_object_mut()
+            .and_then(|object| object.get_mut("functionCall"))
+            .and_then(Json::as_object_mut)
+        else {
+            return true;
+        };
+        let Some(call) = sanitized.next() else {
+            return false;
+        };
+        if function_call.contains_key("id") {
+            set_optional_string_field(function_call, "id", Some(call.id.as_str()));
+        }
+        set_optional_string_field(function_call, "name", Some(call.name.as_str()));
+        function_call.insert("args".into(), call.arguments.clone());
+        true
+    });
 }
 
 fn overlay_openai_chat_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {

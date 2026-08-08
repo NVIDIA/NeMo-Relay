@@ -20,6 +20,15 @@ import (
 )
 
 const (
+	deferredCloseErrorFmt = "deferred Close() error = %v"
+	goNativeToolName      = "go-native-tool"
+	toolInterceptErrorFmt = "ToolRequestIntercepts() error = %v"
+	invalidToolArgsFmt    = "transformed tool args are invalid JSON: %v"
+	pluginsTOMLName       = "plugins.toml"
+	staticFixtureKind     = "go.fixture.static_base"
+)
+
+const (
 	pluginFixtureManifest      = "/tmp/relay-plugin.toml"
 	initializePluginsErrorFmt  = "InitializeWithDynamicPlugins() error = %v"
 	closeErrorFmt              = "Close() error = %v"
@@ -593,7 +602,7 @@ func TestInitializeWithDynamicPluginsLoadsNativePluginThroughCgo(t *testing.T) {
 	}
 	defer func() {
 		if err := activation.Close(); err != nil {
-			t.Errorf("deferred Close() error = %v", err)
+			t.Errorf(deferredCloseErrorFmt, err)
 		}
 	}()
 	if len(report.Diagnostics) != 1 {
@@ -634,7 +643,7 @@ func TestInitializeWithDynamicPluginsIgnoresProjectPluginConfig(t *testing.T) {
 	}
 	defer func() {
 		if err := activation.Close(); err != nil {
-			t.Errorf("deferred Close() error = %v", err)
+			t.Errorf(deferredCloseErrorFmt, err)
 		}
 	}()
 	if len(report.Diagnostics) != 0 {
@@ -644,13 +653,13 @@ func TestInitializeWithDynamicPluginsIgnoresProjectPluginConfig(t *testing.T) {
 		t.Fatalf("static registrations = %d, want 0", staticRegistrations.Load())
 	}
 
-	transformed, err := ToolRequestIntercepts("go-native-tool", json.RawMessage(`{"input":true}`))
+	transformed, err := ToolRequestIntercepts(goNativeToolName, json.RawMessage(`{"input":true}`))
 	if err != nil {
-		t.Fatalf("ToolRequestIntercepts() error = %v", err)
+		t.Fatalf(toolInterceptErrorFmt, err)
 	}
 	var transformedObject map[string]any
 	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
-		t.Fatalf("transformed tool args are invalid JSON: %v", err)
+		t.Fatalf(invalidToolArgsFmt, err)
 	}
 	if transformedObject["native_plugin"] != true || transformedObject["go_static_base"] != nil {
 		t.Fatalf("transformed tool args = %s, want only native-plugin marker", transformed)
@@ -663,7 +672,7 @@ func TestInitializeWithDynamicPluginsIgnoresProjectPluginConfig(t *testing.T) {
 func configureNativePluginUserConfig(t *testing.T) string {
 	t.Helper()
 	projectDir := t.TempDir()
-	legacyPluginsTOML := filepath.Join(projectDir, ".nemo-relay", "plugins.toml")
+	legacyPluginsTOML := filepath.Join(projectDir, ".nemo-relay", pluginsTOMLName)
 	if err := os.MkdirAll(filepath.Dir(legacyPluginsTOML), 0o700); err != nil {
 		t.Fatalf("MkdirAll(legacy project config) error = %v", err)
 	}
@@ -675,8 +684,8 @@ func configureNativePluginUserConfig(t *testing.T) string {
 	if err := os.MkdirAll(userConfigDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(user config) error = %v", err)
 	}
-	pluginsTOML := filepath.Join(userConfigDir, "plugins.toml")
-	const staticKind = "go.fixture.static_base"
+	pluginsTOML := filepath.Join(userConfigDir, pluginsTOMLName)
+	const staticKind = staticFixtureKind
 	fileConfig := fmt.Sprintf(`version = 1
 
 [[components]]
@@ -708,11 +717,11 @@ source = "user-file"
 func configureNativePluginProjectConfig(t *testing.T) {
 	t.Helper()
 	projectDir := t.TempDir()
-	projectPluginsTOML := filepath.Join(projectDir, ".nemo-relay", "plugins.toml")
+	projectPluginsTOML := filepath.Join(projectDir, ".nemo-relay", pluginsTOMLName)
 	if err := os.MkdirAll(filepath.Dir(projectPluginsTOML), 0o700); err != nil {
 		t.Fatalf("MkdirAll(project config) error = %v", err)
 	}
-	const staticKind = "go.fixture.static_base"
+	const staticKind = staticFixtureKind
 	projectConfig := fmt.Sprintf(`version = 1
 
 [[components]]
@@ -746,7 +755,7 @@ source = "project-file"
 
 func registerStaticFixturePlugin(t *testing.T) (*atomic.Int32, *atomic.Int32) {
 	t.Helper()
-	const staticKind = "go.fixture.static_base"
+	const staticKind = staticFixtureKind
 	staticRegistrations := &atomic.Int32{}
 	staticCallbacks := &atomic.Int32{}
 	if err := RegisterPlugin(staticKind, PluginFuncs{
@@ -792,13 +801,13 @@ func assertNativePluginInterception(t *testing.T, pluginsTOML string, staticCall
 		t.Fatalf("mutate plugins.toml error = %v", err)
 	}
 
-	transformed, err := ToolRequestIntercepts("go-native-tool", json.RawMessage(`{"input":true}`))
+	transformed, err := ToolRequestIntercepts(goNativeToolName, json.RawMessage(`{"input":true}`))
 	if err != nil {
-		t.Fatalf("ToolRequestIntercepts() error = %v", err)
+		t.Fatalf(toolInterceptErrorFmt, err)
 	}
 	var transformedObject map[string]any
 	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
-		t.Fatalf("transformed tool args are invalid JSON: %v", err)
+		t.Fatalf(invalidToolArgsFmt, err)
 	}
 	if transformedObject["native_plugin"] != true {
 		t.Fatalf("transformed tool args = %s, want native_plugin marker", transformed)
@@ -819,7 +828,7 @@ func assertNativePluginCleanup(t *testing.T, activation *PluginActivation, plugi
 	if err := activation.Close(); err != nil {
 		t.Fatalf(closeErrorFmt, err)
 	}
-	afterClose, err := ToolRequestIntercepts("go-native-tool", json.RawMessage(`{"input":true}`))
+	afterClose, err := ToolRequestIntercepts(goNativeToolName, json.RawMessage(`{"input":true}`))
 	if err != nil {
 		t.Fatalf("ToolRequestIntercepts() after Close error = %v", err)
 	}
@@ -879,7 +888,7 @@ func testInitializeWithDynamicWorkerPlugin(t *testing.T, manifest string) {
 	}
 	defer func() {
 		if err := activation.Close(); err != nil {
-			t.Errorf("deferred Close() error = %v", err)
+			t.Errorf(deferredCloseErrorFmt, err)
 		}
 	}()
 	if len(report.Diagnostics) != 0 {
@@ -888,11 +897,11 @@ func testInitializeWithDynamicWorkerPlugin(t *testing.T, manifest string) {
 
 	transformed, err := ToolRequestIntercepts("go-worker-tool", json.RawMessage(`{"input":true}`))
 	if err != nil {
-		t.Fatalf("ToolRequestIntercepts() error = %v", err)
+		t.Fatalf(toolInterceptErrorFmt, err)
 	}
 	var transformedObject map[string]any
 	if err := json.Unmarshal(transformed, &transformedObject); err != nil {
-		t.Fatalf("transformed tool args are invalid JSON: %v", err)
+		t.Fatalf(invalidToolArgsFmt, err)
 	}
 	if transformedObject["worker_plugin"] != true {
 		t.Fatalf("transformed tool args = %s, want worker_plugin marker", transformed)

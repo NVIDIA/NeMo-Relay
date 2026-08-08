@@ -943,60 +943,91 @@ fn register_atif_dispatcher(
         "observability",
         ctx.qualify_name("atif.shutdown"),
         Box::new(move || {
-            let work = match (|| -> PluginResult<_> {
-                let work = {
-                    let mut guard = manager.lock().map_err(|err| {
-                        PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-                    })?;
-                    guard.flush_open_agents()
-                };
-                for (scope_uuid, name) in &work.scope_subscribers {
-                    deregister_atif_shutdown_subscriber(scope_uuid, name)?;
-                }
-                Ok(work)
-            })() {
-                Ok(work) => work,
-                Err(error) => return PluginRegistrationCleanupOutcome::NotRemoved(error),
-            };
-
-            let delivery = (|| -> PluginResult<()> {
-                for export in work.exports {
-                    let write = prepare_atif_shutdown_file(&export, Arc::clone(&manager))
-                        .map_err(observability_registration_error)?;
-                    let agent_uuid = write.agent_uuid;
-                    let targets = {
-                        let guard = manager.lock().map_err(|err| {
-                            PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-                        })?;
-                        guard.sink_targets()
-                    };
-                    let results = write_atif(&write, shutdown_storage.as_slice(), &targets);
-                    let mut guard = manager.lock().map_err(|err| {
-                        PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
-                    })?;
-                    let _ = guard.complete_scope_write(agent_uuid, results);
-                }
-                Ok(())
-            })();
-            if let Err(error) = delivery {
-                return PluginRegistrationCleanupOutcome::RemovedWithError(error);
-            }
-            let guard = match manager.lock() {
-                Ok(guard) => guard,
-                Err(error) => {
-                    return PluginRegistrationCleanupOutcome::RemovedWithError(
-                        PluginError::Internal(format!("ATIF dispatcher lock poisoned: {error}")),
-                    );
-                }
-            };
-            match guard.last_error_result() {
-                Ok(()) => PluginRegistrationCleanupOutcome::Removed,
-                Err(error) => PluginRegistrationCleanupOutcome::RemovedWithError(
-                    observability_registration_error(error),
-                ),
-            }
+            atif_shutdown_cleanup(Arc::clone(&manager), Arc::clone(&shutdown_storage))
         }),
     ));
+    Ok(())
+}
+
+fn atif_shutdown_cleanup(
+    manager: Arc<Mutex<AtifDispatcher>>,
+    shutdown_storage: AtifStorageList,
+) -> PluginRegistrationCleanupOutcome {
+    let (work, deregistration_error) = match flush_atif_shutdown_work(&manager) {
+        Ok(work) => work,
+        Err(error) => return PluginRegistrationCleanupOutcome::NotRemoved(error),
+    };
+    if let Err(error) = write_atif_shutdown_exports(&manager, &shutdown_storage, work.exports) {
+        return PluginRegistrationCleanupOutcome::RemovedWithError(error);
+    }
+    if let Some(error) = deregistration_error {
+        return PluginRegistrationCleanupOutcome::NotRemoved(error);
+    }
+    match manager.lock() {
+        Ok(guard) => match guard.last_error_result() {
+            Ok(()) => PluginRegistrationCleanupOutcome::Removed,
+            Err(error) => PluginRegistrationCleanupOutcome::RemovedWithError(
+                observability_registration_error(error),
+            ),
+        },
+        Err(error) => PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::Internal(
+            format!("ATIF dispatcher lock poisoned: {error}"),
+        )),
+    }
+}
+
+fn flush_atif_shutdown_work(
+    manager: &Arc<Mutex<AtifDispatcher>>,
+) -> PluginResult<(AtifFlushWork, Option<PluginError>)> {
+    let work = {
+        let mut guard = manager.lock().map_err(|err| {
+            PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}"))
+        })?;
+        guard.flush_open_agents()
+    };
+    let mut deregistration_error = None;
+    for (scope_uuid, name) in &work.scope_subscribers {
+        if let Err(error) = deregister_atif_shutdown_subscriber(scope_uuid, name)
+            && deregistration_error.is_none()
+        {
+            deregistration_error = Some(error);
+        }
+    }
+    Ok((work, deregistration_error))
+}
+
+fn write_atif_shutdown_exports(
+    manager: &Arc<Mutex<AtifDispatcher>>,
+    shutdown_storage: &AtifStorageList,
+    exports: Vec<PendingAtifExport>,
+) -> PluginResult<()> {
+    let mut first_error = None;
+    for export in exports {
+        if let Err(error) = write_atif_shutdown_export(manager, shutdown_storage, &export)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+fn write_atif_shutdown_export(
+    manager: &Arc<Mutex<AtifDispatcher>>,
+    shutdown_storage: &AtifStorageList,
+    export: &PendingAtifExport,
+) -> PluginResult<()> {
+    let write = prepare_atif_shutdown_file(export, Arc::clone(manager))
+        .map_err(observability_registration_error)?;
+    let targets = manager
+        .lock()
+        .map_err(|err| PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}")))?
+        .sink_targets();
+    let results = write_atif(&write, shutdown_storage.as_slice(), &targets);
+    let mut guard = manager
+        .lock()
+        .map_err(|err| PluginError::Internal(format!("ATIF dispatcher lock poisoned: {err}")))?;
+    let _ = guard.complete_scope_write(write.agent_uuid, results);
     Ok(())
 }
 
