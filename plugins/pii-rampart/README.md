@@ -100,6 +100,12 @@ If admission, model execution, codec projection, or a configured payload budget
 fails, the affected observable value is omitted or replaced rather than emitted
 without sanitization. The original application call continues unchanged.
 
+Successful detections use the configured replacement, which defaults to
+`[REDACTED]`. A value that cannot be processed uses a distinct
+`[CONTENT OMITTED: ...]` marker so operators can distinguish a detected PII
+span from a sanitizer failure. The marker remains in the affected field of the
+emitted event and therefore reaches subscribers and exporters.
+
 The `trajectory_context` preset operates on provider-native request and response
 content and is the recommended configuration for coding-agent telemetry.
 Explicit normalized LLM paths support Relay's built-in OpenAI Chat, OpenAI

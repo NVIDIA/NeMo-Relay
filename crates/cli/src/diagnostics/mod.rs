@@ -888,82 +888,78 @@ async fn observability_http_exporter_checks(
         return Vec::new();
     };
     join_all(
-        endpoints
-            .iter()
-            .enumerate()
-            .map(|(index, endpoint)| async move {
-                let endpoint_type = endpoint
-                    .get("type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                let label = "OpenTelemetry endpoint";
-                let transport = endpoint
-                    .get("transport")
-                    .and_then(Value::as_str)
-                    .unwrap_or("http_binary");
-                match endpoint.get("endpoint").and_then(Value::as_str) {
-                    Some(url) => {
-                        let mut check = if transport == "grpc" {
-                            if probe_mode.is_offline() {
-                                match validate_grpc_endpoint(url) {
-                                    Ok(_) => Check {
-                                        name: label,
-                                        status: Status::Info,
-                                        details: format!(
-                                            "endpoints[{index}] ({endpoint_type}): live network probe skipped (--offline)"
-                                        ),
-                                    },
-                                    Err(details) => Check {
-                                        name: label,
-                                        status: Status::Fail,
-                                        details: format!(
-                                            "endpoints[{index}] ({endpoint_type}): {details}"
-                                        ),
-                                    },
-                                }
-                            } else {
-                                probe_tcp_named(label, url).await
-                            }
-                        } else {
-                            let effective_url = resolve_http_trace_endpoint(url);
-                            if probe_mode.is_offline() {
-                                match validate_otlp_http_endpoint(effective_url.as_ref()) {
-                                    Ok(()) => Check {
-                                        name: label,
-                                        status: Status::Info,
-                                        details: format!(
-                                            "endpoints[{index}] ({endpoint_type}): live network probe skipped (--offline)"
-                                        ),
-                                    },
-                                    Err(details) => Check {
-                                        name: label,
-                                        status: Status::Fail,
-                                        details: format!(
-                                            "endpoints[{index}] ({endpoint_type}): {details}"
-                                        ),
-                                    },
-                                }
-                            } else {
-                                probe_otlp_http_named(label, effective_url.as_ref()).await
-                            }
-                        };
-                        if !probe_mode.is_offline() {
-                            check.details =
-                                format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
-                        }
-                        check
-                    }
-                    None => Check {
-                        name: label,
-                        status: Status::Fail,
-                        details: format!(
-                            "endpoints[{index}] ({endpoint_type}): endpoint is required"
-                        ),
-                    },
-                }
-            }),
+        endpoints.iter().enumerate().map(|(index, endpoint)| {
+            observability_http_exporter_check(index, endpoint, probe_mode)
+        }),
     )
     .await
+}
+
+async fn observability_http_exporter_check(
+    index: usize,
+    endpoint: &Value,
+    probe_mode: DoctorProbeMode,
+) -> Check {
+    let endpoint_type = endpoint
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let label = "OpenTelemetry endpoint";
+    let Some(url) = endpoint.get("endpoint").and_then(Value::as_str) else {
+        return Check {
+            name: label,
+            status: Status::Fail,
+            details: format!("endpoints[{index}] ({endpoint_type}): endpoint is required"),
+        };
+    };
+    let transport = endpoint
+        .get("transport")
+        .and_then(Value::as_str)
+        .unwrap_or("http_binary");
+    let mut check = if transport == "grpc" {
+        probe_grpc_endpoint(label, url, probe_mode).await
+    } else {
+        probe_http_endpoint(label, url, probe_mode).await
+    };
+    check.details = format!("endpoints[{index}] ({endpoint_type}): {}", check.details);
+    check
+}
+
+async fn probe_grpc_endpoint(label: &'static str, url: &str, mode: DoctorProbeMode) -> Check {
+    if mode.is_offline() {
+        return match validate_grpc_endpoint(url) {
+            Ok(_) => Check {
+                name: label,
+                status: Status::Info,
+                details: "live network probe skipped (--offline)".into(),
+            },
+            Err(details) => Check {
+                name: label,
+                status: Status::Fail,
+                details,
+            },
+        };
+    }
+    probe_tcp_named(label, url).await
+}
+
+async fn probe_http_endpoint(label: &'static str, url: &str, mode: DoctorProbeMode) -> Check {
+    let effective_url = resolve_http_trace_endpoint(url);
+    if mode.is_offline() {
+        return match validate_otlp_http_endpoint(effective_url.as_ref()) {
+            Ok(()) => Check {
+                name: label,
+                status: Status::Info,
+                details: "live network probe skipped (--offline)".into(),
+            },
+            Err(details) => Check {
+                name: label,
+                status: Status::Fail,
+                details,
+            },
+        };
+    }
+    probe_otlp_http_named(label, effective_url.as_ref()).await
 }
 
 fn observability_component_config(plugin_value: &Value) -> Option<&Value> {
@@ -1229,54 +1225,74 @@ fn validate_atof_stream_probe_target(
 fn endpoint_headers(endpoint: &Value) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     let mut names = std::collections::HashSet::new();
-    if let Some(headers) = endpoint.get("headers") {
-        let Some(object) = headers.as_object() else {
-            return Err("headers must be an object of string values".into());
-        };
-        for (key, value) in object {
-            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                .map_err(|error| error.to_string())?;
-            let Some(value) = value.as_str() else {
-                return Err(format!("headers.{key} must be a string"));
-            };
-            if value.trim().is_empty() {
-                return Err(format!("headers.{key} must not be blank"));
-            }
-            reqwest::header::HeaderValue::from_bytes(value.as_bytes())
-                .map_err(|error| format!("headers.{key} invalid: {error}"))?;
-            if !names.insert(name) {
-                return Err(format!("header {key:?} appears more than once"));
-            }
-            out.push((key.clone(), value.to_string()));
-        }
-    }
-    if let Some(header_env) = endpoint.get("header_env") {
-        let Some(object) = header_env.as_object() else {
-            return Err("header_env must be an object of string values".into());
-        };
-        for (key, variable) in object {
-            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                .map_err(|error| error.to_string())?;
-            if names.contains(&name) {
-                return Err(format!(
-                    "header {key:?} cannot appear in both headers and header_env"
-                ));
-            }
-            let Some(variable) = variable.as_str() else {
-                return Err(format!("header_env.{key} must be a string"));
-            };
-            let value = std::env::var(variable)
-                .map_err(|_| format!("environment variable {variable:?} is not set"))?;
-            if value.trim().is_empty() {
-                return Err(format!("environment variable {variable:?} is blank"));
-            }
-            reqwest::header::HeaderValue::from_bytes(value.as_bytes())
-                .map_err(|error| format!("header_env.{key} invalid: {error}"))?;
-            names.insert(name);
-            out.push((key.clone(), value));
-        }
-    }
+    append_configured_headers(endpoint.get("headers"), &mut names, &mut out)?;
+    append_environment_headers(endpoint.get("header_env"), &mut names, &mut out)?;
     Ok(out)
+}
+
+fn append_configured_headers(
+    headers: Option<&Value>,
+    names: &mut std::collections::HashSet<reqwest::header::HeaderName>,
+    out: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    let Some(headers) = headers else {
+        return Ok(());
+    };
+    let Some(object) = headers.as_object() else {
+        return Err("headers must be an object of string values".into());
+    };
+    for (key, value) in object {
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|error| error.to_string())?;
+        let Some(value) = value.as_str() else {
+            return Err(format!("headers.{key} must be a string"));
+        };
+        if value.trim().is_empty() {
+            return Err(format!("headers.{key} must not be blank"));
+        }
+        reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+            .map_err(|error| format!("headers.{key} invalid: {error}"))?;
+        if !names.insert(name) {
+            return Err(format!("header {key:?} appears more than once"));
+        }
+        out.push((key.clone(), value.to_string()));
+    }
+    Ok(())
+}
+
+fn append_environment_headers(
+    header_env: Option<&Value>,
+    names: &mut std::collections::HashSet<reqwest::header::HeaderName>,
+    out: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    let Some(header_env) = header_env else {
+        return Ok(());
+    };
+    let Some(object) = header_env.as_object() else {
+        return Err("header_env must be an object of string values".into());
+    };
+    for (key, variable) in object {
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|error| error.to_string())?;
+        if names.contains(&name) {
+            return Err(format!(
+                "header {key:?} cannot appear in both headers and header_env"
+            ));
+        }
+        let Some(variable) = variable.as_str() else {
+            return Err(format!("header_env.{key} must be a string"));
+        };
+        let value = std::env::var(variable)
+            .map_err(|_| format!("environment variable {variable:?} is not set"))?;
+        if value.trim().is_empty() {
+            return Err(format!("environment variable {variable:?} is blank"));
+        }
+        reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+            .map_err(|error| format!("header_env.{key} invalid: {error}"))?;
+        names.insert(name);
+        out.push((key.clone(), value));
+    }
+    Ok(())
 }
 
 fn doctor_atof_probe_payload() -> Result<String, String> {

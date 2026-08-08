@@ -74,7 +74,12 @@ function formatMs(value) {
     return "—";
   }
   const magnitude = Math.abs(value);
-  const digits = magnitude >= 100 ? 1 : magnitude >= 10 ? 2 : 3;
+  let digits = 3;
+  if (magnitude >= 100) {
+    digits = 1;
+  } else if (magnitude >= 10) {
+    digits = 2;
+  }
   return `${value.toFixed(digits)} ms`;
 }
 
@@ -237,7 +242,7 @@ function drawLineChart(svg, series, payloads, includeZero) {
       class: "line-series",
       points,
       stroke: color,
-      "stroke-dasharray": seriesIndex === 1 ? "9 5" : seriesIndex === 2 ? "3 5" : "none",
+      "stroke-dasharray": strokeDasharray(seriesIndex),
     });
     item.values.forEach((point, index) => {
       const circle = addSvg(svg, "circle", {
@@ -250,6 +255,16 @@ function drawLineChart(svg, series, payloads, includeZero) {
       addSvg(circle, "title", {}, `${item.label}, ${formatBytes(point.payload)}: ${formatMs(point.value)}`);
     });
   });
+}
+
+function strokeDasharray(seriesIndex) {
+  if (seriesIndex === 1) {
+    return "9 5";
+  }
+  if (seriesIndex === 2) {
+    return "3 5";
+  }
+  return "none";
 }
 
 function renderLegend(series) {
@@ -321,11 +336,12 @@ function renderGateway() {
   renderLegend(series);
 
   const metricLabel = metric === "first_content" ? "time to first content" : "total response time";
-  const viewLabel = view === "absolute"
-    ? "absolute latency"
-    : view === "minimal"
-      ? "variant overhead relative to minimal Relay"
-      : "Relay overhead relative to direct provider calls";
+  let viewLabel = "Relay overhead relative to direct provider calls";
+  if (view === "absolute") {
+    viewLabel = "absolute latency";
+  } else if (view === "minimal") {
+    viewLabel = "variant overhead relative to minimal Relay";
+  }
   byId("gateway-chart-description").textContent =
     `${statistic.replace("_ms", "")} ${metricLabel}; ${viewLabel}. ` +
     `Provider ${byId("gateway-provider").value}, ${byId("gateway-mode").value}, ` +
