@@ -17,6 +17,24 @@ use crate::response_cache::store::CacheEntry;
 /// Mark-event name emitted on every cache decision.
 pub const RESPONSE_CACHE_MARK: &str = "response_cache";
 
+/// Execution surface that made a response-cache decision.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CacheSurface {
+    /// An LLM response.
+    Llm,
+    /// A tool result.
+    Tool,
+}
+
+impl CacheSurface {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Llm => "llm",
+            Self::Tool => "tool",
+        }
+    }
+}
+
 /// Pulls saved token count and cost out of a stored entry (the aggregate
 /// response object — buffered and streaming both store this shape).
 ///
@@ -103,7 +121,7 @@ fn probed_savings(entry: &CacheEntry) -> (Option<u64>, Option<f64>) {
 pub(crate) struct CacheMark<'a> {
     status: &'a str,
     reason: Option<&'a str>,
-    surface: &'a str,
+    surface: CacheSurface,
     backend: &'a str,
     key_hash: Option<&'a str>,
     age_ms: Option<u64>,
@@ -118,7 +136,7 @@ impl<'a> CacheMark<'a> {
         Self {
             status,
             reason: None,
-            surface: "llm",
+            surface: CacheSurface::Llm,
             backend,
             key_hash: None,
             age_ms: None,
@@ -134,8 +152,8 @@ impl<'a> CacheMark<'a> {
         self
     }
 
-    /// Overrides the surface label (defaults to `"llm"`; tool marks set `"tool"`).
-    pub(crate) fn surface(mut self, surface: &'a str) -> Self {
+    /// Overrides the cache surface (defaults to [`CacheSurface::Llm`]).
+    pub(crate) fn surface(mut self, surface: CacheSurface) -> Self {
         self.surface = surface;
         self
     }
@@ -174,7 +192,7 @@ pub(crate) fn emit_cache_mark(mark: CacheMark<'_>) {
     let mut metadata = Map::new();
     metadata.insert(
         "nemo_relay.response_cache.surface".to_string(),
-        json!(mark.surface),
+        json!(mark.surface.as_str()),
     );
     metadata.insert(
         "nemo_relay.response_cache.backend".to_string(),

@@ -20,10 +20,8 @@ use crate::config::ResponseCacheConfig;
 use crate::response_cache::config::{ToolCacheConfig, ToolClass, ToolOverride};
 use crate::response_cache::intercept::should_bypass;
 use crate::response_cache::key::{KeyOutcome, build_tool_cache_key};
-use crate::response_cache::mark::{CacheMark, emit_cache_mark};
+use crate::response_cache::mark::{CacheMark, CacheSurface, emit_cache_mark};
 use crate::response_cache::store::{CacheEntry, CacheStore, now_unix_ms};
-
-const TOOL_SURFACE: &str = "tool";
 
 #[derive(Debug, Clone, PartialEq)]
 struct ResolvedToolPolicy {
@@ -255,7 +253,7 @@ async fn run_tool_cache(
         KeyOutcome::Bypass(reason) => {
             emit_cache_mark(
                 CacheMark::new("bypass", backend)
-                    .surface(TOOL_SURFACE)
+                    .surface(CacheSurface::Tool)
                     .reason(reason),
             );
             return next(args).await.map(Into::into);
@@ -265,7 +263,7 @@ async fn run_tool_cache(
     if should_bypass(policy.bypass_rate) {
         emit_cache_mark(
             CacheMark::new("bypass", backend)
-                .surface(TOOL_SURFACE)
+                .surface(CacheSurface::Tool)
                 .reason("sampled")
                 .key_hash(&key),
         );
@@ -281,7 +279,7 @@ async fn run_tool_cache(
             // caching is disabled; a successful live result replaces it.
             emit_cache_mark(
                 CacheMark::new("bypass", backend)
-                    .surface(TOOL_SURFACE)
+                    .surface(CacheSurface::Tool)
                     .reason("cached_error")
                     .key_hash(&key),
             );
@@ -293,7 +291,7 @@ async fn run_tool_cache(
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             emit_cache_mark(
                 CacheMark::new("hit", backend)
-                    .surface(TOOL_SURFACE)
+                    .surface(CacheSurface::Tool)
                     .key_hash(&key)
                     .age_ms(age_ms)
                     .ttl_ms(policy.ttl.as_millis() as u64)
@@ -304,7 +302,7 @@ async fn run_tool_cache(
         Ok(None) => {
             emit_cache_mark(
                 CacheMark::new("miss", backend)
-                    .surface(TOOL_SURFACE)
+                    .surface(CacheSurface::Tool)
                     .key_hash(&key)
                     .ttl_ms(policy.ttl.as_millis() as u64),
             );
@@ -315,7 +313,7 @@ async fn run_tool_cache(
         Err(_) => {
             emit_cache_mark(
                 CacheMark::new("miss", backend)
-                    .surface(TOOL_SURFACE)
+                    .surface(CacheSurface::Tool)
                     .reason("store_error")
                     .key_hash(&key),
             );

@@ -20,6 +20,12 @@ impl Drop for ResetPricingResolverGuard {
 }
 
 #[test]
+fn cache_surfaces_have_stable_metadata_values() {
+    assert_eq!(CacheSurface::Llm.as_str(), "llm");
+    assert_eq!(CacheSurface::Tool.as_str(), "tool");
+}
+
+#[test]
 fn anthropic_shaped_bodies_price_through_the_catalog() {
     // A real Anthropic response body must yield a dollar figure when the
     // model is in the pricing catalog: its usage carries only

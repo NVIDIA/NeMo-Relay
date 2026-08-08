@@ -100,6 +100,22 @@ impl Default for ToolCacheConfig {
     }
 }
 
+nemo_relay::editor_config! {
+    impl ToolCacheConfig {
+        enabled => { label: "enabled", kind: Boolean },
+        priority => { label: "priority", kind: Integer },
+        cache_errors => { label: "cache_errors", kind: Boolean },
+        default => {
+            label: "default",
+            kind: Section,
+            nested: ToolClass,
+            default: ToolClass,
+        },
+        classes => { label: "classes", kind: Json },
+        overrides => { label: "overrides", kind: Json },
+    }
+}
+
 /// Policy shared by a class of tools.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -137,4 +153,24 @@ pub struct ToolOverride {
     /// Replaces the class argument skip list when set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arg_skip: Option<Vec<String>>,
+}
+
+nemo_relay::editor_config! {
+    impl ToolClass {
+        cacheable => { label: "cacheable", kind: Boolean },
+        ttl_seconds => { label: "ttl_seconds", kind: Integer, optional: true },
+        bypass_rate => { label: "bypass_rate", kind: Float, optional: true },
+        arg_skip => { label: "arg_skip", kind: Json },
+        members => { label: "members", kind: Json },
+    }
+}
+
+nemo_relay::editor_config! {
+    impl ToolOverride {
+        cacheable => { label: "cacheable", kind: Boolean, optional: true },
+        ttl_seconds => { label: "ttl_seconds", kind: Integer, optional: true },
+        bypass_rate => { label: "bypass_rate", kind: Float, optional: true },
+        tool_version => { label: "tool_version", kind: String, optional: true },
+        arg_skip => { label: "arg_skip", kind: Json, optional: true },
+    }
 }

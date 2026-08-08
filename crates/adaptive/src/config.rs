@@ -410,7 +410,13 @@ nemo_relay::editor_config! {
             nested: BackendConfig,
             default: BackendConfig,
         },
-        tools => { label: "tools", kind: Json, optional: true },
+        tools => {
+            label: "tools",
+            kind: Section,
+            optional: true,
+            nested: ToolCacheConfig,
+            default: ToolCacheConfig,
+        },
     }
 }
 

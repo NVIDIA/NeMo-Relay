@@ -37,7 +37,6 @@ fn test_typed_section_helpers_default() {
 
     let tools = ToolCacheConfig::default();
     assert!(!tools.enabled);
-    assert_eq!(tools.priority, 50);
     assert!(!tools.cache_errors);
     assert_eq!(tools.priority, 150);
 }
@@ -203,5 +202,22 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
     assert_eq!(
         response_cache_backend.field("kind").unwrap().enum_values,
         &["in_memory", "redis"]
+    );
+
+    let tools = response_cache.field("tools").unwrap();
+    assert_eq!(tools.kind, EditorFieldKind::Section);
+    assert!(tools.optional);
+    let tools = tools.schema().unwrap();
+    assert_eq!(
+        tools.field("enabled").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+    assert_eq!(
+        tools.field("priority").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+    assert_eq!(
+        tools.field("default").unwrap().kind,
+        EditorFieldKind::Section
     );
 }

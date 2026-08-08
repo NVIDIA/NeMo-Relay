@@ -362,6 +362,9 @@ fn validate_response_cache_section(
             );
         }
     }
+    if let Some(tools_json) = response_cache_json.get("tools").and_then(Json::as_object) {
+        validate_response_cache_tools_fields(diagnostics, policy, tools_json);
+    }
 }
 
 fn validate_response_cache_backend_config_fields(
