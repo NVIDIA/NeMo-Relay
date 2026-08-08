@@ -393,8 +393,8 @@ An exact class member wins. Otherwise, Relay selects the most-specific matching
 `*` pattern; an exact override wins over a wildcard override. Configuration
 validation rejects overlapping wildcard class patterns or wildcard overrides
 that disagree on `cacheable`, so a broad deny policy cannot silently become a
-cacheable result. Unmatched tools use `tools.default`, which is uncacheable by
-default.
+cacheable result. Unmatched tools use `tools.default`, which must remain
+uncacheable; classify every cacheable tool through a named class or override.
 
 ### Tool Keys and Identity
 
@@ -429,12 +429,12 @@ the cache derives its key. Sanitize guardrails affect emitted observability
 payloads only; they do not change the real arguments, result, or cache key.
 `tools.priority` controls the tool execution interceptor: lower priorities run
 outermost. A hit returns before later execution interceptors and the managed
-callback. For example, the default tool cache priority (`50`) runs before a
+callback. For example, the default tool cache priority (`150`) runs after a
 NeMo Guardrails execution interceptor at its default priority (`100`), so that
-interceptor does not run on a hit. Give a rail a strictly lower priority than
-the cache if it must run on both hits and misses. In that arrangement, a miss
-is written before the outer rail transforms its result, so choose the ordering
-and stored-result semantics deliberately.
+interceptor runs on a hit. Give a rail a strictly lower priority than the cache
+if it must run on both hits and misses. In that arrangement, a miss is written
+before the outer rail transforms its result, so choose the ordering and
+stored-result semantics deliberately.
 
 ## Observability
 
@@ -489,9 +489,9 @@ The following fields configure the separately opt-in tool-result surface:
 | Field | Default | Notes |
 |---|---|---|
 | `tools.enabled` | `false` | Master switch. Classes and overrides are validated even when the surface is disabled. |
-| `tools.priority` | `50` | Tool execution-intercept priority. Lower values run earlier and outermost. |
+| `tools.priority` | `150` | Tool execution-intercept priority. Lower values run earlier and outermost. |
 | `tools.cache_errors` | `false` | Store conventional in-band error objects only when `true`; callback errors are never stored. |
-| `tools.default` | uncacheable | Policy for tools that match no class. It supports `cacheable`, optional `ttl_seconds` and `bypass_rate`, and `arg_skip`. |
+| `tools.default` | uncacheable | Policy for tools that match no class. Keep it uncacheable; classify every cacheable tool through a named class or override. |
 | `tools.classes.<name>` | — | Named policy with `cacheable`, optional `ttl_seconds` and `bypass_rate`, top-level `arg_skip`, and `members` containing exact names or `*` patterns. Omitted TTL and bypass rate inherit the response-cache values. |
 | `tools.overrides.<name>` | — | Per-tool refinement after class resolution. `cacheable`, `ttl_seconds`, `bypass_rate`, and `tool_version` override when supplied; `arg_skip` replaces the class list, including when set to `[]`. |
 
@@ -528,7 +528,7 @@ Redis capacity and eviction in Redis itself.
   or the same member name or pattern appears in two classes.
 - Overlapping wildcard class patterns or wildcard overrides disagree on
   `cacheable`. A cacheable catch-all `*` member or override also warns; use
-  `tools.default.cacheable` when broad coverage is intended.
+  named classes to limit caching to explicitly read-only tools.
 
 Tool-cache diagnostics use the following codes. The catch-all diagnostics are
 warnings; the others are errors.
