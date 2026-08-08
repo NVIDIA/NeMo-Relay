@@ -297,7 +297,7 @@ impl LlmStreamWrapper {
                 })
                 .flatten();
             let metadata = if termination == StreamTermination::Dropped
-                && has_authoritative_successful_completion(annotated_response.as_ref())
+                && has_authoritative_terminal_outcome(annotated_response.as_ref())
             {
                 metadata_with_otel_status(metadata, "OK", None)
             } else {
@@ -530,7 +530,7 @@ fn has_authoritative_final_usage(response: Option<&AnnotatedLlmResponse>) -> boo
     })
 }
 
-fn has_authoritative_successful_completion(response: Option<&AnnotatedLlmResponse>) -> bool {
+fn has_authoritative_terminal_outcome(response: Option<&AnnotatedLlmResponse>) -> bool {
     has_authoritative_final_usage(response)
         && response.is_some_and(|response| {
             response
