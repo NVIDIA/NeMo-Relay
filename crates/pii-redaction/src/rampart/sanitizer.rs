@@ -116,14 +116,31 @@ type TextCacheKey = [u8; 32];
 enum SanitizationDecision {
     Keep,
     Redact(Arc<[(usize, usize)]>),
-    FailClosed,
+    FailClosed(FailClosedReason),
+}
+
+#[derive(Clone, Copy)]
+enum FailClosedReason {
+    ModelWindowLimit,
+    PayloadLimit,
+    SanitizerFailure,
+}
+
+impl FailClosedReason {
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::ModelWindowLimit => "[CONTENT OMITTED: sanitizer model window limit exceeded]",
+            Self::PayloadLimit => "[CONTENT OMITTED: sanitizer payload limit exceeded]",
+            Self::SanitizerFailure => "[CONTENT OMITTED: sanitizer failed closed]",
+        }
+    }
 }
 
 impl SanitizationDecision {
     fn apply(&self, text: &str, replacement: &str) -> String {
         match self {
             Self::Keep => text.to_string(),
-            Self::FailClosed => replacement.to_string(),
+            Self::FailClosed(reason) => reason.placeholder().to_string(),
             Self::Redact(ranges) => {
                 let mut redacted = text.to_string();
                 for &(start, end) in ranges.iter().rev() {
@@ -143,7 +160,7 @@ impl SanitizationDecision {
 
     fn cache_weight(&self) -> usize {
         match self {
-            Self::Keep | Self::FailClosed => 1,
+            Self::Keep | Self::FailClosed(_) => 1,
             Self::Redact(ranges) => ranges.len() * std::mem::size_of::<(usize, usize)>(),
         }
     }
@@ -363,7 +380,7 @@ impl RampartSanitizer {
     }
 
     fn fail_closed_payload(&self) -> Json {
-        Json::String(self.replacement.to_string())
+        Json::String(FailClosedReason::SanitizerFailure.placeholder().to_string())
     }
 
     fn sanitize_json(&self, value: Json) -> Result<Json, SanitizeError> {
@@ -451,20 +468,26 @@ impl RampartSanitizer {
                     ));
                 } else if pending_keys.contains(&key) {
                     texts.push(SelectedText::Pending { key, text: None });
-                } else if pending_keys.len() < MAX_TEXTS_PER_PAYLOAD
-                    && total_bytes
-                        .checked_add(text.len())
-                        .is_some_and(|next_total| next_total <= MAX_PAYLOAD_TEXT_BYTES)
+                } else if pending_keys.len() >= MAX_TEXTS_PER_PAYLOAD {
+                    *rejected_fields += 1;
+                    texts.push(SelectedText::Resolved(
+                        FailClosedReason::PayloadLimit.placeholder().to_string(),
+                    ));
+                } else if total_bytes
+                    .checked_add(text.len())
+                    .is_none_or(|next_total| next_total > MAX_PAYLOAD_TEXT_BYTES)
                 {
+                    *rejected_fields += 1;
+                    texts.push(SelectedText::Resolved(
+                        FailClosedReason::PayloadLimit.placeholder().to_string(),
+                    ));
+                } else {
                     *total_bytes += text.len();
                     pending_keys.insert(key);
                     texts.push(SelectedText::Pending {
                         key,
                         text: Some(text.clone()),
                     });
-                } else {
-                    *rejected_fields += 1;
-                    texts.push(SelectedText::Resolved(self.replacement.to_string()));
                 }
             }
             Json::Array(items) => {
@@ -575,10 +598,9 @@ impl RampartSanitizer {
     ) {
         match value {
             Json::String(text) if self.selects_string(selection, path, field, preserve) => {
-                *text = sanitized
-                    .get(*index)
-                    .cloned()
-                    .unwrap_or_else(|| self.replacement.to_string());
+                *text = sanitized.get(*index).cloned().unwrap_or_else(|| {
+                    FailClosedReason::SanitizerFailure.placeholder().to_string()
+                });
                 *index += 1;
             }
             Json::Array(items) => {
@@ -664,10 +686,13 @@ impl RampartSanitizer {
         let rendered = pending
             .iter()
             .map(|(key, text)| {
-                let decision = decisions
-                    .get(key)
-                    .cloned()
-                    .unwrap_or(SanitizationDecision::FailClosed);
+                let decision =
+                    decisions
+                        .get(key)
+                        .cloned()
+                        .unwrap_or(SanitizationDecision::FailClosed(
+                            FailClosedReason::SanitizerFailure,
+                        ));
                 (*key, decision.apply(text, self.replacement.as_ref()))
             })
             .collect::<HashMap<_, _>>();
@@ -676,10 +701,11 @@ impl RampartSanitizer {
             .into_iter()
             .map(|selected| match selected {
                 SelectedText::Resolved(text) => text,
-                SelectedText::Pending { key, .. } => rendered
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| self.replacement.to_string()),
+                SelectedText::Pending { key, .. } => {
+                    rendered.get(&key).cloned().unwrap_or_else(|| {
+                        FailClosedReason::SanitizerFailure.placeholder().to_string()
+                    })
+                }
             })
             .collect()
     }
@@ -714,7 +740,8 @@ impl RampartSanitizer {
                 Err(DetectionError::PayloadLimit) => {
                     let index = group[0];
                     let key = pending[index].0;
-                    let decision = SanitizationDecision::FailClosed;
+                    let decision =
+                        SanitizationDecision::FailClosed(FailClosedReason::ModelWindowLimit);
                     self.cache_decision(key, decision.clone());
                     decisions.insert(key, decision);
                     log::warn!(
@@ -736,7 +763,10 @@ impl RampartSanitizer {
                         "Rampart PII inference failed closed"
                     );
                     for index in group {
-                        decisions.insert(pending[index].0, SanitizationDecision::FailClosed);
+                        decisions.insert(
+                            pending[index].0,
+                            SanitizationDecision::FailClosed(FailClosedReason::SanitizerFailure),
+                        );
                     }
                 }
             }
@@ -1708,7 +1738,7 @@ mod tests {
                 }))
                 .unwrap(),
             serde_json::json!({
-                "message": "[REDACTED]",
+                "message": FailClosedReason::SanitizerFailure.placeholder(),
                 "metadata": "visible"
             })
         );
@@ -1732,7 +1762,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_text_count_limit_redacts_only_excess_unique_fields() {
+    fn selected_text_count_limit_omits_only_excess_unique_fields() {
         let calls = Arc::new(AtomicUsize::new(0));
         let sanitizer = sanitizer(Arc::new(CountingDetector(Arc::clone(&calls))), vec!["/*"]);
         let value = Json::Object(
@@ -1746,14 +1776,14 @@ mod tests {
                 .collect(),
         );
         let sanitized = sanitizer.sanitize_json(value).unwrap();
-        let redacted = sanitized
+        let omitted = sanitized
             .as_object()
             .unwrap()
             .values()
-            .filter(|value| value.as_str() == Some("[REDACTED]"))
+            .filter(|value| value.as_str() == Some(FailClosedReason::PayloadLimit.placeholder()))
             .count();
 
-        assert_eq!(redacted, 1);
+        assert_eq!(omitted, 1);
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
@@ -1780,13 +1810,13 @@ mod tests {
                     "message": " ".repeat(MAX_PAYLOAD_TEXT_BYTES + 1)
                 }))
                 .unwrap()["message"],
-            "[REDACTED]"
+            FailClosedReason::PayloadLimit.placeholder()
         );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn aggregate_limit_redacts_only_the_field_beyond_the_budget() {
+    async fn aggregate_limit_omits_only_the_field_beyond_the_budget() {
         let calls = Arc::new(AtomicUsize::new(0));
         let backend = sanitizer(
             Arc::new(CountingDetector(Arc::clone(&calls))),
@@ -1806,7 +1836,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(output["messages"][0]["content"], "first-private-value");
-        assert_eq!(output["messages"][1]["content"], "[REDACTED]");
+        assert_eq!(
+            output["messages"][1]["content"],
+            FailClosedReason::PayloadLimit.placeholder()
+        );
         assert_eq!(output["metadata"], "visible");
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
@@ -1996,7 +2029,7 @@ mod tests {
             )
             .await
             .unwrap(),
-            Json::String("[REDACTED]".into())
+            Json::String(FailClosedReason::SanitizerFailure.placeholder().into())
         );
 
         let event = Arc::new(Event::Mark(MarkEvent::new(
@@ -2053,7 +2086,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(tool["message"], "[REDACTED]");
+        assert_eq!(
+            tool["message"],
+            FailClosedReason::ModelWindowLimit.placeholder()
+        );
         assert_eq!(tool["metadata"], "visible");
 
         let event = Arc::new(Event::Mark(MarkEvent::new(
@@ -2071,8 +2107,14 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(event_fields.data.unwrap()["message"], "[REDACTED]");
-        assert_eq!(event_fields.metadata.unwrap()["message"], "[REDACTED]");
+        assert_eq!(
+            event_fields.data.unwrap()["message"],
+            FailClosedReason::ModelWindowLimit.placeholder()
+        );
+        assert_eq!(
+            event_fields.metadata.unwrap()["message"],
+            FailClosedReason::ModelWindowLimit.placeholder()
+        );
 
         let request = LlmRequest {
             headers: Map::new(),
@@ -2085,7 +2127,10 @@ mod tests {
         .await
         .unwrap()
         .expect("field-level failure should preserve the request envelope");
-        assert_eq!(request.content["message"], "[REDACTED]");
+        assert_eq!(
+            request.content["message"],
+            FailClosedReason::ModelWindowLimit.placeholder()
+        );
         let response = llm_sanitize_response_callback(backend.clone())(
             serde_json::json!({"message": private}),
             LlmSanitizeResponseContext::default(),
@@ -2093,7 +2138,10 @@ mod tests {
         .await
         .unwrap()
         .expect("field-level failure should preserve the response envelope");
-        assert_eq!(response["message"], "[REDACTED]");
+        assert_eq!(
+            response["message"],
+            FailClosedReason::ModelWindowLimit.placeholder()
+        );
 
         let codec = build_response_codec(ProviderSurface::OpenAIChat);
         let payload = serde_json::json!({
@@ -2108,7 +2156,10 @@ mod tests {
         let sanitized = backend
             .sanitize_response_with_codec(codec.as_ref(), ProviderSurface::OpenAIChat, payload)
             .unwrap();
-        assert_eq!(sanitized["choices"][0]["message"]["content"], "[REDACTED]");
+        assert_eq!(
+            sanitized["choices"][0]["message"]["content"],
+            FailClosedReason::ModelWindowLimit.placeholder()
+        );
     }
 
     #[test]
@@ -2158,7 +2209,10 @@ mod tests {
             .await
             .expect("contending sanitizer should respect the admission deadline")
             .unwrap();
-            assert_eq!(contending, Json::String("[REDACTED]".into()));
+            assert_eq!(
+                contending,
+                Json::String(FailClosedReason::SanitizerFailure.placeholder().into())
+            );
 
             release.store(true, Ordering::Release);
             for task in active {
@@ -2305,7 +2359,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(output, Json::String("[REDACTED]".into()));
+        assert_eq!(
+            output,
+            Json::String(FailClosedReason::SanitizerFailure.placeholder().into())
+        );
         assert_eq!(calls.load(Ordering::Acquire), 0);
         drop(permits);
     }
