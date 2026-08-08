@@ -11,9 +11,9 @@ use std::collections::HashMap;
 
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
-    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmFinalInputPolicyFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::registry::SortedRegistry;
 
@@ -49,6 +49,8 @@ pub(crate) struct ScopeLocalRegistries {
     pub(crate) llm_conditional_execution_guardrails: SortedRegistry<Guardrail<LlmConditionalFn>>,
     /// LLM request intercepts that can rewrite or annotate requests.
     pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
+    /// LLM policies that evaluate the final request before managed execution.
+    pub(crate) llm_final_input_policies: SortedRegistry<Guardrail<LlmFinalInputPolicyFn>>,
     /// Non-streaming LLM execution intercepts that wrap callback execution.
     pub(crate) llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
     /// Streaming LLM execution intercepts that wrap stream-producing callbacks.
@@ -78,6 +80,7 @@ impl ScopeLocalRegistries {
             llm_sanitize_response_guardrails: SortedRegistry::new(),
             llm_conditional_execution_guardrails: SortedRegistry::new(),
             llm_request_intercepts: SortedRegistry::new(),
+            llm_final_input_policies: SortedRegistry::new(),
             llm_execution_intercepts: SortedRegistry::new(),
             llm_stream_execution_intercepts: SortedRegistry::new(),
             event_subscribers: HashMap::new(),

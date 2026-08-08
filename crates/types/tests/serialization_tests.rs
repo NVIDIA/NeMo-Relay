@@ -9,7 +9,9 @@ use nemo_relay_types::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings,
 };
-use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay_types::api::llm::{
+    LlmAttributes, LlmFinalInputPolicyOutcome, LlmRequest, LlmRequestInterceptOutcome,
+};
 use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
@@ -174,6 +176,38 @@ fn llm_request_intercept_outcome_converts_from_request_inputs() {
         optional_annotation,
         LlmRequestInterceptOutcome::new(request, Some(annotated_request))
     );
+}
+
+#[test]
+fn llm_final_input_policy_outcomes_have_stable_tagged_json() {
+    let allow = LlmFinalInputPolicyOutcome::allow_with_evidence(json!({"rail": "input"}));
+    let encoded = serde_json::to_value(&allow).expect("allow outcome should serialize");
+    assert_eq!(encoded["decision"], "allow");
+    assert_eq!(encoded["evidence"]["rail"], "input");
+
+    let transform = LlmFinalInputPolicyOutcome::transform(
+        LlmRequest {
+            headers: Map::new(),
+            content: json!({"prompt": "safe"}),
+        },
+        None,
+    )
+    .with_evidence(json!({"modified": true}));
+    let encoded = serde_json::to_value(&transform).expect("transform outcome should serialize");
+    assert_eq!(encoded["decision"], "transform");
+    assert_eq!(encoded["request"]["content"]["prompt"], "safe");
+    assert_eq!(encoded["evidence"]["modified"], true);
+
+    let reject = LlmFinalInputPolicyOutcome::reject("unsafe_input", "request rejected")
+        .with_evidence(json!({"rail": "jailbreak"}));
+    let encoded = serde_json::to_value(&reject).expect("reject outcome should serialize");
+    assert_eq!(encoded["decision"], "reject");
+    assert_eq!(encoded["reason_code"], "unsafe_input");
+    assert_eq!(encoded["safe_message"], "request rejected");
+
+    let decoded: LlmFinalInputPolicyOutcome =
+        serde_json::from_value(encoded).expect("reject outcome should deserialize");
+    assert_eq!(decoded, reject);
 }
 
 #[test]

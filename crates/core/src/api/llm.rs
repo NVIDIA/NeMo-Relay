@@ -35,8 +35,9 @@ use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_error,
-    metadata_with_otel_status, resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
-    snapshot_event_sanitizers, snapshot_event_subscribers,
+    metadata_with_otel_status, resolve_parent_uuid, run_final_input_policies_with_codec,
+    run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -46,7 +47,8 @@ use crate::json::Json;
 use crate::stream::LlmStreamWrapper;
 
 pub use nemo_relay_types::api::llm::{
-    LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes, LlmRequest, LlmRequestInterceptOutcome,
+    LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA, LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmAttributes,
+    LlmFinalInputPolicyOutcome, LlmRequest, LlmRequestInterceptOutcome,
 };
 
 const OBSERVABILITY_CREDENTIAL_HEADERS: [&str; 7] = [
@@ -1341,10 +1343,10 @@ impl Drop for ManagedLlmCompletion {
 
 /// Execute an LLM call through the managed middleware pipeline.
 ///
-/// This runs conditional-execution guardrails, request intercepts, and
-/// sanitize-request guardrails, emits the LLM-start event, then runs execution
-/// intercepts, the provider callback when it is not replaced, and
-/// sanitize-response guardrails in the runtime-defined order.
+/// This runs conditional-execution guardrails, request intercepts, final-input
+/// policies, and sanitize-request guardrails, emits the LLM-start event, then
+/// runs execution intercepts, the provider callback when it is not replaced,
+/// and sanitize-response guardrails in the runtime-defined order.
 ///
 /// # Parameters
 /// - `name`: Logical provider or model family name recorded on emitted events.
@@ -1367,8 +1369,9 @@ impl Drop for ManagedLlmCompletion {
 ///
 /// # Errors
 /// Returns [`FlowError::GuardrailRejected`] when conditional-execution
-/// guardrails block the call, or any error raised by request intercepts,
-/// execution intercepts, codecs, or the callback itself.
+/// guardrails or final-input policies block the call, or any error raised by
+/// request intercepts, final-input policies, execution intercepts, codecs, or
+/// the callback itself.
 ///
 /// # Notes
 /// The LLM-start event is emitted before execution intercepts run. Before
@@ -1453,6 +1456,15 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             .await
         })
         .await?;
+    let (intercepted_request, annotated_request) = run_final_input_policies_with_codec(
+        &name,
+        intercepted_request,
+        annotated_request,
+        request_codec.clone(),
+        parent.as_ref(),
+        metadata.clone(),
+    )
+    .await?;
 
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
@@ -1575,8 +1587,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
 ///
 /// # Errors
 /// Returns [`FlowError::GuardrailRejected`] when conditional-execution
-/// guardrails block the call, or any error raised by request intercepts,
-/// execution intercepts, stream callbacks, codecs, or the provider callback.
+/// guardrails or final-input policies block the call, or any error raised by
+/// request intercepts, final-input policies, execution intercepts, stream
+/// callbacks, codecs, or the provider callback.
 ///
 /// # Notes
 /// The LLM-start event is emitted before stream execution intercepts run.
@@ -1662,6 +1675,15 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             .await
         })
         .await?;
+    let (intercepted_request, annotated_request) = run_final_input_policies_with_codec(
+        &name,
+        intercepted_request,
+        annotated_request,
+        request_codec.clone(),
+        parent.as_ref(),
+        metadata.clone(),
+    )
+    .await?;
 
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()

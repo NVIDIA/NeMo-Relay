@@ -24,13 +24,14 @@ use thiserror::Error;
 
 use crate::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
-    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
-    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    deregister_llm_final_input_policy, deregister_llm_request_intercept,
+    deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_mark_sanitize_guardrail,
+    deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_final_input_policy,
     register_llm_request_intercept, register_llm_sanitize_request_guardrail,
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
     register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
@@ -39,9 +40,9 @@ use crate::api::registry::{
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
 use crate::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
-    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmFinalInputPolicyFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
@@ -551,6 +552,35 @@ impl PluginRegistrationContext {
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
                             "llm request intercept deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers an LLM final-input policy and records its rollback closure.
+    pub fn register_llm_final_input_policy(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: LlmFinalInputPolicyFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_llm_final_input_policy(&qualified_name, priority, callback).map_err(|err| {
+            PluginError::RegistrationFailed(format!("llm final input policy: {err}"))
+        })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_llm_final_input_policy(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "llm final input policy deregistration failed: {err}"
                         ))
                     })
             }),

@@ -127,6 +127,41 @@ leave raw `request["content"]` unchanged, edit normalized fields or provider
 extensions through the annotation, and use `request["headers"]` for transport
 headers.
 
+## Final-Input Policies
+
+Use a final-input policy when a decision must see the request after every
+request intercept and must finish before Relay enters cache, routing, or
+provider execution:
+
+```python
+from nemo_relay_plugin import LlmFinalInputPolicyOutcome, PolicyFailureMode
+
+
+async def check_input(name, request, annotated):
+    del name, request, annotated
+    return LlmFinalInputPolicyOutcome.reject(
+        "unsafe_input",
+        "The request was rejected by policy.",
+    )
+
+
+ctx.register_llm_final_input_policy(
+    "check_input",
+    check_input,
+    timeout_ms=5_000,
+    failure_mode=PolicyFailureMode.FAIL_CLOSED,
+)
+```
+
+A policy returns `allow`, `transform`, or `reject`. An explicit rejection is
+always terminal. The failure mode applies only when the worker fails or misses
+its deadline: fail-closed aborts the request, while fail-open continues with
+redacted policy-bypass evidence. Relay sends `CancelInvocation` when the
+deadline expires. With an active codec, transformations must leave raw request
+content unchanged and return the transformed `annotated_request`. Fail-closed
+worker failures return a caller-safe terminal rejection while Relay keeps the
+operational error in host logs.
+
 ## Callback Concurrency
 
 The gRPC AsyncIO server can keep multiple RPCs in flight. Callback execution is

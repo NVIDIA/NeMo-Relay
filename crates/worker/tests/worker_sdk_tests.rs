@@ -19,10 +19,10 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
-    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
-    serve_plugin_arc_with_config,
+    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmFinalInputPolicyOutcome, LlmNext,
+    LlmRequest, LlmStreamNext, PluginContext, PluginRuntime, PolicyFailureMode, Result, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
+    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -114,6 +114,11 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             .supported_surfaces
             .contains(&(RegistrationSurface::LlmStreamExecutionIntercept as i32))
     );
+    assert!(
+        handshake
+            .supported_surfaces
+            .contains(&(RegistrationSurface::LlmFinalInputPolicy as i32))
+    );
 
     let bad_health = client
         .health(Request::new(HealthRequest {
@@ -200,7 +205,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 21);
+    assert_eq!(registrations.len(), 22);
     for local_name in [
         "llm-sanitize-request",
         "llm-sanitize-response",
@@ -229,6 +234,15 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             .filter(|registration| registration.local_name == "event-sanitize")
             .count(),
         3
+    );
+    let final_policy = registrations
+        .iter()
+        .find(|registration| registration.local_name == "llm-final-input")
+        .expect("final-input policy registration");
+    assert_eq!(final_policy.timeout_ms, Some(1_250));
+    assert_eq!(
+        final_policy.failure_mode,
+        nemo_relay_worker_proto::v1::PolicyFailureMode::FailClosed as i32
     );
 
     let invoke_err = client
@@ -730,6 +744,25 @@ async fn worker_service_invokes_every_registration_surface() {
         intercepted.content.get("phase"),
         Some(&json!("llm_request"))
     );
+    let final_policy = invoke_llm_final_input_policy(
+        &mut client,
+        llm_invoke(
+            "llm-final-input",
+            RegistrationSurface::LlmFinalInputPolicy,
+            llm_request(),
+            None,
+            None,
+        ),
+    )
+    .await;
+    assert!(matches!(
+        final_policy,
+        LlmFinalInputPolicyOutcome::Reject {
+            ref reason_code,
+            ref safe_message,
+            ..
+        } if reason_code == "unsafe_input" && safe_message == "request rejected"
+    ));
     let llm_exec = invoke_json(
         &mut client,
         llm_invoke(
@@ -1916,6 +1949,19 @@ impl WorkerPlugin for SurfacePlugin {
             },
         );
 
+        ctx.register_llm_final_input_policy(
+            "llm-final-input",
+            2,
+            Duration::from_millis(1_250),
+            PolicyFailureMode::FailClosed,
+            |_, _, _| async {
+                Ok(LlmFinalInputPolicyOutcome::reject(
+                    "unsafe_input",
+                    "request rejected",
+                ))
+            },
+        );
+
         ctx.register_llm_execution_intercept(
             "llm-exec",
             1,
@@ -2792,6 +2838,28 @@ async fn invoke_llm_request(
             )
             .expect("decode LLM request outcome")
             .request
+        }
+        other => panic!("unexpected invoke result: {other:?}"),
+    }
+}
+
+async fn invoke_llm_final_input_policy(
+    client: &mut PluginWorkerClient<Channel>,
+    request: InvokeRequest,
+) -> LlmFinalInputPolicyOutcome {
+    let response = client
+        .invoke(Request::new(request))
+        .await
+        .expect("invoke succeeds")
+        .into_inner();
+    match response.result.expect("invoke result") {
+        nemo_relay_worker_proto::v1::invoke_response::Result::LlmFinalInputPolicy(result) => {
+            let outcome = result.outcome.expect("LLM final-input policy outcome");
+            assert_eq!(
+                outcome.schema,
+                nemo_relay_types::api::llm::LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA
+            );
+            decode_json_envelope(&outcome).expect("decode LLM final-input policy outcome")
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }

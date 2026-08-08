@@ -49,9 +49,16 @@ enum RegistrationSurface {
   LLM_REQUEST_INTERCEPT = 23;
   LLM_EXECUTION_INTERCEPT = 24;
   LLM_STREAM_EXECUTION_INTERCEPT = 25;
+  LLM_FINAL_INPUT_POLICY = 26;
   MARK_SANITIZE_GUARDRAIL = 30;
   SCOPE_SANITIZE_START_GUARDRAIL = 31;
   SCOPE_SANITIZE_END_GUARDRAIL = 32;
+}
+
+enum PolicyFailureMode {
+  POLICY_FAILURE_MODE_UNSPECIFIED = 0;
+  FAIL_CLOSED = 1;
+  FAIL_OPEN = 2;
 }
 
 enum LlmCodecKind {
@@ -143,6 +150,8 @@ message Registration {
   int32 priority = 3;
   bool break_chain = 4;
   reserved 5;
+  optional uint64 timeout_ms = 6;
+  PolicyFailureMode failure_mode = 7;
 }
 
 message InvokeRequest {
@@ -203,6 +212,7 @@ message InvokeResponse {
     LlmRequestInterceptResult llm_request = 4;
     WorkerError error = 5;
     ToolExecutionInterceptResult tool_execution = 6;
+    LlmFinalInputPolicyResult llm_final_input_policy = 7;
   }
 }
 
@@ -222,6 +232,10 @@ message LlmRequestInterceptResult {
 }
 
 message ToolExecutionInterceptResult {
+  JsonEnvelope outcome = 1;
+}
+
+message LlmFinalInputPolicyResult {
   JsonEnvelope outcome = 1;
 }
 

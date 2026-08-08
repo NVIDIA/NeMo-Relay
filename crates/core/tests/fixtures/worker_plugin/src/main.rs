@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use nemo_relay_worker::{
-    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest, PendingMarkSpec,
+    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmFinalInputPolicyOutcome,
+    LlmRequest, PendingMarkSpec, PolicyFailureMode,
 };
 use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolExecutionInterceptOutcome,
@@ -112,6 +113,9 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             ctx,
             fixture_flag(config, "llm_request_error"),
             fixture_flag(config, "llm_stream_open_error"),
+            fixture_flag(config, "final_input_policy_error"),
+            fixture_flag(config, "final_input_policy_timeout"),
+            fixture_flag(config, "final_input_policy_fail_open"),
         );
         Ok(())
     }
@@ -216,6 +220,9 @@ fn register_fixture_llm_hooks(
     ctx: &mut PluginContext,
     llm_request_error: bool,
     llm_stream_open_error: bool,
+    final_input_policy_error: bool,
+    final_input_policy_timeout: bool,
+    final_input_policy_fail_open: bool,
 ) {
     ctx.register_llm_sanitize_request_guardrail(
         "fixture_llm_sanitize_request",
@@ -274,6 +281,54 @@ fn register_fixture_llm_hooks(
                             .build(),
                     ),
             )
+        },
+    );
+    ctx.register_llm_final_input_policy(
+        "fixture_llm_final_input_policy",
+        0,
+        if final_input_policy_timeout {
+            std::time::Duration::from_millis(25)
+        } else {
+            std::time::Duration::from_secs(2)
+        },
+        if final_input_policy_fail_open {
+            PolicyFailureMode::FailOpen
+        } else {
+            PolicyFailureMode::FailClosed
+        },
+        move |_name, request, annotated| async move {
+            if final_input_policy_timeout {
+                std::future::pending::<()>().await;
+            }
+            if final_input_policy_error {
+                return Err(WorkerSdkError::Callback(
+                    "fixture final-input policy error requested".into(),
+                ));
+            }
+            if request
+                .content
+                .get("reject_final_input")
+                .and_then(Json::as_bool)
+                .unwrap_or(false)
+            {
+                return Ok(LlmFinalInputPolicyOutcome::reject(
+                    "fixture_unsafe_input",
+                    "fixture final-input policy rejected the request",
+                ));
+            }
+            let (request, annotated) = match annotated {
+                Some(mut annotated) => {
+                    annotated
+                        .extra
+                        .insert("worker_plugin_final_input_policy".into(), json!(true));
+                    (request, Some(annotated))
+                }
+                None => (
+                    mark_llm_request(request, "worker_plugin_final_input_policy"),
+                    None,
+                ),
+            };
+            Ok(LlmFinalInputPolicyOutcome::transform(request, annotated))
         },
     );
     ctx.register_llm_execution_intercept(

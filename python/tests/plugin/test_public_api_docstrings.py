@@ -33,6 +33,7 @@ _TYPE_ALIASES = {
     "LlmSanitizeResponseCallback",
     "LlmConditionalCallback",
     "LlmRequestCallback",
+    "LlmFinalInputPolicyCallback",
     "LlmExecutionCallback",
     "LlmStreamExecutionCallback",
 }

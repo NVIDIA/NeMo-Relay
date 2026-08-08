@@ -27,6 +27,7 @@ from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
     DiagnosticLevel,
     Json,
+    LlmFinalInputPolicyOutcome,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
     LlmSanitizeRequestContext,
@@ -34,6 +35,7 @@ from nemo_relay_plugin import (  # noqa: E402
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
+    PolicyFailureMode,
     ScopeType,
     ToolExecutionInterceptOutcome,
     ToolNext,
@@ -46,6 +48,7 @@ from nemo_relay_plugin._api import (  # noqa: E402
     ANNOTATED_LLM_REQUEST_SCHEMA,
     EVENT_SCHEMA,
     JSON_SCHEMA,
+    LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA,
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
     TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
@@ -118,6 +121,42 @@ def test_optimization_contribution_omitted_applied_defaults_consistently():
     assert decoded.applied is False
     assert direct.to_json()["applied"] is False
     assert decoded.to_json()["applied"] is False
+
+
+def test_final_input_policy_outcomes_use_stable_tagged_json():
+    request = {"headers": {}, "content": {"prompt": "redacted"}}
+    annotated = {"messages": [], "extra": {}}
+
+    assert LlmFinalInputPolicyOutcome.allow(evidence={"policy": "ok"}).to_json() == {
+        "decision": "allow",
+        "evidence": {"policy": "ok"},
+    }
+    assert LlmFinalInputPolicyOutcome.transform(request, annotated).to_json() == {
+        "decision": "transform",
+        "request": request,
+        "annotated_request": annotated,
+    }
+    assert LlmFinalInputPolicyOutcome.reject("unsafe_input", "request rejected").to_json() == {
+        "decision": "reject",
+        "reason_code": "unsafe_input",
+        "safe_message": "request rejected",
+    }
+
+    with pytest.raises(WorkerSdkError, match="reason_code"):
+        LlmFinalInputPolicyOutcome.reject("", "request rejected").to_json()
+
+
+def test_final_input_policy_registration_requires_explicit_valid_resilience_options():
+    ctx = PluginContext()
+
+    async def policy(name: str, request: Json, annotated: Json | None) -> LlmFinalInputPolicyOutcome:
+        del name, request, annotated
+        return LlmFinalInputPolicyOutcome.allow()
+
+    with pytest.raises(WorkerSdkError, match="positive integer"):
+        ctx.register_llm_final_input_policy("zero_timeout", policy, timeout_ms=0)
+    with pytest.raises(WorkerSdkError, match="PolicyFailureMode"):
+        ctx.register_llm_final_input_policy("bad_failure", policy, failure_mode=cast(Any, "fail_open"))
 
 
 def test_optimization_contribution_preserves_future_quality_strings():
@@ -354,6 +393,16 @@ class AllSurfacesPlugin(WorkerPlugin):
                 pending_marks=[PendingMarkSpec("worker.pending", data={"source": "python"})],
             )
 
+        async def llm_final_input_policy(
+            name: str, request: Json, annotated: Json | None
+        ) -> LlmFinalInputPolicyOutcome:
+            del name, request, annotated
+            return LlmFinalInputPolicyOutcome.reject(
+                "unsafe_input",
+                "request rejected",
+                evidence={"source": "python"},
+            )
+
         async def llm_execution(name: str, request: Json, next_call: Any) -> Json:
             result = await next_call.call(_tag_llm_request(request, f"llm_execute_{name}"))
             return _tag(result, "llm_execution")
@@ -376,8 +425,15 @@ class AllSurfacesPlugin(WorkerPlugin):
         ctx.register_llm_sanitize_response_guardrail("llm_sanitize_response", llm_sanitize_response, priority=7)
         ctx.register_llm_conditional_execution_guardrail("llm_conditional", llm_block, priority=8)
         ctx.register_llm_request_intercept("llm_request", llm_request, priority=9, break_chain=True)
-        ctx.register_llm_execution_intercept("llm_execution", llm_execution, priority=10)
-        ctx.register_llm_stream_execution_intercept("llm_stream_execution", llm_stream_execution, priority=11)
+        ctx.register_llm_final_input_policy(
+            "llm_final_input_policy",
+            llm_final_input_policy,
+            priority=10,
+            timeout_ms=1_250,
+            failure_mode=PolicyFailureMode.FAIL_OPEN,
+        )
+        ctx.register_llm_execution_intercept("llm_execution", llm_execution, priority=11)
+        ctx.register_llm_stream_execution_intercept("llm_stream_execution", llm_stream_execution, priority=12)
 
 
 @pytest.fixture(name="host_stub")
@@ -408,6 +464,9 @@ def test_generated_proto_matches_worker_contract():
     assert pb.SUBSCRIBER == 1
     assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    assert pb.LLM_FINAL_INPUT_POLICY == 26
+    assert pb.FAIL_CLOSED == 1
+    assert pb.FAIL_OPEN == 2
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
     assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
     assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
@@ -461,9 +520,15 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
         ("llm_sanitize_response", pb.LLM_SANITIZE_RESPONSE_GUARDRAIL, 7, False),
         ("llm_conditional", pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL, 8, False),
         ("llm_request", pb.LLM_REQUEST_INTERCEPT, 9, True),
-        ("llm_execution", pb.LLM_EXECUTION_INTERCEPT, 10, False),
-        ("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT, 11, False),
+        ("llm_final_input_policy", pb.LLM_FINAL_INPUT_POLICY, 10, False),
+        ("llm_execution", pb.LLM_EXECUTION_INTERCEPT, 11, False),
+        ("llm_stream_execution", pb.LLM_STREAM_EXECUTION_INTERCEPT, 12, False),
     ]
+    policy_registration = next(
+        registration for registration in register.registrations if registration.surface == pb.LLM_FINAL_INPUT_POLICY
+    )
+    assert policy_registration.timeout_ms == 1_250
+    assert policy_registration.failure_mode == pb.FAIL_OPEN
 
 
 def test_sdk_version_uses_package_metadata_and_source_tree_fallback(
@@ -1431,6 +1496,26 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert request_only_outcome["request"]["content"]["llm_request"]
     assert request_only_outcome["annotated_request"] is None
     assert request_only_outcome["pending_marks"] == outcome["pending_marks"]
+
+    final_policy = await service.Invoke(
+        _invoke_request(
+            "llm_final_input_policy",
+            pb.LLM_FINAL_INPUT_POLICY,
+            llm=_llm_payload(
+                model_name="gpt-test",
+                request={"content": {"prompt": "hello"}},
+                annotated={"messages": []},
+            ),
+        ),
+        AbortContext(),
+    )
+    assert final_policy.llm_final_input_policy.outcome.schema == LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA
+    assert _envelope_value(final_policy.llm_final_input_policy.outcome) == {
+        "decision": "reject",
+        "reason_code": "unsafe_input",
+        "safe_message": "request rejected",
+        "evidence": {"source": "python"},
+    }
 
     llm_execution = await _invoke_json_async(
         service,
@@ -2829,4 +2914,5 @@ def _all_expected_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        pb.LLM_FINAL_INPUT_POLICY,
     ]

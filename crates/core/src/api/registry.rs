@@ -5,9 +5,9 @@
 //! intercepts, and subscribers.
 
 use crate::api::runtime::{
-    EventSanitizeFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    EventSanitizeFn, LlmConditionalFn, LlmExecutionFn, LlmFinalInputPolicyFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
@@ -584,6 +584,16 @@ global_intercept_registry_api!(
     llm_request_intercepts,
     LlmRequestInterceptFn
 );
+global_guardrail_registry_api!(
+    /// Register a global LLM final-input policy.
+    /// Final-input policies run after request intercepts and before the managed
+    /// LLM scope, cache, routing, or provider execution begins.
+    register_llm_final_input_policy,
+    /// Deregister a global LLM final-input policy.
+    deregister_llm_final_input_policy,
+    llm_final_input_policies,
+    LlmFinalInputPolicyFn
+);
 global_execution_registry_api!(
     /// Register a global LLM execution intercept.
     /// Execution intercepts can wrap or replace the non-streaming provider
@@ -716,6 +726,14 @@ scope_intercept_registry_api!(
     scope_deregister_llm_request_intercept,
     llm_request_intercepts,
     LlmRequestInterceptFn
+);
+scope_guardrail_registry_api!(
+    /// Register a scope-local LLM final-input policy.
+    scope_register_llm_final_input_policy,
+    /// Deregister a scope-local LLM final-input policy.
+    scope_deregister_llm_final_input_policy,
+    llm_final_input_policies,
+    LlmFinalInputPolicyFn
 );
 scope_execution_registry_api!(
     /// Register a scope-local LLM execution intercept.

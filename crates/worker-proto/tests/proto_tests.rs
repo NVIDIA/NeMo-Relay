@@ -4,7 +4,8 @@
 //! Tests for stable worker protocol helpers and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, RegistrationSurface, ScopeType,
+    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, PolicyFailureMode,
+    RegistrationSurface, ScopeType,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use prost::Message;
@@ -38,9 +39,17 @@ fn registration_surface_values_are_stable() {
     assert_eq!(RegistrationSurface::LlmRequestIntercept as i32, 23);
     assert_eq!(RegistrationSurface::LlmExecutionIntercept as i32, 24);
     assert_eq!(RegistrationSurface::LlmStreamExecutionIntercept as i32, 25);
+    assert_eq!(RegistrationSurface::LlmFinalInputPolicy as i32, 26);
     assert_eq!(RegistrationSurface::MarkSanitizeGuardrail as i32, 30);
     assert_eq!(RegistrationSurface::ScopeSanitizeStartGuardrail as i32, 31);
     assert_eq!(RegistrationSurface::ScopeSanitizeEndGuardrail as i32, 32);
+}
+
+#[test]
+fn policy_failure_mode_values_are_stable() {
+    assert_eq!(PolicyFailureMode::Unspecified as i32, 0);
+    assert_eq!(PolicyFailureMode::FailClosed as i32, 1);
+    assert_eq!(PolicyFailureMode::FailOpen as i32, 2);
 }
 
 #[test]

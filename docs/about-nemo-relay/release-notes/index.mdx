@@ -31,7 +31,11 @@ NVIDIA NeMo Relay 0.8 release notes are in preparation.
 
 ### Highlights
 
-- _Highlights will be added for the 0.8 release._
+- Dynamic Rust and Python workers can register asynchronous LLM final-input
+  policies that evaluate the fully intercepted request before managed scope
+  creation, cache, routing, and provider execution. Policies can allow,
+  transform, or reject the request and declare timeout and operational-failure
+  behavior.
 
 ### Support Matrix and Compatibility Updates
 

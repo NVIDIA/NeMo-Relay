@@ -16,7 +16,7 @@ use std::task::{Context, Poll};
 use tokio_stream::Stream;
 
 use crate::api::event::{Event, EventSanitizeFields};
-use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use crate::api::llm::{LlmFinalInputPolicyOutcome, LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::tool::ToolExecutionInterceptOutcome;
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -410,6 +410,21 @@ pub type LlmRequestInterceptFn = Arc<
             LlmRequest,
             Option<AnnotatedLlmRequest>,
         ) -> Pin<Box<dyn Future<Output = Result<LlmRequestInterceptOutcome>> + Send>>
+        + Send
+        + Sync,
+>;
+/// Evaluate the final LLM request immediately before managed execution.
+///
+/// Final-input policies run after request intercepts and can allow the current
+/// request, replace it, or reject execution with a caller-safe policy reason.
+/// The optional normalized annotation is authoritative for provider content
+/// whenever a request codec is active.
+pub type LlmFinalInputPolicyFn = Arc<
+    dyn Fn(
+            String,
+            LlmRequest,
+            Option<AnnotatedLlmRequest>,
+        ) -> Pin<Box<dyn Future<Output = Result<LlmFinalInputPolicyOutcome>> + Send>>
         + Send
         + Sync,
 >;

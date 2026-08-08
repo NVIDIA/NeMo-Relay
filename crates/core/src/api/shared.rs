@@ -9,12 +9,12 @@ use crate::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use crate::api::llm::LlmRequest;
 use crate::api::registry::Guardrail;
 use crate::api::runtime::global_context;
+use crate::api::runtime::state::LlmFinalInputPolicyChainOutcome;
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
 use crate::api::runtime::{current_scope_stack, task_scope_top};
-use crate::api::scope::ScopeHandle;
-use crate::api::scope::ScopeType;
+use crate::api::scope::{EmitMarkEventParams, ScopeHandle, ScopeType, event};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::LlmCodec;
 use crate::error::{FlowError, Result};
@@ -235,6 +235,100 @@ pub(crate) type InterceptedLlmRequest = (
     Vec<crate::api::event::PendingMarkSpec>,
     Vec<crate::codec::optimization::LlmOptimizationContribution>,
 );
+
+pub(crate) type FinalInputLlmRequest = (LlmRequest, Option<Arc<AnnotatedLlmRequest>>);
+
+/// Evaluate the final request visible after every request transform.
+///
+/// This is the last middleware phase before Relay creates the managed LLM
+/// scope and enters cache, routing, or provider execution.
+pub(crate) async fn run_final_input_policies_with_codec(
+    name: &str,
+    request: LlmRequest,
+    annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    codec: Option<Arc<dyn LlmCodec>>,
+    parent: Option<&ScopeHandle>,
+    metadata: Option<Json>,
+) -> Result<FinalInputLlmRequest> {
+    let (entries, subscribers, parent_uuid) = {
+        let scope_stack = current_scope_stack();
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        let scope_locals = scope_guard
+            .collect_scope_local_registries(|registries| &registries.llm_final_input_policies);
+        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        (
+            state.llm_final_input_policy_entries(&scope_locals),
+            state.collect_event_subscribers(&scope_subscribers),
+            resolve_parent_uuid(parent),
+        )
+    };
+
+    if entries.is_empty() {
+        return Ok((request, annotated_request));
+    }
+
+    let outcome = NemoRelayContextState::llm_final_input_policy_snapshot_chain(
+        name,
+        request,
+        annotated_request.as_deref().cloned(),
+        &entries,
+        &subscribers,
+        parent_uuid,
+        metadata.clone(),
+        codec.is_some(),
+    )
+    .await?;
+
+    match outcome {
+        LlmFinalInputPolicyChainOutcome::Approved {
+            mut request,
+            annotated_request,
+            transformed,
+        } => {
+            if transformed && let Some(codec) = codec {
+                let annotated = annotated_request.as_ref().ok_or_else(|| {
+                    FlowError::InvalidArgument(
+                        "final-input policy omitted annotated_request while a request codec is active"
+                            .into(),
+                    )
+                })?;
+                let mut encoded = codec.encode(annotated, &request)?;
+                encoded.headers.extend(request.headers);
+                request = encoded;
+            }
+            Ok((
+                request,
+                annotated_request.map(|annotated| Arc::new(*annotated)),
+            ))
+        }
+        LlmFinalInputPolicyChainOutcome::Rejected {
+            reason_code,
+            safe_message,
+            evidence,
+        } => {
+            let _ = event(
+                EmitMarkEventParams::builder()
+                    .name(name)
+                    .parent_opt(parent)
+                    .data(serde_json::json!({
+                        "rejected": true,
+                        "reason_code": reason_code,
+                        "rejection_reason": safe_message,
+                        "evidence": evidence,
+                    }))
+                    .metadata_opt(metadata)
+                    .build(),
+            );
+            Err(FlowError::GuardrailRejected(safe_message))
+        }
+    }
+}
 
 #[cfg(test)]
 pub(crate) async fn run_request_intercepts_with_codec(

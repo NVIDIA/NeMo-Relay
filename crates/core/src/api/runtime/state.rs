@@ -25,13 +25,13 @@ use crate::api::event::{
     tool_attributes_to_strings,
 };
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
-use crate::api::llm::{LlmHandle, LlmRequest};
+use crate::api::llm::{LlmFinalInputPolicyOutcome, LlmHandle, LlmRequest};
 use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    LlmFinalInputPolicyFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
+    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
     LlmStreamExecutionNextFn, LlmStreamExecutionRegistryRefs, LlmStreamInner, ToolConditionalFn,
     ToolExecutionFn, ToolExecutionNextFn, ToolExecutionOutcomeNextFn, ToolInterceptFn,
     ToolSanitizeFn,
@@ -159,6 +159,22 @@ struct GuardrailScopeCompletion<'a> {
     pending_publication: Option<subscriber_dispatcher::PendingPublication>,
 }
 
+/// Result of evaluating every final-input policy visible to one LLM call.
+pub(crate) enum LlmFinalInputPolicyChainOutcome {
+    /// All policies allowed the request, possibly after one or more transforms.
+    Approved {
+        request: LlmRequest,
+        annotated_request: Option<Box<AnnotatedLlmRequest>>,
+        transformed: bool,
+    },
+    /// A policy rejected the request before managed execution began.
+    Rejected {
+        reason_code: String,
+        safe_message: String,
+        evidence: Option<Json>,
+    },
+}
+
 impl GuardrailScopeCompletion<'_> {
     fn new(
         handle: ScopeHandle,
@@ -236,6 +252,8 @@ pub struct NemoRelayContextState {
     pub(crate) llm_conditional_execution_guardrails: SortedRegistry<Guardrail<LlmConditionalFn>>,
     /// Global LLM request intercepts that can rewrite or annotate requests.
     pub(crate) llm_request_intercepts: SortedRegistry<Intercept<LlmRequestInterceptFn>>,
+    /// Global LLM policies that evaluate the final request before managed execution.
+    pub(crate) llm_final_input_policies: SortedRegistry<Guardrail<LlmFinalInputPolicyFn>>,
     /// Global non-streaming LLM execution intercepts that wrap callback execution.
     pub(crate) llm_execution_intercepts: SortedRegistry<ExecutionIntercept<LlmExecutionFn>>,
     /// Global streaming LLM execution intercepts that wrap stream-producing callbacks.
@@ -269,6 +287,7 @@ impl NemoRelayContextState {
             llm_sanitize_response_guardrails: SortedRegistry::new(),
             llm_conditional_execution_guardrails: SortedRegistry::new(),
             llm_request_intercepts: SortedRegistry::new(),
+            llm_final_input_policies: SortedRegistry::new(),
             llm_execution_intercepts: SortedRegistry::new(),
             llm_stream_execution_intercepts: SortedRegistry::new(),
             event_subscribers: HashMap::new(),
@@ -1569,6 +1588,157 @@ impl NemoRelayContextState {
             annotated_request: annotated_value,
             pending_marks,
             optimization_contributions,
+        })
+    }
+
+    /// Snapshot LLM final-input policies in priority order.
+    pub(crate) fn llm_final_input_policy_entries(
+        &self,
+        scope_locals: &[&SortedRegistry<Guardrail<LlmFinalInputPolicyFn>>],
+    ) -> Vec<Guardrail<LlmFinalInputPolicyFn>> {
+        merge_guardrail_entries(&self.llm_final_input_policies, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Evaluate final-input policies after request transforms and before the
+    /// managed LLM scope or execution chain begins.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn llm_final_input_policy_snapshot_chain(
+        name: &str,
+        request: LlmRequest,
+        annotated_request: Option<AnnotatedLlmRequest>,
+        entries: &[Guardrail<LlmFinalInputPolicyFn>],
+        subscribers: &[EventSubscriberFn],
+        parent_uuid: Option<Uuid>,
+        metadata: Option<Json>,
+        codec_active: bool,
+    ) -> crate::error::Result<LlmFinalInputPolicyChainOutcome> {
+        let mut request_value = request;
+        let mut annotated_value = annotated_request;
+        let mut transformed = false;
+
+        for entry in entries {
+            let scope_stack = super::current_scope_stack();
+            let handle = Self::emit_guardrail_scope_start(
+                &entry.name,
+                parent_uuid,
+                metadata.clone(),
+                json!({
+                    "kind": "llm_final_input_policy",
+                }),
+                subscribers,
+                scope_stack.clone(),
+            );
+            let completion = GuardrailScopeCompletion::new(handle, subscribers, scope_stack);
+            let callback = Arc::clone(&entry.payload);
+            let callback_name = name.to_string();
+            let callback_request = request_value.clone();
+            let callback_annotated = annotated_value.clone();
+            let result = match AssertUnwindSafe(async move {
+                callback(callback_name, callback_request, callback_annotated).await
+            })
+            .catch_unwind()
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(FlowError::Internal(format!(
+                    "LLM final-input policy '{}' panicked",
+                    entry.name
+                ))),
+            };
+
+            let outcome = match result {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    completion.finish(json!({
+                        "allowed": false,
+                        "error": error.to_string(),
+                    }));
+                    return Err(error);
+                }
+            };
+
+            match outcome {
+                LlmFinalInputPolicyOutcome::Allow { evidence } => {
+                    completion.finish(json!({
+                        "allowed": true,
+                        "rejected": false,
+                        "transformed": false,
+                        "evidence": evidence,
+                    }));
+                }
+                LlmFinalInputPolicyOutcome::Transform {
+                    request,
+                    annotated_request,
+                    evidence,
+                } => {
+                    if codec_active && request.content != request_value.content {
+                        completion.finish(json!({
+                            "allowed": false,
+                            "error": "policy changed request.content while a request codec is active",
+                        }));
+                        return Err(FlowError::InvalidArgument(format!(
+                            "LLM final-input policy '{}' changed request.content while a request codec is active; modify annotated_request instead",
+                            entry.name
+                        )));
+                    }
+                    if codec_active && annotated_request.is_none() {
+                        completion.finish(json!({
+                            "allowed": false,
+                            "error": "policy omitted annotated_request while a request codec is active",
+                        }));
+                        return Err(FlowError::InvalidArgument(format!(
+                            "LLM final-input policy '{}' omitted annotated_request while a request codec is active",
+                            entry.name
+                        )));
+                    }
+                    request_value = request;
+                    annotated_value = annotated_request.map(|annotated| *annotated);
+                    transformed = true;
+                    completion.finish(json!({
+                        "allowed": true,
+                        "rejected": false,
+                        "transformed": true,
+                        "evidence": evidence,
+                    }));
+                }
+                LlmFinalInputPolicyOutcome::Reject {
+                    reason_code,
+                    safe_message,
+                    evidence,
+                } => {
+                    if reason_code.trim().is_empty() || safe_message.trim().is_empty() {
+                        completion.finish(json!({
+                            "allowed": false,
+                            "error": "policy rejection omitted reason_code or safe_message",
+                        }));
+                        return Err(FlowError::InvalidArgument(format!(
+                            "LLM final-input policy '{}' returned a rejection with an empty reason_code or safe_message",
+                            entry.name
+                        )));
+                    }
+                    completion.finish(json!({
+                        "allowed": false,
+                        "rejected": true,
+                        "reason_code": reason_code,
+                        "safe_message": safe_message,
+                        "evidence": evidence,
+                    }));
+                    return Ok(LlmFinalInputPolicyChainOutcome::Rejected {
+                        reason_code,
+                        safe_message,
+                        evidence,
+                    });
+                }
+            }
+        }
+
+        Ok(LlmFinalInputPolicyChainOutcome::Approved {
+            request: request_value,
+            annotated_request: annotated_value.map(Box::new),
+            transformed,
         })
     }
 

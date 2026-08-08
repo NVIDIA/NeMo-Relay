@@ -85,6 +85,18 @@ Relay supplies the socket, activation ID, and authentication token through the
 worker environment. Use `serve_plugin` for Relay-spawned workers; explicit
 server configuration is intended for tests and custom launchers.
 
+## Final-Input Policies
+
+`PluginContext::register_llm_final_input_policy` installs an async policy after
+request intercepts and before Relay enters cache, routing, or provider
+execution. The callback returns `LlmFinalInputPolicyOutcome::Allow`,
+`Transform`, or `Reject`. Each registration declares a host-enforced deadline
+and `PolicyFailureMode`; fail-open applies only to worker failures or timeouts,
+never to an explicit policy rejection. Fail-closed worker failures become a
+caller-safe terminal rejection while Relay logs the operational error. When a
+codec is active, transformations must preserve raw request content and return
+the transformed annotated request.
+
 ## Concurrency and Cancellation
 
 Unary and streaming callbacks run concurrently. Cancellation is cooperative:

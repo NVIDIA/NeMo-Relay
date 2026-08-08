@@ -136,11 +136,12 @@ It establishes:
 
 ### Middleware Registries
 
-The middleware registries hold the active intercepts and guardrails for tool and
-LLM execution. Request intercepts can rewrite real requests, conditional
-guardrails can reject execution, and sanitize guardrails can change emitted
-observability payloads. Managed helpers read those registries before invoking
-the real callback.
+The middleware registries hold the active intercepts, policies, and guardrails
+for tool and LLM execution. Request intercepts can rewrite real requests,
+conditional guardrails can reject execution, LLM final-input policies can
+govern the fully intercepted provider request, and sanitize guardrails can
+change emitted observability payloads. Managed helpers read those registries
+before invoking the real callback.
 
 Async middleware callbacks are awaited as part of managed execution. The
 managed call does not advance past that middleware callback until the callback
@@ -272,10 +273,12 @@ Managed tool and LLM execution follows the same high-level order:
 
 1. Conditional-execution guardrails decide whether work can proceed.
 2. Request intercepts can rewrite the real request.
-3. Sanitize-request guardrails can rewrite the emitted start-event payload.
-4. Execution intercepts wrap or replace the user callback.
-5. The user callback runs.
-6. Sanitize-response guardrails can rewrite the emitted end-event payload.
+3. For LLM calls, final-input policies can allow, replace, or reject the fully
+   intercepted provider request. Tool calls skip this step.
+4. Sanitize-request guardrails can rewrite the emitted start-event payload.
+5. Execution intercepts wrap or replace the user callback.
+6. The user callback runs.
+7. Sanitize-response guardrails can rewrite the emitted end-event payload.
 
 The following sequence shows where each middleware family runs during a managed
 call.
@@ -287,6 +290,7 @@ sequenceDiagram
     participant Runtime as NeMo Relay Runtime
     participant Conditional as Conditional Guardrails
     participant Request as Request Intercepts
+    participant FinalInput as LLM Final-Input Policies
     participant Sanitizers as Request / Response Sanitizers
     participant Execution as Execution Intercepts
     participant Callback as Real Callback
@@ -301,6 +305,10 @@ sequenceDiagram
         Conditional-->>Runtime: continue
         Runtime->>Request: transform real request
         Request-->>Runtime: intercepted request
+        opt LLM call
+            Runtime->>FinalInput: evaluate final provider-bound request
+            FinalInput-->>Runtime: allow, replacement, or rejection
+        end
         Runtime->>Sanitizers: sanitize event-only request copy
         Sanitizers-->>Runtime: start-event payload
         Runtime->>Dispatcher: enqueue start event
@@ -322,6 +330,7 @@ sequenceDiagram
 Two distinctions matter:
 
 - Intercepts affect the real execution path
+- LLM final-input policies govern the fully intercepted provider request
 - Sanitize guardrails affect the emitted observability payload
 
 For the expanded request-to-response runtime path, including streaming and

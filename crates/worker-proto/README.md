@@ -41,6 +41,9 @@ tooling.
   clients, servers, services, and messages.
 - **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
   serializing Relay DTOs into protocol payloads.
+- **Policy controls**: The final-input policy surface carries a per-registration
+  deadline and explicit fail-open or fail-closed behavior; the existing
+  cancellation RPC remains the interruption mechanism when a deadline expires.
 
 ## Installation
 

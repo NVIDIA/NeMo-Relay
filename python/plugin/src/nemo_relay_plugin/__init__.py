@@ -36,6 +36,8 @@ Public data types:
     LlmOptimizationTokens: Explicit token evidence by category.
     LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
+    LlmFinalInputPolicyOutcome: Allow, transform, or reject a final LLM input.
+    PolicyFailureMode: Host behavior when the policy worker fails.
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
@@ -53,6 +55,7 @@ Public callback aliases:
     LlmSanitizeResponseCallback: LLM response sanitizer callback.
     LlmConditionalCallback: LLM execution guardrail callback.
     LlmRequestCallback: LLM request intercept callback.
+    LlmFinalInputPolicyCallback: Terminal final-input policy callback.
     LlmExecutionCallback: Unary LLM execution intercept callback.
     LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
 
@@ -79,6 +82,8 @@ from ._api import (
     LlmCodecIdentity,
     LlmConditionalCallback,
     LlmExecutionCallback,
+    LlmFinalInputPolicyCallback,
+    LlmFinalInputPolicyOutcome,
     LlmNext,
     LlmOptimizationContribution,
     LlmOptimizationDataSchema,
@@ -99,6 +104,7 @@ from ._api import (
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
+    PolicyFailureMode,
     ScopeType,
     SubscriberCallback,
     ToolConditionalCallback,
@@ -125,6 +131,8 @@ __all__ = [
     "LlmConditionalCallback",
     "LlmCodecIdentity",
     "LlmExecutionCallback",
+    "LlmFinalInputPolicyCallback",
+    "LlmFinalInputPolicyOutcome",
     "LlmOptimizationContribution",
     "LlmOptimizationDataSchema",
     "LlmOptimizationEvidenceQuality",
@@ -144,6 +152,7 @@ __all__ = [
     "LlmStreamExecutionCallback",
     "PluginContext",
     "PluginRuntime",
+    "PolicyFailureMode",
     "PendingMarkSpec",
     "ScopeType",
     "SubscriberCallback",

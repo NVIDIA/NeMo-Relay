@@ -33,7 +33,7 @@ worker emit marks, manage scopes and isolated scope stacks, and call tool, LLM,
 or LLM-stream continuations during execution intercepts.
 
 This page summarizes the stable contract. Refer to the [canonical protocol
-definition](https://github.com/NVIDIA/NeMo-Relay/blob/0.5.0-alpha.20260706/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
+definition](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
 for every message and RPC field required to implement another runtime.
 
 ## PluginWorker RPCs
@@ -57,8 +57,9 @@ and `Register` also carry the plugin ID and component configuration.
 ## Registration and Invocation
 
 On success, `RegisterResponse` contains `Registration` records with a local
-name, surface, priority, and `break_chain` value. A failed registration can
-return `WorkerError` without registrations. The supported surfaces are:
+name, surface, priority, and `break_chain` value. Final-input policy records
+also carry `timeout_ms` and a `failure_mode`. A failed registration can return
+`WorkerError` without registrations. The supported surfaces are:
 
 - `SUBSCRIBER`
 - `TOOL_SANITIZE_REQUEST_GUARDRAIL`, `TOOL_SANITIZE_RESPONSE_GUARDRAIL`,
@@ -66,13 +67,22 @@ return `WorkerError` without registrations. The supported surfaces are:
   `TOOL_EXECUTION_INTERCEPT`
 - `LLM_SANITIZE_REQUEST_GUARDRAIL`, `LLM_SANITIZE_RESPONSE_GUARDRAIL`,
   `LLM_CONDITIONAL_EXECUTION_GUARDRAIL`, `LLM_REQUEST_INTERCEPT`,
-  `LLM_EXECUTION_INTERCEPT`, and `LLM_STREAM_EXECUTION_INTERCEPT`
+  `LLM_FINAL_INPUT_POLICY`, `LLM_EXECUTION_INTERCEPT`, and
+  `LLM_STREAM_EXECUTION_INTERCEPT`
 
 `InvokeRequest` identifies the registration, surface, invocation, optional
 continuation, and scope context. Its payload is one of an event, tool
 invocation, or LLM invocation. `InvokeResponse` returns an empty result, JSON
-result, guardrail result, LLM request-intercept result, tool-execution result,
-or `WorkerError`. `InvokeStream` emits JSON chunks or `WorkerError` chunks.
+result, guardrail result, LLM request-intercept result, LLM final-input policy
+result, tool-execution result, or `WorkerError`. `InvokeStream` emits JSON
+chunks or `WorkerError` chunks.
+
+`LLM_FINAL_INPUT_POLICY` runs after LLM request intercepts and before managed
+scope creation, cache, routing, and provider execution. Its tagged
+`nemo.relay.LlmFinalInputPolicyOutcome@1` envelope selects allow, transform, or
+reject. Relay requires a nonzero timeout and either `FAIL_CLOSED` or
+`FAIL_OPEN`. Fail-open applies only to operational worker failures; it never
+overrides an explicit reject outcome.
 
 Every LLM sanitizer invocation includes a directional context with tagged codec
 identity: `none`, `builtin(id)`, `runtime(id)`, or `opaque`. Worker SDKs expose

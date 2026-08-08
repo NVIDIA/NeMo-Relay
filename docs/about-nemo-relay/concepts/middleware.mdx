@@ -47,8 +47,8 @@ synchronous: they create or close their handle immediately and queue observabili
 work rather than awaiting it.
 
 <Warning>
-Event sanitizers, conditional-execution guardrails, request intercepts,
-execution intercepts, and subscribers are not re-entrant. These callbacks must
+Event sanitizers, conditional-execution guardrails, final-input policies,
+request intercepts, execution intercepts, and subscribers are not re-entrant. These callbacks must
 not invoke another NeMo Relay API that runs middleware, flushes subscriber
 delivery, waits on an exporter, or clears plugins. Scope APIs remain supported:
 callbacks may create, push, or pop scopes at any nesting level and may replace
@@ -99,10 +99,12 @@ everything in application code.
 
 ## Middleware Families
 
-NeMo Relay has two major middleware families with three distinct purposes:
+NeMo Relay separates middleware by lifecycle purpose:
 
 - **Intercepts** change the real request or callback execution path.
 - **Conditional-execution guardrails** decide whether the real work runs.
+- **LLM final-input policies** evaluate the fully intercepted provider request
+  and can allow, transform, or reject it.
 - **Sanitize guardrails** change emitted observability without changing the real
   request or result.
 
@@ -111,8 +113,10 @@ NeMo Relay has two major middleware families with three distinct purposes:
 Choose the middleware type that matches the behavior you need:
 
 - Use a **conditional-execution guardrail** when the work should be allowed or
-  rejected.
+  rejected before request transformation.
 - Use a **request intercept** when the real request must change before the call.
+- Use an **LLM final-input policy** when policy must evaluate or replace the
+  final provider-bound request after all request intercepts have run.
 - Use an **execution intercept** when code must run before or after the callback.
 - Use a **sanitize guardrail** when only subscribers and exporters should see
   rewritten data.
@@ -124,8 +128,8 @@ Choose the middleware type that matches the behavior you need:
 
 ## Callback Error Handling
 
-Conditional-execution guardrails and request or execution intercepts fail
-closed when their callbacks return a failure result. A failure returned
+Conditional-execution guardrails, in-process final-input policies, and request
+or execution intercepts fail closed when their callbacks return a failure result. A failure returned
 directly or produced when a callback raises an exception or rejects a `Promise`
 stops Relay at that middleware stage, and Relay surfaces the failure to the
 managed caller. A conditional guardrail or request intercept therefore prevents
@@ -134,7 +138,12 @@ conditional-execution guardrail can return its documented rejection message to
 block execution. A rejection is normal control flow, not a callback failure. An
 execution intercept cannot undo work from a `next` continuation that it already
 invoked. This fail-closed contract is the same whether the callback completes
-directly or asynchronously.
+directly or asynchronously. A worker final-input policy declares both a timeout
+and whether operational failures fail open or fail closed. An explicit policy
+rejection is always terminal and is never converted into fail-open behavior.
+For a worker policy, fail closed returns a caller-safe terminal rejection while
+the host logs the underlying operational error; fail open continues with
+redacted policy-bypass evidence.
 
 ## Intercepts
 
@@ -184,6 +193,18 @@ whether execution may proceed.
 
 Use them when the runtime should block work based on policy, budget, or context.
 
+### LLM Final Input
+
+LLM final-input policies run after every LLM request intercept and before Relay
+creates the managed LLM scope or enters cache, routing, and provider execution.
+They receive the final provider-bound request and return one of three outcomes:
+allow it unchanged, replace it, or reject the call.
+
+Relay awaits policies sequentially in priority order. A replacement becomes the
+input to the next policy. When an LLM codec is active, a policy can edit the
+normalized annotated request and Relay re-encodes it into the original provider
+shape before execution continues.
+
 ### Sanitize Request
 
 Sanitize-request guardrails rewrite the payload recorded on emitted start events.
@@ -231,7 +252,8 @@ the callback failure and withholds the governed observability payload.
 ## Managed Execution Order
 
 Tool calls and buffered LLM calls follow one normal path grouped into request,
-execution, and response phases.
+execution, and response phases. LLM calls include the final-input stage; tool
+calls skip it.
 
 <MermaidStyles />
 
@@ -240,9 +262,10 @@ flowchart LR
     subgraph RequestPhase[Request Phase]
         Conditional[Conditional Guardrails]
         RequestIntercepts[Request Intercepts]
+        FinalInput[LLM Final-Input Policies]
         RequestSanitizers[Request Sanitizers]
         StartEvent[Scope-Start Sanitizers and Start Event]
-        Conditional --> RequestIntercepts --> RequestSanitizers --> StartEvent
+        Conditional --> RequestIntercepts --> FinalInput --> RequestSanitizers --> StartEvent
     end
 
     subgraph ExecutionPhase[Execution Phase]
@@ -264,9 +287,10 @@ flowchart LR
 The phases run as follows:
 
 1. **Request phase:** Conditional-execution guardrails allow the call, request
-   intercepts rewrite the real request, request sanitizers rewrite the
+   intercepts rewrite the real request, LLM final-input policies allow, replace,
+   or reject the fully intercepted request, request sanitizers rewrite the
    observability copy, and scope-start sanitizers run before Relay enqueues the
-   start event.
+   start event. Tool calls omit the final-input step.
 2. **Execution phase:** Execution intercepts wrap or replace the real callback.
 3. **Response phase:** Response sanitizers rewrite the observability copy, and
    scope-end sanitizers run before Relay enqueues the end event.
@@ -278,11 +302,16 @@ execution does not wait for subscriber or exporter callbacks.
 This ordering preserves the distinction between the families:
 
 - Use an intercept to change real execution.
+- Use an LLM final-input policy to govern the final provider-bound request.
 - Use a sanitize guardrail to change only emitted observability.
 
 ### Rejection Path
 
-A conditional-execution guardrail can reject the call during the request phase.
+A conditional-execution guardrail can reject the call before request
+transformation. An LLM final-input policy can reject it after every request
+intercept has produced the final provider-bound request. In either case, Relay
+does not invoke the provider callback.
+
 Relay emits a guardrail scope start/end pair for each conditional guardrail it
 evaluates. If a guardrail rejects the call, Relay skips the managed call start
 and end events and does not run request intercepts, execution intercepts, or the
@@ -304,8 +333,9 @@ flowchart LR
 
 ### Streaming LLM Path
 
-For streaming LLM flows, the same pre-execution order applies: the runtime
-applies request sanitizers and emits the LLM start event before the
+For streaming LLM flows, the same pre-execution order applies: the runtime runs
+request intercepts and final-input policies, then applies request sanitizers and
+emits the LLM start event before the
 stream execution intercept chain runs. Stream execution intercepts are the
 execution family for streaming provider callbacks. The runtime then collects
 chunks and finalizes the stream before response sanitizers rewrite

@@ -440,6 +440,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Subscriber as i32,
                 priority: 0,
                 break_chain: false,
+                ..Registration::default()
             }],
             error: None,
         },
@@ -455,6 +456,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: 999,
                 priority: 0,
                 break_chain: false,
+                ..Registration::default()
             }],
             error: None,
         },
@@ -474,6 +476,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Unspecified as i32,
                 priority: 0,
                 break_chain: false,
+                ..Registration::default()
             }],
             error: None,
         },
@@ -483,6 +486,65 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
         unspecified
             .to_string()
             .contains("unspecified registration surface")
+    );
+
+    let invalid_policy_timeout = validate_registration_plan(
+        "fixture_worker",
+        &RegisterResponse {
+            registrations: vec![Registration {
+                local_name: "policy".into(),
+                surface: RegistrationSurface::LlmFinalInputPolicy as i32,
+                priority: 0,
+                break_chain: false,
+                timeout_ms: None,
+                failure_mode: PolicyFailureMode::FailClosed as i32,
+            }],
+            error: None,
+        },
+    )
+    .expect_err("final-input policy timeout should be required");
+    assert!(invalid_policy_timeout.to_string().contains("timeout_ms"));
+
+    let invalid_policy_failure_mode = validate_registration_plan(
+        "fixture_worker",
+        &RegisterResponse {
+            registrations: vec![Registration {
+                local_name: "policy".into(),
+                surface: RegistrationSurface::LlmFinalInputPolicy as i32,
+                priority: 0,
+                break_chain: false,
+                timeout_ms: Some(30_000),
+                failure_mode: PolicyFailureMode::Unspecified as i32,
+            }],
+            error: None,
+        },
+    )
+    .expect_err("final-input policy failure mode should be required");
+    assert!(
+        invalid_policy_failure_mode
+            .to_string()
+            .contains("fail-closed or fail-open")
+    );
+
+    let invalid_non_policy_options = validate_registration_plan(
+        "fixture_worker",
+        &RegisterResponse {
+            registrations: vec![Registration {
+                local_name: "subscriber".into(),
+                surface: RegistrationSurface::Subscriber as i32,
+                priority: 0,
+                break_chain: false,
+                timeout_ms: Some(30_000),
+                failure_mode: PolicyFailureMode::FailOpen as i32,
+            }],
+            error: None,
+        },
+    )
+    .expect_err("non-policy registrations should reject policy-only options");
+    assert!(
+        invalid_non_policy_options
+            .to_string()
+            .contains("may only set timeout_ms and failure_mode")
     );
 
     let cases = [
@@ -1563,6 +1625,7 @@ async fn install_registrations_covers_registry_error_edges() {
         RegistrationSurface::LlmRequestIntercept,
         RegistrationSurface::LlmExecutionIntercept,
         RegistrationSurface::LlmStreamExecutionIntercept,
+        RegistrationSurface::LlmFinalInputPolicy,
     ] {
         let duplicate_name = format!("duplicate_worker_{surface:?}");
         let (instance, _shutdown) = fake_worker_instance(vec![
@@ -2696,6 +2759,12 @@ fn registration(surface: RegistrationSurface, local_name: &str) -> Registration 
         surface: surface as i32,
         priority: 0,
         break_chain: false,
+        timeout_ms: (surface == RegistrationSurface::LlmFinalInputPolicy).then_some(30_000),
+        failure_mode: if surface == RegistrationSurface::LlmFinalInputPolicy {
+            PolicyFailureMode::FailClosed as i32
+        } else {
+            PolicyFailureMode::Unspecified as i32
+        },
     }
 }
 

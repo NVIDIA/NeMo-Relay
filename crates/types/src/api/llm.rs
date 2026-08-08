@@ -16,6 +16,9 @@ use crate::codec::request::AnnotatedLlmRequest;
 /// Version 2 carries the version 2 annotated-request schema.
 pub const LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA: &str = "nemo.relay.LlmRequestInterceptOutcome@2";
 
+/// Versioned JSON envelope schema for [`LlmFinalInputPolicyOutcome`].
+pub const LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA: &str = "nemo.relay.LlmFinalInputPolicyOutcome@1";
+
 bitflags! {
     /// Bitflags that modify LLM-call behavior and observability.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -103,5 +106,101 @@ impl From<(LlmRequest, AnnotatedLlmRequest)> for LlmRequestInterceptOutcome {
 impl From<(LlmRequest, Option<AnnotatedLlmRequest>)> for LlmRequestInterceptOutcome {
     fn from((request, annotated_request): (LlmRequest, Option<AnnotatedLlmRequest>)) -> Self {
         Self::new(request, annotated_request)
+    }
+}
+
+/// Result of evaluating the final LLM input immediately before execution.
+///
+/// Final-input policies run after all request intercepts and before Relay
+/// creates the managed LLM scope or enters cache, routing, and provider
+/// execution. An allowed request is carried forward unchanged, a transformed
+/// request becomes authoritative for all later middleware, and a rejection is
+/// terminal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum LlmFinalInputPolicyOutcome {
+    /// Continue with the current request unchanged.
+    Allow {
+        /// Optional redacted, policy-specific decision evidence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<Json>,
+    },
+    /// Continue with a transformed request.
+    Transform {
+        /// Rewritten provider request when no request codec is active.
+        ///
+        /// With an active codec, headers remain writable but content is
+        /// read-only; provider-body changes must be expressed through
+        /// `annotated_request`.
+        request: LlmRequest,
+        /// Optional normalized request annotation to carry forward.
+        ///
+        /// This field is required when a request codec is active.
+        #[serde(default)]
+        annotated_request: Option<Box<AnnotatedLlmRequest>>,
+        /// Optional redacted, policy-specific decision evidence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<Json>,
+    },
+    /// Stop the request before managed execution begins.
+    Reject {
+        /// Stable, low-cardinality reason code suitable for policy metrics.
+        reason_code: String,
+        /// Caller-safe rejection message.
+        safe_message: String,
+        /// Optional redacted, policy-specific decision evidence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        evidence: Option<Json>,
+    },
+}
+
+impl LlmFinalInputPolicyOutcome {
+    /// Allow the current request without additional evidence.
+    #[must_use]
+    pub fn allow() -> Self {
+        Self::Allow { evidence: None }
+    }
+
+    /// Return an allowed decision with redacted policy evidence.
+    #[must_use]
+    pub fn allow_with_evidence(evidence: Json) -> Self {
+        Self::Allow {
+            evidence: Some(evidence),
+        }
+    }
+
+    /// Transform the request without additional evidence.
+    #[must_use]
+    pub fn transform(request: LlmRequest, annotated_request: Option<AnnotatedLlmRequest>) -> Self {
+        Self::Transform {
+            request,
+            annotated_request: annotated_request.map(Box::new),
+            evidence: None,
+        }
+    }
+
+    /// Reject the request with a stable code and caller-safe message.
+    #[must_use]
+    pub fn reject(reason_code: impl Into<String>, safe_message: impl Into<String>) -> Self {
+        Self::Reject {
+            reason_code: reason_code.into(),
+            safe_message: safe_message.into(),
+            evidence: None,
+        }
+    }
+
+    /// Attach redacted policy evidence to any decision.
+    #[must_use]
+    pub fn with_evidence(mut self, evidence: Json) -> Self {
+        match &mut self {
+            Self::Allow { evidence: current }
+            | Self::Transform {
+                evidence: current, ..
+            }
+            | Self::Reject {
+                evidence: current, ..
+            } => *current = Some(evidence),
+        }
+        self
     }
 }

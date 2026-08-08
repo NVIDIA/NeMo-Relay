@@ -27,17 +27,18 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
     llm_stream_call_execute,
 };
-use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+use nemo_relay::api::llm::{LlmFinalInputPolicyOutcome, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::optimization::record_llm_optimization_contribution;
 use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
-    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
-    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
+    deregister_llm_final_input_policy, deregister_llm_request_intercept,
+    deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_mark_sanitize_guardrail,
+    deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_final_input_policy,
     register_llm_request_intercept, register_llm_sanitize_request_guardrail,
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
     register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
@@ -4298,6 +4299,195 @@ async fn test_llm_request_intercept_pending_marks_preserve_order_and_break_chain
     for name in ["pending_first", "pending_break", "pending_skipped"] {
         deregister_llm_request_intercept(name).unwrap();
     }
+}
+
+#[tokio::test]
+async fn test_final_input_policy_runs_after_request_intercepts_and_transforms_provider_request() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_llm_request_intercept(
+        "before_final_policy",
+        1,
+        false,
+        Arc::new(|_name, mut request, annotated| {
+            request
+                .headers
+                .insert("x-request-intercept".into(), json!(true));
+            ready(LlmRequestInterceptOutcome::new(request, annotated))
+        }),
+    )
+    .unwrap();
+    register_llm_final_input_policy(
+        "final_policy_transform",
+        1,
+        Arc::new(|_name, mut request, annotated| {
+            assert_eq!(request.headers["x-request-intercept"], true);
+            request.content["prompt"] = json!("approved prompt");
+            ready(
+                LlmFinalInputPolicyOutcome::transform(request, annotated)
+                    .with_evidence(json!({"rail": "input"})),
+            )
+        }),
+    )
+    .unwrap();
+    register_llm_final_input_policy(
+        "final_policy_observer",
+        2,
+        Arc::new(|_name, request, _annotated| {
+            assert_eq!(request.content["prompt"], "approved prompt");
+            ready(LlmFinalInputPolicyOutcome::allow())
+        }),
+    )
+    .unwrap();
+
+    let provider_request = Arc::new(Mutex::new(None::<LlmRequest>));
+    let captured_request = Arc::clone(&provider_request);
+    let response = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("final-input-transform")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "original"}),
+            })
+            .func(Arc::new(move |request| {
+                *captured_request.lock().unwrap() = Some(request);
+                Box::pin(async { Ok(json!({"response": "done"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response, json!({"response": "done"}));
+    let provider_request = provider_request.lock().unwrap().clone().unwrap();
+    assert_eq!(provider_request.content["prompt"], "approved prompt");
+    assert_eq!(provider_request.headers["x-request-intercept"], true);
+
+    deregister_llm_final_input_policy("final_policy_observer").unwrap();
+    deregister_llm_final_input_policy("final_policy_transform").unwrap();
+    deregister_llm_request_intercept("before_final_policy").unwrap();
+}
+
+#[tokio::test]
+async fn test_final_input_policy_rejection_is_terminal_before_managed_start() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "final_policy_rejection_observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_llm_final_input_policy(
+        "reject_final_input",
+        1,
+        Arc::new(|_name, _request, _annotated| {
+            ready(
+                LlmFinalInputPolicyOutcome::reject("unsafe_input", "request rejected")
+                    .with_evidence(json!({"rail": "jailbreak"})),
+            )
+        }),
+    )
+    .unwrap();
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&provider_called);
+    let error = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("final-input-rejected")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "unsafe"}),
+            })
+            .func(Arc::new(move |_| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({"response": "must not run"})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        FlowError::GuardrailRejected(ref reason) if reason == "request rejected"
+    ));
+    assert!(!provider_called.load(Ordering::SeqCst));
+    flush_subscribers().unwrap();
+
+    let events = events.lock().unwrap();
+    assert!(!events.iter().any(|event| {
+        event.name() == "final-input-rejected"
+            && event.scope_category() == Some(ScopeCategory::Start)
+            && event.scope_type() == Some(ScopeType::Llm)
+    }));
+    assert!(events.iter().any(|event| {
+        event.name() == "reject_final_input"
+            && event.scope_category() == Some(ScopeCategory::End)
+            && event.data().and_then(|data| data.get("reason_code")) == Some(&json!("unsafe_input"))
+    }));
+    assert!(events.iter().any(|event| {
+        event.name() == "final-input-rejected"
+            && event.data().and_then(|data| data.get("rejected")) == Some(&json!(true))
+            && event.data().and_then(|data| data.get("reason_code")) == Some(&json!("unsafe_input"))
+    }));
+    drop(events);
+
+    deregister_llm_final_input_policy("reject_final_input").unwrap();
+    deregister_subscriber("final_policy_rejection_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_final_input_policy_rejects_before_stream_provider_opens() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_llm_final_input_policy(
+        "reject_stream_final_input",
+        1,
+        Arc::new(|_name, _request, _annotated| {
+            ready(LlmFinalInputPolicyOutcome::reject(
+                "unsafe_input",
+                "stream request rejected",
+            ))
+        }),
+    )
+    .unwrap();
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    let called = Arc::clone(&provider_called);
+    let error = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("final-input-stream-rejected")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "unsafe"}),
+            })
+            .func(Arc::new(move |_| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({"response": "must not run"})))
+            .build(),
+    )
+    .await
+    .err()
+    .expect("final-input policy should reject before opening the provider stream");
+
+    assert!(matches!(
+        error,
+        FlowError::GuardrailRejected(ref reason) if reason == "stream request rejected"
+    ));
+    assert!(!provider_called.load(Ordering::SeqCst));
+
+    deregister_llm_final_input_policy("reject_stream_final_input").unwrap();
 }
 
 #[tokio::test]

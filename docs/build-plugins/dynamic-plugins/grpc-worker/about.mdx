@@ -70,6 +70,11 @@ Relay 0.6 host sends `nemo.relay.AnnotatedLlmRequest@2` and expects
 `nemo.relay.LlmRequestInterceptOutcome@2`; it rejects request-intercept
 registrations whose manifest still admits Relay 0.5.
 
+If the worker registers an LLM final-input policy, set
+`compat.relay = ">=0.8,<1.0"`, or another range that excludes earlier Relay
+versions. Relay 0.8 introduces the final-input registration surface and the
+`nemo.relay.LlmFinalInputPolicyOutcome@1` result envelope.
+
 The worker receives its activation ID, plugin ID, worker and host endpoints,
 and a local activation token through environment variables. Do not start the
 worker directly during normal operation. The host supplies these values.
@@ -79,6 +84,14 @@ worker directly during normal operation. The host supplies these values.
 Workers return declarative registrations. Relay owns registry mutation,
 namespacing, rollback, and deregistration. Relay DTOs use `JsonEnvelope`
 values, while protobuf handles control flow.
+
+A final-input policy registration must declare a nonzero timeout and a failure
+mode. Choose fail closed when an unavailable policy must stop provider
+execution, or fail open when Relay should continue after an operational worker
+failure. Fail-closed operational failures become caller-safe terminal
+rejections while the host retains the underlying error in its logs.
+Cancellation is cooperative. An explicit policy rejection is normal, terminal
+policy behavior and never fails open.
 
 Run `nemo-relay plugins add` and `nemo-relay plugins validate` to evaluate the
 configured host policy and artifact trust evidence. Refer to [Configure

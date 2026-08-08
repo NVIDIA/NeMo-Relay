@@ -4,6 +4,7 @@
 //! Integration coverage for gRPC worker dynamic plugins.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
@@ -303,6 +304,10 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         llm_execute_response["request"]["worker_plugin_llm_execution_request"],
         true
     );
+    assert_eq!(
+        llm_execute_response["request"]["worker_plugin_final_input_policy"],
+        true
+    );
     flush_subscribers().expect("worker fixture LLM events should flush");
     let captured_events = events.lock().unwrap().clone();
     find_event(&captured_events, "fixture.worker.subscriber.mark", None);
@@ -365,6 +370,10 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
     assert_eq!(stream_value["worker_plugin_llm_stream_execution"], true);
     assert_eq!(
         stream_value["request"]["worker_plugin_llm_stream_execution_request"],
+        true
+    );
+    assert_eq!(
+        stream_value["request"]["worker_plugin_final_input_policy"],
         true
     );
 
@@ -588,6 +597,10 @@ async fn worker_llm_request_intercept_round_trips_annotations() {
     .expect("worker LLM request intercept should preserve annotations");
     assert_eq!(response["llm_callback"], true);
     assert_eq!(response["request"]["worker_plugin_annotated_request"], true);
+    assert_eq!(
+        response["request"]["worker_plugin_final_input_policy"],
+        true
+    );
 
     loaded.clear();
 }
@@ -625,6 +638,137 @@ async fn worker_llm_request_intercept_callback_error_surfaces_to_host() {
         "{error}"
     );
 
+    loaded.clear();
+}
+
+#[tokio::test]
+async fn worker_final_input_policy_is_terminal_and_applies_failure_mode() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    let called = provider_called.clone();
+    let loaded = load_and_initialize_fixture(Map::new()).await;
+    let rejected = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("worker-fixture-final-input-reject")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({ "reject_final_input": true }),
+            })
+            .func(Arc::new(move |_| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({ "should_not_run": true })) })
+            }))
+            .build(),
+    )
+    .await
+    .expect_err("explicit final-input rejection should be terminal");
+    assert!(
+        rejected
+            .to_string()
+            .contains("fixture final-input policy rejected the request"),
+        "{rejected}"
+    );
+    assert!(!provider_called.load(Ordering::SeqCst));
+    loaded.clear();
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    let called = provider_called.clone();
+    let loaded = load_and_initialize_fixture(Map::from_iter([(
+        "final_input_policy_error".into(),
+        json!(true),
+    )]))
+    .await;
+    let failed_closed = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("worker-fixture-final-input-fail-closed")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({ "prompt": "closed" }),
+            })
+            .func(Arc::new(move |_| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({ "should_not_run": true })) })
+            }))
+            .build(),
+    )
+    .await
+    .expect_err("a fail-closed worker error should abort the request");
+    assert!(
+        failed_closed
+            .to_string()
+            .contains("Request blocked because the required input policy could not be evaluated"),
+        "{failed_closed}"
+    );
+    assert!(
+        !failed_closed
+            .to_string()
+            .contains("fixture final-input policy error requested"),
+        "{failed_closed}"
+    );
+    assert!(!provider_called.load(Ordering::SeqCst));
+    loaded.clear();
+
+    let loaded = load_and_initialize_fixture(Map::from_iter([
+        ("final_input_policy_error".into(), json!(true)),
+        ("final_input_policy_fail_open".into(), json!(true)),
+    ]))
+    .await;
+    let allowed = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("worker-fixture-final-input-fail-open")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({ "prompt": "open" }),
+            })
+            .func(Arc::new(|request| {
+                Box::pin(async move { Ok(json!({ "request": request.content })) })
+            }))
+            .build(),
+    )
+    .await
+    .expect("a fail-open worker error should continue to the provider");
+    assert_eq!(
+        allowed["request"]["worker_plugin_llm_request_intercept"],
+        true
+    );
+    assert!(
+        allowed["request"]
+            .get("worker_plugin_final_input_policy")
+            .is_none()
+    );
+    loaded.clear();
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    let called = provider_called.clone();
+    let loaded = load_and_initialize_fixture(Map::from_iter([(
+        "final_input_policy_timeout".into(),
+        json!(true),
+    )]))
+    .await;
+    let timed_out = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("worker-fixture-final-input-timeout")
+            .request(LlmRequest {
+                headers: Map::new(),
+                content: json!({ "prompt": "timeout" }),
+            })
+            .func(Arc::new(move |_| {
+                called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(json!({ "should_not_run": true })) })
+            }))
+            .build(),
+    )
+    .await
+    .expect_err("a fail-closed final-input timeout should abort the request");
+    assert!(
+        timed_out
+            .to_string()
+            .contains("Request blocked because the required input policy could not be evaluated"),
+        "{timed_out}"
+    );
+    assert!(!timed_out.to_string().contains("timed out"), "{timed_out}");
+    assert!(!provider_called.load(Ordering::SeqCst));
     loaded.clear();
 }
 

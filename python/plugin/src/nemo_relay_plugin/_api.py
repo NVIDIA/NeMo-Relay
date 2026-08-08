@@ -25,6 +25,8 @@ Public data types:
     LlmOptimizationTokens: Explicit token evidence by category.
     LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
+    LlmFinalInputPolicyOutcome: Allow, transform, or reject a final LLM input.
+    PolicyFailureMode: Host behavior when the policy worker fails.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
     ScopeType: Semantic category for a Relay execution scope.
@@ -48,6 +50,7 @@ Public callback aliases used in registration annotations:
     LlmSanitizeResponseCallback: LLM response sanitizer callback.
     LlmConditionalCallback: LLM execution guardrail callback.
     LlmRequestCallback: LLM request intercept callback.
+    LlmFinalInputPolicyCallback: Terminal final-input policy callback.
     LlmExecutionCallback: Unary LLM execution intercept callback.
     LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
 
@@ -207,6 +210,7 @@ EVENT_SCHEMA = "nemo.relay.Event@1"
 LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
 ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@2"
 LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.LlmRequestInterceptOutcome@2"
+LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA = "nemo.relay.LlmFinalInputPolicyOutcome@1"
 TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.ToolExecutionInterceptOutcome@1"
 PLUGIN_DIAGNOSTICS_SCHEMA = "nemo.relay.PluginDiagnostics@1"
 _OBJECT_SCHEMAS = frozenset(
@@ -215,6 +219,7 @@ _OBJECT_SCHEMAS = frozenset(
         LLM_REQUEST_SCHEMA,
         ANNOTATED_LLM_REQUEST_SCHEMA,
         LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+        LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA,
         TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     }
 )
@@ -651,6 +656,101 @@ class LlmRequestInterceptOutcome:
         }
 
 
+class PolicyFailureMode(str, Enum):
+    """Choose how Relay handles an unavailable final-input policy worker."""
+
+    FAIL_CLOSED = "fail_closed"
+    FAIL_OPEN = "fail_open"
+
+
+@dataclass(slots=True)
+class LlmFinalInputPolicyOutcome:
+    """Canonical decision returned by a final-input policy callback."""
+
+    decision: str
+    request: LlmRequest | None = None
+    annotated_request: AnnotatedLlmRequest | None = None
+    reason_code: str | None = None
+    safe_message: str | None = None
+    evidence: Json | None = None
+
+    @classmethod
+    def allow(cls, *, evidence: Json | None = None) -> LlmFinalInputPolicyOutcome:
+        """Allow the current request unchanged."""
+        return cls(decision="allow", evidence=evidence)
+
+    @classmethod
+    def transform(
+        cls,
+        request: LlmRequest,
+        annotated_request: AnnotatedLlmRequest | None = None,
+        *,
+        evidence: Json | None = None,
+    ) -> LlmFinalInputPolicyOutcome:
+        """Continue with a transformed request."""
+        return cls(
+            decision="transform",
+            request=request,
+            annotated_request=annotated_request,
+            evidence=evidence,
+        )
+
+    @classmethod
+    def reject(
+        cls,
+        reason_code: str,
+        safe_message: str,
+        *,
+        evidence: Json | None = None,
+    ) -> LlmFinalInputPolicyOutcome:
+        """Reject the request with caller-safe details."""
+        return cls(
+            decision="reject",
+            reason_code=reason_code,
+            safe_message=safe_message,
+            evidence=evidence,
+        )
+
+    def to_json(self) -> dict[str, Json]:
+        """Validate and convert this outcome to its tagged JSON payload."""
+        if self.decision == "allow":
+            if any(
+                value is not None
+                for value in (self.request, self.annotated_request, self.reason_code, self.safe_message)
+            ):
+                raise WorkerSdkError("allow outcome cannot include transform or rejection fields")
+            value: dict[str, Json] = {"decision": "allow"}
+        elif self.decision == "transform":
+            if not isinstance(self.request, dict):
+                raise WorkerSdkError("transform outcome request must be a JSON object")
+            if self.annotated_request is not None and not isinstance(self.annotated_request, dict):
+                raise WorkerSdkError("transform outcome annotated_request must be a JSON object or None")
+            if self.reason_code is not None or self.safe_message is not None:
+                raise WorkerSdkError("transform outcome cannot include rejection fields")
+            value = {
+                "decision": "transform",
+                "request": self.request,
+                "annotated_request": self.annotated_request,
+            }
+        elif self.decision == "reject":
+            if not isinstance(self.reason_code, str) or not self.reason_code.strip():
+                raise WorkerSdkError("reject outcome reason_code must be a non-empty string")
+            if not isinstance(self.safe_message, str) or not self.safe_message.strip():
+                raise WorkerSdkError("reject outcome safe_message must be a non-empty string")
+            if self.request is not None or self.annotated_request is not None:
+                raise WorkerSdkError("reject outcome cannot include transform fields")
+            value = {
+                "decision": "reject",
+                "reason_code": self.reason_code,
+                "safe_message": self.safe_message,
+            }
+        else:
+            raise WorkerSdkError("final-input policy decision must be allow, transform, or reject")
+        if self.evidence is not None:
+            value["evidence"] = self.evidence
+        return value
+
+
 @dataclass(slots=True)
 class ToolExecutionInterceptOutcome:
     """Canonical result returned by a Python worker tool execution intercept."""
@@ -840,6 +940,10 @@ LlmRequestCallback: TypeAlias = Callable[
     [str, LlmRequest, AnnotatedLlmRequest | None],
     LlmRequestInterceptOutcome | Awaitable[LlmRequestInterceptOutcome],
 ]
+LlmFinalInputPolicyCallback: TypeAlias = Callable[
+    [str, LlmRequest, AnnotatedLlmRequest | None],
+    LlmFinalInputPolicyOutcome | Awaitable[LlmFinalInputPolicyOutcome],
+]
 LlmExecutionCallback: TypeAlias = Callable[[str, LlmRequest, "LlmNext"], Json | Awaitable[Json]]
 LlmStreamExecutionCallback: TypeAlias = Callable[
     [str, LlmRequest, "LlmStreamNext"],
@@ -863,6 +967,7 @@ class _Handlers:
     llm_sanitize_responses: dict[str, LlmSanitizeResponseCallback]
     llm_conditionals: dict[str, LlmConditionalCallback]
     llm_requests: dict[str, LlmRequestCallback]
+    llm_final_input_policies: dict[str, LlmFinalInputPolicyCallback]
     llm_executions: dict[str, LlmExecutionCallback]
     llm_stream_executions: dict[str, LlmStreamExecutionCallback]
 
@@ -883,6 +988,7 @@ class _Handlers:
             llm_sanitize_responses={},
             llm_conditionals={},
             llm_requests={},
+            llm_final_input_policies={},
             llm_executions={},
             llm_stream_executions={},
         )
@@ -917,6 +1023,7 @@ class PluginContext:
             pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
             pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
             pb.LLM_REQUEST_INTERCEPT,
+            pb.LLM_FINAL_INPUT_POLICY,
             pb.LLM_EXECUTION_INTERCEPT,
         }
     )
@@ -1213,6 +1320,45 @@ class PluginContext:
         self._push_registration(name, pb.LLM_REQUEST_INTERCEPT, priority, break_chain)
         self._handlers.llm_requests[name] = callback
 
+    def register_llm_final_input_policy(
+        self,
+        name: str,
+        callback: LlmFinalInputPolicyCallback,
+        *,
+        priority: int = 0,
+        timeout_ms: int = 30_000,
+        failure_mode: PolicyFailureMode = PolicyFailureMode.FAIL_CLOSED,
+    ) -> None:
+        """Register a terminal async policy over the fully intercepted LLM input.
+
+        After all request intercepts and before cache, routing, or provider
+        execution, the callback receives ``(name, request,
+        annotated_request)``. ``name`` is Relay's logical LLM-call name.
+        Return :class:`LlmFinalInputPolicyOutcome` to allow, transform, or
+        reject the request. Relay cancels the worker invocation when
+        ``timeout_ms`` elapses. ``failure_mode`` applies only to worker failures
+        and timeouts; an explicit reject outcome is always terminal. Fail closed
+        returns a caller-safe terminal rejection after logging the underlying
+        error, while fail open continues with redacted bypass evidence.
+        """
+        if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or timeout_ms <= 0:
+            raise WorkerSdkError("final-input policy timeout_ms must be a positive integer")
+        if not isinstance(failure_mode, PolicyFailureMode):
+            raise WorkerSdkError("final-input policy failure_mode must be a PolicyFailureMode")
+        proto_failure_mode = {
+            PolicyFailureMode.FAIL_CLOSED: pb.FAIL_CLOSED,
+            PolicyFailureMode.FAIL_OPEN: pb.FAIL_OPEN,
+        }[failure_mode]
+        self._push_registration(
+            name,
+            pb.LLM_FINAL_INPUT_POLICY,
+            priority,
+            False,
+            timeout_ms=timeout_ms,
+            failure_mode=proto_failure_mode,
+        )
+        self._handlers.llm_final_input_policies[name] = callback
+
     def register_llm_execution_intercept(
         self,
         name: str,
@@ -1260,20 +1406,32 @@ class PluginContext:
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
+    def _push_registration(
+        self,
+        name: str,
+        surface: int,
+        priority: int,
+        break_chain: bool,
+        *,
+        timeout_ms: int | None = None,
+        failure_mode: int | None = None,
+    ) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
         ):
             raise WorkerSdkError(f"handler {name!r} is already registered for surface {surface}")
-        self._handlers.registrations.append(
-            pb.Registration(
-                local_name=name,
-                surface=surface,
-                priority=priority,
-                break_chain=break_chain,
-            )
+        registration = pb.Registration(
+            local_name=name,
+            surface=surface,
+            priority=priority,
+            break_chain=break_chain,
         )
+        if timeout_ms is not None:
+            registration.timeout_ms = timeout_ms
+        if failure_mode is not None:
+            registration.failure_mode = failure_mode
+        self._handlers.registrations.append(registration)
 
 
 class PluginRuntime:
@@ -2118,6 +2276,35 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     ),
                 )
             )
+        if request.surface == pb.LLM_FINAL_INPUT_POLICY:
+            payload = request.llm
+            llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+            annotated = (
+                _decode_required_envelope(
+                    payload.annotated_request,
+                    "annotated llm request",
+                    ANNOTATED_LLM_REQUEST_SCHEMA,
+                )
+                if payload.HasField("annotated_request")
+                else None
+            )
+            result = await _maybe_await(
+                self._handler(self._handlers.llm_final_input_policies, request.registration_name)(
+                    payload.model_name,
+                    llm_request,
+                    annotated,
+                )
+            )
+            if not isinstance(result, LlmFinalInputPolicyOutcome):
+                raise WorkerSdkError("LLM final-input policy must return LlmFinalInputPolicyOutcome")
+            return pb.InvokeResponse(
+                llm_final_input_policy=pb.LlmFinalInputPolicyResult(
+                    outcome=_json_envelope(
+                        LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA,
+                        result.to_json(),
+                    ),
+                )
+            )
         if request.surface == pb.LLM_EXECUTION_INTERCEPT:
             payload = request.llm
             result = await _maybe_await(
@@ -2206,6 +2393,7 @@ def _all_surfaces() -> list[int]:
         pb.LLM_REQUEST_INTERCEPT,
         pb.LLM_EXECUTION_INTERCEPT,
         pb.LLM_STREAM_EXECUTION_INTERCEPT,
+        pb.LLM_FINAL_INPUT_POLICY,
     ]
 
 

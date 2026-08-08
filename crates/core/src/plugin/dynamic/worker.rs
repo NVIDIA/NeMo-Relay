@@ -26,9 +26,9 @@ use nemo_relay_worker_proto::v1::{
     LlmCodecKind, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
-    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
-    ToolNextRequest, ValidateRequest, WorkerError,
+    PolicyFailureMode, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
+    RegisterResponse, Registration, RegistrationSurface, ScopeContext, ShutdownRequest,
+    StreamChunk, ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use semver::{Version, VersionReq};
@@ -59,7 +59,10 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tower::service_fn;
 
 use crate::api::event::{Event, EventSanitizeFields};
-use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
+use crate::api::llm::{
+    LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA, LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+    LlmFinalInputPolicyOutcome, LlmRequest,
+};
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
@@ -94,6 +97,9 @@ const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_RETRY: Duration = Duration::from_millis(25);
 const MANAGED_ENVIRONMENTS_DIR: &str = ".dynamic-plugin-environments";
+const WORKER_POLICY_UNAVAILABLE_REASON: &str = "worker_policy_unavailable";
+const WORKER_POLICY_UNAVAILABLE_MESSAGE: &str =
+    "Request blocked because the required input policy could not be evaluated.";
 const PYTHON_WORKER_BOOTSTRAP: &str = r#"
 import asyncio
 import importlib
@@ -624,8 +630,12 @@ fn load_one_worker_plugin(
         register.registrations
     };
     if registrations.iter().any(|registration| {
-        RegistrationSurface::try_from(registration.surface)
-            .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
+        RegistrationSurface::try_from(registration.surface).is_ok_and(|surface| {
+            matches!(
+                surface,
+                RegistrationSurface::LlmRequestIntercept | RegistrationSurface::LlmFinalInputPolicy
+            )
+        })
     }) {
         validate_annotated_request_consumer_compatibility(&relay_compat, &spec.plugin_id)?;
     }
@@ -1091,7 +1101,8 @@ impl WorkerPluginInstance {
                 | RegistrationSurface::LlmConditionalExecutionGuardrail
                 | RegistrationSurface::LlmRequestIntercept
                 | RegistrationSurface::LlmExecutionIntercept
-                | RegistrationSurface::LlmStreamExecutionIntercept => {
+                | RegistrationSurface::LlmStreamExecutionIntercept
+                | RegistrationSurface::LlmFinalInputPolicy => {
                     self.install_llm_registration(ctx, registration, surface)?
                 }
                 RegistrationSurface::Unspecified => {
@@ -1314,6 +1325,75 @@ impl WorkerPluginInstance {
                     })
                 }),
             ),
+            RegistrationSurface::LlmFinalInputPolicy => {
+                let timeout = Duration::from_millis(
+                    registration
+                        .timeout_ms
+                        .expect("validated final-input policy registration has a timeout"),
+                );
+                let failure_mode = PolicyFailureMode::try_from(registration.failure_mode)
+                    .expect("validated final-input policy registration has a failure mode");
+                ctx.register_llm_final_input_policy(
+                    name,
+                    priority,
+                    Arc::new(move |model_name, request, annotated| {
+                        let instance = instance.clone();
+                        let callback_name = callback_name.clone();
+                        Box::pin(async move {
+                            let result = instance
+                                .invoke_llm_final_input_policy(
+                                    &callback_name,
+                                    &model_name,
+                                    request,
+                                    annotated,
+                                    timeout,
+                                )
+                                .await;
+                            match result {
+                                Ok(outcome) => Ok(outcome),
+                                Err(error) if failure_mode == PolicyFailureMode::FailOpen => {
+                                    log::warn!(
+                                        target: "nemo_relay.worker",
+                                        event = "worker_policy_failed_open",
+                                        plugin_id = instance.plugin_kind.as_str(),
+                                        callback = callback_name.as_str(),
+                                        surface = RegistrationSurface::LlmFinalInputPolicy.as_str_name();
+                                        "Worker final-input policy failed open: {error}"
+                                    );
+                                    Ok(LlmFinalInputPolicyOutcome::allow_with_evidence(
+                                        serde_json::json!({
+                                            "policy_availability": {
+                                                "status": "bypassed",
+                                                "reason": "worker_callback_failed"
+                                            }
+                                        }),
+                                    ))
+                                }
+                                Err(error) => {
+                                    log::warn!(
+                                        target: "nemo_relay.worker",
+                                        event = "worker_policy_failed_closed",
+                                        plugin_id = instance.plugin_kind.as_str(),
+                                        callback = callback_name.as_str(),
+                                        surface = RegistrationSurface::LlmFinalInputPolicy.as_str_name();
+                                        "Worker final-input policy failed closed: {error}"
+                                    );
+                                    Ok(LlmFinalInputPolicyOutcome::reject(
+                                        WORKER_POLICY_UNAVAILABLE_REASON,
+                                        WORKER_POLICY_UNAVAILABLE_MESSAGE,
+                                    )
+                                    .with_evidence(serde_json::json!({
+                                        "policy_availability": {
+                                            "status": "unavailable",
+                                            "reason": "worker_callback_failed"
+                                        }
+                                    })))
+                                }
+                            }
+                        })
+                    }),
+                )
+            }
             RegistrationSurface::LlmExecutionIntercept => ctx.register_llm_execution_intercept(
                 name,
                 priority,
@@ -1742,6 +1822,48 @@ impl WorkerPluginCallback {
             Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
             _ => Err(FlowError::Internal(
                 "worker LLM request intercept returned unexpected result".into(),
+            )),
+        }
+    }
+
+    async fn invoke_llm_final_input_policy(
+        &self,
+        registration_name: &str,
+        model_name: &str,
+        request: LlmRequest,
+        annotated: Option<AnnotatedLlmRequest>,
+        timeout: Duration,
+    ) -> FlowResult<LlmFinalInputPolicyOutcome> {
+        let invoke = self.base_request(
+            registration_name,
+            RegistrationSurface::LlmFinalInputPolicy,
+            None,
+            Some(invoke_request_payload_llm(
+                model_name,
+                Some(request),
+                annotated,
+                None,
+            )),
+        );
+        let response = self.invoke_async_with_timeout(invoke, timeout).await?;
+        match response.result {
+            Some(invoke_response_result::Result::LlmFinalInputPolicy(result)) => {
+                let outcome = required_envelope(result.outcome, "LLM final-input policy outcome")?;
+                if outcome.schema != LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA {
+                    return Err(FlowError::Internal(format!(
+                        "worker returned unsupported LLM final-input policy outcome schema: {}",
+                        outcome.schema
+                    )));
+                }
+                decode_json_envelope(&outcome).map_err(|err| {
+                    FlowError::Internal(format!(
+                        "worker returned invalid LLM final-input policy outcome: {err}"
+                    ))
+                })
+            }
+            Some(invoke_response_result::Result::Error(error)) => Err(worker_error_to_flow(error)),
+            _ => Err(FlowError::Internal(
+                "worker LLM final-input policy returned unexpected result".into(),
             )),
         }
     }
@@ -3163,6 +3285,39 @@ fn validate_registration_plan(
         if surface == RegistrationSurface::Unspecified {
             return Err(PluginError::RegistrationFailed(format!(
                 "worker plugin '{plugin_id}' returned unspecified registration surface"
+            )));
+        }
+        if surface == RegistrationSurface::LlmFinalInputPolicy {
+            if registration
+                .timeout_ms
+                .is_none_or(|timeout_ms| timeout_ms == 0)
+            {
+                return Err(PluginError::RegistrationFailed(format!(
+                    "worker plugin '{plugin_id}' final-input policy '{}' must declare a non-zero timeout_ms",
+                    registration.local_name
+                )));
+            }
+            if !matches!(
+                PolicyFailureMode::try_from(registration.failure_mode),
+                Ok(PolicyFailureMode::FailClosed | PolicyFailureMode::FailOpen)
+            ) {
+                return Err(PluginError::RegistrationFailed(format!(
+                    "worker plugin '{plugin_id}' final-input policy '{}' must declare fail-closed or fail-open behavior",
+                    registration.local_name
+                )));
+            }
+            if registration.break_chain {
+                return Err(PluginError::RegistrationFailed(format!(
+                    "worker plugin '{plugin_id}' final-input policy '{}' cannot set break_chain",
+                    registration.local_name
+                )));
+            }
+        } else if registration.timeout_ms.is_some()
+            || registration.failure_mode != PolicyFailureMode::Unspecified as i32
+        {
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{plugin_id}' registration '{}' may only set timeout_ms and failure_mode for an LLM final-input policy",
+                registration.local_name
             )));
         }
     }

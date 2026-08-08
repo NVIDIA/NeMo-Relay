@@ -29,13 +29,16 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
-pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+pub use nemo_relay_types::api::llm::{
+    LlmFinalInputPolicyOutcome, LlmRequest, LlmRequestInterceptOutcome,
+};
 pub use nemo_relay_types::api::scope::ScopeType;
 pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
 pub use nemo_relay_types::codec::optimization::{
@@ -53,8 +56,9 @@ use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
     EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
     HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
-    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
-    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
+    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmFinalInputPolicyResult,
+    LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest,
+    PolicyFailureMode as ProtoPolicyFailureMode, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
     ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
     ValidateResponse, WorkerAck, WorkerError,
@@ -80,6 +84,24 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 
 /// Boxed JSON stream returned by streaming worker callbacks.
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
+
+/// Host behavior when an out-of-process policy callback cannot return a decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PolicyFailureMode {
+    /// Abort the Relay request when the policy worker fails or times out.
+    FailClosed,
+    /// Continue the Relay request with redacted bypass evidence.
+    FailOpen,
+}
+
+impl PolicyFailureMode {
+    fn as_proto(self) -> ProtoPolicyFailureMode {
+        match self {
+            Self::FailClosed => ProtoPolicyFailureMode::FailClosed,
+            Self::FailOpen => ProtoPolicyFailureMode::FailOpen,
+        }
+    }
+}
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
@@ -273,6 +295,15 @@ type LlmRequestFn = Arc<
         + Send
         + Sync,
 >;
+type LlmFinalInputPolicyFn = Arc<
+    dyn Fn(
+            String,
+            LlmRequest,
+            Option<AnnotatedLlmRequest>,
+        ) -> BoxFutureResult<LlmFinalInputPolicyOutcome>
+        + Send
+        + Sync,
+>;
 type LlmExecutionFn = Arc<dyn Fn(&str, LlmRequest, LlmNext) -> BoxFutureResult<Json> + Send + Sync>;
 type LlmStreamExecutionFn =
     Arc<dyn Fn(&str, LlmRequest, LlmStreamNext) -> BoxFutureResult<JsonStream> + Send + Sync>;
@@ -293,6 +324,7 @@ struct WorkerHandlers {
     llm_sanitize_responses: HashMap<String, LlmSanitizeResponseFn>,
     llm_conditionals: HashMap<String, LlmConditionalFn>,
     llm_requests: HashMap<String, LlmRequestFn>,
+    llm_final_input_policies: HashMap<String, LlmFinalInputPolicyFn>,
     llm_executions: HashMap<String, LlmExecutionFn>,
     llm_stream_executions: HashMap<String, LlmStreamExecutionFn>,
 }
@@ -626,6 +658,48 @@ impl PluginContext {
         );
     }
 
+    /// Registers a terminal async policy over the fully intercepted LLM input.
+    ///
+    /// Relay invokes this callback after request intercepts and before cache,
+    /// routing, or provider execution. The host enforces `timeout` and applies
+    /// `failure_mode` only to operational worker failures; an explicit reject
+    /// outcome remains terminal in either mode. Fail closed converts an
+    /// operational failure into a caller-safe terminal rejection after logging
+    /// the underlying error; fail open continues with redacted bypass evidence.
+    pub fn register_llm_final_input_policy<F, Fut>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        timeout: Duration,
+        failure_mode: PolicyFailureMode,
+        callback: F,
+    ) where
+        F: Fn(String, LlmRequest, Option<AnnotatedLlmRequest>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<LlmFinalInputPolicyOutcome>> + Send + 'static,
+    {
+        assert!(
+            !timeout.is_zero(),
+            "final-input policy timeout must be non-zero"
+        );
+        let timeout_ms = u64::try_from(timeout.as_millis())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        self.handlers.registrations.push(Registration {
+            local_name: name.into(),
+            surface: RegistrationSurface::LlmFinalInputPolicy as i32,
+            priority,
+            break_chain: false,
+            timeout_ms: Some(timeout_ms),
+            failure_mode: failure_mode.as_proto() as i32,
+        });
+        self.handlers.llm_final_input_policies.insert(
+            name.into(),
+            Arc::new(move |model_name, request, annotated| {
+                Box::pin(callback(model_name, request, annotated))
+            }),
+        );
+    }
+
     /// Registers an LLM execution intercept.
     ///
     /// [`LlmNext::call`] may run repeatedly or concurrently while the callback
@@ -691,6 +765,8 @@ impl PluginContext {
             surface: surface as i32,
             priority,
             break_chain,
+            timeout_ms: None,
+            failure_mode: ProtoPolicyFailureMode::Unspecified as i32,
         });
     }
 }
@@ -1699,7 +1775,8 @@ impl WorkerService {
             | RegistrationSurface::LlmSanitizeResponseGuardrail
             | RegistrationSurface::LlmConditionalExecutionGuardrail
             | RegistrationSurface::LlmRequestIntercept
-            | RegistrationSurface::LlmExecutionIntercept => {
+            | RegistrationSurface::LlmExecutionIntercept
+            | RegistrationSurface::LlmFinalInputPolicy => {
                 self.invoke_llm_response(request, &scope, surface).await
             }
             RegistrationSurface::LlmStreamExecutionIntercept | RegistrationSurface::Unspecified => {
@@ -1846,6 +1923,10 @@ impl WorkerService {
             RegistrationSurface::LlmRequestIntercept => {
                 self.invoke_llm_request_response(request, scope).await
             }
+            RegistrationSurface::LlmFinalInputPolicy => {
+                self.invoke_llm_final_input_policy_response(request, scope)
+                    .await
+            }
             RegistrationSurface::LlmExecutionIntercept => {
                 self.invoke_llm_execution_response(request, scope).await
             }
@@ -1922,6 +2003,31 @@ impl WorkerService {
         })
         .await?;
         llm_request_response(outcome)
+    }
+
+    async fn invoke_llm_final_input_policy_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = llm_payload(request.payload)?;
+        let request_value = required_json::<LlmRequest>(payload.request, "llm request")?;
+        let annotated = payload
+            .annotated_request
+            .map(|value| {
+                decode_expected_json_envelope::<AnnotatedLlmRequest>(
+                    &value,
+                    "annotated llm request",
+                    ANNOTATED_LLM_REQUEST_SCHEMA,
+                )
+            })
+            .transpose()?;
+        let handler = self.llm_final_input_policy(&request.registration_name)?;
+        let outcome = with_thread_scope(scope, || {
+            handler(payload.model_name, request_value, annotated)
+        })
+        .await?;
+        llm_final_input_policy_response(outcome)
     }
 
     async fn invoke_llm_execution_response(
@@ -2081,6 +2187,20 @@ impl WorkerService {
             .cloned()
             .ok_or_else(|| {
                 WorkerSdkError::InvalidInput(format!("llm request '{name}' not registered"))
+            })
+    }
+
+    fn llm_final_input_policy(&self, name: &str) -> Result<LlmFinalInputPolicyFn> {
+        self.handlers
+            .lock()
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
+            .llm_final_input_policies
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!(
+                    "llm final-input policy '{name}' not registered"
+                ))
             })
     }
 
@@ -2272,6 +2392,21 @@ fn llm_request_response(outcome: LlmRequestInterceptOutcome) -> Result<InvokeRes
                 LlmRequestInterceptResult {
                     outcome: Some(json_envelope(
                         nemo_relay_types::api::llm::LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+                        &outcome,
+                    )?),
+                },
+            ),
+        ),
+    })
+}
+
+fn llm_final_input_policy_response(outcome: LlmFinalInputPolicyOutcome) -> Result<InvokeResponse> {
+    Ok(InvokeResponse {
+        result: Some(
+            nemo_relay_worker_proto::v1::invoke_response::Result::LlmFinalInputPolicy(
+                LlmFinalInputPolicyResult {
+                    outcome: Some(json_envelope(
+                        nemo_relay_types::api::llm::LLM_FINAL_INPUT_POLICY_OUTCOME_SCHEMA,
                         &outcome,
                     )?),
                 },
@@ -2534,6 +2669,7 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
         RegistrationSurface::LlmRequestIntercept,
         RegistrationSurface::LlmExecutionIntercept,
         RegistrationSurface::LlmStreamExecutionIntercept,
+        RegistrationSurface::LlmFinalInputPolicy,
         RegistrationSurface::MarkSanitizeGuardrail,
         RegistrationSurface::ScopeSanitizeStartGuardrail,
         RegistrationSurface::ScopeSanitizeEndGuardrail,
