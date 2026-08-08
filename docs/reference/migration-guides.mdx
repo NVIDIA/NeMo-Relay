@@ -13,6 +13,12 @@ intervening release in sequence.
 
 ## Upgrade to NeMo Relay 0.8
 
+### Update Exhaustive Cache Configuration Literals
+
+Rust code that constructs `ResponseCacheConfig` with an exhaustive struct
+literal must add `tools: None`. Prefer `..ResponseCacheConfig::default()` when
+the literal should remain compatible with new optional cache surfaces.
+
 ### Move Hermes Agent to Its Native Relay Integration
 
 NeMo Relay 0.8 removes Hermes Agent from the Relay CLI. The `nemo-relay hermes`
@@ -44,8 +50,8 @@ Move settings that should apply to your account into these files:
   `XDG_CONFIG_HOME` is not set
 
 Use `/etc/nemo-relay/config.toml` and `/etc/nemo-relay/plugins.toml` on Unix,
-or `%ProgramData%\nemo-relay\config.toml` and
-`%ProgramData%\nemo-relay\plugins.toml` on Windows, for system policy. System
+or `%ProgramData%\\nemo-relay\\config.toml` and
+`%ProgramData%\\nemo-relay\\plugins.toml` on Windows, for system policy. System
 configuration has higher precedence than the selected user or explicit
 configuration.
 
