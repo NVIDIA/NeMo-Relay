@@ -1,0 +1,78 @@
+---
+title: "Build Plugins"
+description: "Build code-driven, native dynamic, and gRPC worker plugins for NeMo Relay."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this section when you want to create and package reusable NeMo Relay
+behavior as a plugin.
+
+Plugins are the configuration-driven packaging layer for shared runtime
+behavior. A plugin can validate component-local config, register middleware and
+subscribers through a component-scoped context, and rely on the plugin system to
+report diagnostics and roll back partial setup when activation fails.
+
+Plugins prevent repeated registration code for policies, request transforms,
+exporters, and related runtime components. They give shared behavior a stable
+kind name, a structured config document, and a clear activation lifecycle.
+
+## When to Use This Guide
+
+Use this guide when you need to package reusable NeMo Relay behavior.
+
+- Ship policy bundles across applications
+- Package framework-agnostic request transforms
+- Validate operator-supplied config before runtime behavior changes
+- Package a manifest-backed native library or worker for discovery by the CLI
+
+Keep behavior scope-local when it applies to only one request or tenant. Use a
+process-level plugin only for reusable behavior.
+
+## Plugin Types
+
+Choose the group that matches the process boundary and language of the plugin.
+
+### Language Binding Plugins (Rust, Python, Node.js)
+
+Application code registers these in-process plugins directly. Start with
+[Language Binding Plugins](/build-plugins/language-binding/about) for the
+common contract and binding-specific registration examples.
+
+### Native Dynamic Plugins (Rust)
+
+These plugins run in-process from a separately packaged Rust shared library.
+Start with [Native Dynamic Plugins (Rust)](/build-plugins/dynamic-plugins/native-dynamic/about).
+
+### gRPC Worker Plugins (Rust)
+
+These plugins run out of process as a Relay-managed Rust worker. Use [gRPC
+Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about).
+
+### gRPC Worker Plugins (Python)
+
+These plugins run out of process as a Relay-managed Python worker. Use [gRPC
+Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about).
+
+## Next Steps
+
+- Build a language binding plugin in this order:
+  1. [Validate Plugin Configuration](/build-plugins/language-binding/validate-configuration)
+  2. [Register Plugin Behavior](/build-plugins/language-binding/register-behavior)
+  3. [Design Plugin Configuration](/build-plugins/language-binding/advanced-configuration)
+  4. [Code Examples](/build-plugins/language-binding/code-examples)
+- Build a shared-library example with [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example).
+- Compare manifest-backed packages in [Discoverable Plugins](/build-plugins/dynamic-plugins/about).
+- Choose a worker runtime in [gRPC Worker Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about)
+  and implement the boundary with [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol).
+- Configure a built-in or packaged plugin in [Configure Plugins](/configure-plugins/about).
+
+Start by deciding which runtime surfaces the plugin owns: middleware,
+subscribers, or a combination of related runtime behavior. Define the smallest
+JSON-compatible config that can drive that behavior, validate it before
+registration, and keep external objects or callables out of the config document.
+
+Use plugins for reusable process-level behavior. Keep request-specific behavior
+scope-local so Relay removes it when the owning scope closes.
