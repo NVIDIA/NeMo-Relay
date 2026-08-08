@@ -1651,3 +1651,19 @@ fn responses_helpers_cover_invalid_and_provider_edge_values() {
 
     assert!(OpenAIResponsesStreamingCodec::default().finalizer()().is_object());
 }
+
+#[test]
+fn openai_responses_streaming_codec_ignores_incomplete_lifecycle_frames() {
+    // Truncated Responses streams can contain envelope events without their
+    // optional payload. Treat those frames as no-ops so cache aggregation stays
+    // fail-open and never creates a synthetic response or output item.
+    let codec = OpenAIResponsesStreamingCodec::default();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({"type": "response.created"})).unwrap();
+    collector(json!({"type": "response.output_item.done", "item": {"type": "message"}})).unwrap();
+    collector(json!({"type": "response.output_item.done", "output_index": 0})).unwrap();
+
+    assert_eq!(finalizer(), json!({}));
+}

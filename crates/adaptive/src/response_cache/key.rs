@@ -14,6 +14,8 @@
 //! skip-list drops volatile/identity fields, tool-call IDs are normalized, and
 //! only allowlisted headers plus Relay-owned routing partitions fold in.
 
+use std::collections::BTreeSet;
+
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -74,7 +76,8 @@ pub fn build_cache_key(
         normalize_tool_call_ids(object);
     }
 
-    let headers = cache_key_headers(&request.headers, &config.header_allowlist);
+    let header_allowlist = normalized_header_allowlist(&config.header_allowlist);
+    let headers = cache_key_headers(&request.headers, &header_allowlist);
 
     let key_doc = json!({
         "v": CACHE_SCHEMA_VERSION,
@@ -85,6 +88,7 @@ pub fn build_cache_key(
         "openai_chat_token_cap": chat_token_cap_spelling,
         "body": body,
         "headers": headers,
+        "header_allowlist": header_allowlist,
     });
     if contains_unrepresentable_int(&key_doc) {
         return KeyOutcome::Bypass("unrepresentable_number");
@@ -208,6 +212,47 @@ impl std::io::Write for HashWriter<'_> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// Builds a tool-result key from its name, version, canonicalized arguments,
+/// and the effective cache policies.
+pub fn build_tool_cache_key(
+    namespace: &str,
+    tool_name: &str,
+    tool_version: Option<&str>,
+    args: &Json,
+    arg_skip: &[String],
+    cache_errors: bool,
+) -> KeyOutcome {
+    let arg_skip = normalized_arg_skip(arg_skip);
+    let mut args = args.clone();
+    if !arg_skip.is_empty()
+        && let Some(object) = args.as_object_mut()
+    {
+        for key in &arg_skip {
+            object.remove(key);
+        }
+    }
+
+    if contains_unrepresentable_int(&args) {
+        return KeyOutcome::Bypass("unrepresentable_number");
+    }
+
+    let key_doc = json!({
+        "v": CACHE_SCHEMA_VERSION,
+        "surface": "tool_result",
+        "ns": namespace,
+        "tool": tool_name,
+        "tool_version": tool_version,
+        "arg_skip": arg_skip,
+        "cache_errors": cache_errors,
+        "args": args,
+    });
+
+    match fingerprint(&key_doc) {
+        Some(key) => KeyOutcome::Key(key),
+        None => KeyOutcome::Bypass("canonicalization_failed"),
     }
 }
 
@@ -553,6 +598,26 @@ fn allowlisted_headers(headers: &Map<String, Json>, allowlist: &[String]) -> Map
         }
     }
     kept
+}
+
+/// Normalizes case-insensitive header policy names before keying them.
+fn normalized_header_allowlist(allowlist: &[String]) -> Vec<String> {
+    allowlist
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Normalizes the case-sensitive tool argument keys dropped before keying.
+fn normalized_arg_skip(arg_skip: &[String]) -> Vec<String> {
+    arg_skip
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Builds the key's header partition from configured headers plus the

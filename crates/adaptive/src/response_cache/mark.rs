@@ -17,6 +17,24 @@ use crate::response_cache::store::CacheEntry;
 /// Mark-event name emitted on every cache decision.
 pub const RESPONSE_CACHE_MARK: &str = "response_cache";
 
+/// Execution surface that made a response-cache decision.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CacheSurface {
+    /// An LLM response.
+    Llm,
+    /// A tool result.
+    Tool,
+}
+
+impl CacheSurface {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Llm => "llm",
+            Self::Tool => "tool",
+        }
+    }
+}
+
 /// Pulls saved token count and cost out of a stored entry (the aggregate
 /// response object — buffered and streaming both store this shape).
 ///
@@ -103,12 +121,14 @@ fn probed_savings(entry: &CacheEntry) -> (Option<u64>, Option<f64>) {
 pub(crate) struct CacheMark<'a> {
     status: &'a str,
     reason: Option<&'a str>,
+    surface: CacheSurface,
     backend: &'a str,
     key_hash: Option<&'a str>,
     age_ms: Option<u64>,
     ttl_ms: Option<u64>,
     saved_tokens: Option<u64>,
     saved_cost_usd: Option<f64>,
+    saved_invocations: Option<u64>,
 }
 
 impl<'a> CacheMark<'a> {
@@ -116,17 +136,25 @@ impl<'a> CacheMark<'a> {
         Self {
             status,
             reason: None,
+            surface: CacheSurface::Llm,
             backend,
             key_hash: None,
             age_ms: None,
             ttl_ms: None,
             saved_tokens: None,
             saved_cost_usd: None,
+            saved_invocations: None,
         }
     }
 
     pub(crate) fn reason(mut self, reason: &'a str) -> Self {
         self.reason = Some(reason);
+        self
+    }
+
+    /// Overrides the cache surface (defaults to [`CacheSurface::Llm`]).
+    pub(crate) fn surface(mut self, surface: CacheSurface) -> Self {
+        self.surface = surface;
         self
     }
 
@@ -150,6 +178,12 @@ impl<'a> CacheMark<'a> {
         self.saved_cost_usd = cost;
         self
     }
+
+    /// Records the number of tool invocations a hit avoided (tool surface).
+    pub(crate) fn saved_invocations(mut self, invocations: u64) -> Self {
+        self.saved_invocations = Some(invocations);
+        self
+    }
 }
 
 /// Emits the `response_cache` mark. Only the key fingerprint is ever recorded —
@@ -158,7 +192,7 @@ pub(crate) fn emit_cache_mark(mark: CacheMark<'_>) {
     let mut metadata = Map::new();
     metadata.insert(
         "nemo_relay.response_cache.surface".to_string(),
-        json!("llm"),
+        json!(mark.surface.as_str()),
     );
     metadata.insert(
         "nemo_relay.response_cache.backend".to_string(),
@@ -198,6 +232,12 @@ pub(crate) fn emit_cache_mark(mark: CacheMark<'_>) {
         metadata.insert(
             "nemo_relay.response_cache.saved_cost_usd".to_string(),
             json!(saved_cost_usd),
+        );
+    }
+    if let Some(saved_invocations) = mark.saved_invocations {
+        metadata.insert(
+            "nemo_relay.response_cache.saved_invocations".to_string(),
+            json!(saved_invocations),
         );
     }
 

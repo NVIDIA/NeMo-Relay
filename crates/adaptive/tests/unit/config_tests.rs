@@ -7,6 +7,8 @@ use super::*;
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
 use serde_json::json;
 
+use crate::response_cache::config::ToolCacheConfig;
+
 #[test]
 fn test_adaptive_config_defaults() {
     let config = AdaptiveConfig::default();
@@ -32,6 +34,22 @@ fn test_typed_section_helpers_default() {
 
     let response_cache = ResponseCacheConfig::default();
     assert!(!response_cache.cache_nondeterministic);
+
+    let tools = ToolCacheConfig::default();
+    assert!(!tools.enabled);
+    assert!(!tools.cache_errors);
+    assert_eq!(tools.priority, 150);
+}
+
+#[test]
+fn test_tool_cache_deserializes_explicit_error_caching_opt_in() {
+    let tools: ToolCacheConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "cache_errors": true,
+    }))
+    .unwrap();
+    assert!(tools.enabled);
+    assert!(tools.cache_errors);
 }
 
 #[test]
@@ -39,6 +57,36 @@ fn test_backend_spec_in_memory_helper_uses_empty_config() {
     let backend = BackendSpec::in_memory();
     assert_eq!(backend.kind, "in_memory");
     assert!(backend.config.is_empty());
+
+    let default_backend = BackendSpec::default();
+    assert_eq!(default_backend.kind, "in_memory");
+    assert!(default_backend.config.is_empty());
+}
+
+#[cfg(not(feature = "redis-backend"))]
+#[test]
+fn test_response_cache_redis_backend_requires_the_redis_feature() {
+    let mut response_cache = ResponseCacheConfig {
+        namespace: "cache-tests".to_string(),
+        ..ResponseCacheConfig::default()
+    };
+    response_cache.backend.kind = "redis".to_string();
+    response_cache
+        .backend
+        .config
+        .insert("url".to_string(), json!("redis://127.0.0.1/"));
+
+    let report = crate::runtime::features::AdaptiveRuntime::validate_config(&AdaptiveConfig {
+        response_cache: Some(response_cache),
+        ..AdaptiveConfig::default()
+    });
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.backend_unavailable")
+    );
 }
 
 #[cfg(feature = "redis-backend")]
@@ -154,5 +202,22 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
     assert_eq!(
         response_cache_backend.field("kind").unwrap().enum_values,
         &["in_memory", "redis"]
+    );
+
+    let tools = response_cache.field("tools").unwrap();
+    assert_eq!(tools.kind, EditorFieldKind::Section);
+    assert!(tools.optional);
+    let tools = tools.schema().unwrap();
+    assert_eq!(
+        tools.field("enabled").unwrap().kind,
+        EditorFieldKind::Boolean
+    );
+    assert_eq!(
+        tools.field("priority").unwrap().kind,
+        EditorFieldKind::Integer
+    );
+    assert_eq!(
+        tools.field("default").unwrap().kind,
+        EditorFieldKind::Section
     );
 }

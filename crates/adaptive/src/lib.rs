@@ -34,7 +34,7 @@ pub mod learner;
 pub mod plugin_component;
 #[cfg(feature = "redis-backend")]
 pub mod redis;
-/// Opt-in LLM response cache (exact-match).
+/// Opt-in exact-match LLM response and tool-result cache.
 pub mod response_cache;
 mod runtime;
 /// Storage backends and backend traits for adaptive state persistence.
@@ -58,6 +58,7 @@ pub use error::{AdaptiveError, Result};
 #[cfg(feature = "redis-backend")]
 pub use redis::RedisBackend;
 pub use response_cache::RESPONSE_CACHE_MARK;
+pub use response_cache::config::{ToolCacheConfig, ToolClass, ToolOverride};
 pub use runtime::features::AdaptiveRuntime;
 pub use storage::erased::AnyBackend;
 pub use storage::memory::InMemoryBackend;
