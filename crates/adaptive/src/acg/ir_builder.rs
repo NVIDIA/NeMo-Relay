@@ -35,7 +35,13 @@ use crate::acg::prompt_ir::{
 pub fn build_prompt_ir(request: &AnnotatedLlmRequest) -> Result<PromptIR> {
     let mut blocks: Vec<PromptBlock> = Vec::new();
     let mut sequence_index: u32 = 0;
-    let mut inserted_tool_blocks = false;
+    let mut inserted_scaffold_blocks = false;
+    let structured_output = request
+        .extra
+        .get("response_format")
+        .filter(|value| !value.is_null())
+        .map(canonicalize_value)
+        .transpose()?;
 
     if let Some(instructions) = &request.instructions {
         blocks.push(build_text_block(
@@ -48,16 +54,28 @@ pub fn build_prompt_ir(request: &AnnotatedLlmRequest) -> Result<PromptIR> {
     }
 
     for message in &request.messages {
-        if should_insert_tool_blocks_before_message(inserted_tool_blocks, request, message) {
+        if !inserted_scaffold_blocks
+            && !matches!(message, Message::System { .. } | Message::Developer { .. })
+        {
             append_tool_schema_blocks(&mut blocks, &mut sequence_index, request.tools.as_deref())?;
-            inserted_tool_blocks = true;
+            append_structured_output_block(
+                &mut blocks,
+                &mut sequence_index,
+                structured_output.as_deref(),
+            );
+            inserted_scaffold_blocks = true;
         }
 
         append_message_blocks(&mut blocks, &mut sequence_index, message)?;
     }
 
-    if !inserted_tool_blocks {
+    if !inserted_scaffold_blocks {
         append_tool_schema_blocks(&mut blocks, &mut sequence_index, request.tools.as_deref())?;
+        append_structured_output_block(
+            &mut blocks,
+            &mut sequence_index,
+            structured_output.as_deref(),
+        );
     }
 
     let tool_schema_hashes = match &request.tools {
@@ -70,20 +88,10 @@ pub fn build_prompt_ir(request: &AnnotatedLlmRequest) -> Result<PromptIR> {
         ir_id: Uuid::new_v4(),
         blocks,
         tool_schema_hashes,
-        structured_output_schema_id: None,
+        structured_output_schema_id: structured_output.as_deref().map(sha256_hex),
         source_request_hash,
         created_at: Utc::now(),
     })
-}
-
-fn should_insert_tool_blocks_before_message(
-    inserted_tool_blocks: bool,
-    request: &AnnotatedLlmRequest,
-    message: &Message,
-) -> bool {
-    !inserted_tool_blocks
-        && !matches!(message, Message::System { .. } | Message::Developer { .. })
-        && request.tools.is_some()
 }
 
 fn append_message_blocks(
@@ -321,6 +329,38 @@ fn append_tool_schema_blocks(
     }
 
     Ok(())
+}
+
+/// Append the canonicalized structured-output contract as a scaffold block.
+///
+/// The block sits with the tool schemas ahead of the first non-system message so
+/// an output contract that never changes stays inside the stable prefix.
+///
+/// # Parameters
+/// - `blocks`: Block list being built.
+/// - `seq`: Running sequence index shared by every block builder.
+/// - `response_format`: Canonicalized `response_format` value, if the request set one.
+fn append_structured_output_block(
+    blocks: &mut Vec<PromptBlock>,
+    seq: &mut u32,
+    response_format: Option<&str>,
+) {
+    let Some(content) = response_format else {
+        return;
+    };
+
+    let index = *seq;
+    *seq += 1;
+    blocks.push(PromptBlock {
+        span_id: generate_span_id(PromptRole::System, index, Some("structured-output")),
+        sequence_index: index,
+        role: PromptRole::System,
+        content: content.to_string(),
+        content_type: BlockContentType::StructuredOutput,
+        provenance: ProvenanceLabel::System,
+        sensitivity: SensitivityLabel::default(),
+        token_metadata: None,
+    });
 }
 
 fn build_tool_schema_block(seq: &mut u32, tool: &ToolDefinition) -> Result<PromptBlock> {

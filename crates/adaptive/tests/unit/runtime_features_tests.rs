@@ -87,6 +87,14 @@ fn layered_acg_request() -> LlmRequest {
 }
 
 fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResult {
+    let request = layered_acg_request();
+    let annotated_request = nemo_relay::codec::resolve::request_codec(
+        nemo_relay::codec::resolve::ProviderSurface::AnthropicMessages,
+    )
+    .decode(&request)
+    .expect("fixture request should decode");
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&annotated_request)
+        .expect("fixture request should build prompt ir");
     StabilityAnalysisResult {
         scores: vec![
             BlockStabilityScore {
@@ -112,6 +120,11 @@ fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResu
             },
         ],
         stable_prefix_length: 3,
+        stable_prefix_fingerprint: crate::acg::stability::profile_prefix_fingerprint(
+            &prompt_ir,
+            3,
+            &crate::acg_profile::derive_acg_learning_key("agent-acg", &annotated_request),
+        ),
         total_observations: observation_count,
     }
 }
