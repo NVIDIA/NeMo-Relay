@@ -7,7 +7,8 @@ import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from unittest import mock
 
 
 def load_attributions_module() -> ModuleType:
@@ -43,6 +44,30 @@ class StableRustLicenseTextTests(unittest.TestCase):
         normalized = self.module._stable_rust_license_text({}, license_text)
 
         self.assertEqual(normalized, license_text)
+
+
+class CargoJsonEncodingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = load_attributions_module()
+
+    def test_cargo_json_commands_decode_utf8_explicitly(self) -> None:
+        cases = (
+            (self.module._cargo_workspace_members, '{"workspace_members": []}'),
+            (self.module._cargo_metadata, '{"packages": []}'),
+            (self.module._cargo_about_json, '{"licenses": []}'),
+        )
+        for command, output in cases:
+            with self.subTest(command=command.__name__):
+                completed = SimpleNamespace(stdout=output)
+                with (
+                    mock.patch.object(self.module, "_cargo_fetch_locked"),
+                    mock.patch.object(self.module.subprocess, "run", return_value=completed) as run,
+                ):
+                    command()
+
+                self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+                self.assertNotIn("text", run.call_args.kwargs)
 
 
 if __name__ == "__main__":

@@ -82,7 +82,10 @@ def archive_entries(repository: Path, library: Path, attributions: Path, target:
         raise FileNotFoundError(f"plugin library does not exist: {library}")
 
     entries = {name: (repository / source).read_bytes() for name, source in PACKAGE_FILES.items()}
-    entries["ATTRIBUTIONS-Rust.md"] = attributions.read_bytes()
+    attribution_content = attributions.read_bytes()
+    if not attribution_content.strip():
+        raise ValueError("Rampart Rust attributions must not be empty")
+    entries["ATTRIBUTIONS-Rust.md"] = attribution_content
     digest = sha256(library)
     entries["relay-plugin.toml"] = render_manifest(
         repository / "plugins/pii-rampart/relay-plugin.toml", expected_library, digest
@@ -152,6 +155,8 @@ def safe_member_path(name: str) -> PurePosixPath:
     path = PurePosixPath(name)
     if path.is_absolute() or not path.parts:
         raise ValueError(f"unsafe archive member path: {name!r}")
+    if len(path.parts) < 2 or path.parts[0] != ARCHIVE_ROOT:
+        raise ValueError(f"archive member is outside {ARCHIVE_ROOT!r}: {name!r}")
     return path
 
 
@@ -164,7 +169,10 @@ def extract_archive(archive: Path, destination: Path) -> None:
             for member in source.infolist():
                 path = safe_member_path(member.filename)
                 if member.is_dir():
-                    continue
+                    raise ValueError(f"archive member is not a regular file: {member.filename!r}")
+                unix_mode = member.external_attr >> 16
+                if member.create_system == 3 and stat.S_IFMT(unix_mode) not in {0, stat.S_IFREG}:
+                    raise ValueError(f"archive member is not a regular file: {member.filename!r}")
                 if path in seen:
                     raise ValueError(f"duplicate archive member path: {member.filename!r}")
                 seen.add(path)
@@ -205,6 +213,8 @@ def verify_package(root: Path, target: str, load_library: bool) -> None:
     actual_files = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file()}
     if actual_files != expected_files:
         raise ValueError(f"unexpected package contents; expected {sorted(expected_files)}, got {sorted(actual_files)}")
+    if not (root / "ATTRIBUTIONS-Rust.md").read_bytes().strip():
+        raise ValueError("Rampart Rust attributions must not be empty")
 
     manifest = tomllib.loads((root / "relay-plugin.toml").read_text())
     json.loads((root / "config.schema.json").read_text())

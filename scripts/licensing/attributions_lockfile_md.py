@@ -256,7 +256,7 @@ def _cargo_workspace_members(manifest_path: Path | None = None) -> set[str]:
         ],
         cwd=ROOT,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         check=True,
     )
     metadata: dict[str, Any] = json.loads(proc.stdout)
@@ -290,7 +290,7 @@ def _cargo_metadata(manifest_path: Path | None = None) -> dict[str, Any]:
         ],
         cwd=ROOT,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         check=True,
     )
     return cast(dict[str, Any], json.loads(proc.stdout))
@@ -317,7 +317,7 @@ def _cargo_about_json(manifest_path: Path | None = None) -> dict[str, Any]:
         ],
         cwd=ROOT,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         check=True,
     )
     return cast(dict[str, Any], json.loads(proc.stdout))

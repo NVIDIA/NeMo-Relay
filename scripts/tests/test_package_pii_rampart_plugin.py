@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import stat
 import sys
 import tarfile
 import tempfile
@@ -94,6 +95,27 @@ class PackagePiiRampartPluginTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unsafe archive member"):
                     PACKAGE.extract_archive(archive, root / "output")
 
+    def test_rejects_archive_member_outside_package_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "unexpected-root.zip"
+            with zipfile.ZipFile(archive, "w") as output:
+                output.writestr("unexpected-root/file", b"bad")
+            with self.assertRaisesRegex(ValueError, "outside"):
+                PACKAGE.extract_archive(archive, root / "output")
+
+    def test_rejects_zip_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "unsafe.zip"
+            with zipfile.ZipFile(archive, "w") as output:
+                link = zipfile.ZipInfo(f"{PACKAGE.ARCHIVE_ROOT}/link")
+                link.create_system = 3
+                link.external_attr = (stat.S_IFLNK | 0o777) << 16
+                output.writestr(link, b"target")
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                PACKAGE.extract_archive(archive, root / "output")
+
     def test_rejects_non_regular_tar_member(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -133,6 +155,18 @@ class PackagePiiRampartPluginTests(unittest.TestCase):
                     attributions,
                     "x86_64-unknown-linux-gnu",
                 )
+
+    def test_rejects_empty_attributions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = fixture_repository(root)
+            target = "x86_64-unknown-linux-gnu"
+            library = root / PACKAGE.library_name(target)
+            library.write_bytes(b"native-plugin")
+            attributions = root / "ATTRIBUTIONS-Rust.md"
+            attributions.write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "must not be empty"):
+                PACKAGE.archive_entries(repository, library, attributions, target)
 
     def test_rejects_unsupported_target(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported target"):

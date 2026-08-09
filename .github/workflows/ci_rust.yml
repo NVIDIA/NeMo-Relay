@@ -373,7 +373,7 @@ jobs:
                 --target "$RAMPART_TARGET" \
                 --target-dir target/pii-rampart-musllinux
               NEMO_RELAY_TEST_RAMPART_LIBRARY="$PWD/target/pii-rampart-musllinux/$RAMPART_TARGET/release/libnemo_relay_pii_rampart_plugin.so" \
-                cargo test --locked \
+                cargo test --locked --release \
                   --manifest-path plugins/pii-rampart/Cargo.toml \
                   --target "$RAMPART_TARGET" \
                   --target-dir target/pii-rampart-musllinux \
@@ -406,7 +406,7 @@ jobs:
                 --target "${{ matrix.target }}" \
                 --target-dir target
               NEMO_RELAY_TEST_RAMPART_LIBRARY="$PWD/target/${{ matrix.target }}/release/libnemo_relay_pii_rampart_plugin.so" \
-                cargo test --locked \
+                cargo test --locked --release \
                   --manifest-path plugins/pii-rampart/Cargo.toml \
                   --target "${{ matrix.target }}" \
                   --target-dir target \
@@ -424,8 +424,9 @@ jobs:
             library="nemo_relay_pii_rampart_plugin.dll"
           fi
           NEMO_RELAY_TEST_RAMPART_LIBRARY="$PWD/target/${{ matrix.target }}/release/$library" \
-            cargo test --locked \
+            cargo test --locked --release \
               --manifest-path plugins/pii-rampart/Cargo.toml \
+              --target "${{ matrix.target }}" \
               --target-dir target \
               native_plugin_entrypoint_registers_with_relay_host \
               -- --ignored --exact
