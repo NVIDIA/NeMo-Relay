@@ -1,0 +1,77 @@
+{
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/NVIDIA/NeMo-Relay/plugins/nemo-guardrails/config.schema.json",
+  "title": "NeMo Guardrails 0.23 Worker Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "config_path": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path to a NeMo Guardrails configuration file or directory, resolved from the plugin manifest directory."
+    },
+    "config_yaml": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Inline NeMo Guardrails YAML configuration."
+    },
+    "colang_content": {
+      "type": "string",
+      "description": "Optional inline Colang content used with config_yaml."
+    },
+    "priority": {
+      "type": "integer",
+      "default": 0,
+      "description": "Final-input policy priority. Lower values run first."
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 30000,
+      "description": "Maximum duration of one Guardrails input check."
+    },
+    "failure_mode": {
+      "type": "string",
+      "enum": ["fail_closed", "fail_open"],
+      "default": "fail_closed",
+      "description": "Relay behavior for worker crashes, transport failures, and timeouts."
+    },
+    "max_concurrency": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 16,
+      "description": "Maximum number of concurrent Guardrails checks in this worker process."
+    },
+    "blocked_message": {
+      "type": "string",
+      "minLength": 1,
+      "default": "Request blocked by NeMo Guardrails input policy.",
+      "description": "Caller-safe message returned for blocked input."
+    }
+  },
+  "oneOf": [
+    {
+      "required": ["config_path"],
+      "not": {
+        "required": ["config_yaml"]
+      }
+    },
+    {
+      "required": ["config_yaml"],
+      "not": {
+        "required": ["config_path"]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["colang_content"]
+      },
+      "then": {
+        "required": ["config_yaml"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+manifest_version = 1
+
+[plugin]
+id = "nvidia.nemo_guardrails"
+kind = "worker"
+
+[compat]
+relay = ">=0.8,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+manifest_root = "."
+artifact = "nvidia_nemo_guardrails_worker/worker.py"
+
+[integrity]
+sha256 = "sha256:ae064e79bd1e10ab5e96e0730c2bd8cd16528ff594de85e5f763c07eccb4a947"
+
+[load]
+runtime = "python"
+entrypoint = "nvidia_nemo_guardrails_worker.worker:main"

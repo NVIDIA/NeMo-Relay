@@ -372,7 +372,10 @@ fn test_native_pymodule_entrypoint_registers_bindings_without_local_provider_ins
                 config: serde_json::from_value(json!({
                     "mode": "local",
                     "codec": "openai_chat",
-                    "config_path": "./rails"
+                    "config_path": "./rails",
+                    "local": {
+                        "python_module": "nemo_relay_test_missing_guardrails_provider"
+                    }
                 }))
                 .unwrap(),
             }],

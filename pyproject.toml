@@ -57,6 +57,7 @@ dev = [
 test = [
     # De Morgan form: exclude only when the platform is both Windows and ARM64.
     "grpcio>=1.81.1,<2; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
+    "nemoguardrails==0.23.0; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
     "nemo-relay-plugin; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
     "opentelemetry-proto>=1.39,<2",
     "pydantic>=2",

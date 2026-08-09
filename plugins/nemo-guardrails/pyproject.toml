@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-relay-nemo-guardrails-worker"
+version = "0.1.0"
+description = "First-party NeMo Guardrails dynamic worker for NeMo Relay"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = "Apache-2.0"
+authors = [
+  { name = "NVIDIA Corporation & Affiliates" },
+]
+dependencies = [
+  "nemo-relay-plugin>=0.8.0,<1.0.0",
+  "nemoguardrails==0.23.0",
+]
+
+[project.urls]
+Documentation = "https://docs.nvidia.com/nemo/relay"
+Repository = "https://github.com/NVIDIA/NeMo-Relay"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nvidia_nemo_guardrails_worker"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nemo_relay_plugin", "nvidia_nemo_guardrails_worker"]
