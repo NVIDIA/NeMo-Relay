@@ -863,14 +863,18 @@ unsafe extern "C" fn stream_trampoline(
     stream: *const NemoRelayNativeAsyncStream,
 ) -> u32 {
     let state = unsafe { &*user_data.cast::<StreamCallbackState>() };
-    let next = LlmStreamNext(Arc::new(NextInner {
-        host: state.host,
-        raw: next,
-    }));
     let output = OutputStream {
         host: state.host,
         raw: stream,
     };
+    if next.is_null() {
+        output.reject_once("native stream middleware requires a continuation");
+        return NemoRelayNativeAsyncCallbackState::Pending as u32;
+    }
+    let next = LlmStreamNext(Arc::new(NextInner {
+        host: state.host,
+        raw: next,
+    }));
     let invocation = read_json_value(&state.host.0.v3.v1, invocation_json, "stream invocation")
         .map_err(|status| format!("invalid native stream invocation: {status:?}"));
     let binding = ScopePollBinding::capture(state.host.0.v3.v1);

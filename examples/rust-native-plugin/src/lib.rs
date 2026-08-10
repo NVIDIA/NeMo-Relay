@@ -210,6 +210,8 @@ impl NativePlugin for ExampleNativePlugin {
                 let runtime = runtime.clone();
                 let tag = tag.clone();
                 async move {
+                    // Demonstration only: these operations show that Tokio timers and I/O
+                    // run on the SDK executor; production intercepts do not need them.
                     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                     let (mut writer, mut reader) = tokio::io::duplex(16);
                     writer

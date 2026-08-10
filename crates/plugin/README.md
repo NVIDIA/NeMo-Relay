@@ -57,7 +57,8 @@ the dynamic-library boundary on the stable C-compatible ABI.
 Add the SDK to a Rust dynamic-plugin project:
 
 ```bash
-cargo add nemo-relay-plugin serde_json tokio
+cargo add nemo-relay-plugin serde_json
+cargo add tokio@1 --features io-util,macros,rt,time
 ```
 
 Configure the library as a dynamic library:

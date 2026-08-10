@@ -1600,9 +1600,7 @@ impl<'a> ScopeStack<'a> {
     ///
     /// Prefer [`PluginRuntime::bind_scope_stack_thread`] for synchronous code.
     /// Async middleware may pair this with a captured binding across an await.
-    /// Capture the previous binding first and restore it after the future
-    /// completes; prefer [`PluginRuntime::bind_scope_stack_thread`] for
-    /// synchronous code.
+    /// Capture the previous binding first and restore it after the future completes.
     pub fn set_thread(&self) -> NemoRelayStatus {
         unsafe { (self.host.scope_stack_set_thread)(self.ptr) }
     }

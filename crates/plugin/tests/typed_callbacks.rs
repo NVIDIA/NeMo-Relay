@@ -3268,6 +3268,49 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
 }
 
 #[test]
+fn typed_async_stream_rejects_missing_continuation() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_llm_stream_execution_intercept(
+        "stream-null-next",
+        0,
+        |_name, _request, _next| async move {
+            panic!("stream callback must not run without a continuation")
+        },
+    )
+    .unwrap();
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    let output = MockAsyncOutput::new();
+    let invocation = json_host_string(
+        &host.v3.v1,
+        json!({ "name": "provider", "request": test_llm_request() }),
+    );
+    let state = unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            ptr::null(),
+            output.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(state),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    assert_eq!(
+        output.wait_terminal(),
+        vec![MockOutputEvent::Rejected(
+            "native stream middleware requires a continuation".into()
+        )]
+    );
+    output.wait_for_release();
+    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+}
+
+#[test]
 fn raw_registration_propagates_name_allocation_status() {
     let _guard = begin_test();
     let host = test_host();

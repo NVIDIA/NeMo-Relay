@@ -42,8 +42,12 @@ for callback and executor changes.
 
 ### Highlights
 
+The following updates expand native Rust plugin capabilities:
+
 - Typed native Rust middleware can await Tokio timers, I/O, codecs, unary
   continuations, and downstream LLM streams on an SDK-owned executor.
+- Native ABI v4 provides completion-scoped codec operations and pull-based LLM
+  stream continuations.
 
 ### Support Matrix and Compatibility Updates
 
