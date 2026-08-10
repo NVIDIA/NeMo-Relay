@@ -4,8 +4,9 @@
 """Tests for built-in codec Python classes and LlmResponseCodec protocol.
 
 Covers:
-- Built-in codec construction (OpenAIChatCodec, OpenAIResponsesCodec, AnthropicMessagesCodec)
-- Built-in codec decode/encode/decode_response methods
+- Built-in codec construction for OpenAIChatCodec, OpenAIResponsesCodec,
+  AnthropicMessagesCodec, and GeminiGenerateContentCodec
+- Built-in codec decode/encode/decode_response methods for all four providers
 - LlmResponseCodec protocol
 - response_codec parameter accepts object (not string)
 """
@@ -22,7 +23,7 @@ from nemo_relay import (
     llm,
     subscribers,
 )
-from nemo_relay.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+from nemo_relay.codecs import AnthropicMessagesCodec, GeminiGenerateContentCodec, OpenAIChatCodec, OpenAIResponsesCodec
 
 # ---------------------------------------------------------------------------
 # 1. Built-in codec construction
@@ -62,6 +63,18 @@ class TestBuiltinCodecConstruction:
     def test_anthropic_messages_codec_has_methods(self):
         """AnthropicMessagesCodec has decode, encode, decode_response methods."""
         codec = AnthropicMessagesCodec()
+        assert hasattr(codec, "decode")
+        assert hasattr(codec, "encode")
+        assert hasattr(codec, "decode_response")
+
+    def test_gemini_codec_constructable(self):
+        """GeminiGenerateContentCodec() is constructable."""
+        codec = GeminiGenerateContentCodec()
+        assert codec is not None
+
+    def test_gemini_codec_has_methods(self):
+        """GeminiGenerateContentCodec has decode, encode, decode_response methods."""
+        codec = GeminiGenerateContentCodec()
         assert hasattr(codec, "decode")
         assert hasattr(codec, "encode")
         assert hasattr(codec, "decode_response")
@@ -272,6 +285,119 @@ class TestBuiltinCodecDecodeResponse:
         assert annotated.model == "claude-3-sonnet-20240229"
         assert annotated.response_text() == "Hello!"
 
+    def test_gemini_codec_decode(self):
+        """GeminiGenerateContentCodec.decode() returns AnnotatedLLMRequest with messages and params."""
+        codec = GeminiGenerateContentCodec()
+        request = LLMRequest(
+            {},
+            {
+                "model": "gemini-2.0-flash",
+                "contents": [{"role": "user", "parts": [{"text": "Hi"}]}],
+                "generationConfig": {"temperature": 0.5, "maxOutputTokens": 256},
+                "systemInstruction": {"parts": [{"text": "Be concise."}]},
+            },
+        )
+        annotated = codec.decode(request)
+        assert isinstance(annotated, AnnotatedLLMRequest)
+        assert annotated.model == "gemini-2.0-flash"
+        # System message comes first, then the user message.
+        assert len(annotated.messages) == 2
+        assert annotated.messages[0]["role"] == "system"
+        assert annotated.messages[1]["role"] == "user"
+        assert annotated.params is not None
+
+    def test_gemini_codec_encode_round_trip(self):
+        """GeminiGenerateContentCodec.encode(decode(req), req) is idempotent when nothing changes."""
+        codec = GeminiGenerateContentCodec()
+        original = LLMRequest(
+            {},
+            {
+                "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+                "generationConfig": {"temperature": 0.7},
+                "safetySettings": [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}],
+            },
+        )
+        annotated = codec.decode(original)
+        re_encoded = codec.encode(annotated, original)
+        assert re_encoded.content == original.content, (
+            "encode(decode(req), req) must be idempotent when nothing changes"
+        )
+
+    def test_gemini_codec_decode_response_text(self):
+        """GeminiGenerateContentCodec.decode_response() extracts text and usage from a generateContent response."""
+        codec = GeminiGenerateContentCodec()
+        response = {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"text": "Hello from Gemini!"}]},
+                    "finishReason": "STOP",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 8,
+                "candidatesTokenCount": 4,
+                "totalTokenCount": 12,
+            },
+            "modelVersion": "gemini-2.0-flash",
+        }
+        annotated = codec.decode_response(response)
+        assert isinstance(annotated, AnnotatedLLMResponse)
+        assert annotated.response_text() == "Hello from Gemini!"
+        assert annotated.finish_reason == "complete"
+        assert annotated.model == "gemini-2.0-flash"
+        assert annotated.usage is not None
+        assert annotated.usage["prompt_tokens"] == 8
+
+    def test_gemini_codec_decode_response_safety_finish_reason(self):
+        """GeminiGenerateContentCodec maps SAFETY finish reason to 'content_filter', not 'unknown'."""
+        codec = GeminiGenerateContentCodec()
+        response = {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": []},
+                    "finishReason": "SAFETY",
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 5},
+        }
+        annotated = codec.decode_response(response)
+        assert annotated.finish_reason == "content_filter", (
+            "SAFETY finish reason must map to content_filter, not unknown"
+        )
+
+    def test_gemini_codec_decode_response_function_call(self):
+        """GeminiGenerateContentCodec.decode_response() extracts functionCall parts as tool_calls."""
+        codec = GeminiGenerateContentCodec()
+        response = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "get_weather",
+                                    "id": "call_abc",
+                                    "args": {"location": "NYC"},
+                                }
+                            }
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 10},
+        }
+        annotated = codec.decode_response(response)
+        assert annotated.has_tool_calls() is True
+        tool_calls = annotated.tool_calls
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["id"] == "call_abc"
+        assert tool_calls[0]["name"] == "get_weather"
+
 
 # ---------------------------------------------------------------------------
 # 4. LlmResponseCodec protocol
@@ -292,6 +418,7 @@ class TestLlmResponseCodecProtocol:
         assert isinstance(OpenAIChatCodec(), LlmResponseCodec)
         assert isinstance(OpenAIResponsesCodec(), LlmResponseCodec)
         assert isinstance(AnthropicMessagesCodec(), LlmResponseCodec)
+        assert isinstance(GeminiGenerateContentCodec(), LlmResponseCodec)
 
 
 # ---------------------------------------------------------------------------
@@ -564,14 +691,21 @@ class TestBuiltinCodecsTupleRemoved:
 class TestBuiltinCodecImports:
     def test_importable_from_codecs_module(self):
         """Built-in codecs are importable from nemo_relay.codecs."""
-        from nemo_relay.codecs import AnthropicMessagesCodec, OpenAIChatCodec, OpenAIResponsesCodec
+        from nemo_relay.codecs import (
+            AnthropicMessagesCodec,
+            GeminiGenerateContentCodec,
+            OpenAIChatCodec,
+            OpenAIResponsesCodec,
+        )
 
         assert OpenAIChatCodec is not None
         assert OpenAIResponsesCodec is not None
         assert AnthropicMessagesCodec is not None
+        assert GeminiGenerateContentCodec is not None
 
     def test_not_reexported_from_top_level(self):
         """Built-in codecs are not re-exported from nemo_relay."""
         assert not hasattr(nemo_relay, "OpenAIChatCodec")
         assert not hasattr(nemo_relay, "OpenAIResponsesCodec")
         assert not hasattr(nemo_relay, "AnthropicMessagesCodec")
+        assert not hasattr(nemo_relay, "GeminiGenerateContentCodec")

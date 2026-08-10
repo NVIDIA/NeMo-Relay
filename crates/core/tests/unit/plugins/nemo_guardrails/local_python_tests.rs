@@ -689,6 +689,10 @@ fn local_codec_and_rewrite_helpers_cover_all_provider_surfaces() {
             LocalGuardrailsCodec::AnthropicMessages,
             ProviderSurface::AnthropicMessages,
         ),
+        (
+            LocalGuardrailsCodec::GeminiGenerateContent,
+            ProviderSurface::GeminiGenerateContent,
+        ),
     ] {
         assert_eq!(codec.provider_surface(), surface);
         assert_eq!(
@@ -1074,6 +1078,14 @@ fn stream_text_extraction_handles_supported_codecs() {
         ),
         Some("hello".to_string())
     );
+    // Gemini: visible text parts reach the guardrail worker.
+    assert_eq!(
+        extract_stream_text(
+            LocalGuardrailsCodec::GeminiGenerateContent,
+            &json!({"candidates": [{"content": {"parts": [{"text": "visible"}]}, "index": 0}]})
+        ),
+        Some("visible".to_string())
+    );
     for (codec, chunk) in [
         (LocalGuardrailsCodec::OpenAIChat, Json::Null),
         (
@@ -1088,9 +1100,35 @@ fn stream_text_extraction_handles_supported_codecs() {
             LocalGuardrailsCodec::AnthropicMessages,
             json!({"type": "content_block_delta", "delta": {"type": "input_json_delta"}}),
         ),
+        (LocalGuardrailsCodec::GeminiGenerateContent, Json::Null),
     ] {
         assert_eq!(extract_stream_text(codec, &chunk), None);
     }
+}
+
+#[test]
+fn stream_text_extraction_gemini_skips_thought_parts() {
+    // A thought chunk (thought: true) must NOT reach the guardrail worker.
+    assert_eq!(
+        extract_stream_text(
+            LocalGuardrailsCodec::GeminiGenerateContent,
+            &json!({"candidates": [{"content": {"parts": [{"thought": true, "text": "internal reasoning"}]}, "index": 0}]})
+        ),
+        None,
+        "thought parts must not be forwarded to the guardrail worker"
+    );
+    // A chunk with both a thought part and a visible part: only the visible text is forwarded.
+    assert_eq!(
+        extract_stream_text(
+            LocalGuardrailsCodec::GeminiGenerateContent,
+            &json!({"candidates": [{"content": {"parts": [
+                {"thought": true, "text": "reasoning"},
+                {"text": "answer"}
+            ]}, "index": 0}]})
+        ),
+        Some("answer".to_string()),
+        "only non-thought text must reach the guardrail worker"
+    );
 }
 
 #[cfg(unix)]

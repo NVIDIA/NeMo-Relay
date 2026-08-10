@@ -73,16 +73,13 @@ fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
         });
     }
 
-    let user_only = matches!(cli.command.as_ref(), Some(Command::Mcp));
-    let explicit_config = match (user_only, cli.command.as_ref()) {
-        (true, _) => None,
-        (false, Some(Command::Run(command))) => {
-            command.config.as_deref().or(cli.server.config.as_deref())
-        }
-        (false, _) => cli.server.config.as_deref(),
+    let explicit_config = match cli.command.as_ref() {
+        Some(Command::Mcp) => None,
+        Some(Command::Run(command)) => command.config.as_deref().or(cli.server.config.as_deref()),
+        _ => cli.server.config.as_deref(),
     };
     let mut fallback_error = None;
-    let config = match cli.logging.resolve(explicit_config, user_only) {
+    let config = match cli.logging.resolve(explicit_config) {
         Ok(config) => config,
         Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
             fallback_error = Some(error);
@@ -174,7 +171,6 @@ async fn run_command(
         Command::Run(command) => run::execute(command, server).await,
         Command::Claude(command) => run::easy_path(CodingAgent::ClaudeCode, command, server).await,
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
-        Command::Hermes(command) => run::easy_path(CodingAgent::Hermes, command, server).await,
         Command::Mcp => mcp::execute(server).await,
         Command::Config(command) => configure::execute(command, server).await,
         Command::Plugins(command) => plugins::execute(command, server),
@@ -233,7 +229,14 @@ async fn run_default(
         .await?;
         Ok(ExitCode::SUCCESS)
     } else if runtime_configuration::any_config_file_exists() {
-        runtime_diagnostics::run_doctor(None, false, &runtime_args, None).await
+        runtime_diagnostics::run_doctor(
+            None,
+            false,
+            runtime_diagnostics::DoctorProbeMode::Live,
+            &runtime_args,
+            None,
+        )
+        .await
     } else {
         configure::run(None, None).await?;
         Ok(ExitCode::SUCCESS)

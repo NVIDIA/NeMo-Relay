@@ -213,8 +213,7 @@ while (-not (Test-Path -LiteralPath $args[1])) {
     };
     std::fs::write(release_path, b"ready").unwrap();
 
-    let status = match tokio::time::timeout(std::time::Duration::from_secs(15), child.wait()).await
-    {
+    let status = match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
         Ok(status) => status.unwrap(),
         Err(_) => {
             let _ = child.terminate().await;

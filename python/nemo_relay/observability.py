@@ -229,6 +229,9 @@ class OpenTelemetryEndpointConfig:
     headers: dict[str, str] = field(default_factory=dict)
     header_env: dict[str, str] = field(default_factory=dict)
     resource_attributes: dict[str, str] = field(default_factory=dict)
+    max_queue_size: int | None = None
+    max_export_batch_size: int | None = None
+    scheduled_delay_millis: int | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -245,6 +248,9 @@ class OpenTelemetryEndpointConfig:
                 "service_version": self.service_version,
                 "instrumentation_scope": self.instrumentation_scope,
                 "timeout_millis": self.timeout_millis,
+                "max_queue_size": self.max_queue_size,
+                "max_export_batch_size": self.max_export_batch_size,
+                "scheduled_delay_millis": self.scheduled_delay_millis,
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "resource_attributes": self.resource_attributes,
@@ -266,13 +272,18 @@ class OpenTelemetrySectionConfig:
 
 @dataclass(slots=True)
 class ObservabilityConfig:
-    """Canonical config document for the top-level observability component."""
+    """Canonical config document for the top-level observability component.
+
+    ``enable_full_payloads`` retains complete sanitized request data on every
+    LLM start event.
+    """
 
     version: int = 3
     atof: AtofConfig | None = None
     atif: AtifConfig | None = None
     opentelemetry: OpenTelemetrySectionConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)
+    enable_full_payloads: bool = False
 
     def to_dict(self) -> JsonObject:
         """Serialize this observability config to the canonical JSON object shape."""
@@ -283,6 +294,7 @@ class ObservabilityConfig:
                 "atif": self.atif,
                 "opentelemetry": self.opentelemetry,
                 "policy": self.policy,
+                "enable_full_payloads": self.enable_full_payloads,
             }
         )
 

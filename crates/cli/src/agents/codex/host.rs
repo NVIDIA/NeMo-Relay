@@ -14,6 +14,7 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, Value as TomlValue, value
 
 use crate::agents::CodingAgent;
 use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, RELAY_PLUGIN_ID};
+#[cfg(test)]
 use crate::hooks::generated_hooks;
 #[cfg(test)]
 use crate::hooks::merge_hooks;
@@ -109,11 +110,11 @@ pub(crate) fn install_codex_with_generation(
 
 pub(crate) fn install_codex_with_trust<F>(
     gateway_url: &str,
-    expected_command: &str,
+    expected_commands: &crate::hooks::GeneratedHookCommands,
     trust_hooks: F,
 ) -> Result<ExitCode, String>
 where
-    F: FnOnce(&Path, &Path, &str) -> Result<(), String>,
+    F: FnOnce(&Path, &Path, &crate::hooks::GeneratedHookCommands) -> Result<(), String>,
 {
     let home = home_dir()?;
     let codex_dir = codex_home_dir()?;
@@ -125,7 +126,7 @@ where
     let snapshots = codex_install_snapshots(&config_path, &hooks_path)?;
     let install_result = remove_legacy_codex_hooks(&hooks_path)
         .and_then(|()| install_codex_config(&config_path, gateway_url))
-        .and_then(|()| trust_hooks(&home, &config_path, expected_command));
+        .and_then(|()| trust_hooks(&home, &config_path, expected_commands));
     if let Err(error) = install_result {
         return match restore_codex_install_snapshots(&snapshots) {
             Ok(()) => Err(error),
@@ -257,9 +258,9 @@ pub(crate) fn codex_hook_trust_report_with_generation(
 pub(crate) fn codex_hook_trust_report_with_client(
     client: &mut dyn CodexHooksClient,
     cwd: &Path,
-    expected_command: &str,
+    expected_commands: &crate::hooks::GeneratedHookCommands,
 ) -> Result<CodexHookTrustReport, String> {
-    let hooks = relay_codex_hooks(client, cwd, expected_command)?;
+    let hooks = relay_codex_hooks(client, cwd, expected_commands)?;
     Ok(codex_hook_trust_report_for(&hooks))
 }
 
@@ -267,9 +268,9 @@ pub(crate) fn auto_trust_codex_hooks(
     client: &mut dyn CodexHooksClient,
     cwd: &Path,
     config_path: &Path,
-    expected_command: &str,
+    expected_commands: &crate::hooks::GeneratedHookCommands,
 ) -> Result<(), String> {
-    let hooks = relay_codex_hooks(client, cwd, expected_command)?;
+    let hooks = relay_codex_hooks(client, cwd, expected_commands)?;
     let before = codex_hook_trust_report_for(&hooks);
     if !before.missing_required.is_empty() || !before.duplicate_required.is_empty() {
         return Err(format!(
@@ -280,7 +281,7 @@ pub(crate) fn auto_trust_codex_hooks(
     }
     let state = snapshot_hook_trust_state(config_path, &hooks)?;
     let trust_result = client.trust_hooks(&hooks).and_then(|()| {
-        let verified_hooks = relay_codex_hooks(client, cwd, expected_command)?;
+        let verified_hooks = relay_codex_hooks(client, cwd, expected_commands)?;
         let verified = codex_hook_trust_report_for(&verified_hooks);
         let unverified_targets = hooks
             .iter()
@@ -308,7 +309,7 @@ pub(crate) fn auto_trust_codex_hooks(
         return restore_hook_trust_after_failure(
             client,
             cwd,
-            expected_command,
+            expected_commands,
             &hooks,
             &state,
             error,
@@ -320,21 +321,28 @@ pub(crate) fn auto_trust_codex_hooks(
 fn relay_codex_hooks(
     client: &mut dyn CodexHooksClient,
     cwd: &Path,
-    expected_command: &str,
+    expected_commands: &crate::hooks::GeneratedHookCommands,
 ) -> Result<Vec<CodexHookMetadata>, String> {
     let hooks = relay_codex_plugin_hooks(client, cwd)?
         .into_iter()
-        .filter(|hook| hook.command.as_deref() == Some(expected_command))
+        .filter(|hook| {
+            expected_codex_hook_command(expected_commands, &hook.event_name).is_some_and(
+                |expected| {
+                    hook.command.as_deref() == Some(expected)
+                        || hook.command.as_deref() == expected_commands.legacy()
+                },
+            )
+        })
         .collect::<Vec<_>>();
-    validate_loaded_hook_sources(&hooks, expected_command)?;
+    validate_loaded_hook_sources(&hooks, expected_commands)?;
     Ok(hooks)
 }
 
 fn validate_loaded_hook_sources(
     hooks: &[CodexHookMetadata],
-    expected_command: &str,
+    expected_commands: &crate::hooks::GeneratedHookCommands,
 ) -> Result<(), String> {
-    let expected = generated_hooks(CodingAgent::Codex, expected_command);
+    let expected = crate::hooks::generated_policy_hooks(CodingAgent::Codex, expected_commands);
     let sources = hooks
         .iter()
         .map(|hook| hook.source_path.as_str())
@@ -538,7 +546,7 @@ fn verify_restored_hook_trust(
 fn restore_hook_trust_after_failure(
     client: &mut dyn CodexHooksClient,
     cwd: &Path,
-    expected_command: &str,
+    expected_commands: &crate::hooks::GeneratedHookCommands,
     before: &[CodexHookMetadata],
     state: &[(String, Option<Value>)],
     original_error: String,
@@ -548,7 +556,7 @@ fn restore_hook_trust_after_failure(
             "{original_error}; additionally failed to restore Codex hook trust: {rollback_error}"
         ));
     }
-    let restored = relay_codex_hooks(client, cwd, expected_command).map_err(|rollback_error| {
+    let restored = relay_codex_hooks(client, cwd, expected_commands).map_err(|rollback_error| {
         format!(
             "{original_error}; additionally failed to verify restored Codex hook trust: {rollback_error}"
         )
@@ -569,14 +577,16 @@ fn restore_hook_trust_after_failure(
 }
 
 #[cfg(test)]
-pub(crate) fn expected_plugin_hook_command(plugin_hooks_path: &Path) -> Result<String, String> {
+pub(crate) fn expected_plugin_hook_command(
+    plugin_hooks_path: &Path,
+) -> Result<crate::hooks::GeneratedHookCommands, String> {
     expected_plugin_hook_command_with_token(plugin_hooks_path, None)
 }
 
 fn expected_plugin_hook_command_with_token(
     plugin_hooks_path: &Path,
     generation_token: Option<&str>,
-) -> Result<String, String> {
+) -> Result<crate::hooks::GeneratedHookCommands, String> {
     let relay = current_exe()?;
     let relay = relay.canonicalize().unwrap_or(relay);
     let relay = portable_executable_path(relay);
@@ -614,9 +624,12 @@ fn plugin_generation_file(plugin_hooks_path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-fn validate_plugin_hooks(path: &Path, expected_command: &str) -> Result<(), String> {
+fn validate_plugin_hooks(
+    path: &Path,
+    expected_commands: &crate::hooks::GeneratedHookCommands,
+) -> Result<(), String> {
     let actual = read_json_object(path)?;
-    let expected = generated_hooks(CodingAgent::Codex, expected_command);
+    let expected = crate::hooks::generated_policy_hooks(CodingAgent::Codex, expected_commands);
     if actual == expected {
         Ok(())
     } else {
@@ -674,12 +687,24 @@ fn is_generated_codex_hook_event(event: &str) -> bool {
         .any(|expected| normalize_hook_event(expected) == normalized)
 }
 
-fn normalize_hook_event(event: &str) -> String {
+pub(crate) fn normalize_hook_event(event: &str) -> String {
     event
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+pub(crate) fn expected_codex_hook_command<'a>(
+    commands: &'a crate::hooks::GeneratedHookCommands,
+    event: &str,
+) -> Option<&'a str> {
+    let normalized = normalize_hook_event(event);
+    CodingAgent::Codex
+        .hook_events()
+        .iter()
+        .find(|expected| normalize_hook_event(expected) == normalized)
+        .map(|event| commands.for_event(event))
 }
 
 fn codex_install_snapshots(
@@ -1635,7 +1660,7 @@ pub(crate) fn codex_hooks_installed_with_generation(
     generation_token: Option<&str>,
 ) -> Result<bool, String> {
     let value = read_json_object(path)?;
-    let generated = generated_hooks(
+    let generated = crate::hooks::generated_policy_hooks(
         CodingAgent::Codex,
         &expected_plugin_hook_command_with_token(path, generation_token)?,
     );
@@ -1660,8 +1685,8 @@ pub(crate) fn codex_plugin_hook_command(
     relay: &Path,
     generation: &Path,
     generation_token: &str,
-) -> Result<String, String> {
-    crate::hooks::persistent_hook_forward_command(
+) -> Result<crate::hooks::GeneratedHookCommands, String> {
+    crate::hooks::persistent_hook_forward_commands(
         relay,
         CodingAgent::Codex,
         generation,
@@ -1675,8 +1700,8 @@ pub(crate) fn codex_plugin_hook_command_for_platform(
     generation: &Path,
     generation_token: &str,
     windows: bool,
-) -> String {
-    crate::hooks::persistent_hook_forward_command_for_platform(
+) -> crate::hooks::GeneratedHookCommands {
+    crate::hooks::persistent_hook_forward_commands_for_platform(
         relay,
         CodingAgent::Codex,
         generation,

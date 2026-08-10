@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Sequence
 from types import TracebackType
 from typing import AsyncContextManager, Literal, Protocol, Self, TypedDict
 
@@ -160,11 +161,14 @@ class PluginHostActivation:
         traceback: TracebackType | None,
     ) -> None: ...
 
+def load_dynamic_plugin_activation_specs(
+    plugin_config_path: str | os.PathLike[str],
+) -> list[DynamicPluginActivationSpec]: ...
 def validate(config: PluginConfig | JsonObject) -> ConfigReport: ...
 async def initialize(config: PluginConfig | JsonObject) -> ConfigReport: ...
 async def initialize_with_dynamic_plugins(
     config: PluginConfig | JsonObject,
-    dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject],
+    dynamic_plugins: Sequence[DynamicPluginActivationSpec | JsonObject],
 ) -> PluginHostActivation: ...
 def clear() -> None: ...
 async def clear_async() -> None: ...

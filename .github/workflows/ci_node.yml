@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       run_package:
-        description: 'Whether to build package artifacts after tests pass'
+        description: 'Whether to build package artifacts'
         required: false
         default: true
         type: boolean
@@ -43,26 +43,37 @@ jobs:
   Test:
     name: Test (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - platform: linux-amd64
+          - &linux-amd64
+            platform: linux-amd64
             runner: ubuntu-latest
-          - platform: linux-arm64
+          - &linux-arm64
+            platform: linux-arm64
             runner: ubuntu-24.04-arm
-          - platform: macos-arm64
+          - &macos-arm64
+            platform: macos-arm64
             runner: macos-15
-          - platform: windows-amd64
+          - &windows-amd64
+            platform: windows-amd64
             runner: windows-2022
-          - platform: windows-arm64
+          - &windows-arm64
+            platform: windows-arm64
             runner: windows-11-arm
 
     steps:
+      - name: Remove untrusted Homebrew tap
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          if [ -d "$(brew --repository aws/tap)" ]; then
+            brew untap aws/tap
+          fi
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -77,11 +88,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
-          save-if: false
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
@@ -113,28 +123,41 @@ jobs:
 
   Package:
     name: Package (${{ matrix.platform }})
-    needs: [Test]
-    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
+    if: ${{ inputs.run_package }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - platform: linux-amd64
+          - *linux-amd64
+          - *linux-arm64
+          - *macos-arm64
+          - *windows-amd64
+          - *windows-arm64
+          - &package-linux-musl-amd64
+            node_arch: x64
+            platform: linux-musl-amd64
             runner: ubuntu-latest
-          - platform: linux-arm64
+            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+            package_name: nemo-relay-node-linux-x64-musl
+          - &package-linux-musl-arm64
+            node_arch: arm64
+            platform: linux-musl-arm64
             runner: ubuntu-24.04-arm
-          - platform: macos-arm64
-            runner: macos-15
-          - platform: windows-amd64
-            runner: windows-2022
-          - platform: windows-arm64
-            runner: windows-11-arm
+            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+            package_name: nemo-relay-node-linux-arm64-musl
 
     steps:
+      - name: Remove untrusted Homebrew tap
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          if [ -d "$(brew --repository aws/tap)" ]; then
+            brew untap aws/tap
+          fi
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -143,27 +166,28 @@ jobs:
         uses: ./.github/actions/load-ci-tool-versions
 
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
-          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
-          save-if: false
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
-        if: ${{ startsWith(matrix.platform, 'linux-') }}
+        if: ${{ startsWith(matrix.platform, 'linux-') && !contains(matrix.platform, 'musl') }}
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - name: Install managed Python for Zig packaging
-        if: ${{ startsWith(matrix.platform, 'linux-') }}
+        if: ${{ startsWith(matrix.platform, 'linux-') && !contains(matrix.platform, 'musl') }}
         run: |
           set -e
           UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
@@ -173,21 +197,22 @@ jobs:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Create packaging output directory
-        if: ${{ inputs.run_package }}
+        if: ${{ !contains(matrix.platform, 'musl') }}
         run: |
           set -e
           mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm"
 
       - name: Derive Node package version
-        if: ${{ inputs.run_package }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
@@ -201,7 +226,7 @@ jobs:
           printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Package Node
-        if: ${{ inputs.run_package }}
+        if: ${{ !contains(matrix.platform, 'musl') }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
@@ -214,54 +239,14 @@ jobs:
 
       - name: Upload split Node npm package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        if: ${{ inputs.run_package }}
+        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           name: node-npm-package-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm/*.tgz
           if-no-files-found: error
 
-  PackageMusllinux:
-    name: Package (musllinux-${{ matrix.node_arch }})
-    needs: [Test]
-    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - node_arch: x64
-            platform: linux-musl-amd64
-            runner: ubuntu-latest
-            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
-          - node_arch: arm64
-            platform: linux-musl-arm64
-            runner: ubuntu-24.04-arm
-            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - name: Load CI tool versions
-        id: ci-config
-        uses: ./.github/actions/load-ci-tool-versions
-
-      - name: Derive Node package version
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -euo pipefail
-          version="$(node -e 'const fs = require("fs"); const pkg = JSON.parse(fs.readFileSync("crates/node/package.json", "utf8")); if (!pkg.version) { throw new Error("crates/node/package.json missing version field"); } console.log(pkg.version);')"
-          if [[ "${{ inputs.ref_type }}" == "tag" ]]; then
-            version="${{ inputs.ref_name }}"
-          else
-            version="${version}+${GITHUB_SHA::8}"
-          fi
-          printf 'NEMO_RELAY_NODE_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
-
       - name: Build musllinux Node package
+        if: ${{ contains(matrix.platform, 'musl') }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
@@ -272,7 +257,7 @@ jobs:
             --workdir "${NEMO_RELAY_CI_WORKSPACE}" \
             --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
             --env NEMO_RELAY_NODE_OUTPUT_DIR="$output_dir" \
-            --env NEMO_RELAY_NODE_VERSION="${NEMO_RELAY_NODE_PACKAGE_VERSION}" \
+            --env NEMO_RELAY_NODE_VERSION="${NEMO_RELAY_PACKAGE_VERSION}" \
             --env NEMO_RELAY_NODE_PLATFORM="${{ matrix.platform }}" \
             "${{ matrix.container_image }}" \
             sh -ceu '
@@ -286,89 +271,16 @@ jobs:
             '
 
       - name: Upload musllinux Node npm package artifact
+        if: ${{ contains(matrix.platform, 'musl') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: node-npm-package-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm-musllinux/*.tgz
           if-no-files-found: error
 
-  PackageMusllinuxSmoke:
-    name: Package smoke (musllinux-${{ matrix.node_arch }})
-    needs: [Package, PackageMusllinux]
-    if: ${{ inputs.run_package && !cancelled() && needs.Package.result == 'success' && needs.PackageMusllinux.result == 'success' }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - node_arch: x64
-            platform: linux-musl-amd64
-            package_name: nemo-relay-node-linux-x64-musl
-            runner: ubuntu-latest
-            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
-          - node_arch: arm64
-            platform: linux-musl-arm64
-            package_name: nemo-relay-node-linux-arm64-musl
-            runner: ubuntu-24.04-arm
-            container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
-
-    steps:
-      - name: Download Node metapackage artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: node-npm-package-linux-amd64
-          path: node-metapackage/
-
-      - name: Download matching musllinux Node native package artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: node-npm-package-${{ matrix.platform }}
-          path: node-native/
-
-      - name: Install and load musllinux split Node package
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            --volume "${{ github.workspace }}:${{ github.workspace }}" \
-            --workdir "${{ github.workspace }}" \
-            --env NEMO_RELAY_NODE_PACKAGE_NAME="${{ matrix.package_name }}" \
-            --env NEMO_RELAY_WORKSPACE="${{ github.workspace }}" \
-            "${{ matrix.container_image }}" \
-            sh -ceu '
-              smoke_dir="$(mktemp -d)"
-              trap "rm -rf $smoke_dir" EXIT
-              cd "$smoke_dir"
-              npm init --yes >/dev/null
-              metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "nemo-relay-node-npm-[0-9]*.tgz" -print -quit)"
-              native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "*.tgz" -print -quit)"
-              test -n "$metapackage"
-              test -n "$native"
-              npm install --ignore-scripts "$native" "$metapackage"
-              node -e "
-                const assert = require(\"node:assert/strict\");
-                const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
-                assert.deepEqual(manifest.libc, [\"musl\"]);
-                for (const entrypoint of [
-                  \"nemo-relay-node\",
-                  \"nemo-relay-node/typed\",
-                  \"nemo-relay-node/plugin\",
-                  \"nemo-relay-node/adaptive\",
-                  \"nemo-relay-node/observability\",
-                  \"nemo-relay-node/pii_redaction\",
-                  \"nemo-relay-node/model_pricing\",
-                ]) {
-                  require(entrypoint);
-                }
-              "
-            '
-
   PackageOpenClaw:
     name: Package OpenClaw plugin
-    needs: [Test]
-    if: ${{ inputs.run_openclaw && !cancelled() && needs.Test.result == 'success' }}
+    if: ${{ inputs.run_openclaw }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -388,7 +300,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-openclaw-package-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -441,30 +353,37 @@ jobs:
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - platform: linux-amd64
-            runner: ubuntu-latest
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-          - platform: macos-arm64
-            runner: macos-15
-          - platform: windows-amd64
-            runner: windows-2022
-          - platform: windows-arm64
-            runner: windows-11-arm
+          - *linux-amd64
+          - *linux-arm64
+          - *macos-arm64
+          - *windows-amd64
+          - *windows-arm64
+          - *package-linux-musl-amd64
+          - *package-linux-musl-arm64
     steps:
+      - name: Remove untrusted Homebrew tap
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          if [ -d "$(brew --repository aws/tap)" ]; then
+            brew untap aws/tap
+          fi
+
       - name: Checkout
+        if: ${{ !contains(matrix.platform, 'musl') }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
 
       - name: Load CI tool versions
+        if: ${{ !contains(matrix.platform, 'musl') }}
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
@@ -481,6 +400,7 @@ jobs:
           path: node-native/
 
       - name: Install and load split Node package
+        if: ${{ !contains(matrix.platform, 'musl') }}
         run: |
           set -euo pipefail
           mkdir package-smoke
@@ -508,3 +428,48 @@ jobs:
             require(entrypoint);
           }
           NODE
+
+      - name: Install and load musllinux split Node package
+        if: ${{ contains(matrix.platform, 'musl') }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ github.workspace }}:${{ github.workspace }}" \
+            --workdir "${{ github.workspace }}" \
+            --env NEMO_RELAY_NODE_PACKAGE_NAME="${{ matrix.package_name }}" \
+            --env NEMO_RELAY_WORKSPACE="${{ github.workspace }}" \
+            "${{ matrix.container_image }}" \
+            sh -ceu '
+              smoke_dir="$(mktemp -d)"
+              trap "rm -rf $smoke_dir" EXIT
+              cd "$smoke_dir"
+              npm init --yes >/dev/null
+              metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "nemo-relay-node-npm-[0-9]*.tgz" -print -quit)"
+              native_count="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" | wc -l)"
+              test "$native_count" -eq 1
+              native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" -print -quit)"
+              test -n "$metapackage"
+              test -n "$native"
+              npm install --ignore-scripts "$native" "$metapackage"
+              node -e "
+                const assert = require(\"node:assert/strict\");
+                const { readdirSync } = require(\"node:fs\");
+                const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
+                const nativePackages = readdirSync(\"node_modules\").filter(
+                  (name) => name.startsWith(\"nemo-relay-node-\") && name !== \"nemo-relay-node\",
+                );
+                assert.equal(nativePackages.length, 1);
+                assert.deepEqual(manifest.libc, [\"musl\"]);
+                for (const entrypoint of [
+                  \"nemo-relay-node\",
+                  \"nemo-relay-node/typed\",
+                  \"nemo-relay-node/plugin\",
+                  \"nemo-relay-node/adaptive\",
+                  \"nemo-relay-node/observability\",
+                  \"nemo-relay-node/pii_redaction\",
+                  \"nemo-relay-node/model_pricing\",
+                ]) {
+                  require(entrypoint);
+                }
+              "
+            '

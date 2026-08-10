@@ -7,7 +7,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::codec::resolve::supported_codec_names;
+use nemo_relay::codec::resolve::{ProviderSurface, supported_codec_names};
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, Plugin, PluginComponentSpec, PluginError,
     PluginRegistrationContext, Result as PluginResult, UnsupportedBehavior,
@@ -274,7 +274,7 @@ nemo_relay::editor_config! {
         codec => {
             label: "codec",
             kind: Enum,
-            values: ["openai_chat", "openai_responses", "anthropic_messages"],
+            values: ["openai_chat", "openai_responses", "anthropic_messages", "gemini_generate_content"],
             optional: true,
         },
         profiles => { label: "profiles", kind: List, list: &PII_REDACTION_PROFILE_LIST_ITEM },
@@ -498,11 +498,8 @@ fn custom_mark_payload_policy_schema(
 
 #[cfg(feature = "schema")]
 fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-    string_enum_schema(
-        generator,
-        &["openai_chat", "openai_responses", "anthropic_messages"],
-        None,
-    )
+    let codec_names = supported_codec_names();
+    string_enum_schema(generator, &codec_names, None)
 }
 
 #[cfg(feature = "schema")]
@@ -1130,14 +1127,15 @@ fn validate_codec_requirements(
         return;
     };
 
-    if !supported_codec_names().contains(&codec) {
+    if ProviderSurface::from_codec_name(codec).is_none() {
+        let supported = supported_codec_names();
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "pii_redaction.unsupported_value",
             Some(PII_REDACTION_PLUGIN_KIND.to_string()),
             Some("codec".to_string()),
-            "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'".to_string(),
+            format!("codec must be one of: {}", supported.join(", ")),
         );
     }
 }

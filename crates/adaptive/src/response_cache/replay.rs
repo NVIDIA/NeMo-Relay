@@ -12,8 +12,9 @@ use serde_json::{Map, Value as Json, json};
 ///
 /// A strict streaming client parses only its provider's wire chunks (Anthropic
 /// `message_start → content_block_delta → … → message_stop`, OpenAI Chat
-/// `chat.completion.chunk` deltas, OpenAI Responses lifecycle events) — replaying
-/// the aggregate as one frame breaks such clients even though the body is correct.
+/// `chat.completion.chunk` deltas, OpenAI Responses lifecycle events, or Gemini
+/// `GenerateContentResponse` chunks) — replaying the aggregate as one frame
+/// breaks such clients even though the body is correct.
 /// The surface is detected from the stored aggregate's own shape (the codec
 /// finalizer's output, or a buffered body of the same shape), so no codec handle
 /// is needed at the call sites. An unrecognized shape falls back to a
@@ -79,6 +80,11 @@ fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
         ProviderSurface::AnthropicMessages => synthesize_anthropic_chunks(aggregate),
         ProviderSurface::OpenAIChat => synthesize_chat_chunks(aggregate),
         ProviderSurface::OpenAIResponses => synthesize_responses_chunks(aggregate),
+        // Gemini streaming events are GenerateContentResponse objects; a stored
+        // aggregate is a valid single native chunk. `replay_is_lossy` still
+        // re-aggregates it and rejects shapes the streaming collector cannot
+        // preserve exactly.
+        ProviderSurface::GeminiGenerateContent => vec![aggregate.clone()],
     })
 }
 

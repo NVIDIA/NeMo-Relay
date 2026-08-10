@@ -21,7 +21,11 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmStreamExecutionNextFn, LlmStreamInner};
-use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::scope::get_handle;
+use nemo_relay::api::subscriber::{
+    deregister_subscriber, flush_subscribers, register_subscriber, scope_deregister_subscriber,
+    scope_register_subscriber,
+};
 use nemo_relay::codec::optimization::LlmOptimizationSummaryStatus;
 use nemo_relay::error::{UpstreamFailure, UpstreamFailureClass};
 use nemo_relay::plugin::rollback_registrations;
@@ -1234,7 +1238,9 @@ async fn managed_buffered_events(
     let subscriber_name = format!("switchyard-accounting-{}", uuid::Uuid::now_v7());
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = Arc::clone(&events);
-    register_subscriber(
+    let scope_uuid = get_handle().unwrap().uuid;
+    scope_register_subscriber(
+        &scope_uuid,
         &subscriber_name,
         Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
     )
@@ -1259,7 +1265,7 @@ async fn managed_buffered_events(
     .await
     .unwrap();
     flush_subscribers().unwrap();
-    deregister_subscriber(&subscriber_name).unwrap();
+    scope_deregister_subscriber(&scope_uuid, &subscriber_name).unwrap();
     Arc::try_unwrap(events).unwrap().into_inner().unwrap()
 }
 
@@ -1270,7 +1276,9 @@ async fn managed_stream_events(
     let subscriber_name = format!("switchyard-stream-accounting-{}", uuid::Uuid::now_v7());
     let events = Arc::new(Mutex::new(Vec::<Event>::new()));
     let captured = Arc::clone(&events);
-    register_subscriber(
+    let scope_uuid = get_handle().unwrap().uuid;
+    scope_register_subscriber(
+        &scope_uuid,
         &subscriber_name,
         Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
     )
@@ -1299,7 +1307,7 @@ async fn managed_stream_events(
     while stream.next().await.is_some() {}
     drop(stream);
     flush_subscribers().unwrap();
-    deregister_subscriber(&subscriber_name).unwrap();
+    scope_deregister_subscriber(&scope_uuid, &subscriber_name).unwrap();
     Arc::try_unwrap(events).unwrap().into_inner().unwrap()
 }
 

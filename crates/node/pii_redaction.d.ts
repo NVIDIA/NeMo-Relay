@@ -39,7 +39,7 @@ export interface Config {
   tool_output?: boolean;
   mark?: boolean;
   priority?: number;
-  codec?: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | string;
+  codec?: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'gemini_generate_content' | string;
   builtin?: BuiltinConfig;
   local?: LocalModelConfig;
   policy?: ConfigPolicy;

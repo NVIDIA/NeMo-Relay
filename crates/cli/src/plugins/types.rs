@@ -9,7 +9,6 @@ pub(crate) enum ConfigurationScope {
     #[default]
     Default,
     User,
-    Project,
     Global,
     /// More than one mutually exclusive command scope was supplied.
     Invalid,

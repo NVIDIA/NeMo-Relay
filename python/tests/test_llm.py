@@ -18,14 +18,18 @@ from nemo_relay import (
     LLMRequest,
     LLMRequestInterceptOutcome,
     PendingMarkSpec,
+    PropagationContext,
     ScopeEvent,
     ScopeType,
     capture_propagation_context,
+    capture_traceparent,
+    create_scope_stack_from_propagation,
     guardrails,
     intercepts,
     llm,
     scope,
     subscribers,
+    use_scope_stack,
 )
 from nemo_relay.codecs import OpenAIChatCodec
 
@@ -606,6 +610,58 @@ class TestLLMIntercepts:
 
 
 class TestLLMInterceptsAsync:
+    async def test_execution_callback_capture_traceparent_matches_llm_scope(self):
+        events = []
+        observed = []
+        subscribers.register("py_llm_capture_traceparent", events.append)
+
+        async def execution_intercept(_name, request, next_handler):
+            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            return await next_handler(request)
+
+        async def provider(_request):
+            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            return {"ok": True}
+
+        try:
+            intercepts.register_llm_execution("py_llm_capture_traceparent", 10, execution_intercept)
+            assert await llm.execute("py_llm_capture_traceparent", make_request(), provider) == {"ok": True}
+            await subscribers.flush_async()
+            start = _llm_event(events, "py_llm_capture_traceparent", "start")
+            expected = f"00-{start.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [(start.uuid, expected), (start.uuid, expected)]
+        finally:
+            intercepts.deregister_llm_execution("py_llm_capture_traceparent")
+            subscribers.deregister("py_llm_capture_traceparent")
+
+    async def test_execution_callback_capture_traceparent_preserves_imported_root(self):
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000701"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000702"
+        stack = create_scope_stack_from_propagation(PropagationContext(parent_uuid, root_uuid))
+        events = []
+        observed = []
+        subscribers.register("py_llm_capture_propagated_trace_root", events.append)
+
+        async def execution_intercept(_name, request, next_handler):
+            observed.append(capture_traceparent())
+            return await next_handler(request)
+
+        async def provider(_request):
+            observed.append(capture_traceparent())
+            return {"ok": True}
+
+        try:
+            intercepts.register_llm_execution("py_llm_capture_propagated_trace_root", 10, execution_intercept)
+            with use_scope_stack(stack):
+                assert await llm.execute("py_llm_propagated_trace_root", make_request(), provider) == {"ok": True}
+            await subscribers.flush_async()
+            start = _llm_event(events, "py_llm_propagated_trace_root", "start")
+            expected = f"00-{root_uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [expected, expected]
+        finally:
+            intercepts.deregister_llm_execution("py_llm_capture_propagated_trace_root")
+            subscribers.deregister("py_llm_capture_propagated_trace_root")
+
     async def test_cancelling_execute_cancels_pending_execution_intercept(self):
         started = asyncio.Event()
         release = asyncio.Event()
@@ -1338,22 +1394,101 @@ class TestLLMStreaming:
         finally:
             intercepts.deregister_llm_stream_execution("py_llm_stream_direct_error")
 
+    async def test_stream_execution_intercept_failure_emits_exception_type(self):
+        events = []
+        subscribers.register("py_llm_stream_intercept_failure_sub", events.append)
+
+        def failing_middleware(request, next):
+            raise ValueError("stream intercept boom")
+
+        intercepts.register_llm_stream_execution(
+            "py_llm_stream_failure",
+            1,
+            failing_middleware,
+        )
+        try:
+            with pytest.raises(RuntimeError, match="stream intercept boom"):
+                await llm.stream_execute(
+                    "stream_intercept_failure_llm",
+                    make_request(),
+                    lambda request: _single_chunk_stream(),
+                    lambda chunk: None,
+                    lambda: {},
+                )
+        finally:
+            intercepts.deregister_llm_stream_execution("py_llm_stream_failure")
+            await subscribers.flush_async()
+            subscribers.deregister("py_llm_stream_intercept_failure_sub")
+
+        metadata = _llm_event(events, "stream_intercept_failure_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "ValueError"
+
     async def test_stream_execute_collector_failure_raises(self):
+        events = []
+        subscribers.register("py_llm_stream_collector_failure_sub", events.append)
+
         def stream_func(request):
             async def gen():
                 yield {"token": "hello"}
 
             return gen()
 
-        stream = await llm.stream_execute(
-            "stream_collector_fail_llm",
-            make_request(),
-            stream_func,
-            lambda chunk: raise_runtime_error("collector boom"),
-            lambda: {},
-        )
-        with pytest.raises(RuntimeError, match="collector boom"):
-            await anext(stream)
+        try:
+            stream = await llm.stream_execute(
+                "stream_collector_fail_llm",
+                make_request(),
+                stream_func,
+                lambda chunk: raise_runtime_error("collector boom"),
+                lambda: {},
+            )
+            with pytest.raises(RuntimeError, match="collector boom"):
+                await anext(stream)
+            await subscribers.flush_async()
+        finally:
+            subscribers.deregister("py_llm_stream_collector_failure_sub")
+
+        metadata = _llm_event(events, "stream_collector_fail_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "RuntimeError"
+
+    async def test_stream_execute_callback_failure_emits_exception_type(self):
+        events = []
+        subscribers.register("py_llm_stream_callback_failure_sub", events.append)
+
+        def stream_func(request):
+            raise ValueError("stream callback boom")
+
+        async def async_stream_func(request):
+            raise TypeError("async stream callback boom")
+
+        try:
+            with pytest.raises(RuntimeError, match="stream callback boom"):
+                await llm.stream_execute(
+                    "stream_callback_fail_llm",
+                    make_request(),
+                    stream_func,
+                    lambda chunk: None,
+                    lambda: {},
+                )
+            with pytest.raises(RuntimeError, match="async stream callback boom"):
+                await llm.stream_execute(
+                    "async_stream_callback_fail_llm",
+                    make_request(),
+                    async_stream_func,
+                    lambda chunk: None,
+                    lambda: {},
+                )
+            await subscribers.flush_async()
+        finally:
+            subscribers.deregister("py_llm_stream_callback_failure_sub")
+
+        metadata = _llm_event(events, "stream_callback_fail_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "ValueError"
+        metadata = _llm_event(events, "async_stream_callback_fail_llm", "end").metadata
+        assert isinstance(metadata, dict)
+        assert metadata["exception.type"] == "TypeError"
 
     async def test_stream_execute_finalizer_failure_records_null_output(self):
         events = []

@@ -68,7 +68,7 @@ collect:github-artifacts:
       fi
       export GH_TOKEN="${NEMO_RELAY_CI_GITHUB_TOKEN}"
 
-      mkdir -p collected/wheels collected/sdists collected/node collected/cli-npm downloaded
+      mkdir -p collected/wheels collected/sdists collected/node downloaded
 
       tag="${CI_COMMIT_TAG:-}"
       if [ -z "$tag" ]; then
@@ -133,7 +133,6 @@ collect:github-artifacts:
 
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'wheel-*' --dir downloaded/wheels
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'cli-python-wheel-*' --dir downloaded/cli-wheels
-      gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'cli-npm-package-*' --dir downloaded/cli-npm
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name 'plugin-wheel' --dir downloaded/wheels
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --name 'python-sdist' --dir downloaded/sdists
       gh run download "$run_id" --repo "$NEMO_RELAY_CI_GITHUB_REPOSITORY" --pattern 'node-npm-package-*' --dir downloaded/node
@@ -141,7 +140,6 @@ collect:github-artifacts:
       find downloaded/wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
       find downloaded/cli-wheels -type f -name '*.whl' -exec cp {} collected/wheels/ \;
       find downloaded/sdists -type f -name 'nemo_relay-*.tar.gz' -exec cp {} collected/sdists/ \;
-      find downloaded/cli-npm -type f -name '*.tgz' -exec cp {} collected/cli-npm/ \;
       find downloaded/node -type f -name '*.tgz' -exec cp {} collected/node/ \;
 
       if ! ls collected/wheels/*.whl >/dev/null 2>&1; then
@@ -154,10 +152,6 @@ collect:github-artifacts:
       fi
       if ! ls collected/node/*.tgz >/dev/null 2>&1; then
         echo "Error: collected GitHub Node artifacts did not contain any .tgz files." >&2
-        exit 1
-      fi
-      if ! ls collected/cli-npm/*.tgz >/dev/null 2>&1; then
-        echo "Error: collected GitHub CLI npm artifacts did not contain any .tgz files." >&2
         exit 1
       fi
 
@@ -177,7 +171,6 @@ collect:github-artifacts:
       - collected/wheels/*.whl
       - collected/sdists/nemo_relay-*.tar.gz
       - collected/node/*.tgz
-      - collected/cli-npm/*.tgz
       - collected/github-run.json
 
 publish:artifactory:wheels:
@@ -337,8 +330,3 @@ publish:artifactory:npm:
         npm publish --tag dev "$package"
       done
       npm publish --tag dev "collected/node/nemo-relay-node-npm-${CI_COMMIT_TAG}.tgz"
-      for platform in linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl darwin-arm64 win32-x64 win32-arm64; do
-        package="collected/cli-npm/nemo-relay-bin-npm-${platform}-${CI_COMMIT_TAG}.tgz"
-        npm publish --tag dev "$package"
-      done
-      npm publish --tag dev "collected/cli-npm/nemo-relay-bin-npm-${CI_COMMIT_TAG}.tgz"

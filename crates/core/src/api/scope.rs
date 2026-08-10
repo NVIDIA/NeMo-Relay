@@ -4,7 +4,7 @@
 use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, MarkEvent};
 use crate::api::runtime::global_context;
 use crate::api::runtime::scope_stack::snapshot_scope_stack;
-use crate::api::runtime::subscriber_dispatcher;
+use crate::api::runtime::subscriber_dispatcher::{self, SubscriberDelivery};
 use crate::api::runtime::{
     current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
@@ -296,6 +296,26 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
 /// snapshot, so cleanup does not change the middleware applied to the emitted
 /// event.
 pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
+    pop_scope_inner(params, false).map(|_| ())
+}
+
+/// Pop the current scope and return a receipt for its scope-end subscriber delivery.
+///
+/// The receipt covers sanitizer and subscriber processing for the scope-end event.
+/// It does not wait for unrelated events queued after that event.
+#[doc(hidden)]
+pub fn pop_scope_with_subscriber_delivery(
+    params: PopScopeParams<'_>,
+) -> Result<SubscriberDelivery> {
+    pop_scope_inner(params, true)?.ok_or_else(|| {
+        FlowError::Internal("tracked scope pop did not create a subscriber delivery receipt".into())
+    })
+}
+
+fn pop_scope_inner(
+    params: PopScopeParams<'_>,
+    track_delivery: bool,
+) -> Result<Option<SubscriberDelivery>> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
     let (scope, event, subscribers, emission_scope_stack) = {
@@ -335,13 +355,23 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     let publication_scope_stack = snapshot_scope_stack(&emission_scope_stack)?;
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    let _ = subscriber_dispatcher::dispatch_sanitized_event(
-        event,
-        sanitizers,
-        &subscribers,
-        publication_scope_stack,
-    );
-    Ok(())
+    if track_delivery {
+        subscriber_dispatcher::dispatch_sanitized_event_with_delivery(
+            event,
+            sanitizers,
+            &subscribers,
+            publication_scope_stack,
+        )
+        .map(Some)
+    } else {
+        let _ = subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            &subscribers,
+            publication_scope_stack,
+        );
+        Ok(None)
+    }
 }
 
 /// Emit a standalone mark event under the current or provided scope.

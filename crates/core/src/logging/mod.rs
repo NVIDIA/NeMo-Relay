@@ -13,7 +13,7 @@ mod sink;
 
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use spdlog::sink::Sink;
 use spdlog::{Logger, ThreadPool};
@@ -33,6 +33,8 @@ use sink::log_level_filter;
 pub(crate) use format::format_event_for_test;
 
 static LOGGER_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
+static DEFAULT_LOGGING_RUNTIME: Mutex<Option<LoggingRuntime>> = Mutex::new(None);
+static ACTIVE_RELAY_LOGGER: Mutex<Option<Weak<Logger>>> = Mutex::new(None);
 
 fn lock_logger_lifecycle() -> MutexGuard<'static, ()> {
     LOGGER_LIFECYCLE_LOCK
@@ -42,6 +44,32 @@ fn lock_logger_lifecycle() -> MutexGuard<'static, ()> {
 
 fn log_crate_proxy_is_installed() -> bool {
     std::ptr::addr_eq(log::logger(), spdlog::log_crate_proxy() as &dyn log::Log)
+}
+
+fn active_relay_logger_exists() -> bool {
+    ACTIVE_RELAY_LOGGER
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .is_some_and(|logger| logger.upgrade().is_some())
+}
+
+fn set_active_relay_logger(logger: &Arc<Logger>) {
+    *ACTIVE_RELAY_LOGGER
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(Arc::downgrade(logger));
+}
+
+fn clear_active_relay_logger(logger: &Arc<Logger>) {
+    let mut active = ACTIVE_RELAY_LOGGER
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if active
+        .as_ref()
+        .is_some_and(|current| Weak::ptr_eq(current, &Arc::downgrade(logger)))
+    {
+        *active = None;
+    }
 }
 
 fn install_log_crate_proxy() -> Result<()> {
@@ -75,17 +103,22 @@ impl LoggingRuntime {
     /// opened. Dropping the returned runtime flushes sinks and detaches its logger from the
     /// process-global `log` proxy when it is still installed.
     pub fn configure(config: LoggingConfig) -> Result<Self> {
-        let root_relay_id = Uuid::now_v7().to_string();
-        let (logger, thread_pools) = build_logger(&config, root_relay_id.clone())?;
-
         // Install once per process. Subsequent calls (tests / re-entry) reuse the proxy and swap
         // the receiver logger. A different global logger would prevent Relay sinks from receiving
         // `log` facade records, so fail instead of returning a nonfunctional runtime.
         let _lifecycle = lock_logger_lifecycle();
+        Self::configure_with_lifecycle_lock(config)
+    }
+
+    fn configure_with_lifecycle_lock(config: LoggingConfig) -> Result<Self> {
+        let root_relay_id = Uuid::now_v7().to_string();
+        let (logger, thread_pools) = build_logger(&config, root_relay_id.clone())?;
+
         install_log_crate_proxy()?;
         spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
         spdlog::log_crate_proxy().set_filter(None);
         log::set_max_level(log_level_filter(config.level));
+        set_active_relay_logger(&logger);
 
         log::info!(
             target: "nemo_relay.logging",
@@ -154,7 +187,10 @@ impl Drop for LoggingRuntime {
         if let Some(logger) = detached
             && !Arc::ptr_eq(&logger, &self.logger)
         {
-            spdlog::log_crate_proxy().set_logger(Some(logger));
+            spdlog::log_crate_proxy().set_logger(Some(Arc::clone(&logger)));
+            set_active_relay_logger(&logger);
+        } else {
+            clear_active_relay_logger(&self.logger);
         }
     }
 }
@@ -168,6 +204,51 @@ impl Drop for LoggingRuntime {
 /// process-global `log` proxy when it is still installed.
 pub fn init_logging(config: &LoggingConfig) -> Result<LoggingRuntime> {
     LoggingRuntime::configure(config.clone())
+}
+
+/// Installs and retains the default process-wide logging runtime for a language binding.
+///
+/// Configuration is resolved from the supported logging environment variables, with built-in
+/// defaults when none are present. Repeated initialization in the same linked runtime is a no-op.
+#[doc(hidden)]
+pub fn initialize_default_logging() -> Result<()> {
+    let mut runtime = DEFAULT_LOGGING_RUNTIME.lock().map_err(|error| {
+        FlowError::Internal(format!("default logging runtime lock poisoned: {error}"))
+    })?;
+    if runtime.is_none() {
+        let config = LoggingConfig::from_environment()?;
+        let uses_default_config = config.is_none();
+        let _lifecycle = lock_logger_lifecycle();
+        if uses_default_config && active_relay_logger_exists() {
+            return Ok(());
+        }
+        match LoggingRuntime::configure_with_lifecycle_lock(config.unwrap_or_default()) {
+            Ok(configured) => *runtime = Some(configured),
+            // Language bindings initialize logging automatically. When Relay was not explicitly
+            // configured, defer to an application logger that already owns the process facade.
+            Err(FlowError::AlreadyExists(_)) if uses_default_config => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Shuts down and releases the default process-wide logging runtime for a language binding.
+///
+/// Repeated shutdown in the same linked runtime is a no-op. The runtime is removed from shared
+/// state before its sinks are drained so shutdown does not hold the default-runtime lock.
+#[doc(hidden)]
+pub fn shutdown_default_logging() -> Result<()> {
+    let runtime = DEFAULT_LOGGING_RUNTIME
+        .lock()
+        .map_err(|error| {
+            FlowError::Internal(format!("default logging runtime lock poisoned: {error}"))
+        })?
+        .take();
+    if let Some(runtime) = runtime {
+        runtime.shutdown();
+    }
+    Ok(())
 }
 
 #[cfg(test)]

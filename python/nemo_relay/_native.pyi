@@ -32,6 +32,8 @@ _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 
+def _shutdown_default_logging() -> None: ...
+
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
     category_profile: _JsonObject | None
@@ -1155,6 +1157,26 @@ class AnthropicMessagesCodec:
         """Decode an Anthropic response into a normalized response view."""
         ...
 
+class GeminiGenerateContentCodec:
+    """Built-in codec for Gemini generateContent requests and responses.
+
+    Summary:
+        Native codec bridge for Gemini generateContent payloads.
+    """
+
+    def __init__(self) -> None:
+        """Create a Gemini generateContent codec."""
+        ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a Gemini generateContent request into a normalized request view."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode a normalized request back into Gemini generateContent shape."""
+        ...
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
+        """Decode a Gemini response into a normalized response view."""
+        ...
+
 class AdaptiveRuntime:
     """Hosted adaptive runtime bridge implemented by the native extension.
 
@@ -1271,6 +1293,9 @@ class PropagationContext:
     def to_json(self) -> str:
         """Serialize this context to the Relay JSON wire format."""
         ...
+    def to_traceparent(self) -> str:
+        """Convert this rooted context to a W3C traceparent value."""
+        ...
     @staticmethod
     def from_json(value: str) -> PropagationContext:
         """Deserialize and validate a Relay JSON wire context."""
@@ -1278,6 +1303,7 @@ class PropagationContext:
 
 def capture_propagation_context() -> PropagationContext: ...
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext: ...
+def capture_traceparent() -> str: ...
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack: ...
 
 class _ThreadScopeStackBinding: ...

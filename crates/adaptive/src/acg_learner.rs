@@ -88,8 +88,8 @@ impl Learner for AcgLearner {
                 crate::acg::stability::StabilityAnalysisResult,
             )> = None;
 
-            for (profile_key, new_observations) in grouped_observations.drain() {
-                let existing = backend.load_observations(&profile_key).await?;
+            for (learning_key, new_observations) in grouped_observations.drain() {
+                let existing = backend.load_observations(&learning_key).await?;
                 let mut window: VecDeque<PromptIR> =
                     existing.unwrap_or_default().into_iter().collect();
 
@@ -102,16 +102,22 @@ impl Learner for AcgLearner {
 
                 let observations_vec: Vec<PromptIR> = window.into_iter().collect();
                 backend
-                    .store_observations(&profile_key, &observations_vec)
+                    .store_observations(&learning_key, &observations_vec)
                     .await?;
 
-                let stability_result = analyze_stability(&observations_vec, &self.thresholds);
+                let mut stability_result = analyze_stability(&observations_vec, &self.thresholds);
+                stability_result.stable_prefix_fingerprint =
+                    crate::acg::stability::dominant_profile_prefix_fingerprint(
+                        &observations_vec,
+                        stability_result.stable_prefix_length,
+                        &learning_key,
+                    );
                 backend
-                    .store_stability(&profile_key, &stability_result)
+                    .store_stability(&learning_key, &stability_result)
                     .await?;
 
-                profile_counts.insert(profile_key.clone(), stability_result.total_observations);
-                profile_stability.insert(profile_key, stability_result.clone());
+                profile_counts.insert(learning_key.clone(), stability_result.total_observations);
+                profile_stability.insert(learning_key, stability_result.clone());
 
                 let replace_best = best_profile_seed
                     .as_ref()
@@ -130,7 +136,9 @@ impl Learner for AcgLearner {
             if let Some((aggregate_observations, aggregate_stability)) = best_profile_seed.as_ref()
             {
                 // Persist the runtime seed entry under plain agent_id so registration can
-                // rehydrate HotCache without scanning profile-specific keys.
+                // rehydrate HotCache without scanning learning keys. Its fingerprint stays
+                // bound to the winning learning key, so a request from a different profile
+                // fails the reuse gate instead of inheriting another profile's scaffold.
                 backend
                     .store_observations(&self.agent_id, aggregate_observations)
                     .await?;

@@ -30,13 +30,14 @@ use crate::api::runtime::{
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
     MiddlewareContinuationContext, with_active_event_uuid,
 };
-use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
+use crate::api::runtime::{ScopeStackHandle, capture_traceparent, current_scope_stack};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_error,
-    metadata_with_otel_status, resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
-    snapshot_event_sanitizers, snapshot_event_subscribers,
+    ensure_runtime_owner, inject_dynamo_session_ids, inject_traceparent, inject_traceparent_value,
+    metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
+    run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -141,6 +142,10 @@ pub struct CreateLlmHandleParams<'a> {
     /// Logical provider or model family name. Gateway-managed provider calls
     /// should pass the provider route name, for example `anthropic.messages`.
     pub name: &'a str,
+    /// Optional UUID reserved before request interception so outbound
+    /// propagation can identify the emitted LLM span.
+    #[builder(default)]
+    pub uuid: Option<Uuid>,
     /// Optional parent scope UUID.
     #[builder(default)]
     pub parent_uuid: Option<uuid::Uuid>,
@@ -423,7 +428,7 @@ async fn emit_llm_start_with_subscribers(
     subscribers: &[EventSubscriberFn],
 ) -> Result<()> {
     ensure_runtime_owner()?;
-    let entries = {
+    let (entries, full_payloads_enabled) = {
         let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
@@ -433,7 +438,10 @@ async fn emit_llm_start_with_subscribers(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.llm_sanitize_request_entries(&scope_locals)
+        (
+            state.llm_sanitize_request_entries(&scope_locals),
+            state.observability_full_payloads_enabled,
+        )
     };
     let observable_request = remove_observability_credential_headers(request.clone());
     let mut sanitized_request = NemoRelayContextState::llm_sanitize_request_snapshot_chain(
@@ -458,7 +466,10 @@ async fn emit_llm_start_with_subscribers(
         let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
         scope_guard.take_agent_freshness(handle.parent_uuid)
     };
-    if !agent_is_fresh && let Some(sanitized_request) = sanitized_request.as_mut() {
+    if !full_payloads_enabled
+        && !agent_is_fresh
+        && let Some(sanitized_request) = sanitized_request.as_mut()
+    {
         project_llm_request_to_current_user_turn(
             sanitized_request,
             &mut annotated_request,
@@ -738,10 +749,11 @@ fn emit_optimization_marks_with<F>(
 /// `proxy-authorization`, `cookie`, `x-api-key`, `api-key`,
 /// `anthropic-api-key`, and `x-goog-api-key`) from the event-only request copy
 /// before sanitize-request guardrails run. This does not change the
-/// caller-owned [`LlmRequest`]. When the owning agent is not fresh, the emitted
-/// request annotation is limited to the current user turn. Managed calls with a
-/// request codec also apply that projection to the event input, without changing
-/// the request used for provider execution.
+/// caller-owned [`LlmRequest`]. By default, when the owning agent is not fresh,
+/// the emitted request annotation is limited to the current user turn. Managed
+/// calls with a request codec also apply that projection to the event input,
+/// without changing the request used for provider execution. The observability
+/// plugin's `enable_full_payloads` option disables this projection.
 pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
     let handle_params = CreateLlmHandleParams::builder()
         .name(params.name)
@@ -754,7 +766,7 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
         .build();
     let handle = create_llm_handle(handle_params)?;
     let scope_stack = handle.captured_scope_stack().clone();
-    let (entries, subscribers, agent_is_fresh) = {
+    let (entries, subscribers, agent_is_fresh, full_payloads_enabled) = {
         let mut scope_guard = scope_stack
             .write()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
@@ -768,9 +780,10 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
         let entries = state.llm_sanitize_request_entries(&scope_locals);
+        let full_payloads_enabled = state.observability_full_payloads_enabled;
         drop(state);
         let agent_is_fresh = scope_guard.take_agent_freshness(handle.parent_uuid);
-        (entries, subscribers, agent_is_fresh)
+        (entries, subscribers, agent_is_fresh, full_payloads_enabled)
     };
     // Middleware and event publication only observe a credential-free copy.
     // Keep `params.request` untouched: it remains the caller/provider request.
@@ -804,7 +817,10 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
                 } else {
                     annotated_request
                 };
-                if !agent_is_fresh && let Some(sanitized_request) = sanitized_request.as_mut() {
+                if !full_payloads_enabled
+                    && !agent_is_fresh
+                    && let Some(sanitized_request) = sanitized_request.as_mut()
+                {
                     project_llm_request_to_current_user_turn(
                         sanitized_request,
                         &mut annotation,
@@ -1430,8 +1446,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     }
 
     let request_codec = codec.clone();
+    let llm_uuid = Uuid::now_v7();
     let optimization_recorder = LlmOptimizationRecorder::default();
-    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
+    let (mut intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         scope_llm_optimization_recorder(optimization_recorder.clone(), async {
             run_request_intercepts_with_codec_and_recorder(
                 &name,
@@ -1446,6 +1463,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
+            .uuid(llm_uuid)
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
             .attributes(attributes)
             .data_opt(data.clone())
@@ -1467,6 +1485,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         &lifecycle_subscribers,
     )
     .await?;
+    inject_traceparent(&mut intercepted_request, handle.uuid)?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers).await?;
     handle
         .optimization_recorder
@@ -1639,8 +1658,9 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     }
 
     let request_codec = codec.clone();
+    let llm_uuid = Uuid::now_v7();
     let optimization_recorder = LlmOptimizationRecorder::default();
-    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
+    let (mut intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         scope_llm_optimization_recorder(optimization_recorder.clone(), async {
             run_request_intercepts_with_codec_and_recorder(
                 &name,
@@ -1655,6 +1675,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
+            .uuid(llm_uuid)
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
             .attributes(attributes)
             .data_opt(data.clone())
@@ -1676,6 +1697,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         &lifecycle_subscribers,
     )
     .await?;
+    inject_traceparent(&mut intercepted_request, handle.uuid)?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers).await?;
     handle
         .optimization_recorder
@@ -1786,6 +1808,9 @@ pub async fn llm_request_intercepts(
     )
     .await?;
     inject_dynamo_session_ids(&mut outcome.request);
+    if let Ok(traceparent) = capture_traceparent() {
+        inject_traceparent_value(&mut outcome.request, traceparent);
+    }
     Ok(outcome)
 }
 

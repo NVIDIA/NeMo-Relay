@@ -33,7 +33,7 @@ NeMo Relay PII Redaction allows you to:
 - Use built-in detector presets as first-party detectors for common PII,
   structured secrets, and cloud credentials.
 - Handle codec-aware LLMs with overlay support for `openai_chat`,
-  `openai_responses`, and `anthropic_messages`.
+  `openai_responses`, `anthropic_messages`, and `gemini_generate_content`.
 - Remove conversational trajectory content while preserving event structure,
   tool-call identity, model attribution, routing, usage, and cost analytics.
 - Use the `local_model` config contract and provider registration surface for

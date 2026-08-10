@@ -90,6 +90,9 @@ function sparseArray() {
 function unprintableError() {
   const error = new Error('sanitize request guardrail failed');
   Object.defineProperties(error, {
+    name: {
+      value: 'GetterError',
+    },
     message: {
       get() {
         throw new Error('message getter boom');
@@ -285,11 +288,11 @@ describe('LLM execute', () => {
 
       await assert.rejects(
         () =>
-          llmCallExecuteAsync(
+          llmCallExecute(
             'exec_status_error_llm',
             makeNative(),
-            async () => {
-              throw new Error('llm status failure');
+            () => {
+              throw unprintableError();
             },
             null,
             null,
@@ -299,7 +302,7 @@ describe('LLM execute', () => {
             },
             null,
           ),
-        /llm status failure/,
+        /JavaScript callback failed/,
       );
 
       await flushSubscribers();
@@ -320,8 +323,9 @@ describe('LLM execute', () => {
       assert.ok(errorEnd, 'expected failed llm end event');
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
-      assert.match(errorEnd.metadata['otel.status_description'], /llm status failure/);
+      assert.match(errorEnd.metadata['otel.status_description'], /JavaScript callback failed/);
       assert.equal(errorEnd.metadata['error.type'], 'internal_error');
+      assert.equal(errorEnd.metadata['exception.type'], 'GetterError');
     } finally {
       deregisterSubscriber('node_llm_status_metadata_sub');
     }
@@ -823,10 +827,9 @@ describe('LLM guardrails', () => {
         null,
         null,
       );
-      assert.deepEqual(result, {
-        model: 'test-model',
-        headers: {},
-      });
+      const { traceparent, ...headers } = result.headers;
+      assert.deepEqual({ ...result, headers }, { model: 'test-model', headers: {} });
+      assert.match(traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     } finally {
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_bad');
     }
@@ -1085,9 +1088,9 @@ describe('LLM intercepts', () => {
     const observed = [];
     registerSubscriber('node_llm_exec_propagation_parent', (event) => events.push(event));
     registerLlmExecutionIntercept('node_llm_exec_propagation_parent', 10, async (request, next) => {
-      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid]);
+      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
       await new Promise((resolve) => setImmediate(resolve));
-      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid]);
+      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
       return next(request);
     });
     try {
@@ -1095,9 +1098,9 @@ describe('LLM intercepts', () => {
         'propagation_parent_llm',
         makeNative(),
         async () => {
-          observed.push(['provider-before', lib.capturePropagationContext().parentUuid]);
+          observed.push(['provider-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
           await new Promise((resolve) => setImmediate(resolve));
-          observed.push(['provider-after', lib.capturePropagationContext().parentUuid]);
+          observed.push(['provider-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
           return { ok: true };
         },
         null,
@@ -1113,15 +1116,57 @@ describe('LLM intercepts', () => {
           event.name === 'propagation_parent_llm' && event.kind === 'scope' && event.scope_category === 'start',
       );
       assert.ok(start, 'expected managed LLM start event');
+      const traceparent = `00-${start.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
       assert.deepEqual(observed, [
-        ['intercept-before', start.uuid],
-        ['intercept-after', start.uuid],
-        ['provider-before', start.uuid],
-        ['provider-after', start.uuid],
+        ['intercept-before', start.uuid, traceparent],
+        ['intercept-after', start.uuid, traceparent],
+        ['provider-before', start.uuid, traceparent],
+        ['provider-after', start.uuid, traceparent],
       ]);
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_propagation_parent');
       deregisterSubscriber('node_llm_exec_propagation_parent');
+    }
+  });
+
+  it('execution callbacks preserve an imported trace root', async () => {
+    const rootUuid = '018f13f0-7c1a-7a80-8000-000000000701';
+    const parentUuid = '018f13f0-7c1a-7a80-8000-000000000702';
+    const stack = lib.createScopeStackFromPropagation({ version: 1, rootUuid, parentUuid });
+    const events = [];
+    const observed = [];
+    registerSubscriber('node_llm_exec_propagated_trace_root', (event) => events.push(event));
+    registerLlmExecutionIntercept('node_llm_exec_propagated_trace_root', 10, async (request, next) => {
+      observed.push(lib.captureTraceparent());
+      return next(request);
+    });
+    try {
+      await lib.withScopeStack(stack, () =>
+        llmCallExecuteAsync(
+          'propagated_trace_root_llm',
+          makeNative(),
+          async () => {
+            observed.push(lib.captureTraceparent());
+            return { ok: true };
+          },
+          null,
+          null,
+          null,
+          null,
+          null,
+        ),
+      );
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'propagated_trace_root_llm' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed LLM start event');
+      const expected = `00-${rootUuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
+      assert.deepEqual(observed, [expected, expected]);
+    } finally {
+      deregisterLlmExecutionIntercept('node_llm_exec_propagated_trace_root');
+      deregisterSubscriber('node_llm_exec_propagated_trace_root');
     }
   });
 

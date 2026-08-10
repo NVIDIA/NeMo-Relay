@@ -22,11 +22,11 @@ trust.
 
 ## Add and Enable a Plugin
 
-Validate the manifest before registering it in project configuration:
+Validate the manifest before registering it in user configuration:
 
 ```bash
 nemo-relay plugins validate ./acme-plugin/relay-plugin.toml
-nemo-relay plugins add --project ./acme-plugin/relay-plugin.toml
+nemo-relay plugins add --user ./acme-plugin/relay-plugin.toml
 nemo-relay plugins inspect acme.plugin
 nemo-relay plugins enable acme.plugin
 nemo-relay plugins validate acme.plugin

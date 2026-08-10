@@ -301,6 +301,18 @@ fn test_request_surface_resolution_and_passthrough_support_cover_matrix() {
         super::resolve_request_surface_from_request(&anthropic_request).unwrap(),
         RequestSurface::AnthropicMessages
     );
+    let gemini_request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "model": "gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        }),
+    };
+    assert!(matches!(
+        super::resolve_request_surface_from_request(&gemini_request),
+        Err(crate::acg::AcgError::Internal(message))
+            if message.contains("does not have an ACG applier")
+    ));
     assert!(matches!(
         super::resolve_request_surface_from_request(&invalid_request),
         Err(crate::acg::AcgError::Internal(message))

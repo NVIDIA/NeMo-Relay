@@ -79,6 +79,73 @@ fn replay_chunks_roundtrip_through_the_codecs() {
 }
 
 #[test]
+fn gemini_replay_uses_a_valid_native_stream_event() {
+    let aggregate = json!({
+        "candidates": [{
+            "index": 0,
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "hello", "thoughtSignature": "sig_TEXT=="},
+                    {
+                        "functionCall": {
+                            "id": "call_1",
+                            "name": "lookup",
+                            "args": {"q": "x"}
+                        },
+                        "thoughtSignature": "sig_CALL=="
+                    }
+                ]
+            },
+            "finishReason": "STOP",
+            "safetyRatings": [
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}
+            ],
+            "groundingMetadata": {"webSearchQueries": ["example query"]}
+        }],
+        "usageMetadata": {
+            "promptTokenCount": 9,
+            "candidatesTokenCount": 3,
+            "totalTokenCount": 12
+        },
+        "modelVersion": "gemini-2.5-flash",
+        "responseId": "resp_1"
+    });
+    let chunks = synthesize_replay_chunks(&aggregate).expect("gemini shape");
+    assert_eq!(
+        chunks,
+        vec![aggregate.clone()],
+        "a GenerateContentResponse aggregate is already a native Gemini stream event"
+    );
+    assert!(
+        !replay_is_lossy(&aggregate),
+        "the Gemini streaming codec must reassemble the native replay exactly"
+    );
+}
+
+#[test]
+fn gemini_replay_rejects_multi_candidate_aggregates_as_lossy() {
+    let aggregate = json!({
+        "candidates": [
+            {
+                "index": 0,
+                "content": {"role": "model", "parts": [{"text": "first"}]},
+                "finishReason": "STOP"
+            },
+            {
+                "index": 1,
+                "content": {"role": "model", "parts": [{"text": "second"}]},
+                "finishReason": "STOP"
+            }
+        ]
+    });
+    assert!(
+        replay_is_lossy(&aggregate),
+        "Gemini streaming replay must not serve aggregates with candidates the collector cannot preserve"
+    );
+}
+
+#[test]
 fn responses_replay_sequence_numbers_are_contiguous() {
     let aggregate = json!({
         "id": "r1",

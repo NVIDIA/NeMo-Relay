@@ -96,6 +96,7 @@ func TestLlmSanitizeDirectionalContextsPreserveEveryCodecIdentity(t *testing.T) 
 	openAIChat := "openai_chat"
 	openAIResponses := "openai_responses"
 	anthropicMessages := "anthropic_messages"
+	gemini := "gemini_generate_content"
 	runtimeCodec := "com.example.chat.v1"
 
 	cases := []codecIdentityTestCase{
@@ -103,6 +104,7 @@ func TestLlmSanitizeDirectionalContextsPreserveEveryCodecIdentity(t *testing.T) 
 		{"openai chat", 1, &openAIChat, LLMCodecBuiltin},
 		{"openai responses", 1, &openAIResponses, LLMCodecBuiltin},
 		{"anthropic messages", 1, &anthropicMessages, LLMCodecBuiltin},
+		{"gemini_generate_content", 1, &gemini, LLMCodecBuiltin},
 		{"runtime", 2, &runtimeCodec, LLMCodecRuntime},
 		{"opaque", 3, nil, LLMCodecOpaque},
 		{"unknown", 99, nil, LLMCodecOpaque},

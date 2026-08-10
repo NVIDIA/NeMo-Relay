@@ -66,33 +66,30 @@ pub(super) async fn probe_otlp_http_named(name: &'static str, url: &str) -> Chec
             } else {
                 Status::Warn
             },
-            details: format!("{} (HTTP {})", url, response.status().as_u16()),
+            details: format!(
+                "{} (live HTTP reachability probe returned HTTP {})",
+                url,
+                response.status().as_u16()
+            ),
         },
         Err(error) => Check {
             name,
             status: Status::Fail,
-            details: format!("{url}: {error}"),
+            details: format!("{url}: live HTTP reachability probe failed: {error}"),
         },
     }
 }
 
 pub(super) async fn probe_tcp_named(name: &'static str, endpoint: &str) -> Check {
-    let parsed = match reqwest::Url::parse(endpoint) {
-        Ok(parsed) => parsed,
-        Err(error) => {
+    let (parsed, host) = match validate_grpc_endpoint(endpoint) {
+        Ok((parsed, host)) => (parsed, host),
+        Err(details) => {
             return Check {
                 name,
                 status: Status::Fail,
-                details: format!("{endpoint}: invalid gRPC endpoint: {error}"),
+                details,
             };
         }
-    };
-    let Some(host) = parsed.host_str() else {
-        return Check {
-            name,
-            status: Status::Fail,
-            details: format!("{endpoint}: gRPC endpoint has no host"),
-        };
     };
     let port = grpc_endpoint_port(&parsed);
     match tokio::time::timeout(
@@ -104,19 +101,50 @@ pub(super) async fn probe_tcp_named(name: &'static str, endpoint: &str) -> Check
         Ok(Ok(_)) => Check {
             name,
             status: Status::Pass,
-            details: format!("{endpoint} (gRPC TCP connection succeeded)"),
+            details: format!(
+                "{endpoint} (live gRPC reachability probe connected to the TCP port; OTLP handshake not verified)"
+            ),
         },
         Ok(Err(error)) => Check {
             name,
             status: Status::Fail,
-            details: format!("{endpoint}: gRPC TCP connection failed: {error}"),
+            details: format!("{endpoint}: live gRPC reachability probe failed: {error}"),
         },
         Err(_) => Check {
             name,
             status: Status::Fail,
-            details: format!("{endpoint}: gRPC TCP connection timed out"),
+            details: format!("{endpoint}: live gRPC reachability probe timed out"),
         },
     }
+}
+
+pub(super) fn validate_grpc_endpoint(endpoint: &str) -> Result<(reqwest::Url, String), String> {
+    let parsed = reqwest::Url::parse(endpoint)
+        .map_err(|error| format!("{endpoint}: invalid gRPC endpoint: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!(
+            "{endpoint}: gRPC endpoint must use http:// or https://"
+        ));
+    }
+    let host = parsed
+        .host_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{endpoint}: gRPC endpoint has no host"))?;
+    Ok((parsed, host))
+}
+
+pub(super) fn validate_otlp_http_endpoint(endpoint: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(endpoint)
+        .map_err(|error| format!("{endpoint}: invalid OTLP HTTP endpoint: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!(
+            "{endpoint}: OTLP HTTP endpoint must use http:// or https://"
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(format!("{endpoint}: OTLP HTTP endpoint has no host"));
+    }
+    Ok(())
 }
 
 fn grpc_endpoint_port(endpoint: &reqwest::Url) -> u16 {

@@ -282,7 +282,7 @@ crate::editor_config! {
         codec => {
             label: "codec",
             kind: Enum,
-            values: ["openai_chat", "openai_responses", "anthropic_messages"],
+            values: ["openai_chat", "openai_responses", "anthropic_messages", "gemini_generate_content"],
             optional: true,
         },
         input => { label: "input", kind: Boolean },
@@ -430,7 +430,12 @@ fn mode_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::sc
 fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
     string_enum_schema(
         generator,
-        &["openai_chat", "openai_responses", "anthropic_messages"],
+        &[
+            "openai_chat",
+            "openai_responses",
+            "anthropic_messages",
+            "gemini_generate_content",
+        ],
         None,
     )
 }
@@ -921,7 +926,10 @@ fn validate_codec_requirements(
             "nemo_guardrails.unsupported_value",
             Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
             Some("codec".to_string()),
-            "codec must be 'openai_chat', 'openai_responses', or 'anthropic_messages'".to_string(),
+            format!(
+                "codec must be one of: {}",
+                supported_codec_names().join(", ")
+            ),
         );
     }
 }

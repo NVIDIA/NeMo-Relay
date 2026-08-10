@@ -8,7 +8,7 @@ use crate::api::registry::Guardrail;
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
-use crate::error::Result;
+use crate::error::{FlowError, Result};
 use std::any::Any;
 use std::cell::RefCell;
 use std::future::Future;
@@ -82,6 +82,37 @@ pub(crate) type EventTransformFn = Box<
     dyn FnOnce(Event) -> Pin<Box<dyn Future<Output = Event> + Send + 'static>> + Send + 'static,
 >;
 
+/// Completion receipt for one queued subscriber delivery.
+///
+/// Unlike [`flush_subscribers`], this receipt waits only for sanitizer and
+/// subscriber processing of the event that created it. Events queued later are
+/// not part of the wait.
+#[doc(hidden)]
+pub struct SubscriberDelivery {
+    completion: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl SubscriberDelivery {
+    fn completed() -> Self {
+        let (completion_tx, completion) = tokio::sync::oneshot::channel();
+        let _ = completion_tx.send(());
+        Self { completion }
+    }
+
+    /// Wait until this event's subscriber delivery is complete.
+    ///
+    /// Do not call this from a subscriber, event-sanitizer, guardrail, or
+    /// intercept callback. The dispatcher signals completion on its own
+    /// thread, so waiting there creates a wait cycle.
+    pub async fn wait(self) -> Result<()> {
+        self.completion.await.map_err(|error| {
+            FlowError::Internal(format!(
+                "subscriber delivery completion channel closed: {error}"
+            ))
+        })
+    }
+}
+
 mod native {
     use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -108,6 +139,7 @@ mod native {
             scope_stack: ScopeStackHandle,
             publication_context: Option<PublicationContext>,
             lineage: Option<PublicationPermit>,
+            completion: Option<tokio::sync::oneshot::Sender<()>>,
         },
         Flush {
             done: Sender<()>,
@@ -486,6 +518,7 @@ mod native {
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         send_dispatch_message(message)
     }
@@ -510,8 +543,42 @@ mod native {
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         enqueue_dispatch_message(message)
+    }
+
+    pub(super) fn dispatch_sanitized_event_with_delivery(
+        event: Event,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> Result<SubscriberDelivery> {
+        if subscribers.is_empty() {
+            return Ok(SubscriberDelivery::completed());
+        }
+        let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
+            return Err(FlowError::Internal(
+                "failed to snapshot scope stack for subscriber delivery".into(),
+            ));
+        };
+        let (completion_tx, completion) = tokio::sync::oneshot::channel();
+        let message = DispatcherMessage::Deliver {
+            event: Box::new(event),
+            transform: None,
+            sanitizers,
+            subscribers: subscribers.to_vec(),
+            scope_stack,
+            publication_context: current_publication_context(),
+            lineage: None,
+            completion: Some(completion_tx),
+        };
+        if !enqueue_dispatch_message(message) {
+            return Err(FlowError::Internal(
+                "failed to queue tracked subscriber delivery".into(),
+            ));
+        }
+        Ok(SubscriberDelivery { completion })
     }
 
     pub(super) fn dispatch_reserved_sanitized_event(
@@ -534,6 +601,7 @@ mod native {
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         enqueue_dispatch_message(message)
     }
@@ -556,6 +624,7 @@ mod native {
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         enqueue_dispatch_message(message)
     }
@@ -884,6 +953,7 @@ mod native {
                 scope_stack,
                 publication_context,
                 lineage: permit,
+                completion,
             } => {
                 let nested_publications = with_publication_lineage(Arc::clone(&lineage), || {
                     deliver_event(
@@ -898,6 +968,9 @@ mod native {
                 drop(permit);
                 for publication in nested_publications {
                     handle_message(publication, state, Some(&lineage));
+                }
+                if let Some(completion) = completion {
+                    let _ = completion.send(());
                 }
             }
             DispatcherMessage::Barrier {
@@ -1180,6 +1253,15 @@ pub(crate) fn dispatch_sanitized_event(
     scope_stack: ScopeStackHandle,
 ) -> bool {
     native::dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
+}
+
+pub(crate) fn dispatch_sanitized_event_with_delivery(
+    event: Event,
+    sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> Result<SubscriberDelivery> {
+    native::dispatch_sanitized_event_with_delivery(event, sanitizers, subscribers, scope_stack)
 }
 
 /// Publish a stream-finalization event at its reserved FIFO position.

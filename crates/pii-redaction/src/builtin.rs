@@ -304,6 +304,9 @@ impl CompiledBuiltinBackend {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages) => {
                 Some(ProviderSurface::AnthropicMessages)
             }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent) => {
+                Some(ProviderSurface::GeminiGenerateContent)
+            }
             LlmCodecIdentity::Runtime(_) | LlmCodecIdentity::Opaque => None,
         }
     }
@@ -396,7 +399,19 @@ impl CompiledBuiltinBackend {
                 .get("choices")
                 .and_then(Json::as_array)
                 .is_some_and(|choices| choices.len() > 1)
-            && self.targets_normalized_openai_chat_choice()
+            && self.targets_normalized_single_projected_response()
+        {
+            return None;
+        }
+        // Gemini responses with multiple candidates: the normalized layer only projects
+        // candidate[0], so candidate[1+] would survive in the raw payload unredacted.
+        // Fail closed identically to the OpenAI Chat multi-choice guard.
+        if surface == ProviderSurface::GeminiGenerateContent
+            && payload
+                .get("candidates")
+                .and_then(Json::as_array)
+                .is_some_and(|candidates| candidates.len() > 1)
+            && self.targets_normalized_single_projected_response()
         {
             return None;
         }
@@ -446,7 +461,7 @@ impl CompiledBuiltinBackend {
         })
     }
 
-    fn targets_normalized_openai_chat_choice(&self) -> bool {
+    fn targets_normalized_single_projected_response(&self) -> bool {
         self.target_paths.iter().any(|path| {
             json_pointer_segments(path)
                 .and_then(|segments| segments.into_iter().next())

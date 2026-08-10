@@ -54,15 +54,6 @@ fn plugins_edit_treats_explicit_target_as_the_user_layer() {
         Some(PathBuf::from("/override/plugins.toml"))
     );
 
-    let project = PluginsEditCommand {
-        scope: PluginsScopeArgs {
-            project: true,
-            ..PluginsScopeArgs::default()
-        },
-    };
-    let request = plugins::edit_request(project, &server);
-    assert_eq!(request.explicit_path, None);
-
     let global = PluginsEditCommand {
         scope: PluginsScopeArgs {
             global: true,
@@ -217,7 +208,7 @@ fn cli_logging_options_override_environment_source() {
     ])
     .unwrap();
 
-    let config = cli.logging.resolve(None, false).unwrap();
+    let config = cli.logging.resolve(None).unwrap();
 
     assert_eq!(config.level, nemo_relay::logging::LogLevel::Trace);
     assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
@@ -251,10 +242,7 @@ stderr_format = "jsonl"
     ])
     .unwrap();
 
-    let config = cli
-        .logging
-        .resolve(cli.server.config.as_deref(), false)
-        .unwrap();
+    let config = cli.logging.resolve(cli.server.config.as_deref()).unwrap();
 
     assert_eq!(config.level, nemo_relay::logging::LogLevel::Warn);
     assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
@@ -283,7 +271,7 @@ fn command_logging_policy_excludes_only_configuration_editors() {
     let config = Cli::try_parse_from(["nemo-relay", "config"]).unwrap();
     assert!(config.command.as_ref().unwrap().skips_logging());
 
-    let plugins_edit = Cli::try_parse_from(["nemo-relay", "plugins", "edit", "--project"]).unwrap();
+    let plugins_edit = Cli::try_parse_from(["nemo-relay", "plugins", "edit", "--user"]).unwrap();
     assert!(plugins_edit.command.as_ref().unwrap().skips_logging());
 
     let plugins_list = Cli::try_parse_from(["nemo-relay", "plugins", "list"]).unwrap();
@@ -309,7 +297,6 @@ fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
         panic!("expected config edit command");
     };
     assert!(!command.user);
-    assert!(!command.project);
     assert!(!command.global);
 
     let explicit = Cli::try_parse_from([
@@ -325,14 +312,10 @@ fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
         Some(PathBuf::from("/managed/config.toml"))
     );
 
-    let project = Cli::try_parse_from(["nemo-relay", "config", "edit", "--project"]).unwrap();
-    let Command::Config(command) = project.command.unwrap() else {
-        panic!("expected config command");
-    };
-    let Some(ConfigSubcommand::Edit(command)) = command.command else {
-        panic!("expected config edit command");
-    };
-    assert!(command.project);
+    assert!(Cli::try_parse_from(["nemo-relay", "config", "edit", "--project"]).is_err());
+    assert!(Cli::try_parse_from(["nemo-relay", "plugins", "edit", "--project"]).is_err());
+    assert!(Cli::try_parse_from(["nemo-relay", "model-pricing", "init", "--project"]).is_err());
+    assert!(Cli::try_parse_from(["nemo-relay", "config", "--reset", "--scope", "user"]).is_err());
 
     let error =
         Cli::try_parse_from(["nemo-relay", "config", "edit", "--user", "--global"]).unwrap_err();
@@ -354,6 +337,36 @@ fn doctor_rejects_conflicting_agent_and_plugin_targets() {
 }
 
 #[test]
+fn doctor_accepts_offline_flag() {
+    let cli = Cli::try_parse_from(["nemo-relay", "doctor", "--offline"]).unwrap();
+    match cli.command {
+        Some(Command::Doctor(command)) => assert!(command.offline),
+        other => panic!("expected doctor command, got {other:?}"),
+    }
+}
+
+#[test]
+fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
+    for shortcut in ["claude", "codex"] {
+        let cli = Cli::try_parse_from([
+            "nemo-relay",
+            shortcut,
+            "--dry-run",
+            "--",
+            shortcut,
+            "synthetic argument",
+        ])
+        .unwrap();
+        let command = match cli.command {
+            Some(Command::Claude(command)) | Some(Command::Codex(command)) => command,
+            other => panic!("expected agent shortcut command, got {other:?}"),
+        };
+        assert!(command.dry_run);
+        assert_eq!(command.command, [shortcut, "synthetic argument"]);
+    }
+}
+
+#[test]
 fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
     let visited = std::cell::RefCell::new(Vec::new());
     let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {
@@ -361,7 +374,6 @@ fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
         match agent {
             CodingAgent::Codex => Err(error::CliError::Install("codex failure".into())),
             CodingAgent::ClaudeCode => Ok(ExitCode::FAILURE),
-            CodingAgent::Hermes => Ok(ExitCode::SUCCESS),
         }
     })
     .unwrap_err()
