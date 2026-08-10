@@ -173,11 +173,9 @@ impl CompletionRef {
             let status = unsafe { (self.host.0.async_completion_retain)(self.raw) };
             status_result(status, "retain native async completion capability")?;
             Some(LlmSanitizeRequestCodec {
-                host: self.host.0.v3.v1,
-                handle: ptr::null(),
-                async_host: Some(self.host.0),
+                async_host: self.host.0,
                 completion: self.raw,
-                completion_release: Some(self.host.0.v3.async_completion_release),
+                completion_release: self.host.0.v3.async_completion_release,
                 _lifetime: PhantomData,
             })
         };
@@ -194,11 +192,9 @@ impl CompletionRef {
             let status = unsafe { (self.host.0.async_completion_retain)(self.raw) };
             status_result(status, "retain native async completion capability")?;
             Some(LlmSanitizeResponseCodec {
-                host: self.host.0.v3.v1,
-                handle: ptr::null(),
-                async_host: Some(self.host.0),
+                async_host: self.host.0,
                 completion: self.raw,
-                completion_release: Some(self.host.0.v3.async_completion_release),
+                completion_release: self.host.0.v3.async_completion_release,
                 _lifetime: PhantomData,
             })
         };

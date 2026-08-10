@@ -198,46 +198,38 @@ pub struct NemoRelayNativeLlmSanitizeResponseContext {
     pub codec: *const NemoRelayNativeLlmResponseCodec,
 }
 
-/// Safe callback-scoped request codec facade for typed native plugins.
+/// Safe completion-backed request codec facade for typed native plugins.
 pub struct LlmSanitizeRequestCodec<'a> {
-    host: NemoRelayNativeHostApiV1,
-    handle: *const NemoRelayNativeLlmRequestCodec,
-    async_host: Option<NemoRelayNativeHostApiV4>,
+    async_host: NemoRelayNativeHostApiV4,
     completion: *const NemoRelayNativeAsyncCompletion,
-    completion_release: Option<unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion)>,
+    completion_release: unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion),
     _lifetime: PhantomData<&'a NemoRelayNativeLlmRequestCodec>,
 }
-// SAFETY: the only construction path is the async SDK, which retains the
-// completion capability until this facade is dropped.
+// SAFETY: this type has no borrowed-handle construction path. The async SDK
+// retains the completion capability until this facade is dropped.
 unsafe impl Send for LlmSanitizeRequestCodec<'_> {}
-// SAFETY: calls use the immutable host API and the retained completion
-// capability, which the host permits from concurrent plugin tasks.
+// SAFETY: calls use the immutable host API and retained completion capability,
+// which the host permits from concurrent plugin tasks.
 unsafe impl Sync for LlmSanitizeRequestCodec<'_> {}
 
 impl Drop for LlmSanitizeRequestCodec<'_> {
     fn drop(&mut self) {
-        if let Some(release) = self.completion_release {
-            unsafe { release(self.completion) };
-        }
+        unsafe { (self.completion_release)(self.completion) };
     }
 }
 
 impl LlmSanitizeRequestCodec<'_> {
     /// Decode an opaque request into Relay's normalized request model.
     pub fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
-        native_codec_call(&self.host, |out| unsafe {
-            let request = HostString::from_json(&self.host, request)
+        native_codec_call(&self.async_host.v3.v1, |out| unsafe {
+            let request = HostString::from_json(&self.async_host.v3.v1, request)
                 .ok_or_else(|| "failed to serialize LLM request".to_string())?;
-            let status = if let Some(host) = self.async_host {
-                (host.async_completion_llm_request_codec_decode)(
-                    self.completion,
-                    request.as_ptr(),
-                    out,
-                )
-            } else {
-                (self.host.llm_request_codec_decode)(self.handle, request.as_ptr(), out)
-            };
-            codec_status(&self.host, status)
+            let status = (self.async_host.async_completion_llm_request_codec_decode)(
+                self.completion,
+                request.as_ptr(),
+                out,
+            );
+            codec_status(&self.async_host.v3.v1, status)
         })
     }
 
@@ -247,42 +239,31 @@ impl LlmSanitizeRequestCodec<'_> {
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> Result<LlmRequest> {
-        native_codec_call(&self.host, |out| unsafe {
-            let annotated = HostString::from_json(&self.host, annotated)
+        native_codec_call(&self.async_host.v3.v1, |out| unsafe {
+            let annotated = HostString::from_json(&self.async_host.v3.v1, annotated)
                 .ok_or_else(|| "failed to serialize annotated request".to_string())?;
-            let original = HostString::from_json(&self.host, original)
+            let original = HostString::from_json(&self.async_host.v3.v1, original)
                 .ok_or_else(|| "failed to serialize original request".to_string())?;
-            let status = if let Some(host) = self.async_host {
-                (host.async_completion_llm_request_codec_encode)(
-                    self.completion,
-                    annotated.as_ptr(),
-                    original.as_ptr(),
-                    out,
-                )
-            } else {
-                (self.host.llm_request_codec_encode)(
-                    self.handle,
-                    annotated.as_ptr(),
-                    original.as_ptr(),
-                    out,
-                )
-            };
-            codec_status(&self.host, status)
+            let status = (self.async_host.async_completion_llm_request_codec_encode)(
+                self.completion,
+                annotated.as_ptr(),
+                original.as_ptr(),
+                out,
+            );
+            codec_status(&self.async_host.v3.v1, status)
         })
     }
 }
 
-/// Safe callback-scoped response codec facade for typed native plugins.
+/// Safe completion-backed response codec facade for typed native plugins.
 pub struct LlmSanitizeResponseCodec<'a> {
-    host: NemoRelayNativeHostApiV1,
-    handle: *const NemoRelayNativeLlmResponseCodec,
-    async_host: Option<NemoRelayNativeHostApiV4>,
+    async_host: NemoRelayNativeHostApiV4,
     completion: *const NemoRelayNativeAsyncCompletion,
-    completion_release: Option<unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion)>,
+    completion_release: unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion),
     _lifetime: PhantomData<&'a NemoRelayNativeLlmResponseCodec>,
 }
-// SAFETY: the only construction path is the async SDK, which retains the
-// completion capability until this facade is dropped.
+// SAFETY: this type has no borrowed-handle construction path. The async SDK
+// retains the completion capability until this facade is dropped.
 unsafe impl Send for LlmSanitizeResponseCodec<'_> {}
 // SAFETY: calls use the immutable host API and the retained completion
 // capability, which the host permits from concurrent plugin tasks.
@@ -290,28 +271,22 @@ unsafe impl Sync for LlmSanitizeResponseCodec<'_> {}
 
 impl Drop for LlmSanitizeResponseCodec<'_> {
     fn drop(&mut self) {
-        if let Some(release) = self.completion_release {
-            unsafe { release(self.completion) };
-        }
+        unsafe { (self.completion_release)(self.completion) };
     }
 }
 
 impl LlmSanitizeResponseCodec<'_> {
     /// Decode an opaque response into Relay's normalized response model.
     pub fn decode(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        native_codec_call(&self.host, |out| unsafe {
-            let response = HostString::from_json(&self.host, response)
+        native_codec_call(&self.async_host.v3.v1, |out| unsafe {
+            let response = HostString::from_json(&self.async_host.v3.v1, response)
                 .ok_or_else(|| "failed to serialize LLM response".to_string())?;
-            let status = if let Some(host) = self.async_host {
-                (host.async_completion_llm_response_codec_decode)(
-                    self.completion,
-                    response.as_ptr(),
-                    out,
-                )
-            } else {
-                (self.host.llm_response_codec_decode)(self.handle, response.as_ptr(), out)
-            };
-            codec_status(&self.host, status)
+            let status = (self.async_host.async_completion_llm_response_codec_decode)(
+                self.completion,
+                response.as_ptr(),
+                out,
+            );
+            codec_status(&self.async_host.v3.v1, status)
         })
     }
 }
