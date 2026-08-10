@@ -1468,6 +1468,14 @@ impl MockAsyncOutput {
         }
         std::mem::take(&mut *events)
     }
+
+    fn wait_for_release(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.releases.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "async output was not released");
+            std::thread::yield_now();
+        }
+    }
 }
 
 struct MockPullStream {
@@ -2939,6 +2947,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
             MockOutputEvent::Finished,
         ]
     );
+    output.wait_for_release();
     assert_eq!(output.releases.load(Ordering::SeqCst), 1);
     assert_eq!(pull_stream.releases.load(Ordering::SeqCst), 1);
     assert_eq!(next.releases.load(Ordering::SeqCst), 3);
@@ -3252,6 +3261,7 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
             MockOutputEvent::Rejected("stream item failed".into()),
         ]
     );
+    output.wait_for_release();
     assert_eq!(output.releases.load(Ordering::SeqCst), 1);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };

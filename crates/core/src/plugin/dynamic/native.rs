@@ -2096,12 +2096,16 @@ fn defer_native_handle_drop(value: impl Send + 'static) {
             // The only safe fallback is to retain the handle. Synchronously
             // dropping it could unload plugin code on its executor thread.
             tracing::error!(
+                target: "nemo_relay.plugin",
+                event = "native_plugin_reaper_channel_closed",
                 "native plugin reaper channel closed; leaking a deferred plugin handle"
             );
             std::mem::forget(error.0);
         }
     } else {
         tracing::error!(
+            target: "nemo_relay.plugin",
+            event = "native_plugin_reaper_unavailable",
             "native plugin reaper thread failed to start; leaking deferred plugin handles"
         );
         std::mem::forget(value);
