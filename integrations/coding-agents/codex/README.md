@@ -73,8 +73,8 @@ runtime files and a copied managed Python environment—to 100,000 filesystem
 entries, 512 MiB, and a maximum directory traversal depth of 128. If startup
 reports an activation snapshot budget error, remove unrelated files from the
 manifest or load-target directory, flatten deeply nested directories, or reduce
-the managed Python environment before retrying. Concurrent Codex,
-Claude Code, and configured Hermes processes can share the gateway and
+the managed Python environment before retrying. Concurrent Codex and Claude
+Code processes can share the gateway and
 heartbeat it every 30 seconds. The sidecar remains available for 300 idle
 seconds after the final client closes. If it dies while MCP remains open,
 overlapping MCP clients coordinate one restart for the endpoint. Persistent
@@ -163,15 +163,16 @@ nemo-relay run \
 
 ## Configure Transparent Runs
 
-Use `.nemo-relay/config.toml` for project defaults:
+Use `$XDG_CONFIG_HOME/nemo-relay/config.toml` or
+`~/.config/nemo-relay/config.toml` for user defaults:
 
 ```toml
 [agents.codex]
 command = "codex"
 ```
 
-Configure observability with `nemo-relay plugins edit --project` or
-`.nemo-relay/plugins.toml`:
+Configure observability with `nemo-relay plugins edit` or the XDG user
+`plugins.toml`:
 
 ```toml
 version = 1
@@ -197,8 +198,8 @@ This example writes ATIF files under the project at `.nemo-relay/atif`.
 
 Use `~/.config/nemo-relay/config.toml`, or
 `$XDG_CONFIG_HOME/nemo-relay/config.toml` when `XDG_CONFIG_HOME` is set, for
-persistent provider defaults. Run `nemo-relay plugins edit` without
-`--project` to write user-scoped observability configuration. For example:
+persistent provider defaults. Run `nemo-relay plugins edit` to write
+user-scoped observability configuration. For example:
 
 ```toml
 version = 1
@@ -212,8 +213,8 @@ enabled = true
 output_directory = "atif"
 ```
 
-Persistent mode ignores project layers and starts the sidecar in the user Relay
-configuration directory. The relative path above resolves to
+Persistent mode starts the sidecar in the user Relay configuration directory.
+The relative path above resolves to
 `$XDG_CONFIG_HOME/nemo-relay/atif`, or `~/.config/nemo-relay/atif` when
 `XDG_CONFIG_HOME` is not set.
 

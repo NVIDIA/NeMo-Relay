@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::agents::CodingAgent;
 use crate::configuration::{RELAY_PLUGIN_ID, RELAY_SOURCE_PLUGIN_ID};
 use crate::error::CliError;
-use crate::hooks::{generated_hooks, transparent_hook_forward_command};
+use crate::hooks::{generated_policy_hooks, transparent_hook_forward_commands};
 use crate::process::{PreparedAgentLaunch, insert_after_host};
 
 pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Result<(), CliError> {
@@ -26,13 +26,13 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
              or pass `--openai-base-url` to an upstream that needs no key."
         );
     }
-    let hook_command = transparent_hook_forward_command(
+    let hook_commands = transparent_hook_forward_commands(
         &transparent_hook_executable(),
         CodingAgent::Codex,
         gateway_url,
     )
     .map_err(CliError::Launch)?;
-    let hook_groups = generated_hooks(CodingAgent::Codex, &hook_command);
+    let hook_groups = generated_policy_hooks(CodingAgent::Codex, &hook_commands);
     let mut args = vec![
         "--config".to_string(),
         "features.hooks=true".to_string(),

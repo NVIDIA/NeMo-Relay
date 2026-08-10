@@ -14,7 +14,7 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
+        assert_status!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let scope_name = cstring("ffi_child_scope_with_parent");
         let data = cstring(r#"{"scope":"child"}"#);
@@ -24,7 +24,7 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
         let invalid = invalid_utf8.as_ptr() as *const c_char;
         let mut child = ptr::null_mut();
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -38,7 +38,7 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
             NemoRelayStatus::Ok
         );
         assert!(take_string(nemo_relay_scope_handle_parent_uuid(child)).is_some());
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 invalid,
                 NemoRelayScopeType::Function,
@@ -51,7 +51,7 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -64,7 +64,7 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
             ),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -79,7 +79,7 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
         );
 
         let event_name = cstring("ffi_event_with_parent");
-        assert_eq!(
+        assert_status!(
             nemo_relay_event(
                 event_name.as_ptr(),
                 parent,
@@ -88,11 +88,11 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_event(invalid, parent, ptr::null(), ptr::null()),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_event(
                 event_name.as_ptr(),
                 parent,
@@ -101,7 +101,7 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
             ),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_event(
                 event_name.as_ptr(),
                 parent,
@@ -111,15 +111,15 @@ fn test_ffi_scope_and_event_remaining_error_paths() {
             NemoRelayStatus::InvalidJson
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(ptr::null(), ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(child, ptr::null()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(child, ptr::null()),
             NemoRelayStatus::NotFound
         );
@@ -138,7 +138,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
     unsafe {
         let stack = fresh_scope_stack();
         let mut parent = ptr::null_mut();
-        assert_eq!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
+        assert_status!(nemo_relay_get_handle(&mut parent), NemoRelayStatus::Ok);
 
         let tool_name = cstring("ffi_tool_call_utf8");
         let tool_args = cstring(r#"{"value":1}"#);
@@ -151,7 +151,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
         let invalid = invalid_utf8.as_ptr() as *const c_char;
         let mut tool_handle = ptr::null_mut();
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
@@ -165,7 +165,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             NemoRelayStatus::Ok
         );
         assert!(take_string(nemo_relay_tool_handle_parent_uuid(tool_handle)).is_some());
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_call(
                 invalid,
                 tool_args.as_ptr(),
@@ -178,7 +178,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_call(
                 tool_name.as_ptr(),
                 tool_args.as_ptr(),
@@ -191,7 +191,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_call_end(
                 tool_handle,
                 tool_result.as_ptr(),
@@ -200,7 +200,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             ),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_tool_call_end(
                 tool_handle,
                 tool_result.as_ptr(),
@@ -221,7 +221,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
         let model_name = cstring("ffi-model-override");
         let mut llm_handle = ptr::null_mut();
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 request.as_ptr(),
@@ -235,7 +235,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             NemoRelayStatus::Ok
         );
         assert!(take_string(nemo_relay_llm_handle_parent_uuid(llm_handle)).is_some());
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call(
                 invalid,
                 request.as_ptr(),
@@ -248,7 +248,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call(
                 llm_name.as_ptr(),
                 request.as_ptr(),
@@ -261,7 +261,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call_end(
                 llm_handle,
                 response.as_ptr(),
@@ -270,7 +270,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
             ),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call_end(
                 llm_handle,
                 response.as_ptr(),
@@ -281,7 +281,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
         );
 
         let mut out = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_call_execute(
                 llm_name.as_ptr(),
                 invalid_shape.as_ptr(),
@@ -309,7 +309,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
         );
 
         let mut stream = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_llm_stream_call_execute(
                 llm_name.as_ptr(),
                 invalid_shape.as_ptr(),
@@ -354,7 +354,7 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
     let invalid = invalid_utf8.as_ptr() as *const c_char;
 
     unsafe {
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_sanitize_request_guardrail(
                 invalid,
                 1,
@@ -364,11 +364,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_sanitize_request_guardrail(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_sanitize_response_guardrail(
                 invalid,
                 1,
@@ -378,11 +378,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_sanitize_response_guardrail(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_conditional_execution_guardrail(
                 invalid,
                 1,
@@ -392,11 +392,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_conditional_execution_guardrail(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_request_intercept(
                 invalid,
                 1,
@@ -407,11 +407,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_request_intercept(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_tool_execution_intercept(
                 invalid,
                 1,
@@ -421,12 +421,12 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_tool_execution_intercept(invalid),
             NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_sanitize_request_guardrail(
                 invalid,
                 1,
@@ -436,11 +436,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_sanitize_request_guardrail(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_sanitize_response_guardrail(
                 invalid,
                 1,
@@ -450,11 +450,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_sanitize_response_guardrail(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_conditional_execution_guardrail(
                 invalid,
                 1,
@@ -464,11 +464,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_conditional_execution_guardrail(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_request_intercept(
                 invalid,
                 1,
@@ -479,11 +479,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_request_intercept(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_execution_intercept(
                 invalid,
                 1,
@@ -493,11 +493,11 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_execution_intercept(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_llm_stream_execution_intercept(
                 invalid,
                 1,
@@ -507,15 +507,15 @@ fn test_ffi_global_registry_invalid_utf8_name_sweep() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_llm_stream_execution_intercept(invalid),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_register_subscriber(invalid, subscriber_cb, ptr::null_mut(), None),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_deregister_subscriber(invalid),
             NemoRelayStatus::InvalidUtf8
         );
@@ -534,7 +534,7 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
         let stack = fresh_scope_stack();
         let scope_name = cstring("scope-registry-invalid");
         let mut scope = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Function,
@@ -551,7 +551,7 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
         let invalid_name = invalid_utf8.as_ptr() as *const c_char;
         let valid_name = cstring("scope-registry-valid-name");
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_tool_sanitize_request_guardrail(
                 invalid_scope,
                 valid_name.as_ptr(),
@@ -562,14 +562,14 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_tool_sanitize_request_guardrail(
                 invalid_scope,
                 valid_name.as_ptr(),
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_tool_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 invalid_name,
@@ -580,7 +580,7 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_tool_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 invalid_name
@@ -588,7 +588,7 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_tool_execution_intercept(
                 invalid_scope,
                 valid_name.as_ptr(),
@@ -599,14 +599,14 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_tool_execution_intercept(
                 invalid_scope,
                 valid_name.as_ptr()
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_tool_execution_intercept(
                 scope_uuid.as_ptr(),
                 invalid_name,
@@ -617,12 +617,12 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_tool_execution_intercept(scope_uuid.as_ptr(), invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_llm_sanitize_request_guardrail(
                 invalid_scope,
                 valid_name.as_ptr(),
@@ -633,14 +633,14 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
                 invalid_scope,
                 valid_name.as_ptr(),
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_llm_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 invalid_name,
@@ -651,7 +651,7 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_llm_sanitize_request_guardrail(
                 scope_uuid.as_ptr(),
                 invalid_name
@@ -659,7 +659,7 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_llm_execution_intercept(
                 invalid_scope,
                 valid_name.as_ptr(),
@@ -670,11 +670,11 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_llm_execution_intercept(invalid_scope, valid_name.as_ptr()),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_llm_execution_intercept(
                 scope_uuid.as_ptr(),
                 invalid_name,
@@ -685,12 +685,12 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_llm_execution_intercept(scope_uuid.as_ptr(), invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_subscriber(
                 invalid_scope,
                 valid_name.as_ptr(),
@@ -700,11 +700,11 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_subscriber(invalid_scope, valid_name.as_ptr()),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_register_subscriber(
                 scope_uuid.as_ptr(),
                 invalid_name,
@@ -714,12 +714,12 @@ fn test_ffi_scope_registry_invalid_utf8_scope_and_name_sweeps() {
             ),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_scope_deregister_subscriber(scope_uuid.as_ptr(), invalid_name),
             NemoRelayStatus::InvalidUtf8
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(scope, ptr::null()),
             NemoRelayStatus::Ok
         );
@@ -753,55 +753,55 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let invalid_json = cstring("{");
         let mut out_json = ptr::null_mut();
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_validate_config(config.as_ptr(), &mut out_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(out_json)["diagnostics"], json!([]));
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_validate_config(config.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_validate_config(invalid_json.as_ptr(), &mut out_json),
             NemoRelayStatus::InvalidJson
         );
 
         let mut runtime = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_create(config.as_ptr(), ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_create(invalid_json.as_ptr(), &mut runtime),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_create(config.as_ptr(), &mut runtime),
             NemoRelayStatus::Ok
         );
         assert!(!runtime.is_null());
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_register(ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_register(runtime),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_wait_for_idle(ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_wait_for_idle(runtime),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_report_json(runtime, ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_report_json(runtime, &mut out_json),
             NemoRelayStatus::Ok
         );
@@ -810,7 +810,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let stack = fresh_scope_stack();
         let scope_name = cstring("ffi_adaptive_integration_scope");
         let mut scope = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_push_scope(
                 scope_name.as_ptr(),
                 NemoRelayScopeType::Agent,
@@ -823,11 +823,11 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_bind_scope(runtime, scope),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_bind_scope(runtime, ptr::null()),
             NemoRelayStatus::NullPointer
         );
@@ -849,7 +849,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             })
             .to_string(),
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_build_cache_request_facts(
                 runtime,
                 cache_options.as_ptr(),
@@ -859,7 +859,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         );
         let facts = returned_json(out_json);
         assert_eq!(facts["provider"], json!("openai"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_build_cache_request_facts(
                 runtime,
                 cache_options.as_ptr(),
@@ -922,7 +922,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             })
             .to_string(),
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_build_cache_telemetry_event(
                 telemetry_options.as_ptr(),
                 &mut out_json,
@@ -932,7 +932,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let event = returned_json(out_json);
         assert_eq!(event["cache_read_tokens"], json!(10));
         assert_eq!(event["hit_rate"], json!(10.0 / 60.0));
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_build_cache_telemetry_event(
                 telemetry_options.as_ptr(),
                 ptr::null_mut(),
@@ -951,7 +951,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             })
             .to_string(),
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_build_cache_telemetry_event(
                 no_usage_options.as_ptr(),
                 &mut out_json,
@@ -1034,11 +1034,11 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
                 expected
             );
         }
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_build_cache_telemetry_event(invalid_json.as_ptr(), &mut out_json,),
             NemoRelayStatus::InvalidJson
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_build_cache_request_facts(
                 ptr::null_mut(),
                 cache_options.as_ptr(),
@@ -1046,32 +1046,32 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_set_latency_sensitivity(0),
             NemoRelayStatus::InvalidArg
         );
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_deregister(runtime),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_deregister(ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_shutdown(runtime),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_shutdown(ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_adaptive_runtime_report_json(runtime, &mut out_json),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_pop_scope(scope, ptr::null()),
             NemoRelayStatus::Ok
         );
@@ -1079,21 +1079,21 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         nemo_relay_scope_stack_free(stack);
         types::nemo_relay_adaptive_runtime_free(runtime);
 
-        assert_eq!(
+        assert_status!(
             nemo_relay_observability_default_config_json(&mut out_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(out_json)["version"], json!(3));
-        assert_eq!(
+        assert_status!(
             nemo_relay_observability_default_config_json(ptr::null_mut()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_observability_component_spec_json(ptr::null(), true, &mut out_json),
             NemoRelayStatus::Ok
         );
         assert_eq!(returned_json(out_json)["kind"], json!("observability"));
-        assert_eq!(
+        assert_status!(
             nemo_relay_observability_component_spec_json(
                 invalid_json.as_ptr(),
                 true,
@@ -1111,7 +1111,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let happy_filename = cstring("happy-events.jsonl");
         let happy_name = cstring(&unique_name("ffi_atof_happy"));
         let mut happy_atof = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_create(
                 happy_dir.as_ptr(),
                 append.as_ptr(),
@@ -1122,7 +1122,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         );
         assert!(!happy_atof.is_null());
         let mut path_ptr = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_path(happy_atof, &mut path_ptr),
             NemoRelayStatus::Ok
         );
@@ -1131,19 +1131,19 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             path.ends_with("happy-events.jsonl"),
             "unexpected ATOF exporter path: {path}"
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_register(happy_atof, happy_name.as_ptr()),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_force_flush(happy_atof),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_shutdown(happy_atof),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_deregister(happy_name.as_ptr()),
             NemoRelayStatus::Ok
         );
@@ -1152,7 +1152,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
         let invalid_utf8 = [0xffu8, 0];
         let invalid = invalid_utf8.as_ptr() as *const c_char;
         let mut atof = ptr::null_mut();
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_create(
                 ptr::null(),
                 append.as_ptr(),
@@ -1161,7 +1161,7 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             ),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_create(
                 ptr::null(),
                 bad_mode.as_ptr(),
@@ -1170,31 +1170,31 @@ fn test_ffi_adaptive_and_observability_entry_points_from_integration_binary() {
             ),
             NemoRelayStatus::InvalidArg
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_create(invalid, append.as_ptr(), filename.as_ptr(), &mut atof),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_create(ptr::null(), invalid, filename.as_ptr(), &mut atof),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_create(ptr::null(), append.as_ptr(), invalid, &mut atof),
             NemoRelayStatus::InvalidUtf8
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_register(ptr::null(), filename.as_ptr()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_force_flush(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_shutdown(ptr::null()),
             NemoRelayStatus::NullPointer
         );
-        assert_eq!(
+        assert_status!(
             nemo_relay_atof_exporter_path(ptr::null(), &mut out_json),
             NemoRelayStatus::NullPointer
         );

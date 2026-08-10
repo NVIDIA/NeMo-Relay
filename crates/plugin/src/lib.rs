@@ -59,6 +59,9 @@ pub enum BuiltinLlmCodec {
     /// Anthropic Messages.
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages,
+    /// Gemini generateContent.
+    #[serde(rename = "gemini_generate_content")]
+    GeminiGenerateContent,
 }
 
 /// Per-call LLM codec identity delivered to native plugins.
@@ -3445,6 +3448,7 @@ fn llm_codec_identity_from_native(
                 "openai_chat" => BuiltinLlmCodec::OpenAiChat,
                 "openai_responses" => BuiltinLlmCodec::OpenAiResponses,
                 "anthropic_messages" => BuiltinLlmCodec::AnthropicMessages,
+                "gemini_generate_content" => BuiltinLlmCodec::GeminiGenerateContent,
                 _ => {
                     set_last_error(host, &format!("unknown built-in LLM codec ID: {id}"));
                     return Err(NemoRelayStatus::InvalidArg);

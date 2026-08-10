@@ -86,3 +86,90 @@ async fn write_behind_returns_eof_before_cache_commit_completes() {
         .expect("detached cache commit must resume after release")
         .expect("detached cache commit must run to completion");
 }
+
+#[test]
+fn response_cache_fidelity_helpers_cover_all_rejection_shapes() {
+    assert_uncollected_response_field_shapes();
+    assert_aggregate_replay_and_stream_completion();
+    assert_inband_error_and_content_detection();
+    assert_error_response_and_bypass_detection();
+}
+
+fn assert_uncollected_response_field_shapes() {
+    for chunk in [
+        json!(false),
+        json!({"choices": false}),
+        json!({"choices": [false]}),
+        json!({"choices": [{"index": "zero"}]}),
+        json!({"choices": [{"finish_reason": false}]}),
+        json!({"choices": [{"delta": false}]}),
+        json!({"choices": [{"logprobs": {}}]}),
+        json!({"choices": [{"extension": true}]}),
+        json!({"choices": [{"delta": {"tool_calls": [false]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"index": "zero"}]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"id": false}]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"function": false}]}}]}),
+        json!({"choices": [{"delta": {"tool_calls": [{"extension": true}]}}]}),
+    ] {
+        assert!(chunk_has_uncollected_response_fields(&chunk), "{chunk}");
+    }
+    assert!(!chunk_has_uncollected_response_fields(&json!({
+        "choices": null,
+        "metadata": null
+    })));
+}
+
+fn assert_aggregate_replay_and_stream_completion() {
+    assert!(aggregate_replay_lossy(&json!({
+        "content": [{"type": "thinking"}]
+    })));
+    assert!(aggregate_replay_lossy(&json!({
+        "choices": [{"message": {"content": null, "tool_calls": []}}]
+    })));
+    assert!(!aggregate_replay_lossy(&json!({
+        "choices": [{"message": {"content": "answer"}}]
+    })));
+
+    let mut completion = StreamCompletion::default();
+    completion.observe(&json!({
+        "choices": [
+            {"index": 0, "finish_reason": "stop"},
+            {"index": 1, "finish_reason": null}
+        ]
+    }));
+    assert!(!completion.is_terminal());
+    completion.observe(&json!({"choices": [{"index": 1, "finish_reason": "stop"}]}));
+    assert!(completion.is_terminal());
+
+    let mut stopped = StreamCompletion::default();
+    stopped.observe(&json!({"type": "response.completed"}));
+    assert!(stopped.is_terminal());
+}
+
+fn assert_inband_error_and_content_detection() {
+    assert!(chunk_is_inband_error(&json!({"error": "bad"})));
+    assert!(chunk_is_inband_error(&json!({"type": "response.failed"})));
+    assert!(!chunk_is_inband_error(&json!({"error": null})));
+    assert!(aggregate_has_no_content(&json!({})));
+    assert!(!aggregate_has_no_content(&json!({"output": [1]})));
+}
+
+fn assert_error_response_and_bypass_detection() {
+    assert!(!is_error_response(&json!(false)));
+    assert!(is_error_response(&json!({"error": "bad"})));
+    for status in [
+        "failed",
+        "cancelled",
+        "canceled",
+        "incomplete",
+        "in_progress",
+        "queued",
+    ] {
+        assert!(is_error_response(&json!({"status": status})));
+    }
+    assert!(!is_error_response(&json!({"status": "completed"})));
+    assert!(!should_bypass(0.0));
+    assert!(should_bypass(1.0));
+    let unit = next_unit_f64();
+    assert!((0.0..1.0).contains(&unit), "{unit}");
+}

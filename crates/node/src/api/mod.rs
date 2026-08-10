@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use chrono::{DateTime, Utc};
@@ -88,6 +88,29 @@ use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
 use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
 
+static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static NODE_ENVIRONMENT_LIFECYCLE_LOCK: StdMutex<()> = StdMutex::new(());
+
+fn register_node_environment() -> FlowResult<()> {
+    let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    nemo_relay::logging::initialize_default_logging()?;
+    NODE_ENVIRONMENT_COUNT.fetch_add(1, Ordering::AcqRel);
+    Ok(())
+}
+
+fn cleanup_node_environment() {
+    let _guard = NODE_ENVIRONMENT_LIFECYCLE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if NODE_ENVIRONMENT_COUNT.fetch_sub(1, Ordering::AcqRel) == 1
+        && let Err(error) = nemo_relay::logging::shutdown_default_logging()
+    {
+        eprintln!("nemo-relay: operational logging shutdown failed: {error}");
+    }
+}
+
 fn effective_scope_context(
     env: &Env,
 ) -> napi::Result<(
@@ -127,7 +150,12 @@ fn init() {
 
 #[cfg(not(test))]
 #[napi_derive::module_exports]
-fn install_well_known_symbol_methods(exports: JsObject, env: Env) -> napi::Result<()> {
+fn install_well_known_symbol_methods(exports: JsObject, mut env: Env) -> napi::Result<()> {
+    register_node_environment().map_err(to_napi_err)?;
+    if let Err(error) = env.add_env_cleanup_hook((), |_| cleanup_node_environment()) {
+        cleanup_node_environment();
+        return Err(error);
+    }
     let activation: JsFunction = exports.get_named_property("DynamicPluginActivation")?;
     let activation = activation.coerce_to_object()?;
     let mut prototype: JsObject = activation.get_named_property("prototype")?;
@@ -688,10 +716,9 @@ fn build_plugin_context(
         move |ctx| {
             let name = format!("{}{}", subscriber_namespace, ctx.get::<String>(0)?);
             let callback = ctx.get::<JsFunction>(1)?;
-            let tsfn = json_callback_tsfn(ctx.env, &callback)?;
             core_subscriber_api::register_subscriber(
                 &name,
-                callable::wrap_js_event_subscriber(tsfn),
+                callable::wrap_js_event_subscriber(ctx.env, name.clone(), callback)?,
             )
             .map_err(to_napi_err)?;
 
@@ -3299,16 +3326,18 @@ pub fn deregister_llm_stream_execution_intercept(name: String) -> Result<bool> {
 
 /// Register a named event subscriber that receives all lifecycle events.
 ///
-/// The `callback` receives each event as the canonical JSON event object. Events are
-/// delivered asynchronously and non-blocking. Throws if a subscriber with the same `name`
-/// already exists.
+/// The `callback` receives each event as the canonical JSON event object and may return a
+/// Promise. Events are delivered asynchronously and non-blocking. Callback failures are
+/// isolated, reported to stderr and `getLastCallbackError()`, and do not reject
+/// `flushSubscribers()`. Throws if a subscriber with the same `name` already exists.
 #[napi]
 pub fn register_subscriber(
+    env: Env,
     name: String,
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: JsFunction,
 ) -> Result<()> {
-    core_subscriber_api::register_subscriber(&name, callable::wrap_js_event_subscriber(callback))
-        .map_err(to_napi_err)
+    let callback = callable::wrap_js_event_subscriber(&env, name.clone(), callback)?;
+    core_subscriber_api::register_subscriber(&name, callback).map_err(to_napi_err)
 }
 
 /// Deregister an event subscriber by name.
@@ -3935,23 +3964,22 @@ pub fn scope_deregister_llm_stream_execution_intercept(
 /// Register a scope-local named event subscriber that receives lifecycle events
 /// for the specified scope.
 ///
-/// The `callback` receives each event as the canonical JSON event object. Events are
-/// delivered asynchronously and non-blocking. Throws if a subscriber with the same `name`
-/// already exists on the specified scope.
+/// The `callback` receives each event as the canonical JSON event object and may return a
+/// Promise. Events are delivered asynchronously and non-blocking. Callback failures are
+/// isolated, reported to stderr and `getLastCallbackError()`, and do not reject
+/// `flushSubscribers()`. Throws if a subscriber with the same `name` already exists on the
+/// specified scope.
 #[napi]
 pub fn scope_register_subscriber(
+    env: Env,
     scope_uuid: String,
     name: String,
-    callback: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    #[napi(ts_arg_type = "(event: Json) => void | Promise<void>")] callback: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
         .map_err(|e| napi::Error::from_reason(format!("invalid UUID: {e}")))?;
-    core_subscriber_api::scope_register_subscriber(
-        &uuid,
-        &name,
-        callable::wrap_js_event_subscriber(callback),
-    )
-    .map_err(to_napi_err)
+    let callback = callable::wrap_js_event_subscriber(&env, name.clone(), callback)?;
+    core_subscriber_api::scope_register_subscriber(&uuid, &name, callback).map_err(to_napi_err)
 }
 
 /// Deregister a scope-local event subscriber by name.
@@ -5020,7 +5048,7 @@ pub fn clear_plugin_configuration() -> napi::Result<()> {
     clear_plugin_configuration_impl().map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
-/// Return the last successfully configured plugin report.
+/// Return the active plugin report or one retained after a teardown failure with runtime diagnostics.
 #[napi]
 pub fn active_plugin_report() -> napi::Result<Option<Json>> {
     active_plugin_report_impl()

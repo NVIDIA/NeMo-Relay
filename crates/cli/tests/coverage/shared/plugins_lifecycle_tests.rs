@@ -617,7 +617,7 @@ fn tracked_native_plugin_example_satisfies_default_trust_policy() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -644,7 +644,7 @@ fn tracked_native_plugin_example_rejects_tampered_artifact() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -1747,7 +1747,7 @@ fn python_environment_attestation_rejects_invalid_json_and_source_identity_drift
 }
 
 #[test]
-fn add_registers_dynamic_plugin_in_project_plugins_toml() {
+fn add_registers_dynamic_plugin_in_user_plugins_toml() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
@@ -1757,14 +1757,18 @@ fn add_registers_dynamic_plugin_in_project_plugins_toml() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir.clone(),
         },
         &crate::server::GatewayOverrides::default(),
     )
     .unwrap();
 
-    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    let plugins_toml = temp
+        .path()
+        .join("xdg")
+        .join("nemo-relay")
+        .join("plugins.toml");
     let rendered = std::fs::read_to_string(&plugins_toml).unwrap();
     assert!(rendered.contains("[[plugins.dynamic]]"));
     assert!(rendered.contains("relay-plugin.toml"));
@@ -1793,7 +1797,7 @@ fn add_rejects_unreadable_declared_config_schema() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -1855,14 +1859,18 @@ fn validate_id_checks_resolved_host_config_against_declared_schema() {
     let server = GatewayOverrides::default();
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
     )
     .unwrap();
 
-    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    let plugins_toml = temp
+        .path()
+        .join("xdg")
+        .join("nemo-relay")
+        .join("plugins.toml");
     let mut rendered = std::fs::read_to_string(&plugins_toml).unwrap();
     rendered.push_str(
         r#"
@@ -1899,7 +1907,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
 
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir.clone(),
         },
         &server,
@@ -1918,21 +1926,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         .as_deref()
         .expect("managed environment should be persisted");
     let environment_path = PathBuf::from(environment_ref);
-    assert!(environment_path.is_absolute());
-    let expected_environment_name = Sha256::digest(b"acme.python")
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    assert_eq!(
-        environment_path.file_name(),
-        Some(OsStr::new(&expected_environment_name))
-    );
-    assert!(
-        environment_path
-            .parent()
-            .is_some_and(|parent| parent.ends_with(".dynamic-plugin-environments"))
-    );
-    assert!(environment::environment_python_path(&environment_path).is_file());
+    assert_managed_environment_path(&environment_path);
     assert_eq!(
         added.record.status.validation.environment,
         DynamicPluginCheckState::Valid
@@ -1956,39 +1950,8 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
         inspect["data"]["source"]["environment_ref"],
         serde_json::json!(environment_ref)
     );
-    let calls = runner.calls();
-    assert_eq!(calls.len(), 2);
-    assert_eq!(
-        calls[0].0,
-        OsString::from(if cfg!(windows) { "python" } else { "python3" })
-    );
-    assert_eq!(
-        calls[0].1,
-        vec![
-            OsString::from("-m"),
-            OsString::from("venv"),
-            environment_path.as_os_str().to_owned(),
-        ]
-    );
-    assert_eq!(
-        PathBuf::from(&calls[1].0),
-        environment::environment_python_path(&environment_path)
-    );
-    assert_eq!(
-        calls[1].1,
-        vec![
-            OsString::from("-m"),
-            OsString::from("pip"),
-            OsString::from("install"),
-            plugin_dir.canonicalize().unwrap().into_os_string(),
-        ]
-    );
-    assert!(
-        !calls[1]
-            .1
-            .iter()
-            .any(|arg| arg == "-e" || arg == "--editable")
-    );
+    assert_python_environment_runner_calls(&runner.calls(), &environment_path, &plugin_dir);
+
     enable(
         PluginsEnableRequest {
             id: "acme.python".into(),
@@ -2020,7 +1983,7 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
 
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2029,6 +1992,63 @@ fn add_provisions_persists_and_removes_managed_python_environment() {
     .unwrap();
     assert!(environment::environment_python_path(&environment_path).is_file());
     assert!(!stale_marker.exists());
+}
+
+fn assert_managed_environment_path(environment_path: &Path) {
+    assert!(environment_path.is_absolute());
+    let expected_environment_name = Sha256::digest(b"acme.python")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        environment_path.file_name(),
+        Some(OsStr::new(&expected_environment_name))
+    );
+    assert!(
+        environment_path
+            .parent()
+            .is_some_and(|parent| parent.ends_with(".dynamic-plugin-environments"))
+    );
+    assert!(environment::environment_python_path(environment_path).is_file());
+}
+
+fn assert_python_environment_runner_calls(
+    calls: &[(OsString, Vec<OsString>)],
+    environment_path: &Path,
+    plugin_dir: &Path,
+) {
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0].0,
+        OsString::from(if cfg!(windows) { "python" } else { "python3" })
+    );
+    assert_eq!(
+        calls[0].1,
+        vec![
+            OsString::from("-m"),
+            OsString::from("venv"),
+            environment_path.as_os_str().to_owned(),
+        ]
+    );
+    assert_eq!(
+        PathBuf::from(&calls[1].0),
+        environment::environment_python_path(environment_path)
+    );
+    assert_eq!(
+        calls[1].1,
+        vec![
+            OsString::from("-m"),
+            OsString::from("pip"),
+            OsString::from("install"),
+            plugin_dir.canonicalize().unwrap().into_os_string(),
+        ]
+    );
+    assert!(
+        !calls[1]
+            .1
+            .iter()
+            .any(|arg| arg == "-e" || arg == "--editable")
+    );
 }
 
 #[test]
@@ -2043,7 +2063,7 @@ fn add_rolls_back_python_environment_when_installation_fails() {
 
     let error = add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -2060,7 +2080,8 @@ fn add_rolls_back_python_environment_when_installation_fails() {
     assert_eq!(runner.calls().len(), 2);
     let managed_root = temp
         .path()
-        .join(".nemo-relay")
+        .join("xdg")
+        .join("nemo-relay")
         .join(".dynamic-plugin-environments");
     assert!(!managed_root.exists() || std::fs::read_dir(managed_root).unwrap().next().is_none());
     assert!(
@@ -2083,7 +2104,7 @@ fn enable_rejects_missing_managed_python_environment() {
     let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2139,7 +2160,7 @@ fn enable_rejects_python_environment_outside_managed_location() {
     let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2209,7 +2230,7 @@ fn add_requires_manifest_root_for_python_workers() {
 
     let error = add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -2248,7 +2269,7 @@ fn add_rejects_python_entrypoint_module_that_is_not_integrity_checked_artifact()
 
     let error = add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &GatewayOverrides::default(),
@@ -2351,7 +2372,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
     let server = GatewayOverrides::default();
     add_with_environment_runner(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2434,7 +2455,7 @@ fn remove_can_retry_after_guarded_environment_cleanup_failure() {
 }
 
 #[test]
-fn active_dynamic_plugin_components_project_enabled_native_records_only() {
+fn active_dynamic_plugin_components_user_enabled_native_records_only() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
@@ -2445,7 +2466,7 @@ fn active_dynamic_plugin_components_project_enabled_native_records_only() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2489,7 +2510,7 @@ fn active_dynamic_plugin_components_accept_enabled_worker_records() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2529,7 +2550,7 @@ fn active_dynamic_plugin_components_accept_worker_records_without_manifest_ref()
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2578,7 +2599,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir.clone(),
         },
         &crate::server::GatewayOverrides::default(),
@@ -2587,7 +2608,7 @@ fn add_rejects_duplicate_dynamic_plugin_ids() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2616,7 +2637,7 @@ fn add_rejects_scope_flags_when_explicit_config_is_set() {
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -2632,7 +2653,7 @@ fn add_refuses_dynamic_plugins_blocked_by_host_policy() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.blocked");
@@ -2647,7 +2668,7 @@ allowed = false
 
     let error = add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2718,7 +2739,7 @@ fn list_and_inspect_render_discovered_dynamic_plugins() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2787,7 +2808,7 @@ fn validate_renders_summary_for_path_and_id_targets() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &crate::server::GatewayOverrides::default(),
@@ -2878,7 +2899,7 @@ fn enable_disable_and_remove_persist_lifecycle_state() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -3003,7 +3024,7 @@ fn add_with_explicit_config_uses_sibling_plugins_and_state_files() {
 }
 
 #[test]
-fn explicit_config_keeps_project_dynamic_plugin_lifecycle_scope() {
+fn explicit_config_ignores_project_dynamic_plugin_lifecycle_scope() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
     let project = temp.path().join("project");
@@ -3025,23 +3046,18 @@ fn explicit_config_keeps_project_dynamic_plugin_lifecycle_scope() {
         ),
     )
     .unwrap();
+    std::fs::write(project_config_dir.join(".dynamic-plugins.json"), "{").unwrap();
     let explicit_config = explicit_config_dir.join("config.toml");
     std::fs::write(&explicit_config, "").unwrap();
 
     let resolved = resolve_plugins_config(Some(&explicit_config)).unwrap();
     let explicit_plugin_config = explicit_plugin_config_path(Some(&explicit_config), None);
     let scopes = load_and_hydrate_scopes(explicit_plugin_config.as_ref(), &resolved).unwrap();
-    let entry = find_record_by_id(&scopes, "acme.project-layer")
-        .unwrap()
-        .expect("project-layer record");
-
-    assert_eq!(entry.scope, RegistryScope::Project);
-    assert_eq!(
-        entry.plugins_toml_path.canonicalize().unwrap(),
-        project_config_dir
-            .join("plugins.toml")
-            .canonicalize()
+    assert!(resolved.dynamic_plugins.is_empty());
+    assert!(
+        find_record_by_id(&scopes, "acme.project-layer")
             .unwrap()
+            .is_none()
     );
 }
 
@@ -3086,7 +3102,7 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.bootstrap");
@@ -3107,7 +3123,7 @@ fn hydrate_bootstraps_registry_records_from_existing_dynamic_plugin_refs() {
     let entry = find_record_by_id(&scopes, "acme.bootstrap")
         .unwrap()
         .expect("hydrated record");
-    assert_eq!(entry.scope.to_string(), "project");
+    assert_eq!(entry.scope.to_string(), "user");
     assert_eq!(entry.record.metadata.id, "acme.bootstrap");
     assert!(entry.record.spec.present);
     assert!(!entry.record.spec.enabled);
@@ -3124,7 +3140,7 @@ fn manually_configured_python_worker_cannot_enable_without_lifecycle_add() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("python");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_python_dynamic_manifest(&plugin_dir, "acme.python-direct");
@@ -3183,7 +3199,7 @@ fn hydrate_applies_host_policy_status_to_discovered_dynamic_plugins() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.policy");
@@ -3259,14 +3275,14 @@ fn hydrate_persists_updated_policy_and_error_state() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_manifest(&plugin_dir, "acme.persist-blocked");
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir.clone(),
         },
         &GatewayOverrides::default(),
@@ -3314,7 +3330,7 @@ fn hydrate_verifies_signatures_when_host_policy_provides_trusted_keys() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest_with_options(
@@ -3365,7 +3381,7 @@ fn hydrate_marks_signature_required_plugins_invalid_without_trusted_keys() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest_with_options(
@@ -3418,7 +3434,7 @@ fn hydrate_marks_signature_required_plugins_invalid_with_wrong_trusted_key() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest_with_options(
@@ -3474,7 +3490,7 @@ fn hydrate_marks_malformed_signature_files_invalid_when_signature_is_present() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest_with_options(
@@ -3530,7 +3546,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.enable-blocked");
@@ -3538,7 +3554,7 @@ fn enable_refuses_dynamic_plugins_blocked_by_host_policy_and_persists_status() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -3616,7 +3632,7 @@ fn disable_succeeds_when_registered_plugin_manifest_is_unreadable() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir.clone(),
         },
         &server,
@@ -3654,7 +3670,7 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
     let plugin_dir = temp.path().join("plugins").join("acme");
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     std::fs::create_dir_all(&plugin_dir).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.validate-blocked");
@@ -3662,7 +3678,7 @@ fn validate_marks_registered_plugins_invalid_when_host_policy_blocks_them() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -3802,7 +3818,7 @@ fn add_can_revive_tombstoned_records() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir.clone(),
         },
         &server,
@@ -3819,7 +3835,7 @@ fn add_can_revive_tombstoned_records() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -3847,7 +3863,7 @@ fn json_helpers_emit_stable_success_and_failure_shapes() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
@@ -3978,14 +3994,18 @@ fn remove_tolerates_unreadable_non_target_manifest_entries() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
     )
     .unwrap();
 
-    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    let plugins_toml = temp
+        .path()
+        .join("xdg")
+        .join("nemo-relay")
+        .join("plugins.toml");
     std::fs::write(
         &plugins_toml,
         format!(
@@ -4052,7 +4072,7 @@ fn remove_matches_relative_target_manifest_refs_without_loading_manifest() {
     let temp = tempfile::tempdir().unwrap();
     let _env = EnvScope::hermetic(&temp);
     let _cwd = CurrentDirGuard::enter(temp.path());
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join("xdg").join("nemo-relay");
     let plugin_dir = temp.path().join("plugins").join("acme");
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::create_dir_all(&plugin_dir).unwrap();
@@ -4102,14 +4122,18 @@ fn inspect_redacts_host_config_values() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
     )
     .unwrap();
 
-    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    let plugins_toml = temp
+        .path()
+        .join("xdg")
+        .join("nemo-relay")
+        .join("plugins.toml");
     std::fs::write(
         &plugins_toml,
         format!(
@@ -4179,14 +4203,18 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
 
     add(
         PluginsAddRequest {
-            scope: ConfigurationScope::Project,
+            scope: ConfigurationScope::User,
             path: plugin_dir,
         },
         &server,
     )
     .unwrap();
 
-    let plugins_toml = temp.path().join(".nemo-relay").join("plugins.toml");
+    let plugins_toml = temp
+        .path()
+        .join("xdg")
+        .join("nemo-relay")
+        .join("plugins.toml");
     std::fs::write(
         &plugins_toml,
         format!(
@@ -4243,4 +4271,280 @@ fn inspect_distinguishes_empty_host_config_from_missing_host_config() {
             .len(),
         0
     );
+}
+
+fn required_lifecycle_record(
+    temp: &tempfile::TempDir,
+    plugin_id: &str,
+) -> ScopedDynamicPluginRecord {
+    let plugin_dir = temp.path().join(plugin_id);
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    write_dynamic_manifest(&plugin_dir, plugin_id);
+    let server = GatewayOverrides::default();
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+    let scopes = load_scoped_registries(None).unwrap();
+    let mut entry = find_record_by_id(&scopes, plugin_id).unwrap().unwrap();
+    entry.record.status.startup_class =
+        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Required);
+    entry
+}
+
+#[test]
+fn lifecycle_helpers_cover_environment_manifest_scope_and_restore_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_id = "acme.lifecycle-helpers";
+    assert_eq!(
+        environment_last_error(plugin_id, DynamicPluginCheckState::Valid, None),
+        None
+    );
+    let missing = environment_last_error(plugin_id, DynamicPluginCheckState::Invalid, None)
+        .expect("invalid environment should produce a diagnostic");
+    assert_eq!(missing.code, "environment_failed");
+    assert!(missing.message.contains("has no lifecycle-managed"));
+    let unavailable = environment_last_error(
+        plugin_id,
+        DynamicPluginCheckState::Invalid,
+        Some("managed/python"),
+    )
+    .expect("invalid referenced environment should produce a diagnostic");
+    assert!(
+        unavailable
+            .message
+            .contains("managed/python is unavailable")
+    );
+
+    let mut scopes = Vec::new();
+    let plugins_path = temp.path().join("plugins.toml");
+    let state_path = temp.path().join("state.json");
+    let first = ensure_scope(
+        &mut scopes,
+        RegistryScope::User,
+        plugins_path.clone(),
+        state_path.clone(),
+    );
+    let existing = ensure_scope(
+        &mut scopes,
+        RegistryScope::User,
+        plugins_path.clone(),
+        state_path,
+    );
+    assert_eq!((first, existing, scopes.len()), (0, 0, 1));
+    assert!(!scope_flags_selected(&ConfigurationScope::Default));
+    assert!(scope_flags_selected(&ConfigurationScope::User));
+
+    restore_plugins_toml(&plugins_path, Some(b"[plugins]\n")).unwrap();
+    assert_eq!(std::fs::read(&plugins_path).unwrap(), b"[plugins]\n");
+    restore_plugins_toml(&plugins_path, None).unwrap();
+    assert!(!plugins_path.exists());
+    restore_plugins_toml(&plugins_path, None).unwrap();
+}
+
+#[test]
+fn manifest_helpers_report_missing_and_invalid_sources() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.manifest-helpers");
+    entry.record.source.manifest_ref = None;
+    let error = manifest_ref_from_record(&entry.record).unwrap_err();
+    assert!(error.to_string().contains("has no manifest_ref"));
+
+    let missing = temp.path().join("missing-manifest.toml");
+    let error = load_manifest_for_action("inspect", &missing).unwrap_err();
+    assert!(error.to_string().contains("dynamic plugin inspect failed"));
+}
+
+#[test]
+fn required_startup_failure_reports_policy_trust_and_environment_failures() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.required-checks");
+
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Invalid;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("blocked by host policy"));
+
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Valid;
+    entry.record.status.validation.integrity = DynamicPluginCheckState::Invalid;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("trust verification failed"));
+
+    entry.record.status.validation.integrity = DynamicPluginCheckState::Valid;
+    entry.record.status.validation.environment = DynamicPluginCheckState::Invalid;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("environment is unavailable"));
+}
+
+#[test]
+fn required_startup_failure_reports_custom_and_manifest_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.required-manifest");
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Invalid;
+    entry.record.status.last_error = Some(DynamicPluginFailure {
+        phase: DynamicPluginFailurePhase::Validation,
+        code: "custom_failure".into(),
+        message: "custom lifecycle diagnostic".into(),
+    });
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("custom lifecycle diagnostic"));
+
+    entry.record.status.last_error = None;
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Valid;
+    entry.record.source.manifest_ref = None;
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("has no manifest_ref"));
+
+    let missing = temp.path().join("removed-manifest.toml");
+    entry.record.source.manifest_ref = Some(missing.display().to_string());
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("is no longer available"));
+
+    let invalid = temp.path().join("invalid-manifest.toml");
+    std::fs::write(&invalid, b"not valid TOML = [").unwrap();
+    entry.record.source.manifest_ref = Some(invalid.display().to_string());
+    let failure = required_startup_failure(&entry, &[]).unwrap();
+    assert!(failure.contains("is unreadable"));
+}
+
+#[test]
+fn required_startup_failure_accepts_optional_and_readable_plugins() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let mut entry = required_lifecycle_record(&temp, "acme.required-ready");
+    assert_eq!(required_startup_failure(&entry, &[]), None);
+
+    entry.record.status.startup_class =
+        Some(nemo_relay::plugin::dynamic::DynamicPluginStartupClass::Optional);
+    entry.record.status.validation.policy_satisfied = DynamicPluginCheckState::Invalid;
+    assert_eq!(required_startup_failure(&entry, &[]), None);
+}
+
+#[test]
+fn lifecycle_commands_cover_json_and_human_output_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let server = GatewayOverrides::default();
+
+    list(
+        PluginsListRequest {
+            all: false,
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    list(
+        PluginsListRequest {
+            all: false,
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+
+    let plugin_dir = temp.path().join("output-plugin");
+    std::fs::create_dir_all(&plugin_dir).unwrap();
+    let manifest_path = write_dynamic_manifest(&plugin_dir, "acme.output");
+    add(
+        PluginsAddRequest {
+            scope: ConfigurationScope::User,
+            path: plugin_dir,
+        },
+        &server,
+    )
+    .unwrap();
+
+    validate(
+        PluginsValidateRequest {
+            target: manifest_path.display().to_string(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: manifest_path.display().to_string(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: "acme.output".into(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    validate(
+        PluginsValidateRequest {
+            target: "acme.output".into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    list(
+        PluginsListRequest {
+            all: false,
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    list(
+        PluginsListRequest {
+            all: false,
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: "acme.output".into(),
+            json: false,
+        },
+        &server,
+    )
+    .unwrap();
+    inspect(
+        PluginsInspectRequest {
+            id: "acme.output".into(),
+            json: true,
+        },
+        &server,
+    )
+    .unwrap();
+}
+
+#[test]
+fn validate_rejects_a_missing_path_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let _cwd = CurrentDirGuard::enter(temp.path());
+    let missing = temp.path().join("missing").join("relay-plugin.toml");
+    let error = validate(
+        PluginsValidateRequest {
+            target: missing.display().to_string(),
+            json: false,
+        },
+        &GatewayOverrides::default(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("does not exist"));
 }

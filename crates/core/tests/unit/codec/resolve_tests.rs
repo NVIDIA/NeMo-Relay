@@ -26,6 +26,7 @@ fn builtin_provider_surface_registry_keeps_request_priority() {
             ProviderSurface::OpenAIResponses,
             ProviderSurface::AnthropicMessages,
             ProviderSurface::OpenAIChat,
+            ProviderSurface::GeminiGenerateContent,
         ]
     );
 }
@@ -82,6 +83,57 @@ fn detect_request_none_for_unknown_or_non_object() {
     assert_eq!(detect_request_surface(&json!({"foo": 1})), None);
     assert_eq!(detect_request_surface(&json!([1, 2, 3])), None);
     assert_eq!(detect_request_surface(&json!("string")), None);
+}
+
+#[test]
+fn detect_request_gemini_by_contents() {
+    assert_eq!(
+        detect_request_surface(&json!({"contents": []})),
+        Some(ProviderSurface::GeminiGenerateContent)
+    );
+    assert_eq!(
+        detect_request_surface(&json!({"contents": [{"role": "user", "parts": [{"text": "hi"}]}]})),
+        Some(ProviderSurface::GeminiGenerateContent)
+    );
+    // Higher-priority surfaces still win when their discriminators are present.
+    assert_eq!(
+        detect_request_surface(&json!({"contents": [], "messages": []})),
+        Some(ProviderSurface::OpenAIChat),
+        "messages key wins over contents in priority order"
+    );
+}
+
+#[test]
+fn detect_response_gemini_by_candidates() {
+    assert_eq!(
+        detect_response_surface(&json!({"candidates": []})),
+        Some(ProviderSurface::GeminiGenerateContent)
+    );
+    assert_eq!(
+        detect_response_surface(&json!({
+            "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+            "usageMetadata": {}
+        })),
+        Some(ProviderSurface::GeminiGenerateContent)
+    );
+    // A scalar candidates key does not match (must be an array).
+    assert_eq!(
+        detect_response_surface(&json!({"candidates": "not-array"})),
+        None
+    );
+}
+
+#[test]
+fn detect_response_gemini_by_prompt_feedback_block() {
+    assert_eq!(
+        detect_response_surface(&json!({
+            "promptFeedback": {
+                "blockReason": "SAFETY",
+                "safetyRatings": []
+            }
+        })),
+        Some(ProviderSurface::GeminiGenerateContent)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -346,7 +398,7 @@ fn hint_other_or_unknown_provider_stays_chat() {
         Some("anthropic.count_tokens"),
         Some("anthropic.preview"),
         Some("passthrough"),
-        Some("gemini"),
+        Some("gemini_generate_content"),
         None,
     ] {
         assert_eq!(
@@ -395,10 +447,11 @@ fn hint_does_not_classify_non_object_or_keyless() {
 // Provider-codec factory (name<->surface mapping + codec construction)
 // ---------------------------------------------------------------------------
 
-const ALL_SURFACES: [ProviderSurface; 3] = [
+const ALL_SURFACES: [ProviderSurface; 4] = [
     ProviderSurface::OpenAIChat,
     ProviderSurface::OpenAIResponses,
     ProviderSurface::AnthropicMessages,
+    ProviderSurface::GeminiGenerateContent,
 ];
 
 #[test]
@@ -423,11 +476,29 @@ fn codec_name_uses_canonical_spellings() {
         ProviderSurface::AnthropicMessages.codec_name(),
         "anthropic_messages"
     );
+    assert_eq!(
+        ProviderSurface::GeminiGenerateContent.codec_name(),
+        "gemini_generate_content"
+    );
+}
+
+#[test]
+fn from_codec_name_rejects_ambiguous_gemini_name() {
+    assert_eq!(
+        ProviderSurface::from_codec_name("gemini"),
+        None,
+        "Gemini codec names must name the concrete API surface"
+    );
+    assert_eq!(
+        ProviderSurface::GeminiGenerateContent.codec_name(),
+        "gemini_generate_content",
+        "the canonical Gemini codec spelling names generateContent explicitly"
+    );
 }
 
 #[test]
 fn from_codec_name_is_none_for_unknown_names() {
-    assert_eq!(ProviderSurface::from_codec_name("gemini"), None);
+    assert_eq!(ProviderSurface::from_codec_name("generate_content"), None);
     assert_eq!(ProviderSurface::from_codec_name(""), None);
     assert_eq!(ProviderSurface::from_codec_name("OpenAIChat"), None);
 }
@@ -436,7 +507,12 @@ fn from_codec_name_is_none_for_unknown_names() {
 fn supported_codec_names_track_the_builtin_registry() {
     assert_eq!(
         supported_codec_names(),
-        vec!["openai_responses", "anthropic_messages", "openai_chat"]
+        vec![
+            "openai_responses",
+            "anthropic_messages",
+            "openai_chat",
+            "gemini_generate_content"
+        ]
     );
     let from_registry: Vec<_> = BUILTIN_PROVIDER_SURFACES
         .iter()
@@ -480,6 +556,17 @@ fn request_codec_decodes_each_surface() {
             .messages
             .is_empty()
     );
+
+    let gemini = req(json!({
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+    }));
+    assert!(
+        !request_codec(ProviderSurface::GeminiGenerateContent)
+            .decode(&gemini)
+            .expect("gemini request decodes")
+            .messages
+            .is_empty()
+    );
 }
 
 #[test]
@@ -518,6 +605,18 @@ fn response_codec_decodes_each_surface() {
             .expect("responses response decodes")
             .response_text(),
         Some("yo")
+    );
+
+    let gemini = json!({
+        "candidates": [{"content": {"parts": [{"text": "hi gemini"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 1}
+    });
+    assert_eq!(
+        response_codec(ProviderSurface::GeminiGenerateContent)
+            .decode_response(&gemini)
+            .expect("gemini response decodes")
+            .response_text(),
+        Some("hi gemini")
     );
 }
 

@@ -155,21 +155,8 @@ fn malformed_sections_and_missing_sinks_report_errors() {
 fn target_selection_and_file_loading_behave_as_expected() {
     let user = ConfigEditCommand::default();
     assert_eq!(TargetScope::from(&user), TargetScope::User);
-    let project = ConfigEditCommand {
-        project: true,
-        ..ConfigEditCommand::default()
-    };
-    assert_eq!(TargetScope::from(&project), TargetScope::Project);
 
     let root = tempfile::tempdir().unwrap();
-    let project = root.path().join("project");
-    let nested = project.join("nested");
-    std::fs::create_dir_all(&nested).unwrap();
-    let config = project.join(".nemo-relay/config.toml");
-    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(&config, "").unwrap();
-    assert_eq!(project_config_path(&nested), config);
-
     let invalid = root.path().join("invalid.toml");
     std::fs::write(&invalid, "[gateway\n").unwrap();
     let error = match ConfigDocument::read(invalid.clone()) {
@@ -205,22 +192,6 @@ fn config_editor_treats_explicit_config_as_the_user_target() {
             .join("config.toml")
     );
 
-    let project_root = tempfile::tempdir().unwrap();
-    let _cwd = crate::test_support::CwdTestScope::enter(project_root.path());
-    let project = ConfigEditCommand {
-        project: true,
-        ..ConfigEditCommand::default()
-    };
-    let (scope, path) =
-        resolve_edit_target(&project, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
-    assert_eq!(scope, TargetScope::Project);
-    assert_eq!(
-        path,
-        std::env::current_dir()
-            .unwrap()
-            .join(".nemo-relay/config.toml")
-    );
-
     let global = ConfigEditCommand {
         global: true,
         ..ConfigEditCommand::default()
@@ -228,17 +199,22 @@ fn config_editor_treats_explicit_config_as_the_user_target() {
     let (scope, path) =
         resolve_edit_target(&global, Some(PathBuf::from("/ignored/config.toml"))).unwrap();
     assert_eq!(scope, TargetScope::Global);
-    assert_eq!(path, PathBuf::from("/etc/nemo-relay/config.toml"));
+    assert_eq!(
+        path,
+        crate::configuration::system_config_dir().join("config.toml")
+    );
 }
 
 #[test]
 fn documents_are_written_atomically_with_scope_appropriate_permissions() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("nested/config.toml");
+    let path = directory.path().join("user/nested/config.toml");
+    assert!(!path.parent().unwrap().exists());
     let document = ConfigDocument::read(path.clone()).unwrap();
     assert!(!path.exists());
     document.write(TargetScope::User).unwrap();
     assert!(path.exists());
+    assert!(path.parent().unwrap().is_dir());
 
     let original = std::fs::read_to_string(&path).unwrap();
     crate::filesystem::fail_next_atomic_write(&path);
@@ -255,11 +231,14 @@ fn documents_are_written_atomically_with_scope_appropriate_permissions() {
         );
     }
 
-    let global_path = directory.path().join("global/config.toml");
+    let global_path = directory.path().join("system/nested/config.toml");
+    assert!(!global_path.parent().unwrap().exists());
     ConfigDocument::read(global_path.clone())
         .unwrap()
         .write(TargetScope::Global)
         .unwrap();
+    assert!(global_path.is_file());
+    assert!(global_path.parent().unwrap().is_dir());
 
     #[cfg(unix)]
     {
@@ -299,5 +278,71 @@ fn noninteractive_editor_guard_is_deterministic() {
     assert_eq!(
         error,
         "configuration error: interactive configuration editing requires a TTY"
+    );
+    assert!(ensure_tty_with(true).is_ok());
+}
+
+#[test]
+fn document_accessors_cover_inline_values_defaults_and_invalid_shapes() {
+    let mut document = document(
+        "gateway = { max_hook_payload_bytes = 64, max_passthrough_body_bytes = -1 }\nupstream = { openai_base_url = \"https://example.test\", openai_auth_header = 7 }\nlogging = { level = 9 }\n",
+    );
+
+    assert_eq!(document.path(), Path::new("config.toml"));
+    assert_eq!(document.gateway_summary(), "configured");
+    assert_eq!(document.upstream_summary(), "configured");
+    assert_eq!(document.logging_summary(), "configured");
+    assert_eq!(
+        document.integer_summary("gateway", "max_hook_payload_bytes"),
+        "64"
+    );
+    assert_eq!(
+        document.integer_summary("gateway", "max_passthrough_body_bytes"),
+        "invalid"
+    );
+    assert_eq!(
+        document.string_summary("upstream", "openai_base_url"),
+        "https://example.test"
+    );
+    assert_eq!(document.string_summary("logging", "level"), "invalid");
+    assert_eq!(document.string_summary("logging", "missing"), "unset");
+    assert_eq!(document.secret_summary("anthropic_auth_header"), "unset");
+
+    document
+        .set_string("upstream", "openai_base_url", "https://changed.test".into())
+        .unwrap();
+    assert_eq!(
+        document.string("upstream", "openai_base_url").as_deref(),
+        Some("https://changed.test")
+    );
+    document.clear_key("missing", "value").unwrap();
+    assert!(!document.has_key("missing", "value"));
+}
+
+#[test]
+fn sink_accessors_report_invalid_and_incomplete_entries() {
+    let mut document = document(
+        "[[logging.sinks]]\npath = 7\nlevel = \"debug\"\nqueue_capacity = -1\nmax_file_size_bytes = 1024\n",
+    );
+
+    assert_eq!(document.sink_labels(), ["sink 1 (invalid path)"]);
+    assert_eq!(document.sink_string_summary(0, "path"), "invalid");
+    assert_eq!(document.sink_string_summary(0, "level"), "debug");
+    assert_eq!(document.sink_string_summary(0, "format"), "unset");
+    assert_eq!(
+        document.sink_integer_summary(0, "queue_capacity"),
+        "invalid"
+    );
+    assert_eq!(document.sink_integer_summary(0, "retained_files"), "unset");
+    assert_eq!(document.sink_rotation_summary(0), "incomplete");
+
+    document
+        .set_sink_string(0, "path", "relay.log".into())
+        .unwrap();
+    document.clear_sink_key(0, "level").unwrap();
+    assert!(!document.sink_has_key(0, "level").unwrap());
+    assert_eq!(
+        document.sink_string(0, "path").as_deref(),
+        Some("relay.log")
     );
 }

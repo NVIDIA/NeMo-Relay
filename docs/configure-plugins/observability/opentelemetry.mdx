@@ -28,7 +28,14 @@ with collector or backend schemas.
 
 NeMo Relay uses OpenTelemetry Rust `0.32`. It deterministically derives
 compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
-receive the same event stream use the same identifiers and parentage.
+receive the same event stream use the same identifiers and parentage. Different
+endpoint types must therefore use independent OTLP destinations; configuring
+them with the same endpoint and transport is rejected to prevent identifier
+collisions at the receiver. Duplicate detection compares canonical destinations:
+HTTP and HTTPS default ports are realized, repeated and trailing path slashes
+are normalized, and standardized loopback hosts such as `localhost`, names
+under `.localhost`, `127.0.0.0/8`, and `::1` are equivalent. Relay does not use
+DNS resolution for this comparison, and query strings remain significant.
 Rooted Relay propagation continues the Relay-derived trace across the import
 boundary. Rootless propagation retains Relay event parentage but starts a new
 OpenTelemetry trace from the first local event. Carry W3C `traceparent` and
@@ -57,6 +64,9 @@ type = "gen_ai"
 endpoint = "http://localhost:4318/v1/traces"
 transport = "http_binary"
 service_name = "agent-service"
+max_queue_size = 4096
+max_export_batch_size = 512
+scheduled_delay_millis = 1000
 
 [components.config.opentelemetry.endpoints.header_env]
 authorization = "OTEL_AUTHORIZATION"
@@ -77,13 +87,16 @@ work or delivery to the other exporters.
 | Field | Default | Notes |
 |---|---|---|
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
-| `endpoint` | Required | Nonblank OTLP endpoint. |
+| `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
 | `service_version` | Omitted | Optional `service.version`. |
 | `instrumentation_scope` | `opentelemetry` | Instrumentation scope name. |
-| `timeout_millis` | `3000` | Export timeout. |
+| `timeout_millis` | `3000` | OTLP request timeout. |
+| `max_queue_size` | Environment or `2048` | Maximum completed spans buffered before this endpoint drops new spans. |
+| `max_export_batch_size` | Environment or `512` | Maximum spans exported in one batch; capped at the effective queue size. |
+| `scheduled_delay_millis` | Environment or `5000` ms | Maximum delay before this endpoint exports a non-full batch. A full batch exports sooner. |
 | `headers` | `{}` | String-to-string exporter headers. |
 | `header_env` | `{}` | Header names mapped to environment variable names containing secret values. |
 | `resource_attributes` | `{}` | String-to-string resource attributes. |
@@ -91,11 +104,16 @@ work or delivery to the other exporters.
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 
-## Batch Processor Environment Variables
+## Batch Processor Configuration
 
-OpenTelemetry's standard batch processor settings apply process-wide to every
-configured endpoint. Set them before the plugin activates; endpoint-specific
-batch sizing is not supported.
+Configure batch processing independently on each endpoint with
+`max_queue_size`, `max_export_batch_size`, and `scheduled_delay_millis`.
+When an endpoint omits a field, the corresponding standard OpenTelemetry
+environment variable applies process-wide. If neither is set, the SDK default
+applies.
+
+The precedence for each setting is endpoint value, then environment variable,
+then SDK default. Set environment variables before the plugin activates.
 
 | Variable | Default | Notes |
 |---|---:|---|
@@ -103,9 +121,16 @@ batch sizing is not supported.
 | `OTEL_BSP_MAX_EXPORT_BATCH_SIZE` | `512` | Maximum spans exported in one batch; capped at the queue size. |
 | `OTEL_BSP_SCHEDULE_DELAY` | `5000` ms | Maximum delay before exporting a non-full batch. |
 
-Use positive integer values. The SDK falls back to its defaults for malformed
-values but accepts zero; do not use zero values. Queue capacity counts spans,
-not bytes.
+Endpoint values must be positive integers. If both endpoint size fields are
+set, `max_export_batch_size` must not exceed `max_queue_size`. When one size is
+inherited, the SDK caps the effective batch size at the effective queue size.
+The SDK falls back to its default for malformed environment values. Queue and
+batch sizes count spans, not bytes.
+
+Relay's thread-based batch processor exports serially, so it does not expose
+the SDK's concurrent-export setting. It also does not expose a separate batch
+processor export timeout; use the endpoint's `timeout_millis` to bound each
+OTLP request.
 
 <Warning>
 A full queue drops completed spans instead of applying backpressure to
@@ -117,14 +142,22 @@ The OpenTelemetry SDK logs
 first drops a span. It suppresses additional first-drop warnings for that
 endpoint to avoid a log storm. During graceful shutdown, it logs
 `BatchSpanProcessor.SpansDropped` with the endpoint processor's exact
-`dropped_span_count` and `max_queue_size`. The SDK diagnostics do not include
-the Relay endpoint index or URL.
+`dropped_span_count` and `max_queue_size`.
+
+For plugin-managed exporters, NeMo Relay also records `otel.spans_dropped` in the
+active plugin report's `runtime_diagnostics`. Its `count` is the exact number
+of dropped spans, `field` identifies the affected
+`opentelemetry.endpoints[N].endpoint`, and `message` includes the configured
+endpoint URL. If spans were dropped, clearing the plugin returns a delivery
+failure error and retains the diagnostic for inspection. This error does not
+disable later plugin configuration.
 </Warning>
 
-Increasing `OTEL_BSP_MAX_QUEUE_SIZE` can reduce the risk for a known burst
-size, but a finite queue does not guarantee lossless telemetry. Always clear
-the plugin during graceful shutdown so the SDK can report its final drop count
-and attempt to export queued spans.
+Increasing an endpoint's `max_queue_size`, or the process-wide
+`OTEL_BSP_MAX_QUEUE_SIZE` fallback, can reduce the risk for a known burst size,
+but a finite queue does not guarantee lossless telemetry. Always clear the
+plugin during graceful shutdown so NeMo Relay can record the final drop count
+and the SDK can attempt to export queued spans.
 
 ## Endpoint Capacity and Sizing
 
@@ -170,10 +203,16 @@ The `gen_ai` endpoint uses these operation names:
 | Embedder | `embeddings` |
 | Retriever | `retrieval` |
 
-Rerankers, marks, and unsupported scope types are omitted. Supported
-descendants remain attached to their nearest exported ancestor. This
-projection never emits `nemo_relay.*` fields and does not export message
-content, tool payloads, or retrieval content.
+Marks are omitted. Relay scope types without GenAI semantics are emitted as
+minimal internal spans so that the original span parentage is preserved. This
+projection never emits `nemo_relay.*` fields. LLM spans include the
+`gen_ai.system_instructions`, `gen_ai.input.messages`, and
+`gen_ai.output.messages` attributes as JSON strings that follow the
+OpenTelemetry GenAI schemas. Each attribute is emitted only when its normalized
+instructions, messages, or response content is present. Redact sensitive
+content with an LLM or event sanitizer. Tool and retrieval payloads are not
+exported. Set top-level `enable_full_payloads = true` to retain complete
+sanitized LLM request history on every start span.
 
 ### Error Type Mapping
 
@@ -196,14 +235,23 @@ For managed LLM, tool, and stream failures, NeMo Relay maps structured
 | Upstream invalid request | `invalid_request` |
 | Other upstream failure | `upstream_error` |
 | `Internal` | `internal_error` |
+| Binding callback exception | `internal_error` |
 
 External application and callback exceptions that do not have a more specific
-`FlowError` classification are represented as `Internal` and emit
-`internal_error`. NeMo Relay does not inspect error messages to recover Python,
-JavaScript, or application-defined exception class names. When no structured
-`FlowError` is available, such as a cancellation or dropped execution, the
-GenAI projection emits `_OTHER`. Caller-provided `error.type` metadata takes
-precedence over the derived mapping.
+`FlowError` classification emit `internal_error`. Python and JavaScript callback
+boundaries also preserve the exception class separately, and both the `full`
+and `gen_ai` projections emit an `exception` span event with `exception.type`.
+NeMo Relay does not inspect error messages to recover exception class names.
+When an errored parent span has no useful classification of its own, it
+inherits the failed descendant's `error.type` and exception type. When no
+structured `FlowError` is available, such as a cancellation or dropped
+execution, the projection emits `_OTHER`. Caller-provided `error.type` and
+`exception.type` metadata take precedence over values derived from `FlowError`.
+
+`FlowError` is an exhaustive Rust enum. Rust callers upgrading to this release
+must handle the new `CallbackException` variant in exhaustive matches. It maps
+to the same internal status as `Internal`, while retaining `exception_type` for
+observability projection.
 
 ## Direct Subscriber
 

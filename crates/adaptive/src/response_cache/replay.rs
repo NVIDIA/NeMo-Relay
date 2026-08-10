@@ -12,8 +12,9 @@ use serde_json::{Map, Value as Json, json};
 ///
 /// A strict streaming client parses only its provider's wire chunks (Anthropic
 /// `message_start → content_block_delta → … → message_stop`, OpenAI Chat
-/// `chat.completion.chunk` deltas, OpenAI Responses lifecycle events) — replaying
-/// the aggregate as one frame breaks such clients even though the body is correct.
+/// `chat.completion.chunk` deltas, OpenAI Responses lifecycle events, or Gemini
+/// `GenerateContentResponse` chunks) — replaying the aggregate as one frame
+/// breaks such clients even though the body is correct.
 /// The surface is detected from the stored aggregate's own shape (the codec
 /// finalizer's output, or a buffered body of the same shape), so no codec handle
 /// is needed at the call sites. An unrecognized shape falls back to a
@@ -79,6 +80,11 @@ fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
         ProviderSurface::AnthropicMessages => synthesize_anthropic_chunks(aggregate),
         ProviderSurface::OpenAIChat => synthesize_chat_chunks(aggregate),
         ProviderSurface::OpenAIResponses => synthesize_responses_chunks(aggregate),
+        // Gemini streaming events are GenerateContentResponse objects; a stored
+        // aggregate is a valid single native chunk. `replay_is_lossy` still
+        // re-aggregates it and rejects shapes the streaming collector cannot
+        // preserve exactly.
+        ProviderSurface::GeminiGenerateContent => vec![aggregate.clone()],
     })
 }
 
@@ -192,44 +198,7 @@ fn synthesize_chat_chunks(aggregate: &Json) -> Vec<Json> {
         .cloned()
         .unwrap_or_default();
     for (position, choice) in choices.iter().enumerate() {
-        let index = choice
-            .get("index")
-            .and_then(Json::as_u64)
-            .unwrap_or(position as u64);
-        let message = choice.get("message").cloned().unwrap_or(json!({}));
-        if let Some(role) = message.get("role") {
-            chunks.push(base(
-                json!([{"index": index, "delta": {"role": role}, "finish_reason": null}]),
-            ));
-        }
-        if let Some(content) = message.get("content").and_then(Json::as_str)
-            && !content.is_empty()
-        {
-            chunks.push(base(
-                json!([{"index": index, "delta": {"content": content}, "finish_reason": null}]),
-            ));
-        }
-        if let Some(tool_calls) = message.get("tool_calls").and_then(Json::as_array) {
-            let deltas: Vec<Json> = tool_calls
-                .iter()
-                .enumerate()
-                .map(|(call_index, call)| {
-                    let mut delta = call.clone();
-                    if let Some(map) = delta.as_object_mut() {
-                        map.entry("index".to_string())
-                            .or_insert(json!(call_index as u64));
-                    }
-                    delta
-                })
-                .collect();
-            chunks.push(base(
-                json!([{"index": index, "delta": {"tool_calls": deltas}, "finish_reason": null}]),
-            ));
-        }
-        let finish = choice.get("finish_reason").cloned().unwrap_or(Json::Null);
-        chunks.push(base(
-            json!([{"index": index, "delta": {}, "finish_reason": finish}]),
-        ));
+        chunks.extend(synthesize_chat_choice_chunks(&base, position, choice));
     }
     if let Some(usage) = aggregate.get("usage") {
         let mut usage_chunk = base(json!([]));
@@ -238,6 +207,53 @@ fn synthesize_chat_chunks(aggregate: &Json) -> Vec<Json> {
         }
         chunks.push(usage_chunk);
     }
+    chunks
+}
+
+fn synthesize_chat_choice_chunks(
+    base: &impl Fn(Json) -> Json,
+    position: usize,
+    choice: &Json,
+) -> Vec<Json> {
+    let index = choice
+        .get("index")
+        .and_then(Json::as_u64)
+        .unwrap_or(position as u64);
+    let message = choice.get("message").cloned().unwrap_or(json!({}));
+    let mut chunks = Vec::new();
+    if let Some(role) = message.get("role") {
+        chunks.push(base(
+            json!([{"index": index, "delta": {"role": role}, "finish_reason": null}]),
+        ));
+    }
+    if let Some(content) = message.get("content").and_then(Json::as_str)
+        && !content.is_empty()
+    {
+        chunks.push(base(
+            json!([{"index": index, "delta": {"content": content}, "finish_reason": null}]),
+        ));
+    }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Json::as_array) {
+        let deltas = tool_calls
+            .iter()
+            .enumerate()
+            .map(|(call_index, call)| {
+                let mut delta = call.clone();
+                if let Some(map) = delta.as_object_mut() {
+                    map.entry("index".to_string())
+                        .or_insert(json!(call_index as u64));
+                }
+                delta
+            })
+            .collect::<Vec<_>>();
+        chunks.push(base(
+            json!([{"index": index, "delta": {"tool_calls": deltas}, "finish_reason": null}]),
+        ));
+    }
+    let finish = choice.get("finish_reason").cloned().unwrap_or(Json::Null);
+    chunks.push(base(
+        json!([{"index": index, "delta": {}, "finish_reason": finish}]),
+    ));
     chunks
 }
 

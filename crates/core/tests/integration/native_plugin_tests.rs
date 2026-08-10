@@ -777,7 +777,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
     let pending = tokio::spawn(async {
         tool_request_intercepts("async-pending", json!({"input": true})).await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while !unsafe { pending_entered() } {
             tokio::task::yield_now().await;
         }
@@ -814,7 +814,7 @@ async fn native_v3_async_registration_supports_all_middleware_kinds() {
         )
         .await
     });
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while !unsafe { pending_entered() } {
             tokio::task::yield_now().await;
         }
@@ -1461,19 +1461,22 @@ async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
 async fn plugin_host_activation_layers_discovered_static_base_with_dynamic_components() {
     if std::env::var_os(PLUGIN_DISCOVERY_TEST_CHILD).is_none() {
         let environment = TempDir::new().expect("plugin discovery environment should be created");
-        let project_config_dir = environment.path().join(".nemo-relay");
-        std::fs::create_dir_all(&project_config_dir)
-            .expect("project plugin config directory should be created");
+        let xdg_config_home = environment.path().join("xdg");
+        let user_config_dir = xdg_config_home.join("nemo-relay");
+        std::fs::create_dir_all(&user_config_dir)
+            .expect("user plugin config directory should be created");
         std::fs::write(
-            project_config_dir.join("plugins.toml"),
+            user_config_dir.join("plugins.toml"),
             format!(
                 "version = 1\n\n[[components]]\nkind = {STATIC_BASE_PLUGIN_KIND:?}\nenabled = true\n"
             ),
         )
-        .expect("project plugin config should be written");
-        let xdg_config_home = environment.path().join("xdg");
-        std::fs::create_dir_all(&xdg_config_home)
-            .expect("isolated user config directory should be created");
+        .expect("user plugin config should be written");
+        let legacy_project_dir = environment.path().join(".nemo-relay");
+        std::fs::create_dir_all(&legacy_project_dir)
+            .expect("legacy project config directory should be created");
+        std::fs::write(legacy_project_dir.join("plugins.toml"), "components = [\n")
+            .expect("malformed legacy project config should be written");
 
         let output = Command::new(std::env::current_exe().expect("test executable should resolve"))
             .args([
@@ -1569,7 +1572,7 @@ async fn plugin_host_clear_allows_an_in_flight_native_callback_to_finish() {
     });
 
     entered_rx
-        .recv_timeout(std::time::Duration::from_secs(10))
+        .recv_timeout(std::time::Duration::from_secs(5))
         .expect("native callback should enter its continuation");
     activation
         .clear()
@@ -2034,8 +2037,6 @@ fn find_event<'a>(
 }
 
 struct BuiltFixture {
-    _source_dir: TempDir,
-    _target_dir: TempDir,
     manifest_dir: TempDir,
     library_path: PathBuf,
 }
@@ -2043,52 +2044,28 @@ struct BuiltFixture {
 fn build_fixture_plugin() -> BuiltFixture {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
-    let source_dir = TempDir::new().expect("fixture source dir");
-    let fixture_dir = source_dir.path().join("native_plugin");
-    let fixture_src_dir = fixture_dir.join("src");
-    std::fs::create_dir_all(&fixture_src_dir).expect("fixture src dir");
-    let native_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugin");
-    let fixture_manifest = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native_plugin/Cargo.toml"),
-    )
-    .expect("fixture Cargo.toml template")
-    .replace(
-        r#"nemo-relay-plugin = { path = "../../../../plugin" }"#,
-        &format!("nemo-relay-plugin = {{ path = {native_path:?} }}"),
-    );
-    std::fs::write(fixture_dir.join("Cargo.toml"), fixture_manifest).expect("fixture Cargo.toml");
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native_plugin/src/lib.rs"),
-        fixture_src_dir.join("lib.rs"),
-    )
-    .expect("fixture lib.rs");
-    let target_dir = TempDir::new().expect("fixture target dir");
     let manifest_dir = TempDir::new().expect("fixture manifest dir");
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let status = Command::new(cargo)
-        .arg("build")
-        .arg("--quiet")
-        .arg("--manifest-path")
-        .arg(fixture_dir.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(target_dir.path())
-        .status()
-        .expect("fixture cargo build should start");
-    assert!(status.success(), "fixture cargo build failed: {status}");
-
-    let library_path = target_dir.path().join("debug").join(fixture_library_name());
+    let library_path = prepared_plugin_fixture("NEMO_RELAY_TEST_NATIVE_PLUGIN");
     assert!(
         library_path.exists(),
-        "fixture library missing at {}",
+        "fixture library is missing; run `just build-test-plugin-fixtures`: {}",
         library_path.display()
     );
 
     BuiltFixture {
-        _source_dir: source_dir,
-        _target_dir: target_dir,
         manifest_dir,
         library_path,
     }
+}
+
+fn prepared_plugin_fixture(environment: &str) -> PathBuf {
+    std::env::var_os(environment)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/test-plugin-fixtures/debug")
+                .join(fixture_library_name())
+        })
 }
 
 fn write_manifest(fixture: &BuiltFixture) -> PathBuf {

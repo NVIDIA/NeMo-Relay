@@ -12,6 +12,7 @@ pub(crate) enum BuiltinCodecName {
     OpenAIChat,
     OpenAIResponses,
     AnthropicMessages,
+    GeminiGenerateContent,
 }
 
 impl BuiltinCodecName {
@@ -20,6 +21,7 @@ impl BuiltinCodecName {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+            ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
         }
     }
 
@@ -32,8 +34,148 @@ impl BuiltinCodecName {
             Self::OpenAIChat => overlay_openai_chat_response(payload, annotated),
             Self::OpenAIResponses => overlay_openai_responses_response(payload, annotated),
             Self::AnthropicMessages => overlay_anthropic_response(payload, annotated),
+            Self::GeminiGenerateContent => overlay_gemini_response(payload, annotated),
         }
     }
+}
+
+fn gemini_message_parts_for_overlay(message: Option<&MessageContent>) -> Option<Vec<Json>> {
+    let MessageContent::Parts(parts) = message? else {
+        return None;
+    };
+    Some(
+        parts
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text, extra } => {
+                    let mut obj = extra.clone();
+                    obj.insert("text".into(), Json::String(text.clone()));
+                    Some(Json::Object(obj))
+                }
+                ContentPart::ProviderNative {
+                    provider, value, ..
+                } if provider == "gemini" => Some(value.clone()),
+                ContentPart::ImageUrl { .. }
+                | ContentPart::Image { .. }
+                | ContentPart::Audio { .. }
+                | ContentPart::File { .. }
+                | ContentPart::Refusal { .. }
+                | ContentPart::ToolUse { .. }
+                | ContentPart::ToolResult { .. }
+                | ContentPart::ProviderNative { .. } => None,
+            })
+            .collect(),
+    )
+}
+
+fn overlay_gemini_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {
+    let Some(root) = payload.as_object_mut() else {
+        return payload;
+    };
+
+    set_optional_string_field(root, "responseId", annotated.id.as_deref());
+    set_optional_string_field(root, "modelVersion", annotated.model.as_deref());
+
+    let Some(candidate) = root
+        .get_mut("candidates")
+        .and_then(Json::as_array_mut)
+        .and_then(|arr| arr.first_mut())
+        .and_then(Json::as_object_mut)
+    else {
+        return payload;
+    };
+
+    // finishReason is NOT overlaid here.  The normalized FinishReason::ToolUse can
+    // originate from STOP + functionCall parts, so re-emitting it as TOOL_CODE would
+    // corrupt a response that the API legitimately sent as STOP.  The raw provider
+    // value is already correct and must be preserved.
+
+    let Some(parts) = candidate
+        .get_mut("content")
+        .and_then(Json::as_object_mut)
+        .and_then(|c| c.get_mut("parts"))
+        .and_then(Json::as_array_mut)
+    else {
+        return payload;
+    };
+
+    overlay_gemini_message_parts(parts, annotated.message.as_ref());
+
+    // Overlay functionCall parts.
+    overlay_gemini_tool_calls(parts, annotated.tool_calls.as_deref());
+
+    payload
+}
+
+fn overlay_gemini_message_parts(parts: &mut Vec<Json>, message: Option<&MessageContent>) {
+    if let Some(message_parts) = gemini_message_parts_for_overlay(message) {
+        let mut sanitized = message_parts.into_iter();
+        parts.retain_mut(|part| {
+            if part.get("thought").and_then(Json::as_bool) == Some(true)
+                || part.get("functionCall").is_some()
+            {
+                return true;
+            }
+            let Some(next) = sanitized.next() else {
+                return false;
+            };
+            *part = next;
+            true
+        });
+        parts.extend(sanitized);
+        return;
+    }
+
+    let message_text = annotated_message_text(message);
+    let mut wrote_text = false;
+    parts.retain_mut(|part| {
+        if part.get("text").is_none() || part.get("thought").and_then(Json::as_bool) == Some(true) {
+            return true;
+        }
+        let Some(part) = part.as_object_mut() else {
+            return false;
+        };
+        let Some(text) = message_text.as_deref() else {
+            return false;
+        };
+        if wrote_text {
+            return false;
+        }
+        set_optional_string_field(part, "text", Some(text));
+        wrote_text = true;
+        true
+    });
+}
+
+fn overlay_gemini_tool_calls(parts: &mut Vec<Json>, tool_calls: Option<&[ResponseToolCall]>) {
+    let Some(tool_calls) = tool_calls else {
+        parts.retain(|part| {
+            part.as_object()
+                .map(|object| !object.contains_key("functionCall"))
+                .unwrap_or(true)
+        });
+        return;
+    };
+
+    let mut sanitized = tool_calls.iter();
+    parts.retain_mut(|part| {
+        let Some(function_call) = part
+            .as_object_mut()
+            .and_then(|object| object.get_mut("functionCall"))
+            .and_then(Json::as_object_mut)
+        else {
+            return true;
+        };
+        let Some(call) = sanitized.next() else {
+            return false;
+        };
+        if function_call.contains_key("id") {
+            set_optional_string_field(function_call, "id", Some(call.id.as_str()));
+        }
+        set_optional_string_field(function_call, "name", Some(call.name.as_str()));
+        function_call.insert("args".into(), call.arguments.clone());
+        true
+    });
 }
 
 fn overlay_openai_chat_response(mut payload: Json, annotated: &AnnotatedLlmResponse) -> Json {

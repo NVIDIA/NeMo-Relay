@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::agents::CodingAgent;
 use crate::error::CliError;
-use crate::hooks::{generated_hooks, transparent_hook_forward_command};
+use crate::hooks::{generated_policy_hooks, transparent_hook_forward_commands};
 use crate::process::{PreparedAgentLaunch, insert_after_host};
 
 pub(crate) fn prepare(
@@ -61,7 +61,7 @@ pub(crate) fn prepare(
         }))
         .map_err(|error| CliError::Launch(error.to_string()))?,
     )?;
-    let hook_command = transparent_hook_forward_command(
+    let hook_commands = transparent_hook_forward_commands(
         &transparent_hook_executable(),
         CodingAgent::ClaudeCode,
         gateway_url,
@@ -69,7 +69,7 @@ pub(crate) fn prepare(
     .map_err(CliError::Launch)?;
     write_hooks(
         &root.join("hooks/hooks.json"),
-        generated_hooks(CodingAgent::ClaudeCode, &hook_command),
+        generated_policy_hooks(CodingAgent::ClaudeCode, &hook_commands),
     )?;
     let settings_path = root.join("settings.json");
     let settings = settings_overlay(&launch.argv, launch.host_index, gateway_url)?;

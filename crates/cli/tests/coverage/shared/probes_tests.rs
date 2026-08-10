@@ -9,7 +9,12 @@ async fn grpc_probe_uses_tcp_connectivity() {
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let check = probe_tcp_named("OpenTelemetry endpoint", &endpoint).await;
     assert_eq!(check.status, Status::Pass);
-    assert!(check.details.contains("gRPC TCP connection succeeded"));
+    assert!(
+        check
+            .details
+            .contains("live gRPC reachability probe connected to the TCP port")
+    );
+    assert!(check.details.contains("OTLP handshake not verified"));
 }
 
 #[tokio::test]
@@ -20,7 +25,11 @@ async fn grpc_probe_reports_invalid_hostless_and_refused_endpoints() {
 
     let hostless = probe_tcp_named("OpenTelemetry endpoint", "file:///tmp/collector").await;
     assert_eq!(hostless.status, Status::Fail);
-    assert!(hostless.details.contains("has no host"));
+    assert!(
+        hostless
+            .details
+            .contains("gRPC endpoint must use http:// or https://")
+    );
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -28,8 +37,12 @@ async fn grpc_probe_reports_invalid_hostless_and_refused_endpoints() {
     let refused = probe_tcp_named("OpenTelemetry endpoint", &endpoint).await;
     assert_eq!(refused.status, Status::Fail);
     assert!(
-        refused.details.contains("connection failed")
-            || refused.details.contains("connection timed out"),
+        refused
+            .details
+            .contains("live gRPC reachability probe failed")
+            || refused
+                .details
+                .contains("live gRPC reachability probe timed out"),
         "{}",
         refused.details
     );

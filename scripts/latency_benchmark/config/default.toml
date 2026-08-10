@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# A custom config file may contain only the values it needs to override.
+tests = ["gateway", "hooks", "startup"]
+providers = ["openai", "anthropic"]
+modes = ["buffered", "streaming"]
+samples = 100
+hook_samples = 30
+startup_samples = 20
+warmup = 3
+payload_sizes = [4096, 65536, 262144, 1048576, 4194304]
+concurrency = [1, 2, 4, 8, 16]
+response_bytes = 16384
+stream_chunks = 32
+middleware = []
+
+[models]
+openai = "gpt-5-codex"
+anthropic = "claude-sonnet-4-5"
+
+[content]
+request_fill = "p"
+response_fill = "r"

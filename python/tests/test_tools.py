@@ -208,7 +208,7 @@ class TestToolsAsync:
         subscribers.register("py_tool_exec_failure_sub", lambda e: events.append(e))
 
         def failing(args):
-            raise RuntimeError("boom")
+            raise ValueError("boom")
 
         with pytest.raises(RuntimeError, match="boom"):
             await tools.execute("failing_tool", {"x": 1}, failing)
@@ -224,6 +224,8 @@ class TestToolsAsync:
         assert all(e.category == "tool" for e in events)
         assert events[0].uuid == events[1].uuid
         assert events[1].data is None
+        assert events[1].metadata["error.type"] == "internal_error"
+        assert events[1].metadata["exception.type"] == "ValueError"
 
 
 class TestToolGuardrails:

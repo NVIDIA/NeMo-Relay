@@ -594,6 +594,155 @@ fn chat_shaped_requests_key_on_the_detected_decode() {
 }
 
 #[test]
+fn gemini_shaped_requests_key_on_the_detected_decode() {
+    let request = request(json!({
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": {"temperature": 0.0}
+    }));
+    let (body, effective_codec) = resolved_body("gemini_generate_content", &request);
+    assert_eq!(effective_codec, Some("gemini_generate_content"));
+    assert_ne!(
+        body, request.content,
+        "Gemini requests must use the normalized decode when it is lossless"
+    );
+}
+
+#[test]
+fn gemini_unmodeled_generation_config_fields_do_not_collide() {
+    let config = cache_all_config();
+    let mime_request = |response_mime_type: &str| {
+        request(json!({
+            "model": "gemini-2.5-flash",
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "generationConfig": {
+                "temperature": 0.0,
+                "responseMimeType": response_mime_type
+            }
+        }))
+    };
+    let text = mime_request("text/plain");
+    let json = mime_request("application/json");
+    for request in [&text, &json] {
+        let (body, effective_codec) = resolved_body("gemini_generate_content", request);
+        assert_eq!(
+            effective_codec, None,
+            "unmodeled Gemini generationConfig fields must force raw fallback"
+        );
+        assert_eq!(
+            body, request.content,
+            "raw fallback must preserve answer-affecting Gemini generationConfig fields"
+        );
+    }
+    assert_ne!(
+        key_of("gemini_generate_content", &text, &config),
+        key_of("gemini_generate_content", &json, &config),
+        "distinct unmodeled Gemini generationConfig values must not share a cache key"
+    );
+}
+
+#[test]
+fn gemini_malformed_generation_config_raw_keys() {
+    let request = request(json!({
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "generationConfig": "not an object"
+    }));
+    let (body, effective_codec) = resolved_body("gemini_generate_content", &request);
+    assert_eq!(
+        effective_codec, None,
+        "malformed Gemini generationConfig must force raw fallback"
+    );
+    assert_eq!(body, request.content);
+}
+
+#[test]
+fn gemini_unmodeled_system_instruction_fields_do_not_collide() {
+    let config = cache_all_config();
+    let with_signature = |signature: &str| {
+        request(json!({
+            "model": "gemini-2.5-flash",
+            "systemInstruction": {
+                "parts": [{"text": "be concise", "thoughtSignature": signature}]
+            },
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}]
+        }))
+    };
+    let first = with_signature("sig_FIRST==");
+    let second = with_signature("sig_SECOND==");
+    for request in [&first, &second] {
+        let (body, effective_codec) = resolved_body("gemini_generate_content", request);
+        assert_eq!(
+            effective_codec, None,
+            "unmodeled Gemini systemInstruction fields must force raw fallback"
+        );
+        assert_eq!(
+            body, request.content,
+            "raw fallback must preserve systemInstruction metadata"
+        );
+    }
+    assert_ne!(
+        key_of("gemini_generate_content", &first, &config),
+        key_of("gemini_generate_content", &second, &config),
+        "distinct Gemini systemInstruction metadata must not share a cache key"
+    );
+}
+
+#[test]
+fn gemini_function_call_part_metadata_forces_raw_keying() {
+    let request = request(json!({
+        "model": "gemini-2.5-flash",
+        "contents": [{
+            "role": "model",
+            "parts": [{
+                "functionCall": {"id": "call_1", "name": "lookup", "args": {"q": "x"}},
+                "thoughtSignature": "sig_CALL=="
+            }]
+        }]
+    }));
+    let (body, effective_codec) = resolved_body("gemini_generate_content", &request);
+    assert_eq!(
+        effective_codec, None,
+        "functionCall part metadata is provider-native and must raw-key"
+    );
+    assert_eq!(body, request.content);
+}
+
+#[test]
+fn gemini_function_response_name_differences_do_not_collide() {
+    let config = cache_all_config();
+    let response_with_name = |name: &str| {
+        request(json!({
+            "model": "gemini-2.5-flash",
+            "contents": [{
+                "role": "user",
+                "parts": [{
+                    "functionResponse": {
+                        "id": "call_1",
+                        "name": name,
+                        "response": {"ok": true}
+                    }
+                }]
+            }]
+        }))
+    };
+    let first = response_with_name("lookup");
+    let second = response_with_name("search");
+    for request in [&first, &second] {
+        let (body, effective_codec) = resolved_body("gemini_generate_content", request);
+        assert_eq!(
+            effective_codec, None,
+            "Gemini functionResponse.name is native context and must raw-key when it differs from id"
+        );
+        assert_eq!(body, request.content);
+    }
+    assert_ne!(
+        key_of("gemini_generate_content", &first, &config),
+        key_of("gemini_generate_content", &second, &config)
+    );
+}
+
+#[test]
 fn undetectable_shape_falls_back_to_raw_keying() {
     // No `messages`/`input`/`system` top-level key: no surface detects, so
     // the raw body is fingerprinted — still a usable, stable key.

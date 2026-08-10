@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       run_package:
-        description: 'Whether to build package artifacts after tests pass'
+        description: 'Whether to build package artifacts'
         required: false
         default: true
         type: boolean
@@ -43,23 +43,27 @@ jobs:
   Test:
     name: Test (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    continue-on-error: ${{ startsWith(matrix.platform, 'windows') }}
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - platform: linux-amd64
+          - &linux-amd64
+            platform: linux-amd64
             runner: ubuntu-latest
-          - platform: linux-arm64
+          - &linux-arm64
+            platform: linux-arm64
             runner: ubuntu-24.04-arm
-          - platform: macos-arm64
+          - &macos-arm64
+            platform: macos-arm64
             runner: macos-15
-          - platform: windows-amd64
+          - &windows-amd64
+            platform: windows-amd64
             runner: windows-2022
-          - platform: windows-arm64
+          - &windows-arm64
+            platform: windows-arm64
             runner: windows-11-arm
 
     steps:
@@ -77,11 +81,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
-          save-if: false
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
@@ -163,24 +166,32 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: uv cache prune --ci
 
-  Package-musllinux:
-    name: Package (musllinux-${{ matrix.architecture }})
-    needs: [Test]
-    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
+  Package:
+    name: Package (${{ matrix.platform }})
+    if: ${{ inputs.run_package }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - architecture: x86_64
+          - *linux-amd64
+          - *linux-arm64
+          - *macos-arm64
+          - *windows-amd64
+          - *windows-arm64
+          - &package-linux-musl-amd64
+            platform: linux-musl-amd64
+            architecture: x86_64
             runner: ubuntu-latest
-            image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
-          - architecture: aarch64
+            container_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
+          - &package-linux-musl-arm64
+            platform: linux-musl-arm64
+            architecture: aarch64
             runner: ubuntu-24.04-arm
-            image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
+            container_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
 
     steps:
       - name: Checkout
@@ -190,7 +201,138 @@ jobs:
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
-      - name: Derive packaging tool versions
+      - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        with:
+          cache: false
+          toolchain: ${{ steps.ci-config.outputs.rust_version }}
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        with:
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
+          workspaces: . -> target
+          cache-all-crates: true
+          cache-bin: false
+
+      - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        with:
+          version: ${{ steps.ci-config.outputs.uv_version }}
+          enable-cache: true
+          cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
+
+      - name: Set up Windows ARM Python
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+          architecture: arm64
+
+      - name: Select setup-python interpreter for uv
+        if: ${{ matrix.platform == 'windows-arm64' }}
+        run: |
+          set -e
+          python - <<'PY' >> "$GITHUB_ENV"
+          import sys
+          print(f"UV_PYTHON={sys.executable}")
+          PY
+
+      - name: Install managed Python
+        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
+        run: |
+          set -e
+          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+
+      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        with:
+          tool: just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Create packaging output directory
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        run: |
+          set -e
+          mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/wheels"
+
+      - name: Derive Python package version
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -e
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ -z "$version" ]; then
+            echo "Error: failed to read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          sha="${GITHUB_SHA::8}"
+          if [ "${{ inputs.ref_type }}" = "tag" ]; then
+            version="${{ inputs.ref_name }}"
+          else
+            version="${version}+${sha}"
+          fi
+          printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+
+      - name: Package Python wheel
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -e
+          just \
+            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
+            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
+            package-python
+
+      - name: Upload wheel artifact
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/wheels/*.whl
+          if-no-files-found: error
+
+      - name: Package Python source distribution
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -e
+          just \
+            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
+            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
+            package-python-sdist
+
+      - name: Upload Python source distribution artifact
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: python-sdist
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/sdists/nemo_relay-*.tar.gz
+          if-no-files-found: error
+
+      - name: Package Python plugin SDK wheel
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -e
+          just \
+            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
+            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
+            package-python-plugin
+
+      - name: Upload Python plugin SDK wheel artifact
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: plugin-wheel
+          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/plugin-wheels/*.whl
+          if-no-files-found: error
+
+      - name: Prune uv cache
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: uv cache prune --ci
+
+      - name: Derive Maturin version
+        if: ${{ contains(matrix.platform, 'musl') }}
         run: |
           set -euo pipefail
           maturin_version="$(awk '
@@ -205,29 +347,18 @@ jobs:
             echo "Error: failed to read maturin version from uv.lock" >&2
             exit 1
           fi
-          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
-          if [[ -z "$version" ]]; then
-            echo "Error: failed to read workspace version from Cargo.toml" >&2
-            exit 1
-          fi
-          if [[ "${{ inputs.ref_type }}" == "tag" ]]; then
-            version="${{ inputs.ref_name }}"
-          else
-            version="${version}+${GITHUB_SHA::8}"
-          fi
-          {
-            printf 'NEMO_RELAY_MATURIN_VERSION=%s\n' "$maturin_version"
-            printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version"
-          } >> "$GITHUB_ENV"
+          printf 'NEMO_RELAY_MATURIN_VERSION=%s\n' "$maturin_version" >> "$GITHUB_ENV"
 
-      - name: Create packaging output directory
+      - name: Create musllinux packaging output directory
+        if: ${{ contains(matrix.platform, 'musl') }}
         run: |
           set -euo pipefail
           mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"
 
-      - name: Build and smoke test musllinux wheel
+      - name: Build musllinux wheel
+        if: ${{ contains(matrix.platform, 'musl') }}
         env:
-          MUSLLINUX_IMAGE: ${{ matrix.image }}
+          MUSLLINUX_IMAGE: ${{ matrix.container_image }}
           MUSLLINUX_INTERPRETER: /opt/python/cp311-cp311/bin/python
           MUSLLINUX_WHEEL_DIRECTORY: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
           NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
@@ -253,14 +384,10 @@ jobs:
                 --version "$NEMO_RELAY_PACKAGE_VERSION" \
                 --out "$MUSLLINUX_WHEEL_DIRECTORY" \
                 --interpreter "$MUSLLINUX_INTERPRETER"
-              wheel="$(find "$MUSLLINUX_WHEEL_DIRECTORY" -maxdepth 1 -name "*.whl" -print -quit)"
-              test -n "$wheel"
-              "$MUSLLINUX_INTERPRETER" -m venv /tmp/nemo-relay-musllinux-venv
-              /tmp/nemo-relay-musllinux-venv/bin/python -m pip install --no-deps "$wheel"
-              /tmp/nemo-relay-musllinux-venv/bin/python -c "import nemo_relay"
             '
 
-      - name: Verify wheel platform tag
+      - name: Verify musllinux wheel platform tag
+        if: ${{ contains(matrix.platform, 'musl') }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -270,61 +397,67 @@ jobs:
             exit 1
           fi
 
-      - name: Upload wheel artifact
+      - name: Upload musllinux wheel artifact
+        if: ${{ contains(matrix.platform, 'musl') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          name: wheel-musllinux-${{ matrix.architecture }}
+          name: wheel-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels/*.whl
           if-no-files-found: error
 
-  Package:
-    name: Package (${{ matrix.platform }})
-    needs: [Test]
-    if: ${{ inputs.run_package && !cancelled() && needs.Test.result == 'success' }}
+  PackageSmoke:
+    name: Package smoke (${{ matrix.platform }})
+    needs: [Package]
+    if: ${{ inputs.run_package && !cancelled() && needs.Package.result == 'success' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
       contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          - platform: linux-amd64
+          - *linux-amd64
+          - *linux-arm64
+          - *macos-arm64
+          - *windows-amd64
+          - *windows-arm64
+          - *package-linux-musl-amd64
+          - *package-linux-musl-arm64
+          - platform: source-and-plugin
             runner: ubuntu-latest
-          - platform: linux-arm64
-            runner: ubuntu-24.04-arm
-          - platform: macos-arm64
-            runner: macos-15
-          - platform: windows-amd64
-            runner: windows-2022
-          - platform: windows-arm64
-            runner: windows-11-arm
 
     steps:
       - name: Checkout
+        if: ${{ !contains(matrix.platform, 'musl') }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Load CI tool versions
+        if: ${{ !contains(matrix.platform, 'musl') }}
         id: ci-config
         uses: ./.github/actions/load-ci-tool-versions
 
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
+        if: ${{ matrix.platform == 'source-and-plugin' }}
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        if: ${{ matrix.platform == 'source-and-plugin' }}
         with:
-          shared-key: nemo-relay-rust-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
+          save-if: false
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
+        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
-          enable-cache: true
-          cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
       - name: Set up Windows ARM Python
         if: ${{ matrix.platform == 'windows-arm64' }}
@@ -343,71 +476,92 @@ jobs:
           PY
 
       - name: Install managed Python
-        if: ${{ matrix.platform != 'windows-arm64' }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
+        run: UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
-      - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
-        with:
-          tool: just@${{ steps.ci-config.outputs.just_version }}
-
-      - name: Create packaging output directory
-        run: |
-          set -e
-          mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/wheels"
-
-      - name: Derive Python package version
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -e
-          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
-          if [ -z "$version" ]; then
-            echo "Error: failed to read workspace version from Cargo.toml" >&2
-            exit 1
-          fi
-          sha="${GITHUB_SHA::8}"
-          if [ "${{ inputs.ref_type }}" = "tag" ]; then
-            version="${{ inputs.ref_name }}"
-          else
-            version="${version}+${sha}"
-          fi
-          printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
-
-      - name: Package Python wheel
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -e
-          just \
-            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
-            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
-            package-python
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - name: Download matching Python wheel artifact
+        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'source-and-plugin' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: wheel-${{ matrix.platform }}
-          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/wheels/*.whl
-          if-no-files-found: error
+          path: python-wheel/
 
-      - name: Package Python plugin SDK wheel
-        if: ${{ matrix.platform == 'linux-amd64' }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+      - name: Install and import Python wheel
+        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'source-and-plugin' }}
         run: |
-          set -e
-          just \
-            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
-            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
-            package-python-plugin
+          set -euo pipefail
+          wheel="$(find python-wheel -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-wheel-venv"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            venv_python="${RUNNER_TEMP}/nemo-relay-wheel-venv/Scripts/python.exe"
+          else
+            venv_python="${RUNNER_TEMP}/nemo-relay-wheel-venv/bin/python"
+          fi
+          uv pip install --python "$venv_python" --no-deps "$wheel"
+          "$venv_python" -c "import nemo_relay"
 
-      - name: Upload Python plugin SDK wheel artifact
-        if: ${{ matrix.platform == 'linux-amd64' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - name: Download matching musllinux Python wheel artifact
+        if: ${{ contains(matrix.platform, 'musl') }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: python-wheel/
+
+      - name: Install and import musllinux Python wheel
+        if: ${{ contains(matrix.platform, 'musl') }}
+        env:
+          MUSLLINUX_IMAGE: ${{ matrix.container_image }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "${{ github.workspace }}:${{ github.workspace }}" \
+            --workdir "${{ github.workspace }}" \
+            "$MUSLLINUX_IMAGE" \
+            /bin/sh -ec '
+              wheel="$(find python-wheel -maxdepth 1 -name "*.whl" -print -quit)"
+              test -n "$wheel"
+              /opt/python/cp311-cp311/bin/python -m venv /tmp/nemo-relay-wheel-venv
+              /tmp/nemo-relay-wheel-venv/bin/python -m pip install --no-deps "$wheel"
+              /tmp/nemo-relay-wheel-venv/bin/python -c "import nemo_relay"
+            '
+
+      - name: Download Python source distribution artifact
+        if: ${{ matrix.platform == 'source-and-plugin' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-sdist
+          path: python-sdist/
+
+      - name: Download Python plugin SDK wheel artifact
+        if: ${{ matrix.platform == 'source-and-plugin' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: plugin-wheel
-          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/plugin-wheels/*.whl
-          if-no-files-found: error
+          path: plugin-wheel/
 
-      - name: Prune uv cache
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: uv cache prune --ci
+      - name: Build, install, and import Python source distribution
+        if: ${{ matrix.platform == 'source-and-plugin' }}
+        run: |
+          set -euo pipefail
+          sdist="$(find python-sdist -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          test -n "$sdist"
+          uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-sdist-venv"
+          uv pip install \
+            --python "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" \
+            --no-deps \
+            "$sdist"
+          "${RUNNER_TEMP}/nemo-relay-sdist-venv/bin/python" -c "import nemo_relay"
+
+      - name: Install and import Python plugin SDK wheel
+        if: ${{ matrix.platform == 'source-and-plugin' }}
+        run: |
+          set -euo pipefail
+          wheel="$(find plugin-wheel -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          uv venv --python "$(uv python find)" "${RUNNER_TEMP}/nemo-relay-plugin-venv"
+          uv pip install \
+            --python "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" \
+            "$wheel"
+          "${RUNNER_TEMP}/nemo-relay-plugin-venv/bin/python" -c \
+            "import nemo_relay_plugin._proto.plugin_worker_pb2_grpc"

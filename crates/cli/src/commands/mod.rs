@@ -53,6 +53,55 @@ pub(crate) async fn run(bootstrap_shutdown_token: Option<String>) -> ExitCode {
 
 // Dispatches CLI subcommands while keeping the no-subcommand path as server mode. `run` inherits
 // top-level server flags so transparent launch can share config parsing with daemon startup.
+struct LoggingSetup {
+    _runtime: Option<nemo_relay::logging::LoggingRuntime>,
+    fallback_error: Option<error::CliError>,
+}
+
+fn configure_logging(cli: &Cli) -> Result<LoggingSetup, error::CliError> {
+    let initialize = match cli.command.as_ref() {
+        Some(command) => !command.skips_logging(),
+        None => {
+            cli.server.to_runtime().requested_daemon_mode()
+                || runtime_configuration::any_config_file_exists()
+        }
+    };
+    if !initialize {
+        return Ok(LoggingSetup {
+            _runtime: None,
+            fallback_error: None,
+        });
+    }
+
+    let explicit_config = match cli.command.as_ref() {
+        Some(Command::Mcp) => None,
+        Some(Command::Run(command)) => command.config.as_deref().or(cli.server.config.as_deref()),
+        _ => cli.server.config.as_deref(),
+    };
+    let mut fallback_error = None;
+    let config = match cli.logging.resolve(explicit_config) {
+        Ok(config) => config,
+        Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
+            fallback_error = Some(error);
+            nemo_relay::logging::LoggingConfig::default()
+        }
+        Err(error) => return Err(error),
+    };
+    let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
+    if let Some(error) = fallback_error.as_ref() {
+        log::warn!(
+            target: "nemo_relay.cli",
+            event = "doctor_logging_fallback",
+            error_kind = error.log_kind();
+            "Doctor fell back to default logging after resolution failure"
+        );
+    }
+    Ok(LoggingSetup {
+        _runtime: Some(runtime),
+        fallback_error,
+    })
+}
+
 async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, error::CliError> {
     let cli = Cli::parse();
     let command_name = cli
@@ -61,47 +110,7 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
         .map(Command::log_name)
         .unwrap_or("default");
 
-    let initialize_logging = match cli.command.as_ref() {
-        Some(command) => !command.skips_logging(),
-        None => {
-            cli.server.to_runtime().requested_daemon_mode()
-                || runtime_configuration::any_config_file_exists()
-        }
-    };
-    let _logging = if initialize_logging {
-        let user_only = matches!(cli.command.as_ref(), Some(Command::Mcp));
-        let explicit_config = if user_only {
-            None
-        } else {
-            match cli.command.as_ref() {
-                Some(Command::Run(command)) => {
-                    command.config.as_deref().or(cli.server.config.as_deref())
-                }
-                _ => cli.server.config.as_deref(),
-            }
-        };
-        let mut logging_fallback_error = None;
-        let config = match cli.logging.resolve(explicit_config, user_only) {
-            Ok(config) => config,
-            Err(error) if matches!(cli.command.as_ref(), Some(Command::Doctor(_))) => {
-                logging_fallback_error = Some(error);
-                nemo_relay::logging::LoggingConfig::default()
-            }
-            Err(error) => return Err(error),
-        };
-        let runtime = nemo_relay::logging::LoggingRuntime::configure(config)?;
-        if let Some(error) = logging_fallback_error {
-            log::warn!(
-                target: "nemo_relay.cli",
-                event = "doctor_logging_fallback",
-                error_kind = error.log_kind();
-                "Doctor fell back to default logging after resolution failure"
-            );
-        }
-        Some(runtime)
-    } else {
-        None
-    };
+    let logging = configure_logging(&cli)?;
 
     log::info!(
         target: "nemo_relay.cli",
@@ -111,7 +120,7 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
     );
 
     let result = match cli.command {
-        Some(command) => run_command(command, &cli.server).await,
+        Some(command) => run_command(command, &cli.server, logging.fallback_error.as_ref()).await,
         None => run_default(&cli.server, bootstrap_shutdown_token).await,
     };
     match &result {
@@ -147,7 +156,11 @@ async fn dispatch(bootstrap_shutdown_token: Option<String>) -> Result<ExitCode, 
     result
 }
 
-async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, error::CliError> {
+async fn run_command(
+    command: Command,
+    server: &ServerArgs,
+    logging_fallback_error: Option<&error::CliError>,
+) -> Result<ExitCode, error::CliError> {
     match command {
         Command::HookForward(command) => {
             hook_forward::execute(command).await?;
@@ -158,12 +171,13 @@ async fn run_command(command: Command, server: &ServerArgs) -> Result<ExitCode, 
         Command::Run(command) => run::execute(command, server).await,
         Command::Claude(command) => run::easy_path(CodingAgent::ClaudeCode, command, server).await,
         Command::Codex(command) => run::easy_path(CodingAgent::Codex, command, server).await,
-        Command::Hermes(command) => run::easy_path(CodingAgent::Hermes, command, server).await,
         Command::Mcp => mcp::execute(server).await,
         Command::Config(command) => configure::execute(command, server).await,
         Command::Plugins(command) => plugins::execute(command, server),
         Command::ModelPricing(command) => model_pricing::execute(command),
-        Command::Doctor(command) => diagnostics::execute(command, server).await,
+        Command::Doctor(command) => {
+            diagnostics::execute(command, server, logging_fallback_error).await
+        }
         Command::Agents(command) => runtime_diagnostics::run_agents(command.json).await,
         Command::Completions(command) => completions::execute(command),
     }
@@ -215,7 +229,14 @@ async fn run_default(
         .await?;
         Ok(ExitCode::SUCCESS)
     } else if runtime_configuration::any_config_file_exists() {
-        runtime_diagnostics::run_doctor(None, false, &runtime_args).await
+        runtime_diagnostics::run_doctor(
+            None,
+            false,
+            runtime_diagnostics::DoctorProbeMode::Live,
+            &runtime_args,
+            None,
+        )
+        .await
     } else {
         configure::run(None, None).await?;
         Ok(ExitCode::SUCCESS)

@@ -11,7 +11,14 @@ import (
 	"testing"
 )
 
-const newScopeStackFailed = "NewScopeStack failed: %v"
+const (
+	getHandleFailed               = "GetHandle failed: %v"
+	invalidUUID                   = "not-a-uuid"
+	newScopeStackFailed           = "NewScopeStack failed: %v"
+	newStackFromPropagationFailed = "NewScopeStackFromPropagation failed: %v"
+	propagationParentUUID         = "018f13f0-7c1a-7a80-8000-000000000002"
+	propagationRootUUID           = "018f13f0-7c1a-7a80-8000-000000000001"
+)
 
 func scopeNameInStack(stack *ScopeStack, scopeName string, scopeType ScopeType) (string, error) {
 	var currentName string
@@ -260,22 +267,22 @@ func TestCreateScopeStackCreatesFreshStack(t *testing.T) {
 }
 
 func TestNewScopeStackFromPropagationUsesParentAsCurrentHandle(t *testing.T) {
-	rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
-	parentUUID := "018f13f0-7c1a-7a80-8000-000000000002"
+	rootUUID := propagationRootUUID
+	parentUUID := propagationParentUUID
 	stack, err := NewScopeStackFromPropagation(PropagationContext{
 		Version:    1,
 		RootUUID:   &rootUUID,
 		ParentUUID: parentUUID,
 	})
 	if err != nil {
-		t.Fatalf("NewScopeStackFromPropagation failed: %v", err)
+		t.Fatalf(newStackFromPropagationFailed, err)
 	}
 	defer stack.Close()
 
 	stack.Run(func() {
 		handle, err := GetHandle()
 		if err != nil {
-			t.Fatalf("GetHandle failed: %v", err)
+			t.Fatalf(getHandleFailed, err)
 		}
 		if handle.UUID() != parentUUID {
 			t.Fatalf("expected parent UUID %s, got %s", parentUUID, handle.UUID())
@@ -289,42 +296,50 @@ func TestPropagationContextCaptureAndValidation(t *testing.T) {
 		t.Fatalf(newScopeStackFailed, err)
 	}
 	defer stack.Close()
-
 	stack.Run(func() {
-		context, err := CapturePropagationContext()
-		if err != nil {
-			t.Fatalf("CapturePropagationContext failed: %v", err)
-		}
-		if context.Version != 1 || context.RootUUID != nil || context.ParentUUID == "" {
-			t.Fatalf("unexpected rootless context: %+v", context)
-		}
-
-		rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
-		withRoot, err := CapturePropagationContextWithRoot(&rootUUID)
-		if err != nil {
-			t.Fatalf("CapturePropagationContextWithRoot failed: %v", err)
-		}
-		if withRoot.RootUUID == nil || *withRoot.RootUUID != rootUUID {
-			t.Fatalf("expected root UUID %s, got %+v", rootUUID, withRoot.RootUUID)
-		}
-
-		withNilRoot, err := CapturePropagationContextWithRoot(nil)
-		if err != nil {
-			t.Fatalf("CapturePropagationContextWithRoot(nil) failed: %v", err)
-		}
-		if withNilRoot.RootUUID != nil || withNilRoot.ParentUUID != context.ParentUUID {
-			t.Fatalf("unexpected nil-root context: %+v", withNilRoot)
-		}
+		assertCapturedPropagationContexts(t)
 	})
+	assertInvalidPropagationContexts(t)
+}
 
-	invalidRoot := "not-a-uuid"
+func assertCapturedPropagationContexts(t *testing.T) {
+	t.Helper()
+	context, err := CapturePropagationContext()
+	if err != nil {
+		t.Fatalf("CapturePropagationContext failed: %v", err)
+	}
+	if context.Version != 1 || context.RootUUID != nil || context.ParentUUID == "" {
+		t.Fatalf("unexpected rootless context: %+v", context)
+	}
+
+	rootUUID := propagationRootUUID
+	withRoot, err := CapturePropagationContextWithRoot(&rootUUID)
+	if err != nil {
+		t.Fatalf("CapturePropagationContextWithRoot failed: %v", err)
+	}
+	if withRoot.RootUUID == nil || *withRoot.RootUUID != rootUUID {
+		t.Fatalf("expected root UUID %s, got %+v", rootUUID, withRoot.RootUUID)
+	}
+
+	withNilRoot, err := CapturePropagationContextWithRoot(nil)
+	if err != nil {
+		t.Fatalf("CapturePropagationContextWithRoot(nil) failed: %v", err)
+	}
+	if withNilRoot.RootUUID != nil || withNilRoot.ParentUUID != context.ParentUUID {
+		t.Fatalf("unexpected nil-root context: %+v", withNilRoot)
+	}
+}
+
+func assertInvalidPropagationContexts(t *testing.T) {
+	t.Helper()
+	invalidRoot := invalidUUID
 	if _, err := CapturePropagationContextWithRoot(&invalidRoot); err == nil {
 		t.Fatal("expected invalid root UUID to be rejected")
 	}
 
 	for _, context := range []PropagationContext{
-		{Version: 2, ParentUUID: "018f13f0-7c1a-7a80-8000-000000000002"},
-		{Version: 1, ParentUUID: "not-a-uuid"},
+		{Version: 2, ParentUUID: propagationParentUUID},
+		{Version: 1, ParentUUID: invalidUUID},
 	} {
 		if _, err := NewScopeStackFromPropagation(context); err == nil {
 			t.Fatalf("expected invalid context to be rejected: %+v", context)
@@ -333,11 +348,11 @@ func TestPropagationContextCaptureAndValidation(t *testing.T) {
 }
 
 func TestPropagationContextJSONRoundTripAndValidation(t *testing.T) {
-	rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
+	rootUUID := propagationRootUUID
 	context := PropagationContext{
 		Version:    1,
 		RootUUID:   &rootUUID,
-		ParentUUID: "018f13f0-7c1a-7a80-8000-000000000002",
+		ParentUUID: propagationParentUUID,
 	}
 
 	payload, err := context.ToJSON()
@@ -370,7 +385,7 @@ func TestPropagationContextJSONRoundTripAndValidation(t *testing.T) {
 		}
 	}
 
-	if _, err := (PropagationContext{Version: 1, ParentUUID: "not-a-uuid"}).ToJSON(); err == nil {
+	if _, err := (PropagationContext{Version: 1, ParentUUID: invalidUUID}).ToJSON(); err == nil {
 		t.Fatal("expected ToJSON to reject an invalid propagation context")
 	}
 }
@@ -383,13 +398,13 @@ func TestNewScopeStackFromRootlessAndRootParentPropagation(t *testing.T) {
 	} {
 		stack, err := NewScopeStackFromPropagation(context)
 		if err != nil {
-			t.Fatalf("NewScopeStackFromPropagation failed: %v", err)
+			t.Fatalf(newStackFromPropagationFailed, err)
 		}
 
 		stack.Run(func() {
 			handle, err := GetHandle()
 			if err != nil {
-				t.Fatalf("GetHandle failed: %v", err)
+				t.Fatalf(getHandleFailed, err)
 			}
 			if handle.UUID() != parentUUID {
 				t.Fatalf("expected propagated parent %s, got %s", parentUUID, handle.UUID())
@@ -409,19 +424,19 @@ func TestPropagatedScopeStackRunRestoresOuterBinding(t *testing.T) {
 	parentUUID := "018f13f0-7c1a-7a80-8000-000000000005"
 	propagated, err := NewScopeStackFromPropagation(PropagationContext{Version: 1, ParentUUID: parentUUID})
 	if err != nil {
-		t.Fatalf("NewScopeStackFromPropagation failed: %v", err)
+		t.Fatalf(newStackFromPropagationFailed, err)
 	}
 	defer propagated.Close()
 
 	outer.Run(func() {
 		outerHandle, err := GetHandle()
 		if err != nil {
-			t.Fatalf("GetHandle failed: %v", err)
+			t.Fatalf(getHandleFailed, err)
 		}
 		propagated.Run(func() {
 			handle, err := GetHandle()
 			if err != nil {
-				t.Fatalf("GetHandle failed: %v", err)
+				t.Fatalf(getHandleFailed, err)
 			}
 			if handle.UUID() != parentUUID {
 				t.Fatalf("expected propagated parent %s, got %s", parentUUID, handle.UUID())
@@ -438,8 +453,8 @@ func TestPropagatedScopeStackRunRestoresOuterBinding(t *testing.T) {
 }
 
 func TestPropagatedScopeStacksRemainIsolated(t *testing.T) {
-	rootUUID := "018f13f0-7c1a-7a80-8000-000000000001"
-	first, err := NewScopeStackFromPropagation(PropagationContext{Version: 1, RootUUID: &rootUUID, ParentUUID: "018f13f0-7c1a-7a80-8000-000000000002"})
+	rootUUID := propagationRootUUID
+	first, err := NewScopeStackFromPropagation(PropagationContext{Version: 1, RootUUID: &rootUUID, ParentUUID: propagationParentUUID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +467,7 @@ func TestPropagatedScopeStacksRemainIsolated(t *testing.T) {
 
 	first.Run(func() {
 		handle, _ := GetHandle()
-		if handle.UUID() != "018f13f0-7c1a-7a80-8000-000000000002" {
+		if handle.UUID() != propagationParentUUID {
 			t.Fatalf("unexpected first propagated parent: %s", handle.UUID())
 		}
 	})

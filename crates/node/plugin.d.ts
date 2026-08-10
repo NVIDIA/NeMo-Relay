@@ -9,7 +9,7 @@ import type { LlmCodec, LlmResponseCodec } from './typed';
 /** Codec identity available while a managed LLM event is sanitized. */
 export type LlmCodecIdentity =
   | { kind: 'none' }
-  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' }
+  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'gemini_generate_content' }
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };
 
@@ -49,6 +49,17 @@ export interface ConfigDiagnostic {
 /** Validation or activation report for a plugin configuration. */
 export interface ConfigReport {
   diagnostics: ConfigDiagnostic[];
+  runtime_diagnostics?: RuntimeDiagnostic[];
+}
+
+/** One bounded aggregate of a runtime plugin failure. */
+export interface RuntimeDiagnostic {
+  code: string;
+  component: string;
+  field?: string;
+  message: string;
+  session_id?: string;
+  count: number;
 }
 
 /** One top-level plugin component. */
@@ -189,8 +200,11 @@ export interface ToolExecutionInterceptOutcome {
 
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
-  /** Register an infallible event subscriber for this component. */
-  registerSubscriber(name: string, callback: (event: Json) => void): void;
+  /**
+   * Register an event subscriber for this component. Callback failures are isolated and reported
+   * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
+   */
+  registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,

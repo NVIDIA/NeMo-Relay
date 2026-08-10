@@ -17,14 +17,12 @@ use crate::configuration::header_string;
 pub(crate) use crate::events::json_path::{
     string_at_any as json_string_at, value_at_any as json_value_at,
 };
-use crate::events::{AgentKind, LlmEvent, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
+use crate::events::{AgentKind, NormalizedEvent, SessionEvent, SubagentEvent, ToolEvent};
 
 #[path = "../claude/alignment.rs"]
 pub(crate) mod claude_code;
 #[path = "../codex/alignment.rs"]
 pub(crate) mod codex;
-#[path = "../hermes/alignment.rs"]
-pub(crate) mod hermes;
 
 const REQUEST_AFFINITY_KEY_MIN_CHARS: usize = 24;
 const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
@@ -32,14 +30,12 @@ const REQUEST_AFFINITY_KEY_MAX_CHARS: usize = 4096;
 #[derive(Debug, Clone)]
 pub(crate) enum SubagentSessionContext {
     Codex(codex::SubagentContext),
-    Hermes(hermes::SubagentContext),
 }
 
 impl SubagentSessionContext {
     pub(crate) fn parent_session_id(&self) -> &str {
         match self {
             Self::Codex(context) => &context.parent_session_id,
-            Self::Hermes(context) => &context.parent_session_id,
         }
     }
 }
@@ -268,17 +264,13 @@ impl PendingSubagentStart {
 #[derive(Debug, Default)]
 pub(crate) struct SessionAlignmentState {
     aliases: HashMap<String, SessionAlias>,
-    completed_aliases: HashMap<String, SessionAlias>,
     pending_subagents: HashMap<String, PendingSubagentStart>,
-    task_sessions: HashMap<String, HashMap<String, String>>,
 }
 
 impl SessionAlignmentState {
     pub(crate) fn clear(&mut self) {
         self.aliases.clear();
-        self.completed_aliases.clear();
         self.pending_subagents.clear();
-        self.task_sessions.clear();
     }
 
     pub(crate) fn alias_for_session(&self, session_id: &str) -> Option<SessionAlias> {
@@ -316,48 +308,18 @@ impl SessionAlignmentState {
     }
 
     pub(crate) fn route_event(&mut self, event: NormalizedEvent) -> NormalizedEvent {
-        self.record_task_session(&event);
-        let event = self.route_task_session_event(event);
         let (event, finished_alias) = route_event_through_alias(event, &self.aliases);
         let session_id = event.session_id().to_string();
         if let Some(child_session_id) = finished_alias.as_ref() {
             // Remove aliases before terminal skip checks so a late child AgentEnd, or a child
             // TurnEnded used as a subagent completion signal, cannot leave stale reparenting state.
-            if let Some(alias) = self.aliases.remove(child_session_id) {
-                self.completed_aliases
-                    .insert(child_session_id.clone(), alias);
-            }
+            self.aliases.remove(child_session_id);
             self.pending_subagents.remove(child_session_id);
         }
         if matches!(&event, NormalizedEvent::AgentEnded(_)) {
             self.clear_for_ended_agent(&session_id);
         }
         event
-    }
-
-    pub(crate) fn align_explicit_subagent_end(&mut self, event: &mut NormalizedEvent) {
-        let NormalizedEvent::SubagentEnded(subagent_event) = event else {
-            return;
-        };
-        let Some(child_session_id) = hermes::child_session_id_for_subagent_event(subagent_event)
-        else {
-            return;
-        };
-        let Some(alias) = self
-            .aliases
-            .get(&child_session_id)
-            .or_else(|| self.completed_aliases.get(&child_session_id))
-            .cloned()
-        else {
-            return;
-        };
-        if subagent_event.session_id != alias.parent_session_id {
-            return;
-        }
-        subagent_event.subagent_id = alias.subagent_id.clone();
-        subagent_event.metadata = merge_metadata(subagent_event.metadata.clone(), alias.metadata());
-        self.aliases.remove(&child_session_id);
-        self.completed_aliases.remove(&child_session_id);
     }
 
     pub(crate) fn pending_for_parent(
@@ -386,14 +348,9 @@ impl SessionAlignmentState {
         self.aliases.retain(|child_session_id, alias| {
             child_session_id != session_id && alias.parent_session_id != session_id
         });
-        self.completed_aliases.retain(|child_session_id, alias| {
-            child_session_id != session_id && alias.parent_session_id != session_id
-        });
         self.pending_subagents.retain(|child_session_id, pending| {
             child_session_id != session_id && pending.parent_session_id() != session_id
         });
-        self.task_sessions.remove(session_id);
-        prune_task_sessions(&mut self.task_sessions, session_id);
     }
 
     pub(crate) fn clear_for_ended_subagent(&mut self, parent_session_id: &str, subagent_id: &str) {
@@ -407,73 +364,7 @@ impl SessionAlignmentState {
                 && !(pending.parent_session_id() == parent_session_id
                     && pending.event.session_id == subagent_id)
         });
-        self.task_sessions
-            .retain(|session_id, _| session_id != subagent_id);
-        prune_task_sessions(&mut self.task_sessions, subagent_id);
     }
-
-    fn record_task_session(&mut self, event: &NormalizedEvent) {
-        if normalized_event_agent_kind(event) != AgentKind::Hermes {
-            return;
-        }
-        let Some(task_id) = event_task_id(event) else {
-            return;
-        };
-        let session_id = event.session_id();
-        if session_id == task_id {
-            return;
-        }
-        self.task_sessions
-            .entry(session_id.to_string())
-            .or_default()
-            .insert(task_id, session_id.to_string());
-    }
-
-    fn route_task_session_event(&self, event: NormalizedEvent) -> NormalizedEvent {
-        let should_route = matches!(
-            event,
-            NormalizedEvent::ToolStarted(_) | NormalizedEvent::ToolEnded(_)
-        ) && normalized_event_agent_kind(&event) == AgentKind::Hermes;
-        if !should_route {
-            return event;
-        }
-
-        let task_id = event_task_id(&event).unwrap_or_else(|| event.session_id().to_string());
-        let session_scope = event_task_session_scope(&event);
-        let Some(session_id) = self.session_for_task(&task_id, session_scope.as_deref()) else {
-            return event;
-        };
-        route_task_session_event(event, task_id, session_id)
-    }
-
-    fn session_for_task(&self, task_id: &str, session_scope: Option<&str>) -> Option<String> {
-        if let Some(session_scope) = session_scope {
-            return self
-                .task_sessions
-                .get(session_scope)
-                .and_then(|tasks| tasks.get(task_id))
-                .cloned();
-        }
-
-        let mut matches = self
-            .task_sessions
-            .values()
-            .filter_map(|tasks| tasks.get(task_id).cloned());
-        let session_id = matches.next()?;
-        matches.next().is_none().then_some(session_id)
-    }
-}
-
-fn prune_task_sessions(
-    task_sessions: &mut HashMap<String, HashMap<String, String>>,
-    session_id: &str,
-) {
-    task_sessions.values_mut().for_each(|tasks| {
-        tasks.retain(|task_id, mapped_session_id| {
-            task_id != session_id && mapped_session_id != session_id
-        });
-    });
-    task_sessions.retain(|_, tasks| !tasks.is_empty());
 }
 
 // Resolves the session id for a gateway request in precedence order:
@@ -632,7 +523,6 @@ pub(crate) async fn subagent_session_context(
     codex::subagent_context(event)
         .await
         .map(SubagentSessionContext::Codex)
-        .or_else(|| hermes::subagent_context(event).map(SubagentSessionContext::Hermes))
 }
 
 /// Convert an agent start into a pending child-session record when possible.
@@ -673,9 +563,6 @@ pub(crate) fn augment_subagent_session_metadata(
         SubagentSessionContext::Codex(context) => {
             codex::augment_subagent_metadata(metadata, context)
         }
-        SubagentSessionContext::Hermes(context) => {
-            hermes::augment_subagent_metadata(metadata, context)
-        }
     }
 }
 
@@ -689,7 +576,6 @@ pub(crate) fn subagent_start_event(
 ) -> SubagentEvent {
     match context {
         SubagentSessionContext::Codex(context) => codex::subagent_start_event(event, context),
-        SubagentSessionContext::Hermes(context) => hermes::subagent_start_event(event, context),
     }
 }
 
@@ -705,23 +591,7 @@ pub(crate) fn alias_for_child_session(
         SubagentSessionContext::Codex(context) => {
             codex::alias_for_child_session(child_session_id, context)
         }
-        SubagentSessionContext::Hermes(context) => {
-            hermes::alias_for_child_session(child_session_id, context)
-        }
     }
-}
-
-/// Extract an explicit child-session alias from a subagent-start event.
-pub(crate) fn explicit_subagent_alias(
-    event: &mut NormalizedEvent,
-) -> Option<(String, SessionAlias)> {
-    let NormalizedEvent::SubagentStarted(subagent_event) = event else {
-        return None;
-    };
-    let explicit = hermes::explicit_subagent_alias(subagent_event)?;
-    subagent_event.metadata =
-        merge_metadata(subagent_event.metadata.clone(), explicit.scope_metadata);
-    Some((explicit.child_session_id, explicit.alias))
 }
 
 /// Recover provider-specific metadata that should follow owned LLM spans.
@@ -729,10 +599,7 @@ pub(crate) fn explicit_subagent_alias(
 /// Codex contributes thread identifiers today; other harnesses can add filters
 /// here without changing session ownership code.
 pub(crate) fn llm_owner_metadata(scope_metadata: Option<&Value>) -> Value {
-    merge_metadata(
-        codex::llm_owner_metadata(scope_metadata),
-        hermes::llm_owner_metadata(scope_metadata),
-    )
+    codex::llm_owner_metadata(scope_metadata)
 }
 
 /// Build a route-specific affinity key from provider request user task text.
@@ -773,7 +640,6 @@ pub(crate) fn aliased_turn_subagent_id(event: &SessionEvent) -> Option<String> {
     json_string_at(
         &event.metadata,
         &[
-            &["hermes_child_subagent_id"][..],
             &["subagent_id"][..],
             &["codex_subagent_session_id"][..],
             &["subagent_session_id"][..],
@@ -852,14 +718,6 @@ pub(crate) fn route_event_through_alias(
             event.metadata = merge_metadata(event.metadata, metadata);
             (NormalizedEvent::LlmHint(event), None)
         }
-        NormalizedEvent::LlmStarted(mut event) => {
-            route_llm_event(&mut event, &alias, metadata);
-            (NormalizedEvent::LlmStarted(event), None)
-        }
-        NormalizedEvent::LlmEnded(mut event) => {
-            route_llm_event(&mut event, &alias, metadata);
-            (NormalizedEvent::LlmEnded(event), None)
-        }
         NormalizedEvent::ToolStarted(mut event) => {
             route_tool_event(&mut event, &alias, metadata);
             (NormalizedEvent::ToolStarted(event), None)
@@ -886,24 +744,6 @@ fn route_subagent_event(event: &mut SubagentEvent, alias: &SessionAlias, metadat
     event.metadata = merge_metadata(event.metadata.clone(), metadata);
 }
 
-// Rewrites hook-originated LLM events from aliased child sessions. `LlmEvent` does not have a
-// first-class subagent id field, so the alias owner is stamped into metadata where the session
-// manager's hook-LLM path can recover it and choose the subagent scope.
-fn route_llm_event(event: &mut LlmEvent, alias: &SessionAlias, metadata: Value) {
-    event.session_id = alias.parent_session_id.clone();
-    event.metadata = merge_metadata(
-        event.metadata.clone(),
-        merge_metadata(
-            metadata,
-            json!({
-                "llm_correlation_status": "session_alias",
-                "llm_correlation_source": "session_alias",
-                "llm_correlation_subagent_id": alias.subagent_id.clone(),
-            }),
-        ),
-    );
-}
-
 // Rewrites tool calls emitted by an aliased child session so they attach under the aliased
 // subagent. This is the common case for Codex child-thread tool activity that would otherwise show
 // up as root-agent tool calls.
@@ -912,142 +752,6 @@ fn route_tool_event(event: &mut ToolEvent, alias: &SessionAlias, metadata: Value
     event.subagent_id = Some(alias.subagent_id.clone());
     event.metadata = merge_metadata(event.metadata.clone(), metadata);
 }
-
-fn route_task_session_event(
-    event: NormalizedEvent,
-    task_id: String,
-    session_id: String,
-) -> NormalizedEvent {
-    let metadata = json!({
-        "session_correlation_status": "task_session_alias",
-        "session_correlation_source": "task_id",
-        "hermes_task_id": task_id,
-        "hermes_session_id": session_id,
-    });
-    match event {
-        NormalizedEvent::ToolStarted(mut event) => {
-            event.session_id = session_id;
-            event.metadata = merge_metadata(event.metadata, metadata);
-            NormalizedEvent::ToolStarted(event)
-        }
-        NormalizedEvent::ToolEnded(mut event) => {
-            event.session_id = session_id;
-            event.metadata = merge_metadata(event.metadata, metadata);
-            NormalizedEvent::ToolEnded(event)
-        }
-        event => event,
-    }
-}
-
-fn normalized_event_agent_kind(event: &NormalizedEvent) -> AgentKind {
-    match event {
-        NormalizedEvent::AgentStarted(event)
-        | NormalizedEvent::AgentEnded(event)
-        | NormalizedEvent::TurnEnded(event)
-        | NormalizedEvent::PromptSubmitted(event)
-        | NormalizedEvent::Compaction(event)
-        | NormalizedEvent::Notification(event)
-        | NormalizedEvent::HookMark(event) => event.agent_kind,
-        NormalizedEvent::SubagentStarted(event) | NormalizedEvent::SubagentEnded(event) => {
-            event.agent_kind
-        }
-        NormalizedEvent::LlmHint(event) => event.agent_kind,
-        NormalizedEvent::LlmStarted(event) | NormalizedEvent::LlmEnded(event) => event.agent_kind,
-        NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => event.agent_kind,
-    }
-}
-
-fn event_task_id(event: &NormalizedEvent) -> Option<String> {
-    match event {
-        NormalizedEvent::AgentStarted(event)
-        | NormalizedEvent::AgentEnded(event)
-        | NormalizedEvent::TurnEnded(event)
-        | NormalizedEvent::PromptSubmitted(event)
-        | NormalizedEvent::Compaction(event)
-        | NormalizedEvent::Notification(event)
-        | NormalizedEvent::HookMark(event) => {
-            task_id_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-        NormalizedEvent::SubagentStarted(event) | NormalizedEvent::SubagentEnded(event) => {
-            task_id_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-        NormalizedEvent::LlmHint(event) => {
-            task_id_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-        NormalizedEvent::LlmStarted(event) | NormalizedEvent::LlmEnded(event) => {
-            task_id_from_llm_event(event)
-        }
-        NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => {
-            task_id_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-    }
-}
-
-fn event_task_session_scope(event: &NormalizedEvent) -> Option<String> {
-    match event {
-        NormalizedEvent::AgentStarted(event)
-        | NormalizedEvent::AgentEnded(event)
-        | NormalizedEvent::TurnEnded(event)
-        | NormalizedEvent::PromptSubmitted(event)
-        | NormalizedEvent::Compaction(event)
-        | NormalizedEvent::Notification(event)
-        | NormalizedEvent::HookMark(event) => {
-            session_scope_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-        NormalizedEvent::SubagentStarted(event) | NormalizedEvent::SubagentEnded(event) => {
-            session_scope_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-        NormalizedEvent::LlmHint(event) => {
-            session_scope_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-        NormalizedEvent::LlmStarted(event) | NormalizedEvent::LlmEnded(event) => {
-            session_scope_from_llm_event(event)
-        }
-        NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => {
-            session_scope_from_payload_and_metadata(&event.payload, &event.metadata)
-        }
-    }
-}
-
-fn task_id_from_llm_event(event: &LlmEvent) -> Option<String> {
-    task_id_from_payload_and_metadata(&event.request, &event.metadata)
-        .or_else(|| task_id_from_payload_and_metadata(&event.response, &event.metadata))
-}
-
-fn task_id_from_payload_and_metadata(payload: &Value, metadata: &Value) -> Option<String> {
-    json_string_at(payload, TASK_ID_PATHS).or_else(|| json_string_at(metadata, TASK_ID_PATHS))
-}
-
-fn session_scope_from_llm_event(event: &LlmEvent) -> Option<String> {
-    session_scope_from_payload_and_metadata(&event.request, &event.metadata)
-        .or_else(|| session_scope_from_payload_and_metadata(&event.response, &event.metadata))
-}
-
-fn session_scope_from_payload_and_metadata(payload: &Value, metadata: &Value) -> Option<String> {
-    json_string_at(payload, TASK_SESSION_SCOPE_PATHS)
-        .or_else(|| json_string_at(metadata, TASK_SESSION_SCOPE_PATHS))
-}
-
-const TASK_ID_PATHS: &[&[&str]] = &[
-    &["task_id"],
-    &["taskId"],
-    &["extra", "task_id"],
-    &["extra", "taskId"],
-];
-
-const TASK_SESSION_SCOPE_PATHS: &[&[&str]] = &[
-    &["session_id"],
-    &["sessionId"],
-    &["session", "id"],
-    &["conversation_id"],
-    &["conversationId"],
-    &["parent_session_id"],
-    &["parentSessionId"],
-    &["extra", "session_id"],
-    &["extra", "sessionId"],
-    &["extra", "parent_session_id"],
-    &["extra", "parentSessionId"],
-];
 
 fn messages_user_task_text(payload: &Value) -> Option<String> {
     payload

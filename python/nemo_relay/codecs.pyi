@@ -163,9 +163,48 @@ class AnthropicMessagesCodec:
         """
         ...
 
+class GeminiGenerateContentCodec:
+    """Built-in codec for Gemini generateContent requests and responses."""
+
+    def __init__(self) -> None: ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a Gemini generateContent request.
+
+        Args:
+            request: Raw generateContent request payload.
+
+        Returns:
+            AnnotatedLLMRequest: Normalized request representation.
+        """
+        ...
+
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode a normalized request back into generateContent format.
+
+        Args:
+            annotated: Normalized request after intercept edits.
+            original: Original generateContent request.
+
+        Returns:
+            LLMRequest: Updated generateContent request payload.
+        """
+        ...
+
+    def decode_response(self, response: Json) -> AnnotatedLLMResponse:
+        """Decode a Gemini generateContent response.
+
+        Args:
+            response: Raw generateContent response payload.
+
+        Returns:
+            AnnotatedLLMResponse: Normalized response representation.
+        """
+        ...
+
 __all__ = [
     "AnnotatedLLMRequest",
     "AnthropicMessagesCodec",
+    "GeminiGenerateContentCodec",
     "LlmCodec",
     "LlmResponseCodec",
     "OpenAIChatCodec",

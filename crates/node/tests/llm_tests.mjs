@@ -90,6 +90,9 @@ function sparseArray() {
 function unprintableError() {
   const error = new Error('sanitize request guardrail failed');
   Object.defineProperties(error, {
+    name: {
+      value: 'GetterError',
+    },
     message: {
       get() {
         throw new Error('message getter boom');
@@ -285,11 +288,11 @@ describe('LLM execute', () => {
 
       await assert.rejects(
         () =>
-          llmCallExecuteAsync(
+          llmCallExecute(
             'exec_status_error_llm',
             makeNative(),
-            async () => {
-              throw new Error('llm status failure');
+            () => {
+              throw unprintableError();
             },
             null,
             null,
@@ -299,7 +302,7 @@ describe('LLM execute', () => {
             },
             null,
           ),
-        /llm status failure/,
+        /JavaScript callback failed/,
       );
 
       await flushSubscribers();
@@ -320,8 +323,9 @@ describe('LLM execute', () => {
       assert.ok(errorEnd, 'expected failed llm end event');
       assert.equal(errorEnd.metadata.caller, 'node-llm-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
-      assert.match(errorEnd.metadata['otel.status_description'], /llm status failure/);
+      assert.match(errorEnd.metadata['otel.status_description'], /JavaScript callback failed/);
       assert.equal(errorEnd.metadata['error.type'], 'internal_error');
+      assert.equal(errorEnd.metadata['exception.type'], 'GetterError');
     } finally {
       deregisterSubscriber('node_llm_status_metadata_sub');
     }
@@ -1337,7 +1341,7 @@ describe('LLM intercepts', () => {
     let providerSideEffects = 0;
     registerLlmExecutionIntercept('node_llm_exec_abort_started_provider', 10, async (native, next) => {
       downstream = next(native);
-      void downstream.catch(() => {});
+      downstream.catch(() => undefined);
       await started;
       return { source: 'intercept' };
     });
@@ -1950,7 +1954,9 @@ describe('LLM intercepts', () => {
     ];
 
     for (const registration of registrations) {
-      const declaration = declarations.match(new RegExp(`export declare function ${registration}\\([^\\n]+`))?.[0];
+      const declaration = declarations.match(
+        new RegExp(String.raw`export declare function ${registration}\([^\n]+`),
+      )?.[0];
       assert.ok(declaration, `missing declaration for ${registration}`);
       assert.doesNotMatch(declaration, /\.\.\.args: any\[\]/, `${registration} must not expose an any callback`);
       assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);

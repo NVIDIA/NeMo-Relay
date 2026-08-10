@@ -28,7 +28,7 @@ evaluation products, see [the Ecosystem guide](https://docs.nvidia.com/nemo/rela
 
 | Goal | Start With |
 |---|---|
-| Observe Codex, Claude Code, or Hermes locally with the CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
+| Observe Codex or Claude Code locally with the CLI | [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) |
 | Instrument app-owned LLM or tool calls | [Quick Start Application](https://docs.nvidia.com/nemo/relay/getting-started/quick-start) |
 | Use LangChain, LangGraph, Deep Agents, or OpenClaw | [Supported Integrations](https://docs.nvidia.com/nemo/relay/supported-integrations/about) |
 | Build a framework or provider integration | [Integrate into Frameworks](https://docs.nvidia.com/nemo/relay/integrate-into-frameworks/about) |
@@ -36,6 +36,9 @@ evaluation products, see [the Ecosystem guide](https://docs.nvidia.com/nemo/rela
 | Package reusable middleware or exporters | [Build Plugins](https://docs.nvidia.com/nemo/relay/build-plugins/about) |
 | Develop or test this repository from source | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
+Hermes Agent understands NeMo Relay plugin configurations. NeMo Relay is built
+into Hermes Agent, so no separate observability plugin or Relay CLI setup is
+required.
 
 ## Quick Start CLI
 
@@ -45,7 +48,7 @@ trajectory file, you have concrete data to inspect, debug, and build on.
 ### Local Agent Trajectory
 
 This walkthrough shows an end-to-end quick success setup. Install the
-NeMo Relay CLI, turn on local exporters, run Codex, Claude Code, or Hermes
+NeMo Relay CLI, turn on local exporters, run Codex or Claude Code
 through Relay, and check that Relay wrote both raw events and normalized
 trajectories.
 
@@ -56,12 +59,6 @@ Install the prebuilt CLI from PyPI:
 
 ```bash
 pip install nemo-relay-cli-bin
-```
-
-Install the prebuilt CLI from npm:
-
-```bash
-npm install --global nemo-relay-cli-bin
 ```
 
 Python API users can install the matching CLI through the optional extra:
@@ -92,15 +89,14 @@ for version pinning, custom directories, and source-based installation.
 
 #### 2. Enable Local Observability Output
 
-From the project directory ready to be observed, open the project-scoped plugin
-editor:
+Open the user-scoped plugin editor:
 
 ```bash
-nemo-relay plugins edit --project
+nemo-relay plugins edit
 ```
 
-The editor creates or updates the nearest project plugin file at
-`.nemo-relay/plugins.toml`. In the top-level menu, select **Observability**,
+The editor creates or updates `$XDG_CONFIG_HOME/nemo-relay/plugins.toml` (or
+`~/.config/nemo-relay/plugins.toml`). In the top-level menu, select **Observability**,
 then configure these sections:
 
 1. Toggle the Observability component on.
@@ -118,8 +114,9 @@ then configure these sections:
 5. Press `s` to save.
 
 > [!NOTE]
-> Run `nemo-relay plugins edit` without `--project` only when you want
-> user-level exporter settings that apply across projects.
+> Repository-local `.nemo-relay/plugins.toml` files are ignored. To use a
+> configuration stored elsewhere, pass `--config path/to/config.toml`; Relay
+> also selects the sibling `path/to/plugins.toml`.
 
 #### 3. Run a Coding Agent Through Relay
 
@@ -133,12 +130,6 @@ For Claude Code, run:
 
 ```bash
 nemo-relay claude -- "Summarize this repository."
-```
-
-For Hermes, run:
-
-```bash
-nemo-relay hermes -- -z "Summarize this repository."
 ```
 
 Refer to the full [Quick Start CLI](https://docs.nvidia.com/nemo/relay/nemo-relay-cli/about) docs for more options.
@@ -324,7 +315,7 @@ coverage.
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
 | Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; the supported generated schema does not install `SessionEnd`. |
-| Hermes Agent | Yes | Yes | Partial | User config installs the shared native MCP gateway lifecycle plus exact trusted hooks; gateway-routed or hook-backed LLM observability is supported. |
+| Hermes Agent | Yes | Yes | Partial | NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay plugin configurations. No separate observability plugin or Relay CLI setup is required. |
 
 ### Public API Integrations
 

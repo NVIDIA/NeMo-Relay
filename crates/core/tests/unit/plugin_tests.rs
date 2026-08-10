@@ -89,6 +89,26 @@ fn set_conflicting_runtime_owner_for_tests() {
     };
 }
 
+fn observability_destination_document(destination: &str) -> Json {
+    json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {"enabled": true, "sinks": [destination]},
+                "opentelemetry": {"enabled": true, "endpoints": [destination]},
+                "atif": {"enabled": true, "storage": [destination]}
+            }
+        }]
+    })
+}
+
+fn programmatic_observability_config(config: Json) -> PluginConfig {
+    serde_json::from_value(json!({
+        "components": [{"kind": "observability", "config": config}]
+    }))
+    .unwrap()
+}
+
 impl Plugin for TestPlugin {
     fn plugin_kind(&self) -> &str {
         "test.plugin"
@@ -708,6 +728,33 @@ fn test_layer_config_preserves_multi_instance_kinds() {
 }
 
 #[test]
+fn config_layering_helpers_cover_malformed_and_scalar_shapes() {
+    let mut scalar = json!("lower");
+    layer_config(&mut scalar, json!("higher"));
+    assert_eq!(scalar, json!("higher"));
+
+    let mut malformed_left = json!({"not": "components"});
+    merge_plugin_components(&mut malformed_left, json!([]));
+    assert_eq!(malformed_left, json!([]));
+
+    let mut malformed_right = json!([]);
+    merge_plugin_components(&mut malformed_right, json!({"not": "components"}));
+    assert_eq!(malformed_right, json!({"not": "components"}));
+
+    let mut components = json!([]);
+    merge_plugin_components(&mut components, json!([{"enabled": true}]));
+    assert_eq!(components, json!([{"enabled": true}]));
+
+    let mut malformed_component = json!("lower");
+    merge_plugin_component(&mut malformed_component, json!({"kind": "higher"}));
+    assert_eq!(malformed_component, json!({"kind": "higher"}));
+
+    let mut object = json!({"existing": true});
+    merge_json_value(&mut object, json!({"added": true}));
+    assert_eq!(object, json!({"existing": true, "added": true}));
+}
+
+#[test]
 fn test_config_report_has_errors() {
     let report = ConfigReport {
         diagnostics: vec![ConfigDiagnostic {
@@ -717,6 +764,7 @@ fn test_config_report_has_errors() {
             field: None,
             message: "boom".into(),
         }],
+        ..ConfigReport::default()
     };
     assert!(report.has_errors());
 }
@@ -1001,7 +1049,13 @@ fn test_plugin_helper_defaults_and_policy_diagnostics() {
     assert_eq!(diagnostics[0].component.as_deref(), Some("warn.plugin"));
     assert_eq!(diagnostics[0].field.as_deref(), Some("field"));
     assert_eq!(diagnostics[1].level, DiagnosticLevel::Error);
-    assert_eq!(join_error_messages(&ConfigReport { diagnostics }), "error");
+    assert_eq!(
+        join_error_messages(&ConfigReport {
+            diagnostics,
+            ..ConfigReport::default()
+        }),
+        "error"
+    );
 
     reset_global();
 }
@@ -1424,6 +1478,37 @@ fn test_pending_registration_records_rollback_failures() {
 }
 
 #[test]
+fn test_pending_rollbacks_ignore_delivery_only_errors() {
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let delivery_error = || {
+        PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+            "delivery failed".into(),
+        ))
+    };
+    {
+        let mut pending = PendingPluginRegistrations::new(Some(Arc::clone(&failures)));
+        pending.extend(vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "delivery-only-registration",
+            Box::new(delivery_error),
+        )]);
+    }
+    {
+        let mut pending =
+            PendingPluginRegistrationContext::new("fixture.".into(), Some(Arc::clone(&failures)));
+        pending
+            .context
+            .add_registration(PluginRegistration::new_with_outcome(
+                "fixture",
+                "delivery-only-context-registration",
+                Box::new(delivery_error),
+            ));
+    }
+
+    assert!(failures.lock().unwrap().is_empty());
+}
+
+#[test]
 fn test_checked_teardown_reports_unremoved_registrations() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1448,6 +1533,204 @@ fn test_checked_teardown_reports_unremoved_registrations() {
     assert!(error.contains("stale-callback"), "{error}");
     assert!(error.contains("deregistration refused"), "{error}");
     assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_teardown_marker_text_does_not_imply_successful_removal() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "stale-marker-callback",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(format!(
+                    "unrelated failure mentioning {}",
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                )))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("stale-marker-callback"), "{error}");
+    assert!(error.contains("could not be removed"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "atif-shutdown",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "atif.remote_delivery_failed".into(),
+                    component: "observability".into(),
+                    field: Some("storage[0]".into()),
+                    message: "HTTP 500".into(),
+                    session_id: Some("session-123".into()),
+                    count: 1,
+                });
+                let error = PluginError::RegistrationFailed(format!(
+                    "{}: atif.remote_delivery_failed (1)",
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                ));
+                PluginRegistrationCleanupOutcome::RemovedWithError(error)
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("atif.remote_delivery_failed"), "{error}");
+    assert!(!error.contains("could not be removed"), "{error}");
+    let report = active_plugin_report().expect("failed teardown should retain its report");
+    assert_eq!(report.runtime_diagnostics.len(), 1);
+    let diagnostic = &report.runtime_diagnostics[0];
+    assert_eq!(diagnostic.code, "atif.remote_delivery_failed");
+    assert_eq!(diagnostic.field.as_deref(), Some("storage[0]"));
+    assert_eq!(diagnostic.message, "HTTP 500");
+    assert_eq!(diagnostic.session_id.as_deref(), Some("session-123"));
+
+    clear_plugin_configuration_inner();
+    assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    format!(
+                        "{}: otel.spans_dropped (2)",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    assert!(outcome.result.is_err());
+    reset_global();
+}
+
+#[test]
+fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                    format!(
+                        "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "atif-shutdown",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "atif.remote_delivery_failed".into(),
+                    component: "observability".into(),
+                    field: Some("storage[0]".into()),
+                    message: "HTTP 500".into(),
+                    session_id: Some("session-123".into()),
+                    count: 1,
+                });
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    "ATIF delivery failed".into(),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("ATIF delivery failed"),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("fixture registration 'atif-shutdown' reported a delivery failure"),
+        "{error}"
+    );
+    assert!(
+        !plugin_configuration_is_active().unwrap(),
+        "a replacement aborted by delivery failure must not leave a configuration active"
+    );
+    let report = active_plugin_report().expect("failed replacement should retain its report");
+    assert_eq!(report.runtime_diagnostics.len(), 1);
+    assert_eq!(
+        report.runtime_diagnostics[0].code,
+        "atif.remote_delivery_failed"
+    );
+    assert_eq!(
+        report.runtime_diagnostics[0].field.as_deref(),
+        Some("storage[0]")
+    );
+    assert_eq!(report.runtime_diagnostics[0].count, 1);
+
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .expect("delivery-only teardown errors must not block a later initialization");
     reset_global();
 }
 
@@ -2056,11 +2339,18 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     set_conflicting_runtime_owner_for_tests();
     for (registration, expected) in registrations.iter_mut().zip(expected_messages) {
         match (registration.deregister)() {
-            Err(PluginError::RegistrationFailed(message)) => {
+            PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                message,
+            )) => {
                 assert!(message.contains(expected), "{message}");
             }
-            Err(other) => panic!("unexpected deregistration failure: {other}"),
-            Ok(()) => panic!("expected deregistration to fail"),
+            PluginRegistrationCleanupOutcome::NotRemoved(other) => {
+                panic!("unexpected deregistration failure: {other}")
+            }
+            PluginRegistrationCleanupOutcome::Removed
+            | PluginRegistrationCleanupOutcome::RemovedWithError(_) => {
+                panic!("expected deregistration to fail")
+            }
         }
     }
 
@@ -2102,6 +2392,41 @@ fn test_initialize_plugins_replaces_previous_configuration_on_success() {
     assert_eq!(active_plugin_report().unwrap().diagnostics.len(), 1);
     assert_eq!(REPLACEMENT_REGISTRATIONS.load(Ordering::SeqCst), 1);
 
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_preserves_resolution_diagnostics() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+
+    let diagnostic = ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: "plugin.component_reenabled".to_string(),
+        component: Some("recording.plugin".to_string()),
+        field: Some("enabled".to_string()),
+        message: "programmatic configuration re-enabled the component".to_string(),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let report = runtime
+        .block_on(initialize_plugins_with_diagnostics(
+            PluginConfig {
+                components: vec![PluginComponentSpec::new("recording.plugin")],
+                ..PluginConfig::default()
+            },
+            vec![diagnostic.clone()],
+        ))
+        .unwrap();
+
+    assert_eq!(report.diagnostics, vec![diagnostic.clone()]);
+    assert_eq!(
+        active_plugin_report().unwrap().diagnostics,
+        vec![diagnostic]
+    );
     reset_global();
 }
 
@@ -2197,8 +2522,8 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     assert_eq!(observability["kind"], json!("observability"));
     assert_eq!(
         observability["enabled"],
-        json!(false),
-        "the system layer wins shared scalar fields"
+        json!(true),
+        "a disabled system component does not override lower layers"
     );
     assert_eq!(
         observability["config"]["output_directory"],
@@ -2207,13 +2532,13 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     );
     assert_eq!(
         observability["config"]["mode"],
-        json!("system"),
-        "the system layer wins recursively merged config fields"
+        json!("project"),
+        "a disabled system component does not contribute configuration"
     );
     assert_eq!(
         observability["config"]["values"],
-        json!(["system", "project", "lower"]),
-        "list entries aggregate from highest to lowest precedence"
+        json!(["project", "lower"]),
+        "a disabled system component does not contribute list entries"
     );
     assert_eq!(
         components[1]["kind"],
@@ -2225,6 +2550,34 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
         json!("system_only"),
         "a system-only component kind is appended"
     );
+}
+
+#[test]
+fn test_load_plugin_config_files_omits_components_disabled_in_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let lower = dir.path().join("lower.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &lower,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &higher,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+
+    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
+        .unwrap()
+        .expect("the files exist");
+
+    assert_eq!(sources, vec![lower, higher]);
+    assert_eq!(merged["components"], json!([]));
 }
 
 #[test]
@@ -2258,24 +2611,61 @@ fn test_load_plugin_config_files_rejects_version_before_layering() {
 }
 
 #[test]
-fn test_default_plugin_config_paths_order_user_project_system() {
+fn test_plugin_config_loading_reports_read_parse_and_version_type_errors() {
     let dir = tempfile::tempdir().unwrap();
-    let project = dir.path().join("project");
-    let child = project.join("nested");
+    let unreadable = dir.path().join("directory.toml");
+    std::fs::create_dir(&unreadable).unwrap();
+    assert!(
+        load_plugin_config_files([unreadable])
+            .unwrap_err()
+            .to_string()
+            .contains("failed to read")
+    );
+
+    let malformed = dir.path().join("malformed.toml");
+    std::fs::write(&malformed, "version = [").unwrap();
+    assert!(
+        load_plugin_config_files([malformed])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid plugin TOML")
+    );
+
+    assert!(
+        merge_plugin_config_documents([
+            (dir.path().join("typed.toml"), json!({"version": "one"}),)
+        ])
+        .unwrap_err()
+        .to_string()
+        .contains("invalid plugin config version")
+    );
+}
+
+#[test]
+fn test_default_plugin_config_paths_order_user_system() {
+    let dir = tempfile::tempdir().unwrap();
     let user = dir.path().join("user");
-    let project_plugins = project.join(".nemo-relay/plugins.toml");
-    std::fs::create_dir_all(&child).unwrap();
-    std::fs::create_dir_all(project_plugins.parent().unwrap()).unwrap();
-    std::fs::write(&project_plugins, "version = 1\n").unwrap();
 
     assert_eq!(
-        default_plugin_config_paths(Some(&child), Some(user.clone())),
+        default_plugin_config_paths(Some(user.clone())),
         vec![
             user.join("plugins.toml"),
-            project_plugins,
-            PathBuf::from("/etc/nemo-relay/plugins.toml"),
+            system_config_dir().join("plugins.toml"),
         ]
     );
+}
+
+#[test]
+fn test_system_config_dir_matches_platform_convention() {
+    #[cfg(windows)]
+    {
+        let expected_base = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        assert_eq!(system_config_dir(), expected_base.join("nemo-relay"));
+    }
+    #[cfg(not(windows))]
+    assert_eq!(system_config_dir(), PathBuf::from("/etc/nemo-relay"));
 }
 
 #[cfg(unix)]
@@ -2314,10 +2704,10 @@ fn test_load_plugin_config_files_deduplicates_aliases_at_highest_precedence() {
 }
 
 #[test]
-fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
+fn test_plugin_config_overlay_enables_programmatically_declared_components() {
     // After each file's schema version is validated, a typed `PluginConfig` is layered over
-    // the discovered file base. Default-valued `policy`/`enabled` fields inherit the file,
-    // the free-form `config` body merges, and an undeclared component kind is inherited.
+    // the discovered file base. Default-valued policy fields inherit the file, a declared
+    // component applies its enabled value, and the free-form `config` body merges.
     let file_base = json!({
         "version": 1,
         "components": [
@@ -2326,7 +2716,7 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
                 "enabled": false,
                 "config": { "output_directory": "/var/log", "mode": "append" }
             },
-            { "kind": "adaptive", "config": { "ttl": 60 } }
+            { "kind": "adaptive", "enabled": false, "config": { "ttl": 60 } }
         ],
         "policy": {
             "unknown_component": "error",
@@ -2346,7 +2736,7 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
     layer_config(&mut merged, plugin_config_overlay_value(&code).unwrap());
     let typed: PluginConfig = serde_json::from_value(merged).unwrap();
 
-    // Typed defaults do not mask the file base.
+    // Typed policy defaults do not mask the file base.
     assert_eq!(typed.version, 1);
     assert_eq!(
         typed.policy.unknown_component,
@@ -2356,8 +2746,8 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
     let observability = &typed.components[0];
     assert_eq!(observability.kind, "observability");
     assert!(
-        !observability.enabled,
-        "typed default enabled=true inherits the file's false"
+        observability.enabled,
+        "a declared component is enabled by code"
     );
     // The component config body merges: code's `mode` wins, the file's `output_directory`
     // is inherited.
@@ -2365,6 +2755,135 @@ fn test_plugin_config_overlay_inherits_file_values_for_typed_defaults() {
     assert_eq!(observability.config["output_directory"], json!("/var/log"));
     // A kind the code config does not declare is inherited from the file.
     assert_eq!(typed.components[1].kind, "adaptive");
+    assert!(!typed.components[1].enabled);
+}
+
+#[test]
+fn test_programmatic_observability_destinations_concatenate_with_discovered_files_and_warn() {
+    let lower = PathBuf::from("lower/plugins.toml");
+    let higher = PathBuf::from("higher/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![
+        (
+            lower.clone(),
+            observability_destination_document("lower-secret-destination"),
+        ),
+        (
+            higher.clone(),
+            observability_destination_document("higher-secret-destination"),
+        ),
+    ])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true, "sinks": ["programmatic"]},
+        "opentelemetry": {"enabled": true, "endpoints": ["programmatic"]},
+        "atif": {"enabled": true, "storage": ["programmatic"]}
+    }));
+
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    let config = &resolved.config.components[0].config;
+    for (section, field) in [
+        ("atof", "sinks"),
+        ("opentelemetry", "endpoints"),
+        ("atif", "storage"),
+    ] {
+        assert_eq!(
+            config[section][field],
+            json!([
+                "programmatic",
+                "higher-secret-destination",
+                "lower-secret-destination"
+            ])
+        );
+    }
+    assert_eq!(resolved.diagnostics.len(), 2);
+    for (diagnostic, source) in resolved.diagnostics.iter().zip([lower, higher]) {
+        assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+        assert_eq!(diagnostic.code, "plugin.configuration_inherited");
+        assert!(diagnostic.component.is_none());
+        assert!(diagnostic.field.is_none());
+        assert!(diagnostic.message.contains(&source.display().to_string()));
+        assert!(!diagnostic.message.contains("secret-destination"));
+    }
+}
+
+#[test]
+fn test_no_inherited_configuration_warning_without_discovered_files() {
+    let discovered = resolve_discovered_plugin_config(Vec::new()).unwrap();
+    let resolved = resolve_programmatic_plugin_config(discovered, PluginConfig::default()).unwrap();
+    assert!(resolved.diagnostics.is_empty());
+}
+
+#[test]
+fn test_programmatic_enable_override_diagnostic_matches_positionally_and_names_source() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let discovered = json!({
+        "components": [
+            { "kind": "observability", "enabled": true },
+            { "kind": "observability", "enabled": false }
+        ]
+    });
+    let enabled_sources = HashMap::from([(
+        "observability".to_string(),
+        ComponentEnabledSource {
+            enabled: false,
+            path: source.clone(),
+        },
+    )]);
+    let programmatic = PluginConfig {
+        components: vec![
+            PluginComponentSpec::new("observability"),
+            PluginComponentSpec::new("observability"),
+        ],
+        ..PluginConfig::default()
+    };
+
+    let diagnostics =
+        programmatic_enable_override_diagnostics(&discovered, &enabled_sources, &programmatic);
+
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+    assert_eq!(diagnostic.code, "plugin.component_reenabled");
+    assert_eq!(diagnostic.component.as_deref(), Some("observability"));
+    assert_eq!(diagnostic.field.as_deref(), Some("enabled"));
+    assert!(
+        diagnostic.message.contains(&source.display().to_string()),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn test_programmatic_reenable_diagnostic_survives_disabled_component_normalization() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let documents = vec![(
+        source.clone(),
+        json!({
+            "components": [{ "kind": "observability", "enabled": false }]
+        }),
+    )];
+    let enabled_sources = component_enabled_sources(&documents);
+    let (discovered, _) = merge_plugin_config_documents(documents)
+        .unwrap()
+        .expect("the file-backed configuration exists");
+    assert_eq!(discovered["components"], json!([]));
+
+    let diagnostics = programmatic_enable_override_diagnostics(
+        &discovered,
+        &enabled_sources,
+        &PluginConfig {
+            components: vec![PluginComponentSpec::new("observability")],
+            ..PluginConfig::default()
+        },
+    );
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "plugin.component_reenabled");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains(&source.display().to_string())
+    );
 }
 
 #[test]

@@ -446,6 +446,23 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 
 /**
+ * Initializes the Go binding runtime and installs default operational logging.
+ *
+ * Logging configuration is resolved from `NEMO_RELAY_LOG`,
+ * `NEMO_RELAY_LOG_STDERR_FORMAT`, or `NEMO_RELAY_LOG_CONFIG_PATH`, with built-in defaults when
+ * none are set. Repeated initialization is a no-op.
+ */
+NemoRelayStatus nemo_relay_initialize_default_logging(void);
+
+/**
+ * Shuts down and releases the default operational logging runtime.
+ *
+ * Pending file-sink records are drained before this function returns. Repeated shutdown is a
+ * no-op.
+ */
+NemoRelayStatus nemo_relay_shutdown_default_logging(void);
+
+/**
  * Run the registered tool request intercept chain on the given arguments.
  *
  * This helper applies only the request-intercept middleware and does not emit
@@ -944,6 +961,17 @@ struct FfiCodecHandle *nemo_relay_openai_responses_codec_new(void);
  * Caller must free the returned handle via `nemo_relay_codec_free`.
  */
 struct FfiCodecHandle *nemo_relay_anthropic_messages_codec_new(void);
+
+/**
+ * Create a new Gemini generateContent API codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nemo_relay_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nemo_relay_codec_free`.
+ */
+struct FfiCodecHandle *nemo_relay_gemini_generate_content_codec_new(void);
 
 /**
  * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw

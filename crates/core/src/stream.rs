@@ -36,7 +36,7 @@ use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::llm::LlmHandle;
 use crate::api::llm::emit_reserved_optimization_marks;
 use crate::api::optimization::finalize_optimization_summary;
-use crate::api::runtime::LlmSanitizeResponseContext;
+use crate::api::registry::Guardrail;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
@@ -44,10 +44,13 @@ use crate::api::runtime::{
     EventSubscriberFn, LlmJsonStream, LlmStreamInner, ScopeStackHandle, TASK_SCOPE_STACK,
     current_scope_stack,
 };
+use crate::api::runtime::{LlmSanitizeResponseContext, LlmSanitizeResponseFn};
 use crate::api::shared::{
     metadata_with_otel_error, metadata_with_otel_status, snapshot_event_sanitizers,
 };
-use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
+use crate::codec::response::{
+    AnnotatedLlmResponse, FinishReason, attach_estimated_cost_for_provider,
+};
 use crate::codec::traits::LlmResponseCodec;
 use crate::error::{FlowError, Result};
 use crate::json::Json;
@@ -83,6 +86,19 @@ pub struct LlmStreamWrapper {
     close_result: Option<Result<()>>,
     finalization: Option<tokio::task::JoinHandle<()>>,
     terminal_result: Option<Result<Json>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamTermination {
+    Complete,
+    Failed,
+    Dropped,
+}
+
+impl StreamTermination {
+    const fn is_interrupted(self) -> bool {
+        !matches!(self, Self::Complete)
+    }
 }
 
 impl LlmStreamWrapper {
@@ -195,33 +211,28 @@ impl LlmStreamWrapper {
         self.handle
             .optimization_recorder
             .close_for_finalization(None);
-        self.finalization = self.emit_end_event(metadata, true, background_thread);
+        self.finalization =
+            self.emit_end_event(metadata, StreamTermination::Dropped, background_thread);
     }
 
-    fn finish_with_status(
-        &mut self,
-        status_code: &'static str,
-        status_message: Option<String>,
-        interrupted: bool,
-    ) {
+    fn finish_cleanly(&mut self) {
         if self.ended {
             return;
         }
         self.ended = true;
         self.inner.terminalize();
-        let metadata =
-            metadata_with_otel_status(self.metadata.clone(), status_code, status_message);
-        self.finalization = self.emit_end_event(metadata, interrupted, false);
+        let metadata = metadata_with_otel_status(self.metadata.clone(), "OK", None);
+        self.finalization = self.emit_end_event(metadata, StreamTermination::Complete, false);
     }
 
-    fn finish_with_error(&mut self, error: &FlowError, interrupted: bool) {
+    fn finish_with_error(&mut self, error: &FlowError) {
         if self.ended {
             return;
         }
         self.ended = true;
         self.inner.terminalize();
         let metadata = metadata_with_otel_error(self.metadata.clone(), error);
-        self.finalization = self.emit_end_event(metadata, interrupted, false);
+        self.finalization = self.emit_end_event(metadata, StreamTermination::Failed, false);
     }
 
     /// Emit the LLM END event with aggregated response data.
@@ -231,7 +242,7 @@ impl LlmStreamWrapper {
     fn emit_end_event(
         &mut self,
         metadata: Option<Json>,
-        interrupted: bool,
+        termination: StreamTermination,
         background_thread: bool,
     ) -> Option<tokio::task::JoinHandle<()>> {
         // The finalizer below runs on the caller's Tokio runtime. Register a
@@ -249,31 +260,8 @@ impl LlmStreamWrapper {
             aggregated
         };
 
-        let (entries, sanitizer_snapshot_failed) = match self.scope_stack.read() {
-            Ok(scope_guard) => {
-                let scope_locals = scope_guard
-                    .collect_scope_local_registries(|r| &r.llm_sanitize_response_guardrails);
-                match global_context().read() {
-                    Ok(state) => (state.llm_sanitize_response_entries(&scope_locals), false),
-                    Err(error) => {
-                        log::error!(
-                            target: "nemo_relay.runtime",
-                            event = "stream_end_sanitizer_snapshot_failed";
-                            "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
-                        );
-                        (Vec::new(), true)
-                    }
-                }
-            }
-            Err(error) => {
-                log::error!(
-                    target: "nemo_relay.runtime",
-                    event = "stream_end_sanitizer_snapshot_failed";
-                    "LLM stream END sanitizer snapshot failed; omitting the observability payload: {error}"
-                );
-                (Vec::new(), true)
-            }
-        };
+        let (entries, sanitizer_snapshot_failed) =
+            snapshot_stream_end_sanitizers(&self.scope_stack);
         let handle = self.handle.clone();
         let scope_stack = self.scope_stack.clone();
         let finalization_scope_stack = scope_stack.clone();
@@ -308,7 +296,14 @@ impl LlmStreamWrapper {
                     })
                 })
                 .flatten();
-            let interruption = (interrupted
+            let metadata = if termination == StreamTermination::Dropped
+                && has_authoritative_terminal_outcome(annotated_response.as_ref())
+            {
+                metadata_with_otel_status(metadata, "OK", None)
+            } else {
+                metadata
+            };
+            let interruption = (termination.is_interrupted()
                 && !has_authoritative_final_usage(annotated_response.as_ref()))
             .then_some("stream_interrupted");
             handle
@@ -412,6 +407,30 @@ impl LlmStreamWrapper {
     }
 }
 
+fn snapshot_stream_end_sanitizers(
+    scope_stack: &ScopeStackHandle,
+) -> (Vec<Guardrail<LlmSanitizeResponseFn>>, bool) {
+    let entries = scope_stack.read().ok().and_then(|scope_guard| {
+        let scope_locals = scope_guard
+            .collect_scope_local_registries(|registry| &registry.llm_sanitize_response_guardrails);
+        global_context()
+            .read()
+            .ok()
+            .map(|state| state.llm_sanitize_response_entries(&scope_locals))
+    });
+    match entries {
+        Some(entries) => (entries, false),
+        None => {
+            log::error!(
+                target: "nemo_relay.runtime",
+                event = "stream_end_sanitizer_snapshot_failed";
+                "LLM stream END sanitizer snapshot failed; omitting the observability payload"
+            );
+            (Vec::new(), true)
+        }
+    }
+}
+
 impl Stream for LlmStreamWrapper {
     type Item = Result<Json>;
 
@@ -458,19 +477,19 @@ impl Stream for LlmStreamWrapper {
                 match (this.collector)(raw_chunk.clone()) {
                     Ok(()) => Poll::Ready(Some(Ok(raw_chunk))),
                     Err(e) => {
-                        this.finish_with_error(&e, true);
+                        this.finish_with_error(&e);
                         this.terminal_result = Some(Err(e));
                         self.poll_next(cx)
                     }
                 }
             }
             Poll::Ready(Some(Err(e))) => {
-                this.finish_with_error(&e, true);
+                this.finish_with_error(&e);
                 this.terminal_result = Some(Err(e));
                 self.poll_next(cx)
             }
             Poll::Ready(None) => {
-                this.finish_with_status("OK", None, false);
+                this.finish_cleanly();
                 self.poll_next(cx)
             }
             Poll::Pending => Poll::Pending,
@@ -509,6 +528,16 @@ fn has_authoritative_final_usage(response: Option<&AnnotatedLlmResponse>) -> boo
                     || (usage.prompt_tokens.is_some() && usage.completion_tokens.is_some())
             })
     })
+}
+
+fn has_authoritative_terminal_outcome(response: Option<&AnnotatedLlmResponse>) -> bool {
+    has_authoritative_final_usage(response)
+        && response.is_some_and(|response| {
+            response
+                .finish_reason
+                .as_ref()
+                .is_some_and(|reason| !matches!(reason, FinishReason::Unknown(_)))
+        })
 }
 
 fn llm_chunk_mark_data(chunk_index: u64, raw_chunk: &Json) -> Json {

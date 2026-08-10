@@ -420,7 +420,7 @@ describe('typedToolExecute', () => {
     let providerSideEffects = 0;
     registerToolExecutionIntercept('typed_tool_abort_started_provider', 10, async (args, next) => {
       downstream = next(args);
-      void downstream.catch(() => {});
+      downstream.catch(() => undefined);
       await started;
       return { result: { source: 'intercept' } };
     });
@@ -545,7 +545,7 @@ describe('typedLlmExecute', () => {
     let providerSideEffects = 0;
     registerLlmExecutionIntercept('typed_llm_abort_started_provider', 10, async (request, next) => {
       downstream = next(request);
-      void downstream.catch(() => {});
+      downstream.catch(() => undefined);
       await started;
       return { source: 'intercept' };
     });

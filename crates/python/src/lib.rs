@@ -50,6 +50,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
             "failed to initialize NeMo Relay runtime ownership: {e}"
         ))
     })?;
+    nemo_relay::logging::initialize_default_logging().map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "failed to initialize NeMo Relay operational logging: {e}"
+        ))
+    })?;
     register_adaptive_component().map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to register adaptive plugin component: {e}"

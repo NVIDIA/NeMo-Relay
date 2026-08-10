@@ -9,14 +9,19 @@ SPDX-License-Identifier: Apache-2.0
 
 # NeMo Relay Switchyard Plugin
 
+> **Deprecated:** The experimental `nemo-relay-switchyard` plugin will be
+> removed in NeMo Relay 0.8 and replaced by a Switchyard-owned native plugin.
+> The NeMo Relay 0.8 documentation will include an updated configuration guide
+> and migration plan when the replacement is available.
+
 `nemo-relay-switchyard` is NeMo Relay's experimental integration
 with the [NVIDIA NeMo Switchyard](https://github.com/NVIDIA-NeMo/Switchyard)
 Decision API. It adds routing-aware LLM execution intercepts to the Relay
 runtime while preserving Relay ownership of provider credentials, target
 bindings, dispatch, retries, fallbacks, and observability.
 
-NeMo Relay 0.6.0 uses a separately running Switchyard Decision API from the
-`topic/nemo-relay-integration` branch.
+NeMo Relay 0.6.0 and 0.7.0 use a separately running Switchyard Decision API
+from the `topic/nemo-relay-integration` branch.
 
 Install it from crates.io, or build it from the NeMo Relay source checkout with
 the optional CLI feature while the Switchyard Decision API contract and

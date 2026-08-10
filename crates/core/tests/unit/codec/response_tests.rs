@@ -1596,6 +1596,64 @@ fn test_api_specific_anthropic_messages_round_trip() {
 }
 
 #[test]
+fn test_api_specific_gemini_generate_content_round_trip_empty_extra() {
+    let api = ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: Some(3),
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::new(),
+    };
+    let json_val = serde_json::to_value(&api).unwrap();
+    assert_eq!(json_val["api"], json!("gemini_generate_content"));
+    let deserialized: ApiSpecificResponse = serde_json::from_value(json_val).unwrap();
+    assert_eq!(api, deserialized);
+}
+
+#[test]
+fn test_api_specific_gemini_generate_content_round_trip_extra() {
+    let api = ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: None,
+        safety_ratings: Some(json!([{"category": "HARM_CATEGORY_HATE_SPEECH"}])),
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::from_iter([("urlContextMetadata".into(), json!({"url": "u"}))]),
+    };
+    let json_val = serde_json::to_value(&api).unwrap();
+    assert_eq!(json_val["api"], json!("gemini_generate_content"));
+    assert_eq!(json_val["urlContextMetadata"], json!({"url": "u"}));
+    let deserialized: ApiSpecificResponse = serde_json::from_value(json_val).unwrap();
+    assert_eq!(api, deserialized);
+}
+
+#[test]
+fn test_api_specific_gemini_generate_content_extra_cannot_override_api_tag() {
+    let api = ApiSpecificResponse::GeminiGenerateContent {
+        thoughts_tokens: None,
+        safety_ratings: None,
+        grounding_metadata: None,
+        citation_metadata: None,
+        extra: serde_json::Map::from_iter([
+            ("api".into(), json!("not_the_tag")),
+            ("futureField".into(), json!(true)),
+        ]),
+    };
+    let json_val = serde_json::to_value(&api).unwrap();
+    assert_eq!(
+        json_val["api"],
+        json!("gemini_generate_content"),
+        "Gemini extra.api must not overwrite the enum discriminator"
+    );
+    assert_eq!(json_val["futureField"], json!(true));
+    let deserialized: ApiSpecificResponse = serde_json::from_value(json_val).unwrap();
+    let ApiSpecificResponse::GeminiGenerateContent { extra, .. } = deserialized else {
+        panic!("expected Gemini generateContent metadata");
+    };
+    assert!(extra.get("api").is_none());
+    assert_eq!(extra.get("futureField"), Some(&json!(true)));
+}
+
+#[test]
 fn test_api_specific_custom_round_trip() {
     let api = ApiSpecificResponse::Custom {
         api_name: "my_custom_llm".into(),

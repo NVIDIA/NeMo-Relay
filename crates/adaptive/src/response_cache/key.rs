@@ -56,48 +56,8 @@ pub fn build_cache_key(
     request: &LlmRequest,
     config: &ResponseCacheConfig,
 ) -> KeyOutcome {
-    // Unparseable bodies arrive as null; they would all share one key.
-    if request.content.is_null() {
-        return KeyOutcome::Bypass("unparseable_body");
-    }
-    // Cacheability gates run on the RAW request, so they are correct regardless
-    // of which codec (if any) decodes the body — a chat codec may park `store`
-    // in `extra` rather than the typed field, so we must not rely on the decode.
-    if let Some(object) = request.content.as_object() {
-        // Any present, non-`false` `store` opts into server-side persistence —
-        // bypass even a malformed non-boolean rather than risk caching a stateful
-        // call (whose result is otherwise keyed with `store` stripped).
-        if object
-            .get("store")
-            .is_some_and(|value| !matches!(value, Json::Bool(false) | Json::Null))
-        {
-            return KeyOutcome::Bypass("stateful_store");
-        }
-        if object.contains_key("previous_response_id") {
-            return KeyOutcome::Bypass("stateful_previous_response_id");
-        }
-        // Server-side conversation state the key cannot see.
-        if object.contains_key("conversation") || object.contains_key("container") {
-            return KeyOutcome::Bypass("stateful_conversation");
-        }
-        // Responses persists by default; only an explicit opt-out is stateless.
-        // A `prompt` object is the Responses prompt-template reference; a bare
-        // string `prompt` is a completions body with no server-side state.
-        if (object.contains_key("input")
-            || object.contains_key("instructions")
-            || object.get("prompt").is_some_and(Json::is_object))
-            && !object
-                .get("store")
-                .is_some_and(|store| store == &Json::Bool(false))
-        {
-            return KeyOutcome::Bypass("stateful_store");
-        }
-    }
-    // Toggle off = explicit temperature 0 only; absent defaults to sampling.
-    if !config.cache_nondeterministic
-        && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0)
-    {
-        return KeyOutcome::Bypass("nondeterministic_temperature");
+    if let Some(reason) = cache_bypass_reason(request, config) {
+        return KeyOutcome::Bypass(reason);
     }
 
     // Body to fingerprint: the decoded/normalized form when a surface resolves
@@ -134,6 +94,44 @@ pub fn build_cache_key(
         Some(key) => KeyOutcome::Key(key),
         None => KeyOutcome::Bypass("canonicalization_failed"),
     }
+}
+
+fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Option<&'static str> {
+    if request.content.is_null() {
+        return Some("unparseable_body");
+    }
+    if let Some(reason) = request
+        .content
+        .as_object()
+        .and_then(stateful_request_bypass_reason)
+    {
+        return Some(reason);
+    }
+    (!config.cache_nondeterministic
+        && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0))
+    .then_some("nondeterministic_temperature")
+}
+
+fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<&'static str> {
+    if object
+        .get("store")
+        .is_some_and(|value| !matches!(value, Json::Bool(false) | Json::Null))
+    {
+        return Some("stateful_store");
+    }
+    if object.contains_key("previous_response_id") {
+        return Some("stateful_previous_response_id");
+    }
+    if object.contains_key("conversation") || object.contains_key("container") {
+        return Some("stateful_conversation");
+    }
+    let responses_surface = object.contains_key("input")
+        || object.contains_key("instructions")
+        || object.get("prompt").is_some_and(Json::is_object);
+    let explicitly_stateless = object
+        .get("store")
+        .is_some_and(|store| store == &Json::Bool(false));
+    (responses_surface && !explicitly_stateless).then_some("stateful_store")
 }
 
 /// Preserves which OpenAI Chat token-cap field the caller sent.
@@ -340,6 +338,28 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .is_some_and(|blocks| blocks.iter().any(lossy_system_block))
         }
         ProviderSurface::OpenAIResponses => false,
+        ProviderSurface::GeminiGenerateContent => {
+            object
+                .get("generationConfig")
+                .is_some_and(|generation_config| {
+                    let Some(generation_config) = generation_config.as_object() else {
+                        return true;
+                    };
+                    generation_config.keys().any(|key| {
+                        !matches!(
+                            key.as_str(),
+                            "temperature" | "topP" | "maxOutputTokens" | "stopSequences"
+                        )
+                    })
+                })
+                || object
+                    .get("systemInstruction")
+                    .is_some_and(lossy_gemini_system_instruction)
+                || object
+                    .get("contents")
+                    .and_then(Json::as_array)
+                    .is_some_and(|items| items.iter().any(lossy_gemini_content_item))
+        }
     }
 }
 
@@ -362,6 +382,139 @@ fn lossy_system_block(block: &Json) -> bool {
         || fields
             .keys()
             .any(|key| !matches!(key.as_str(), "type" | "text" | "cache_control"))
+}
+
+/// Whether a Gemini `systemInstruction` would lose detail in the normalized
+/// request key. The Gemini codec flattens it to a single system text string, so
+/// only one non-empty plain text part without sibling fields is lossless.
+fn lossy_gemini_system_instruction(value: &Json) -> bool {
+    let Some(object) = value.as_object() else {
+        return true;
+    };
+    if object.keys().any(|key| key != "parts") {
+        return true;
+    }
+    let Some(parts) = object.get("parts").and_then(Json::as_array) else {
+        return true;
+    };
+    let [part] = parts.as_slice() else {
+        return true;
+    };
+    let Some(part_object) = part.as_object() else {
+        return true;
+    };
+    if part_object.len() != 1 {
+        return true;
+    }
+    part_object
+        .get("text")
+        .and_then(Json::as_str)
+        .is_none_or(str::is_empty)
+}
+
+fn lossy_gemini_content_item(item: &Json) -> bool {
+    let Some(object) = item.as_object() else {
+        return true;
+    };
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "role" | "parts"))
+    {
+        return true;
+    }
+    let Some(parts) = object.get("parts").and_then(Json::as_array) else {
+        return true;
+    };
+
+    let mut plain_text_parts = 0usize;
+    for part in parts {
+        if lossy_gemini_part(part, &mut plain_text_parts) {
+            return true;
+        }
+    }
+    plain_text_parts > 1
+}
+
+fn lossy_gemini_part(part: &Json, plain_text_parts: &mut usize) -> bool {
+    let Some(object) = part.as_object() else {
+        return true;
+    };
+    if object.get("thought").and_then(Json::as_bool) == Some(true) {
+        return true;
+    }
+    let data_keys = object
+        .keys()
+        .filter(|key| is_gemini_part_data_key(key))
+        .collect::<Vec<_>>();
+    if data_keys.len() > 1 {
+        return true;
+    }
+    let Some(data_key) = data_keys.first().map(|key| key.as_str()) else {
+        return true;
+    };
+    match data_key {
+        "text" => lossy_gemini_text_part(object, plain_text_parts),
+        "functionCall" => lossy_gemini_function_call_part(object),
+        "functionResponse" => lossy_gemini_function_response_part(object),
+        _ => false,
+    }
+}
+
+fn lossy_gemini_text_part(
+    object: &serde_json::Map<String, Json>,
+    plain_text_parts: &mut usize,
+) -> bool {
+    if !object.get("text").is_some_and(Json::is_string) {
+        return true;
+    }
+    if object.len() == 1 {
+        *plain_text_parts += 1;
+    }
+    false
+}
+
+fn lossy_gemini_function_call_part(object: &serde_json::Map<String, Json>) -> bool {
+    object.keys().any(|key| key != "functionCall")
+        || match object.get("functionCall").and_then(Json::as_object) {
+            Some(call) => {
+                call.keys()
+                    .any(|key| !matches!(key.as_str(), "name" | "id" | "args"))
+                    || call.get("args").is_some_and(|args| !args.is_object())
+            }
+            None => true,
+        }
+}
+
+fn lossy_gemini_function_response_part(object: &serde_json::Map<String, Json>) -> bool {
+    object.keys().any(|key| key != "functionResponse")
+        || match object.get("functionResponse").and_then(Json::as_object) {
+            Some(response) => {
+                response
+                    .keys()
+                    .any(|key| !matches!(key.as_str(), "id" | "name" | "response" | "parts"))
+                    || match (
+                        response.get("id").and_then(Json::as_str),
+                        response.get("name").and_then(Json::as_str),
+                    ) {
+                        (Some(id), Some(name)) => id != name,
+                        _ => false,
+                    }
+            }
+            None => true,
+        }
+}
+
+fn is_gemini_part_data_key(key: &str) -> bool {
+    matches!(
+        key,
+        "text"
+            | "inlineData"
+            | "fileData"
+            | "functionCall"
+            | "functionResponse"
+            | "executableCode"
+            | "codeExecutionResult"
+    )
 }
 
 /// Whether the raw request body carries a non-empty `messages` (chat) or `input`

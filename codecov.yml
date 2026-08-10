@@ -135,11 +135,12 @@ ignore:
   - "**/examples/**"
   - "**/tests/**"
   - "crates/cli/tests/"
-  # CLI TTY shells are exercised by smoke tests, but their prompt loops are
-  # intentionally split away from testable model modules.
-  - "crates/cli/src/plugins/mod.rs"
-  - "crates/cli/src/plugins/dynamic_editor.rs"
-  - "crates/cli/src/commands/configure/wizard.rs"
+  # CLI TTY shells are exercised by smoke tests, while deterministic state,
+  # validation, and persistence behavior remains in the CLI component.
+  - "crates/cli/src/commands/configure/editor/prompt.rs"
+  - "crates/cli/src/commands/configure/wizard/prompt.rs"
+  - "crates/cli/src/plugins/prompt.rs"
+  - "crates/cli/src/plugins/dynamic_editor/prompt.rs"
   - "**/tests-js/**"
   # The Node binding currently reports JS package coverage separately; exclude the
   # native Rust bridge until we have direct Rust-side coverage for this crate.

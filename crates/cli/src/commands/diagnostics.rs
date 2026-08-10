@@ -21,6 +21,11 @@ pub(crate) struct DoctorCommand {
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
     pub(crate) json: bool,
+    #[arg(
+        long,
+        help = "Validate configuration and endpoint syntax without running live network probes"
+    )]
+    pub(crate) offline: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -32,6 +37,7 @@ pub(crate) struct AgentsCommand {
 pub(super) async fn execute(
     command: DoctorCommand,
     server: &super::serve::ServerArgs,
+    logging_fallback_error: Option<&CliError>,
 ) -> Result<ExitCode, CliError> {
     if let Some(plugin) = command.plugin {
         return execute_plugin_doctor(plugin, command.install_dir, command.json);
@@ -40,7 +46,9 @@ pub(super) async fn execute(
     crate::diagnostics::run_doctor(
         command.agent.map(Into::into),
         command.json,
+        crate::diagnostics::DoctorProbeMode::from_offline_flag(command.offline),
         &gateway_overrides,
+        logging_fallback_error,
     )
     .await
 }
@@ -58,7 +66,7 @@ fn execute_plugin_doctor(
     };
     if agents.is_empty() {
         return Err(CliError::Install(
-            "no installed Claude Code, Codex, or Hermes integration state was found".into(),
+            "no installed Claude Code or Codex integration state was found".into(),
         ));
     }
     let options = crate::installation::marketplace::plugin_doctor_options(install_dir);

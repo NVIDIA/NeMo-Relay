@@ -81,6 +81,9 @@ export interface OpenTelemetryEndpointConfig {
   service_version?: string;
   instrumentation_scope?: string;
   timeout_millis?: number;
+  max_queue_size?: number;
+  max_export_batch_size?: number;
+  scheduled_delay_millis?: number;
 }
 
 export interface OpenTelemetrySectionConfig {
@@ -94,6 +97,8 @@ export interface Config {
   atif?: AtifConfig;
   opentelemetry?: OpenTelemetrySectionConfig;
   policy?: ConfigPolicy;
+  /** Retain complete sanitized request data on every LLM start event. */
+  enable_full_payloads?: boolean;
 }
 
 export interface ComponentSpec {
@@ -113,9 +118,7 @@ export declare function atifConfig(config?: AtifConfig): AtifConfig;
 /** Create one typed OpenTelemetry endpoint. */
 export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfig): OpenTelemetryEndpointConfig;
 /** Create multi-endpoint OpenTelemetry settings. */
-export declare function openTelemetryConfig(
-  config?: OpenTelemetrySectionConfig,
-): OpenTelemetrySectionConfig;
+export declare function openTelemetryConfig(config?: OpenTelemetrySectionConfig): OpenTelemetrySectionConfig;
 /** Wrap observability config as a top-level plugin component. */
 export declare function ComponentSpec(
   config: Config,

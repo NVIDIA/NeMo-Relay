@@ -46,6 +46,17 @@ static COLLECTED_CHUNKS: OnceLock<Mutex<Vec<Json>>> = OnceLock::new();
 static FINALIZER_CALLS: OnceLock<Mutex<usize>> = OnceLock::new();
 static PLUGIN_FREES: OnceLock<Mutex<usize>> = OnceLock::new();
 
+#[track_caller]
+fn assert_native_status(actual: NemoRelayStatus, expected: NemoRelayStatus) {
+    assert_eq!(actual, expected);
+}
+
+macro_rules! assert_status {
+    ($actual:expr, $expected:expr $(,)?) => {
+        assert_native_status($actual, $expected)
+    };
+}
+
 fn event_log() -> &'static Mutex<Vec<Json>> {
     EVENT_LOG.get_or_init(|| Mutex::new(Vec::new()))
 }
@@ -230,6 +241,19 @@ unsafe fn fresh_scope_stack() -> *mut FfiScopeStack {
         NemoRelayStatus::Ok
     );
     stack
+}
+
+#[test]
+fn default_logging_shutdown_is_idempotent() {
+    let _guard = lock_unpoisoned(&TEST_MUTEX);
+    assert_status!(
+        api::nemo_relay_shutdown_default_logging(),
+        NemoRelayStatus::Ok
+    );
+    assert_status!(
+        api::nemo_relay_shutdown_default_logging(),
+        NemoRelayStatus::Ok
+    );
 }
 
 #[test]

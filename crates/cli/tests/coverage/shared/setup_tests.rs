@@ -88,9 +88,8 @@ impl Drop for EnvScope {
 fn detect_installed_agents_finds_binaries_on_path() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
-    // Drop stub binaries for two of the three supported agents — confirming detection picks up
-    // only the ones present and ignores the others.
-    for exec in ["claude", "hermes"] {
+    // Drop stub binaries for both supported agents.
+    for exec in ["claude", "codex"] {
         let path = temp.path().join(exec);
         std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -101,8 +100,7 @@ fn detect_installed_agents_finds_binaries_on_path() {
     // race with every other test that reads the environment.
     let detected = detect_installed_agents_in(Some(temp.path().as_os_str()));
     assert!(detected.contains(&CodingAgent::ClaudeCode));
-    assert!(detected.contains(&CodingAgent::Hermes));
-    assert!(!detected.contains(&CodingAgent::Codex));
+    assert!(detected.contains(&CodingAgent::Codex));
 }
 
 #[test]
@@ -112,10 +110,7 @@ fn detect_installed_agents_handles_missing_path() {
 
 #[test]
 fn build_config_does_not_emit_observability_exporters() {
-    let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![],
-    };
+    let answers = SetupAnswers { agents: vec![] };
 
     let rendered = build_config(&answers).to_string();
 
@@ -128,10 +123,7 @@ fn build_config_does_not_emit_observability_exporters() {
 
 #[test]
 fn build_config_skips_empty_sections_when_no_backends_selected() {
-    let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![],
-    };
+    let answers = SetupAnswers { agents: vec![] };
 
     let doc = build_config(&answers);
     let rendered = doc.to_string();
@@ -145,7 +137,6 @@ fn build_config_skips_empty_sections_when_no_backends_selected() {
 #[test]
 fn build_config_emits_agents_block_with_user_facing_keys() {
     let answers = SetupAnswers {
-        scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode, CodingAgent::Codex],
     };
 
@@ -160,22 +151,27 @@ fn build_config_emits_agents_block_with_user_facing_keys() {
 }
 
 #[test]
-fn save_config_writes_project_scope_to_workspace_dir() {
+fn save_config_writes_user_scope_to_user_config_dir() {
+    let _xdg = XdgScope::cleared();
     let answers = SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![CodingAgent::ClaudeCode],
+        agents: vec![CodingAgent::Codex],
     };
     let doc = build_config(&answers);
-    let temp = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
+    let user_config_dir = home.path().join(".config/nemo-relay");
+    assert!(!user_config_dir.exists());
 
-    let written = save_config(&doc, ConfigScope::Project, temp.path(), home.path(), None).unwrap();
+    let written = save_config(&doc, home.path(), None).unwrap();
 
     assert_eq!(written.len(), 1);
-    assert_eq!(written[0], temp.path().join(".nemo-relay/config.toml"));
+    assert_eq!(
+        written[0],
+        home.path().join(".config/nemo-relay/config.toml")
+    );
     let contents = std::fs::read_to_string(&written[0]).unwrap();
+    assert!(user_config_dir.is_dir());
     assert!(!contents.contains("[exporters]"));
-    assert!(contents.contains("[agents.claude]"));
+    assert!(contents.contains("[agents.codex]"));
 }
 
 #[test]
@@ -183,11 +179,11 @@ fn save_config_scoped_merge_preserves_other_agents() {
     // Seed an existing config with claude AND codex blocks, plus a custom [upstream] that the
     // wizard does not touch. Then "re-run" the wizard scoped to claude and assert codex +
     // upstream survive while claude is updated and observability is written fresh.
-    let temp = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let project_dir = temp.path().join(".nemo-relay");
-    std::fs::create_dir_all(&project_dir).unwrap();
-    let existing_path = project_dir.join("config.toml");
+    let _xdg = XdgScope::cleared();
+    let user_dir = home.path().join(".config/nemo-relay");
+    std::fs::create_dir_all(&user_dir).unwrap();
+    let existing_path = user_dir.join("config.toml");
     std::fs::write(
         &existing_path,
         r#"[upstream]
@@ -203,18 +199,10 @@ command = "codex --full-auto"
     .unwrap();
 
     let answers = SetupAnswers {
-        scope: ConfigScope::Project,
         agents: vec![CodingAgent::ClaudeCode],
     };
     let doc = build_config(&answers);
-    save_config(
-        &doc,
-        ConfigScope::Project,
-        temp.path(),
-        home.path(),
-        Some(CodingAgent::ClaudeCode),
-    )
-    .unwrap();
+    save_config(&doc, home.path(), Some(CodingAgent::ClaudeCode)).unwrap();
 
     let merged = std::fs::read_to_string(&existing_path).unwrap();
     assert!(!merged.contains("[exporters]"));
@@ -242,59 +230,30 @@ command = "codex --full-auto"
 }
 
 #[test]
-fn save_config_writes_both_scopes_when_both_selected() {
+fn save_config_writes_only_user_scope() {
     let _xdg = XdgScope::cleared();
-    let answers = SetupAnswers {
-        scope: ConfigScope::Both,
-        agents: vec![],
-    };
+    let answers = SetupAnswers { agents: vec![] };
     let doc = build_config(&answers);
-    let cwd = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
 
-    let written = save_config(&doc, ConfigScope::Both, cwd.path(), home.path(), None).unwrap();
+    let written = save_config(&doc, home.path(), None).unwrap();
 
-    assert_eq!(written.len(), 2);
-    assert!(written.iter().any(|p| p.starts_with(cwd.path())));
-    assert!(written.iter().any(|p| p.starts_with(home.path())));
+    assert_eq!(
+        written,
+        vec![home.path().join(".config/nemo-relay/config.toml")]
+    );
 }
 
 #[test]
-fn global_config_dir_and_preview_paths_prefer_xdg_when_set() {
+fn user_config_dir_and_preview_paths_prefer_xdg_when_set() {
     let xdg = tempfile::tempdir().unwrap();
-    let cwd = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let _env = EnvScope::set(&[("XDG_CONFIG_HOME", Some(xdg.path().as_os_str()))]);
 
+    assert_eq!(user_config_dir(home.path()), xdg.path().join("nemo-relay"));
     assert_eq!(
-        global_config_dir(home.path()),
-        xdg.path().join("nemo-relay")
-    );
-    assert_eq!(
-        preview_paths(ConfigScope::Both, cwd.path(), home.path()),
-        vec![
-            cwd.path().join(".nemo-relay/config.toml"),
-            xdg.path().join("nemo-relay/config.toml"),
-        ]
-    );
-}
-
-#[test]
-fn config_scope_labels_are_user_facing_and_stable() {
-    assert!(
-        ConfigScope::Project
-            .label()
-            .contains(".nemo-relay/config.toml")
-    );
-    assert!(
-        ConfigScope::Global
-            .label()
-            .contains(".config/nemo-relay/config.toml")
-    );
-    assert!(
-        ConfigScope::Both
-            .label()
-            .contains("project overrides global")
+        preview_paths(home.path()),
+        vec![xdg.path().join("nemo-relay/config.toml")]
     );
 }
 
@@ -304,14 +263,6 @@ fn existing_defaults_detects_scope_and_agents_from_docs() {
     assert!(!empty.has_any());
     assert!(
         Defaults {
-            scope: Some(ConfigScope::Project),
-            agents: vec![]
-        }
-        .has_any()
-    );
-    assert!(
-        Defaults {
-            scope: None,
             agents: vec![CodingAgent::Codex]
         }
         .has_any()
@@ -334,7 +285,7 @@ command = "custom"
 }
 
 #[test]
-fn read_existing_defaults_prefers_workspace_and_reports_scope_variants() {
+fn read_existing_defaults_reads_user_config_and_ignores_project_config() {
     let cwd = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let _cwd = CwdScope::enter(cwd.path());
@@ -350,20 +301,16 @@ fn read_existing_defaults_prefers_workspace_and_reports_scope_variants() {
     std::fs::create_dir_all(global_path.parent().unwrap()).unwrap();
     std::fs::write(&global_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
     let defaults = read_existing_defaults().unwrap();
-    assert_eq!(defaults.scope, Some(ConfigScope::Global));
     assert_eq!(defaults.agents, vec![CodingAgent::Codex]);
 
     let workspace_path = cwd.path().join(".nemo-relay/config.toml");
     std::fs::create_dir_all(workspace_path.parent().unwrap()).unwrap();
     std::fs::write(&workspace_path, "[agents.claude]\ncommand = \"claude\"\n").unwrap();
     let defaults = read_existing_defaults().unwrap();
-    assert_eq!(defaults.scope, Some(ConfigScope::Both));
-    assert_eq!(defaults.agents, vec![CodingAgent::ClaudeCode]);
+    assert_eq!(defaults.agents, vec![CodingAgent::Codex]);
 
     std::fs::remove_file(&global_path).unwrap();
-    let defaults = read_existing_defaults().unwrap();
-    assert_eq!(defaults.scope, Some(ConfigScope::Project));
-    assert_eq!(defaults.agents, vec![CodingAgent::ClaudeCode]);
+    assert!(read_existing_defaults().is_none());
 }
 
 #[test]
@@ -382,7 +329,6 @@ config = { version = 1, components = [] }
     )
     .unwrap();
     let doc = build_config(&SetupAnswers {
-        scope: ConfigScope::Project,
         agents: vec![CodingAgent::Codex],
     });
 
@@ -395,32 +341,39 @@ config = { version = 1, components = [] }
 }
 
 #[test]
-fn write_or_merge_overwrites_without_merge_scope_and_reports_malformed_existing_config() {
+fn write_or_merge_replaces_agents_without_merge_scope_and_preserves_other_sections() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("config.toml");
-    std::fs::write(&path, "[agents.codex]\ncommand = \"old\"\n").unwrap();
+    std::fs::write(
+        &path,
+        "[agents.codex]\ncommand = \"old\"\n\n[upstream]\nopenai_base_url = \"https://example.test\"\n",
+    )
+    .unwrap();
     let doc = build_config(&SetupAnswers {
-        scope: ConfigScope::Project,
-        agents: vec![CodingAgent::Hermes],
+        agents: vec![CodingAgent::ClaudeCode],
     });
 
     write_or_merge(&path, &doc, None).unwrap();
     let overwritten = std::fs::read_to_string(&path).unwrap();
     assert!(!overwritten.contains("[agents.codex]"));
-    assert!(overwritten.contains("[agents.hermes]"));
+    assert!(overwritten.contains("[agents.claude]"));
+    assert!(overwritten.contains("[upstream]"));
+    assert!(overwritten.contains("https://example.test"));
 
     std::fs::write(&path, "[agents.codex\n").unwrap();
-    let error = write_or_merge(&path, &doc, Some(CodingAgent::Hermes))
-        .unwrap_err()
-        .to_string();
+    let error = write_or_merge(&path, &doc, None).unwrap_err().to_string();
     assert!(error.contains("could not parse existing config"));
 }
 
 #[test]
-fn reset_removes_whole_project_config_or_one_agent() {
+fn reset_removes_whole_user_config_or_one_agent() {
     let temp = tempfile::tempdir().unwrap();
-    let _cwd = CwdScope::enter(temp.path());
-    let config_dir = temp.path().join(".nemo-relay");
+    let _env = EnvScope::set(&[
+        ("HOME", Some(temp.path().as_os_str())),
+        ("USERPROFILE", None),
+        ("XDG_CONFIG_HOME", None),
+    ]);
+    let config_dir = temp.path().join(".config/nemo-relay");
     std::fs::create_dir_all(&config_dir).unwrap();
     let path = config_dir.join("config.toml");
     std::fs::write(
@@ -435,13 +388,13 @@ command = "codex"
     )
     .unwrap();
 
-    reset(ConfigScope::Project, Some(CodingAgent::ClaudeCode)).unwrap();
+    reset(Some(CodingAgent::ClaudeCode)).unwrap();
 
     let scoped = std::fs::read_to_string(&path).unwrap();
     assert!(!scoped.contains("[agents.claude]"));
     assert!(scoped.contains("[agents.codex]"));
 
-    reset(ConfigScope::Project, None).unwrap();
+    reset(None).unwrap();
 
     assert!(!path.exists());
 }
@@ -449,13 +402,17 @@ command = "codex"
 #[test]
 fn reset_removes_empty_agents_table_when_last_agent_is_removed() {
     let temp = tempfile::tempdir().unwrap();
-    let _cwd = CwdScope::enter(temp.path());
-    let config_dir = temp.path().join(".nemo-relay");
+    let _env = EnvScope::set(&[
+        ("HOME", Some(temp.path().as_os_str())),
+        ("USERPROFILE", None),
+        ("XDG_CONFIG_HOME", None),
+    ]);
+    let config_dir = temp.path().join(".config/nemo-relay");
     std::fs::create_dir_all(&config_dir).unwrap();
     let path = config_dir.join("config.toml");
     std::fs::write(&path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
 
-    reset(ConfigScope::Project, Some(CodingAgent::Codex)).unwrap();
+    reset(Some(CodingAgent::Codex)).unwrap();
 
     let contents = std::fs::read_to_string(&path).unwrap();
     assert!(!contents.contains("[agents]"));
@@ -463,30 +420,32 @@ fn reset_removes_empty_agents_table_when_last_agent_is_removed() {
 }
 
 #[test]
-fn reset_noops_when_project_config_is_missing() {
+fn reset_noops_when_user_config_is_missing() {
     let temp = tempfile::tempdir().unwrap();
-    let _cwd = CwdScope::enter(temp.path());
+    let _env = EnvScope::set(&[
+        ("HOME", Some(temp.path().as_os_str())),
+        ("USERPROFILE", None),
+        ("XDG_CONFIG_HOME", None),
+    ]);
 
-    reset(ConfigScope::Project, None).unwrap();
-    reset(ConfigScope::Project, Some(CodingAgent::Codex)).unwrap();
+    reset(None).unwrap();
+    reset(Some(CodingAgent::Codex)).unwrap();
 }
 
 #[test]
 fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     let temp = tempfile::tempdir().unwrap();
-    let _cwd = CwdScope::enter(temp.path());
-    let hermes_home = temp.path().join("hermes-home");
     let _env = EnvScope::set(&[
         ("HOME", Some(temp.path().as_os_str())),
         ("USERPROFILE", None),
-        ("HERMES_HOME", Some(hermes_home.as_os_str())),
+        ("XDG_CONFIG_HOME", None),
     ]);
-    let config_dir = temp.path().join(".nemo-relay");
+    let config_dir = temp.path().join(".config/nemo-relay");
     std::fs::create_dir_all(&config_dir).unwrap();
     let path = config_dir.join("config.toml");
     std::fs::write(&path, "agents = \"not-a-table\"\n").unwrap();
 
-    reset(ConfigScope::Project, Some(CodingAgent::Hermes)).unwrap();
+    reset(Some(CodingAgent::Codex)).unwrap();
 
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -494,9 +453,7 @@ fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
     );
 
     std::fs::write(&path, "not valid toml = [\n").unwrap();
-    let error = reset(ConfigScope::Project, Some(CodingAgent::Hermes))
-        .unwrap_err()
-        .to_string();
+    let error = reset(Some(CodingAgent::Codex)).unwrap_err().to_string();
     assert!(
         error.contains("could not parse existing config"),
         "error was: {error}"
@@ -504,7 +461,7 @@ fn reset_reports_missing_or_malformed_agent_blocks_without_rewriting() {
 }
 
 #[test]
-fn reset_honors_global_and_both_scopes() {
+fn reset_removes_user_config_and_leaves_project_file_untouched() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let home = temp.path().join("home");
@@ -519,72 +476,37 @@ fn reset_honors_global_and_both_scopes() {
     ]);
 
     let project_path = project.join(".nemo-relay/config.toml");
-    let global_path = global_config_dir(&home).join("config.toml");
+    let user_path = user_config_dir(&home).join("config.toml");
     std::fs::create_dir_all(project_path.parent().unwrap()).unwrap();
-    std::fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(user_path.parent().unwrap()).unwrap();
     std::fs::write(&project_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
-    std::fs::write(&global_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
+    std::fs::write(&user_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
 
-    reset(ConfigScope::Global, None).unwrap();
+    reset(None).unwrap();
     assert!(project_path.exists());
-    assert!(!global_path.exists());
-
-    std::fs::write(&global_path, "[agents.codex]\ncommand = \"codex\"\n").unwrap();
-    reset(ConfigScope::Both, None).unwrap();
-    assert!(!project_path.exists());
-    assert!(!global_path.exists());
+    assert!(!user_path.exists());
 }
 
 #[test]
-fn plugins_edit_command_for_scope_targets_expected_plugin_scope() {
+fn plugins_edit_command_targets_user_scope() {
     use crate::plugins::config_io::{TargetScope, target_scope};
 
-    let cases = [
-        (ConfigScope::Project, TargetScope::Project),
-        (ConfigScope::Global, TargetScope::User),
-        (ConfigScope::Both, TargetScope::Project),
-    ];
-
-    for (scope, expected) in cases {
-        let command = plugins_edit_command_for_scope(scope, None);
-        assert_eq!(
-            target_scope(&command.scope).unwrap(),
-            expected,
-            "unexpected plugin target scope for {scope:?}"
-        );
-    }
+    let command = plugins_edit_command(None);
+    assert_eq!(target_scope(&command.scope).unwrap(), TargetScope::User);
 }
 
 #[test]
-fn plugins_edit_command_for_scope_preserves_explicit_plugin_path() {
+fn plugins_edit_command_preserves_explicit_plugin_path() {
     let path = PathBuf::from("/managed/plugins.toml");
 
-    for scope in [ConfigScope::Project, ConfigScope::Global, ConfigScope::Both] {
-        let command = plugins_edit_command_for_scope(scope, Some(path.clone()));
-        assert_eq!(command.explicit_path, Some(path.clone()));
-        assert_eq!(
-            command.scope,
-            crate::plugins::ConfigurationScope::User,
-            "the inherited explicit file is the selected low/user plugin layer"
-        );
-    }
+    let command = plugins_edit_command(Some(path.clone()));
+    assert_eq!(command.explicit_path, Some(path));
+    assert_eq!(command.scope, crate::plugins::ConfigurationScope::User);
 }
 
 #[test]
-fn plugins_resume_command_matches_scope() {
-    let cases = [
-        (ConfigScope::Project, "nemo-relay plugins edit --project"),
-        (ConfigScope::Both, "nemo-relay plugins edit --project"),
-        (ConfigScope::Global, "nemo-relay plugins edit"),
-    ];
-
-    for (scope, expected) in cases {
-        assert_eq!(
-            plugins_resume_command(scope, None),
-            expected,
-            "unexpected resume command for {scope:?}"
-        );
-    }
+fn plugins_resume_command_targets_user_config() {
+    assert_eq!(plugins_resume_command(None), "nemo-relay plugins edit");
 }
 
 #[test]
@@ -601,10 +523,7 @@ fn plugins_resume_command_preserves_explicit_plugin_path() {
         "'/managed/plugin configs/plugins.toml' plugins edit"
     );
 
-    assert_eq!(
-        plugins_resume_command(ConfigScope::Global, Some(&path)),
-        expected
-    );
+    assert_eq!(plugins_resume_command(Some(&path)), expected);
 }
 
 #[test]

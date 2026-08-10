@@ -55,12 +55,7 @@ fn enable_operational_logs() {
 /// Redis tests were not explicitly enabled or Redis is unavailable.
 async fn get_test_redis() -> Option<RedisBackend> {
     enable_operational_logs();
-    let redis_test_env =
-        std::env::var_os(REDIS_TEST_ENV).map(|value| value.to_string_lossy().into_owned());
-    if !env_value_is_truthy(redis_test_env.as_deref()) {
-        eprintln!(
-            "SKIP: set {REDIS_TEST_ENV} to a truthy value (for example, {REDIS_TEST_ENV}=1) to run Redis-backed tests"
-        );
+    if !redis_tests_enabled() {
         return None;
     }
 
@@ -75,8 +70,23 @@ async fn get_test_redis() -> Option<RedisBackend> {
     }
 }
 
+fn redis_tests_enabled() -> bool {
+    let redis_test_env =
+        std::env::var_os(REDIS_TEST_ENV).map(|value| value.to_string_lossy().into_owned());
+    if !env_value_is_truthy(redis_test_env.as_deref()) {
+        eprintln!(
+            "SKIP: set {REDIS_TEST_ENV} to a truthy value (for example, {REDIS_TEST_ENV}=1) to run Redis-backed tests"
+        );
+        return false;
+    }
+    true
+}
+
 async fn get_test_redis_with_prefix() -> Option<(RedisBackend, String)> {
     enable_operational_logs();
+    if !redis_tests_enabled() {
+        return None;
+    }
     let prefix = format!("test:{}:", Uuid::now_v7());
     match RedisBackend::new("redis://127.0.0.1/", prefix.clone()).await {
         Ok(backend) => Some((backend, prefix)),
