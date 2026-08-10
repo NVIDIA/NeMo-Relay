@@ -41,6 +41,7 @@ use nemo_relay::api::runtime::{
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
+    capture_traceparent as capture_traceparent_handle,
     create_scope_stack as create_scope_stack_handle,
     create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
     current_scope_stack as current_scope_stack_handle, scope_stack_active as scope_stack_is_active,
@@ -1722,11 +1723,47 @@ pub fn capture_propagation_context_with_root(
     .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 
+/// Capture the current Relay context as a W3C `traceparent` value.
+#[napi]
+pub fn capture_traceparent(env: Env) -> napi::Result<String> {
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        let root_uuid = with_effective_scope_stack(&env, capture_traceparent_handle)
+            .ok()
+            .and_then(|result| result.ok())
+            .and_then(|traceparent| {
+                traceparent
+                    .get(3..35)
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            })
+            .unwrap_or(parent_uuid);
+        return nemo_relay::api::runtime::PropagationContext {
+            version: nemo_relay::api::runtime::PropagationContext::VERSION,
+            root_uuid: Some(root_uuid),
+            parent_uuid,
+        }
+        .to_traceparent()
+        .map_err(|error| napi::Error::from_reason(error.to_string()));
+    }
+    with_effective_scope_stack(&env, capture_traceparent_handle)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
 /// Serialize a Relay causal context to the JSON wire format.
 #[napi]
 pub fn propagation_context_to_json(context: PropagationContext) -> napi::Result<String> {
     propagation_context_from_napi(context)?
         .to_json()
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// Convert a rooted Relay propagation context to a W3C `traceparent` value.
+#[napi]
+pub fn propagation_context_to_traceparent(context: PropagationContext) -> napi::Result<String> {
+    propagation_context_from_napi(context)?
+        .to_traceparent()
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 

@@ -610,6 +610,7 @@ impl NemoRelayContextState {
     /// A new [`LlmHandle`] with a fresh UUID.
     pub fn create_llm_handle(&self, params: CreateLlmHandleParams<'_>) -> LlmHandle {
         LlmHandle::builder()
+            .uuid(params.uuid.unwrap_or_else(Uuid::now_v7))
             .name(params.name)
             .started_at(params.timestamp.unwrap_or_else(Utc::now))
             .attributes(params.attributes)

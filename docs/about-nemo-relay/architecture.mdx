@@ -115,10 +115,13 @@ model:
 - [**Subscribers and exporters**](/about-nemo-relay/concepts/subscribers#common-subscriber-roles)
   consume those snapshots.
 
-Every managed tool or LLM call resolves the middleware visible from the active
-scope before it executes. When the runtime emits an event, it records the active
-scope UUID as parentage. The scope stack changes as work opens and closes; the
-parent-linked event records remain available to subscribers.
+Every managed tool or LLM call resolves the conditional and intercept middleware
+visible from the active scope before it executes. Payload sanitization and event
+publication are queued observability work: they do not delay the real callback
+or result, and `flush_subscribers` is the explicit delivery barrier. When the
+runtime emits an event, it records the active scope UUID as parentage. The scope
+stack changes as work opens and closes; the parent-linked event records remain
+available to subscribers.
 
 ## Main Runtime Pieces
 

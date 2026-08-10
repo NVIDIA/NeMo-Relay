@@ -638,6 +638,9 @@ func TestToolMultipleGuardrailsPriorityOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf(toolCallExecuteFailed, err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(toolFlushSubscribersFailed, err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()

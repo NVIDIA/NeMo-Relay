@@ -22,21 +22,22 @@ use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::state::contextualize_stream;
 use crate::api::runtime::subscriber_dispatcher::{
-    PendingPublication, dispatch_reserved_sanitized_event, dispatch_sanitized_event,
-    dispatch_transformed_event, register_pending_publication,
+    EventTransformFn, PendingPublication, dispatch_reserved_sanitized_event,
+    dispatch_sanitized_event, dispatch_transformed_event, register_pending_publication,
 };
 use crate::api::runtime::{
     EventSubscriberFn, LlmCollectorFn, LlmExecutionNextFn, LlmFinalizerFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
     MiddlewareContinuationContext, with_active_event_uuid,
 };
-use crate::api::runtime::{ScopeStackHandle, current_scope_stack};
+use crate::api::runtime::{ScopeStackHandle, capture_traceparent, current_scope_stack};
 use crate::api::scope::event;
 use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
 use crate::api::shared::{
-    ensure_runtime_owner, inject_dynamo_session_ids, metadata_with_otel_error,
-    metadata_with_otel_status, resolve_parent_uuid, run_request_intercepts_with_codec_and_recorder,
-    snapshot_event_sanitizers, snapshot_event_subscribers,
+    ensure_runtime_owner, inject_dynamo_session_ids, inject_traceparent, inject_traceparent_value,
+    metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
+    run_request_intercepts_with_codec_and_recorder, snapshot_event_sanitizers,
+    snapshot_event_subscribers,
 };
 use crate::codec::request::{AnnotatedLlmRequest, Message};
 use crate::codec::response::{AnnotatedLlmResponse, attach_estimated_cost_for_provider};
@@ -141,6 +142,10 @@ pub struct CreateLlmHandleParams<'a> {
     /// Logical provider or model family name. Gateway-managed provider calls
     /// should pass the provider route name, for example `anthropic.messages`.
     pub name: &'a str,
+    /// Optional UUID reserved before request interception so outbound
+    /// propagation can identify the emitted LLM span.
+    #[builder(default)]
+    pub uuid: Option<Uuid>,
     /// Optional parent scope UUID.
     #[builder(default)]
     pub parent_uuid: Option<uuid::Uuid>,
@@ -415,6 +420,7 @@ fn limit_annotated_request_history_to_current_user_turn(
     )
 }
 
+#[cfg(test)]
 async fn emit_llm_start_with_subscribers(
     handle: &LlmHandle,
     request: &LlmRequest,
@@ -482,6 +488,97 @@ async fn emit_llm_start_with_subscribers(
         state.build_llm_start_event(handle, input, annotated_request)
     };
     queue_sanitized_event_with_scope_stack(event, subscribers, scope_stack);
+    Ok(())
+}
+
+fn queue_llm_start_with_subscribers(
+    handle: &LlmHandle,
+    request: &LlmRequest,
+    annotated_request: Option<Arc<AnnotatedLlmRequest>>,
+    request_codec: Option<Arc<dyn LlmCodec>>,
+    subscribers: &[EventSubscriberFn],
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let scope_stack = handle.captured_scope_stack().clone();
+    let scope_locals = {
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        scope_guard
+            .collect_scope_local_registries(|registries| {
+                &registries.llm_sanitize_request_guardrails
+            })
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let (entries, full_payloads_enabled) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        (
+            state.llm_sanitize_request_entries(&scope_local_refs),
+            state.observability_full_payloads_enabled,
+        )
+    };
+    let agent_is_fresh = {
+        let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+        scope_guard.take_agent_freshness(handle.parent_uuid)
+    };
+    let observable_request = remove_observability_credential_headers(request.clone());
+    let queued_handle = handle.clone();
+    let event = {
+        let context = global_context();
+        let state = context
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
+        state.build_llm_start_event(handle, None, None)
+    };
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    dispatch_transformed_event(
+        event,
+        Box::new(move |event| {
+            Box::pin(async move {
+                let mut sanitized_request =
+                    NemoRelayContextState::llm_sanitize_request_snapshot_chain(
+                        observable_request.clone(),
+                        LlmSanitizeRequestContext::for_request_codec(request_codec.clone()),
+                        &entries,
+                    )
+                    .await;
+                let request_changed = sanitized_request
+                    .as_ref()
+                    .is_some_and(|sanitized| sanitized != &observable_request);
+                let mut annotation = match (sanitized_request.as_ref(), request_codec.as_deref()) {
+                    (Some(sanitized), Some(codec)) if request_changed => {
+                        codec.decode(sanitized).ok().map(Arc::new)
+                    }
+                    (Some(_), _) if !request_changed => annotated_request,
+                    _ => None,
+                };
+                if !full_payloads_enabled
+                    && !agent_is_fresh
+                    && let Some(sanitized_request) = sanitized_request.as_mut()
+                {
+                    project_llm_request_to_current_user_turn(
+                        sanitized_request,
+                        &mut annotation,
+                        request_codec.as_deref(),
+                    );
+                }
+                let input = sanitized_request
+                    .as_ref()
+                    .and_then(|request| serde_json::to_value(request).ok());
+                global_context()
+                    .read()
+                    .map(|state| state.build_llm_start_event(&queued_handle, input, annotation))
+                    .unwrap_or(event)
+            })
+        }),
+        event_sanitizers,
+        subscribers,
+        scope_stack,
+    );
     Ok(())
 }
 
@@ -841,7 +938,6 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
 
 #[derive(Clone, Copy)]
 struct LlmCallEndBehavior {
-    response_codec_errors_fatal: bool,
     attach_estimated_cost: bool,
 }
 
@@ -849,6 +945,18 @@ struct LlmEndPayload {
     data: Option<Json>,
     annotated_response: Option<Arc<AnnotatedLlmResponse>>,
     decode_error: Option<FlowError>,
+}
+
+/// Queue a provisional LLM END event and replace its observability-only
+/// payload on the serial publication path before event sanitizers run.
+fn queue_llm_end_event(
+    event: Event,
+    transform: EventTransformFn,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) {
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    dispatch_transformed_event(event, transform, event_sanitizers, subscribers, scope_stack);
 }
 
 async fn build_llm_end_payload(
@@ -1007,7 +1115,6 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
                     response_codec,
                     &entries,
                     LlmCallEndBehavior {
-                        response_codec_errors_fatal: false,
                         attach_estimated_cost: false,
                     },
                 )
@@ -1056,6 +1163,7 @@ async fn llm_call_end_with_behavior(
         response_codec,
         timestamp,
     } = params;
+    let timestamp = timestamp.unwrap_or_else(Utc::now);
     ensure_runtime_owner()?;
     let (entries, subscribers) = {
         let scope_stack = handle.captured_scope_stack();
@@ -1076,41 +1184,65 @@ async fn llm_call_end_with_behavior(
         (entries, subscribers)
     };
     handle.optimization_recorder.close_for_finalization(None);
-    emit_optimization_marks(handle, &subscribers).await;
-    let payload = build_llm_end_payload(
-        handle,
-        response,
-        data,
-        annotated_response,
-        response_codec,
-        &entries,
-        behavior,
-    )
-    .await;
+    enqueue_optimization_marks(handle, &subscribers);
+    let queued_handle = handle.clone();
     let event = {
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let end_metadata = metadata_with_otel_status(metadata, "OK", None);
+        let end_metadata = metadata_with_otel_status(metadata.clone(), "OK", None);
         state.build_llm_end_event(
             EndLlmHandleParams::builder()
                 .handle(handle)
-                .data_opt(payload.data)
+                .data(Json::Null)
                 .metadata_opt(end_metadata)
-                .annotated_response_opt(payload.annotated_response)
-                .timestamp_opt(timestamp)
+                .timestamp(timestamp)
                 .build(),
         )
     };
-    queue_sanitized_event_with_scope_stack(event, &subscribers, handle.captured_scope_stack());
-    if let Some(error) = payload.decode_error
-        && behavior.response_codec_errors_fatal
-    {
-        Err(error)
-    } else {
-        Ok(())
-    }
+    let scope_stack = handle.captured_scope_stack().clone();
+    queue_llm_end_event(
+        event,
+        Box::new(move |event| {
+            Box::pin(async move {
+                let payload = build_llm_end_payload(
+                    &queued_handle,
+                    response,
+                    data,
+                    annotated_response,
+                    response_codec,
+                    &entries,
+                    behavior,
+                )
+                .await;
+                if let Some(error) = payload.decode_error {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "managed_llm_response_codec_failed";
+                        "Managed LLM response annotation failed during queued publication: {error}"
+                    );
+                }
+                let context = global_context();
+                let Ok(state) = context.read() else {
+                    return event;
+                };
+                let end_metadata = metadata_with_otel_status(metadata, "OK", None);
+                state.build_llm_end_event(
+                    EndLlmHandleParams::builder()
+                        .handle(&queued_handle)
+                        .data_opt(payload.data)
+                        .metadata_opt(end_metadata)
+                        .annotated_response_opt(payload.annotated_response)
+                        .timestamp(timestamp)
+                        .build(),
+                )
+            })
+        }),
+        &subscribers,
+        scope_stack,
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1160,6 +1292,7 @@ async fn emit_llm_end_without_output(
     lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
+    let timestamp = Utc::now();
     let (entries, subscribers) = {
         let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
@@ -1178,46 +1311,79 @@ async fn emit_llm_end_without_output(
         let entries = state.llm_sanitize_response_entries(&scope_locals);
         (entries, subscribers)
     };
-    let had_fallback_data = handle.data.is_some();
-    let data = if let Some(data) = handle.data.clone() {
-        NemoRelayContextState::llm_sanitize_response_snapshot_chain(
-            data,
-            LlmSanitizeResponseContext::for_response_codec(response_codec),
-            &entries,
-        )
-        .await
-    } else {
-        None
-    };
-    let annotation_omitted =
-        (had_fallback_data && data.is_none()) || data.as_ref().is_some_and(Json::is_null);
     handle.optimization_recorder.close_for_finalization(None);
-    emit_optimization_marks(handle, &subscribers).await;
-    let pricing = crate::codec::response::active_pricing_resolver();
-    let annotated_response = (!annotation_omitted)
-        .then(|| {
-            finalize_optimization_summary(
-                &handle.optimization_recorder,
-                None,
-                handle.model_name.as_deref(),
-                &pricing,
-            )
-        })
-        .flatten()
-        .map(|summary| {
-            Arc::new(AnnotatedLlmResponse {
-                optimization_summary: Some(summary),
-                ..AnnotatedLlmResponse::default()
-            })
-        });
+    enqueue_optimization_marks(handle, &subscribers);
+    let queued_handle = handle.clone();
+    let fallback_data = handle.data.clone();
     let event = {
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.end_llm_handle(handle, data, metadata, annotated_response)
+        state.build_llm_end_event(
+            EndLlmHandleParams::builder()
+                .handle(handle)
+                .data(Json::Null)
+                .metadata_opt(metadata.clone())
+                .timestamp(timestamp)
+                .build(),
+        )
     };
-    queue_sanitized_event_with_scope_stack(event, &subscribers, handle.captured_scope_stack());
+    let scope_stack = handle.captured_scope_stack().clone();
+    queue_llm_end_event(
+        event,
+        Box::new(move |event| {
+            Box::pin(async move {
+                let had_fallback_data = fallback_data.is_some();
+                let data = match fallback_data {
+                    Some(data) => {
+                        NemoRelayContextState::llm_sanitize_response_snapshot_chain(
+                            data,
+                            LlmSanitizeResponseContext::for_response_codec(response_codec),
+                            &entries,
+                        )
+                        .await
+                    }
+                    None => None,
+                };
+                let annotation_omitted = (had_fallback_data && data.is_none())
+                    || data.as_ref().is_some_and(Json::is_null);
+                let pricing = crate::codec::response::active_pricing_resolver();
+                let annotated_response = (!annotation_omitted)
+                    .then(|| {
+                        finalize_optimization_summary(
+                            &queued_handle.optimization_recorder,
+                            None,
+                            queued_handle.model_name.as_deref(),
+                            &pricing,
+                        )
+                    })
+                    .flatten()
+                    .map(|summary| {
+                        Arc::new(AnnotatedLlmResponse {
+                            optimization_summary: Some(summary),
+                            ..AnnotatedLlmResponse::default()
+                        })
+                    });
+                global_context()
+                    .read()
+                    .map(|state| {
+                        state.build_llm_end_event(
+                            EndLlmHandleParams::builder()
+                                .handle(&queued_handle)
+                                .data_opt(data)
+                                .metadata_opt(metadata)
+                                .annotated_response_opt(annotated_response)
+                                .timestamp(timestamp)
+                                .build(),
+                        )
+                    })
+                    .unwrap_or(event)
+            })
+        }),
+        &subscribers,
+        scope_stack,
+    );
     Ok(())
 }
 
@@ -1441,8 +1607,9 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     }
 
     let request_codec = codec.clone();
+    let llm_uuid = Uuid::now_v7();
     let optimization_recorder = LlmOptimizationRecorder::default();
-    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
+    let (mut intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         scope_llm_optimization_recorder(optimization_recorder.clone(), async {
             run_request_intercepts_with_codec_and_recorder(
                 &name,
@@ -1457,6 +1624,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
+            .uuid(llm_uuid)
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
             .attributes(attributes)
             .data_opt(data.clone())
@@ -1470,14 +1638,15 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
     };
-    emit_llm_start_with_subscribers(
+    let observability_request = intercepted_request.clone();
+    inject_traceparent(&mut intercepted_request, handle.uuid)?;
+    queue_llm_start_with_subscribers(
         &handle,
-        &intercepted_request,
+        &observability_request,
         annotated_request.clone(),
         request_codec.clone(),
         &lifecycle_subscribers,
-    )
-    .await?;
+    )?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers).await?;
     handle
         .optimization_recorder
@@ -1523,7 +1692,6 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                     .response_codec_opt(response_codec)
                     .build(),
                 LlmCallEndBehavior {
-                    response_codec_errors_fatal: false,
                     attach_estimated_cost: true,
                 },
                 Some(&lifecycle_subscribers),
@@ -1650,8 +1818,9 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     }
 
     let request_codec = codec.clone();
+    let llm_uuid = Uuid::now_v7();
     let optimization_recorder = LlmOptimizationRecorder::default();
-    let (intercepted_request, annotated_request, pending_marks, optimization_contributions) =
+    let (mut intercepted_request, annotated_request, pending_marks, optimization_contributions) =
         scope_llm_optimization_recorder(optimization_recorder.clone(), async {
             run_request_intercepts_with_codec_and_recorder(
                 &name,
@@ -1666,6 +1835,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     let mut handle = create_llm_handle(
         CreateLlmHandleParams::builder()
             .name(name.as_str())
+            .uuid(llm_uuid)
             .parent_uuid_opt(resolve_parent_uuid(parent.as_ref()))
             .attributes(attributes)
             .data_opt(data.clone())
@@ -1679,14 +1849,15 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
     };
-    emit_llm_start_with_subscribers(
+    let observability_request = intercepted_request.clone();
+    inject_traceparent(&mut intercepted_request, handle.uuid)?;
+    queue_llm_start_with_subscribers(
         &handle,
-        &intercepted_request,
+        &observability_request,
         annotated_request,
         request_codec.clone(),
         &lifecycle_subscribers,
-    )
-    .await?;
+    )?;
     emit_pending_request_marks(&handle, pending_marks, &lifecycle_subscribers).await?;
     handle
         .optimization_recorder
@@ -1797,6 +1968,9 @@ pub async fn llm_request_intercepts(
     )
     .await?;
     inject_dynamo_session_ids(&mut outcome.request);
+    if let Ok(traceparent) = capture_traceparent() {
+        inject_traceparent_value(&mut outcome.request, traceparent);
+    }
     Ok(outcome)
 }
 

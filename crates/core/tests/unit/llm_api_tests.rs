@@ -74,6 +74,7 @@ fn request_with_credential_headers() -> LlmRequest {
         ("API-KEY", "api-key-secret"),
         ("Anthropic-Api-Key", "anthropic-api-key-secret"),
         ("X-GoOg-Api-Key", "x-goog-api-key-secret"),
+        ("TraceParent", "user-provided-traceparent"),
     ] {
         headers.insert(name.to_string(), json!(value));
     }
@@ -85,10 +86,14 @@ fn request_with_credential_headers() -> LlmRequest {
 }
 
 fn assert_observable_credential_headers_are_removed(request: &LlmRequest) {
-    assert_eq!(request.headers.len(), 1);
+    assert_eq!(request.headers.len(), 2);
     assert_eq!(
         request.headers.get("x-request-id"),
         Some(&json!("safe-request-id"))
+    );
+    assert_eq!(
+        request.headers.get("TraceParent"),
+        Some(&json!("user-provided-traceparent"))
     );
 }
 
@@ -322,7 +327,7 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
     )
     .unwrap();
 
-    let provider_requests = Arc::new(Mutex::new(Vec::<LlmRequest>::new()));
+    let provider_requests = Arc::new(Mutex::new(Vec::<(String, LlmRequest)>::new()));
     let buffered_provider_requests = Arc::clone(&provider_requests);
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
@@ -331,7 +336,10 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
                 .name("credential-header-buffered")
                 .request(request.clone())
                 .func(Arc::new(move |request| {
-                    buffered_provider_requests.lock().unwrap().push(request);
+                    buffered_provider_requests
+                        .lock()
+                        .unwrap()
+                        .push(("credential-header-buffered".into(), request));
                     Box::pin(async { Ok(json!({"ok": true})) })
                 }))
                 .build(),
@@ -345,7 +353,10 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
                 .name("credential-header-streaming")
                 .request(request.clone())
                 .func(Arc::new(move |request| {
-                    streaming_provider_requests.lock().unwrap().push(request);
+                    streaming_provider_requests
+                        .lock()
+                        .unwrap()
+                        .push(("credential-header-streaming".into(), request));
                     Box::pin(async {
                         Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
                             "chunk": true
@@ -388,18 +399,41 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
     .collect::<Vec<_>>();
     drop(events);
     assert_eq!(start_events.len(), 3);
-    for event in start_events {
+    for event in &start_events {
         let input: LlmRequest = serde_json::from_value(event.input().cloned().unwrap()).unwrap();
         assert_observable_credential_headers_are_removed(&input);
     }
 
     let provider_requests = provider_requests.lock().unwrap();
     assert_eq!(provider_requests.len(), 2);
-    assert!(
-        provider_requests
+    for (name, provider) in provider_requests.iter() {
+        assert_eq!(provider.content, request.content);
+        assert_eq!(
+            provider.headers.get("x-request-id"),
+            request.headers.get("x-request-id")
+        );
+        let traceparent_headers = provider
+            .headers
             .iter()
-            .all(|provider| provider == &request)
-    );
+            .filter(|(key, _)| key.eq_ignore_ascii_case("traceparent"))
+            .collect::<Vec<_>>();
+        assert_eq!(traceparent_headers.len(), 1);
+        assert_eq!(traceparent_headers[0].0, "traceparent");
+        let traceparent = traceparent_headers[0]
+            .1
+            .as_str()
+            .expect("managed LLM traceparent must be a string");
+        assert!(traceparent.starts_with("00-"));
+        assert!(traceparent.ends_with("-01"));
+        assert_eq!(traceparent.len(), 55);
+
+        let start = start_events
+            .iter()
+            .find(|event| event.name() == name)
+            .unwrap_or_else(|| panic!("missing LLM start event {name}"));
+        let event_uuid = start.uuid().simple().to_string();
+        assert_eq!(&traceparent[36..52], &event_uuid[16..]);
+    }
 
     assert!(deregister_llm_sanitize_request_guardrail("credential-header-redaction").unwrap());
     assert!(deregister_subscriber("credential-header-redaction").unwrap());
@@ -1252,8 +1286,8 @@ fn projection_encode_failures_do_not_block_managed_or_streaming_calls() {
         }
     });
 
-    assert_eq!(projection_attempts.load(Ordering::Relaxed), 2);
     flush_subscribers().unwrap();
+    assert_eq!(projection_attempts.load(Ordering::Relaxed), 2);
     assert!(deregister_subscriber("projection-encode-failure").unwrap());
     let events = events.lock().unwrap();
     for name in [

@@ -2342,6 +2342,27 @@ NemoRelayStatus nemo_relay_capture_propagation_context_with_root_json(const char
                                                                       char **out);
 
 /**
+ * Capture the current Relay context as a W3C `traceparent` header value.
+ *
+ * The returned string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `out` must be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_capture_traceparent(char **out);
+
+/**
+ * Convert a rooted propagation-context JSON value to a W3C `traceparent`.
+ *
+ * The returned string must be freed with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `context_json` must point to a valid NUL-terminated C string and `out` must
+ * be a valid, writable pointer to a C-string output slot.
+ */
+NemoRelayStatus nemo_relay_propagation_context_to_traceparent(const char *context_json, char **out);
+
+/**
  * Create an isolated scope stack from propagation-context JSON.
  *
  * # Safety

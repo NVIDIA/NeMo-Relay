@@ -566,6 +566,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     while let Some(item) = clean.next().await {
         item.unwrap();
     }
+    flush_subscribers().unwrap();
     assert!(!clean_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (before_error_handle, before_error_recorder) =
@@ -581,6 +582,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
         None,
     );
     assert!(error_before.next().await.unwrap().is_err());
+    flush_subscribers().unwrap();
     assert!(!before_error_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (after_error_handle, after_error_recorder) =
@@ -600,6 +602,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     );
     assert!(error_after.next().await.unwrap().is_ok());
     assert!(error_after.next().await.unwrap().is_err());
+    flush_subscribers().unwrap();
     assert!(!after_error_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (drop_before_handle, drop_before_recorder) =
@@ -615,6 +618,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
         None,
     );
     drop(drop_before);
+    flush_subscribers().unwrap();
     assert!(!drop_before_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (drop_after_handle, drop_after_recorder) =
@@ -635,8 +639,10 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     );
     assert!(drop_after.next().await.unwrap().is_ok());
     drop(drop_after);
+    flush_subscribers().unwrap();
     assert!(!drop_after_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
+    flush_subscribers().unwrap();
     let events = captured_snapshot(&events);
     let summary_for = |name: &str| {
         events

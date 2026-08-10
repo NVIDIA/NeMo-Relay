@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
+use chrono::Utc;
 mod test_support;
 use test_support::{ready, ready_result};
 
@@ -170,16 +171,20 @@ fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
 }
 
 fn assert_middleware_callback_locks_are_free() {
-    let context = global_context();
-    assert!(
-        context.try_write().is_ok(),
-        "middleware callback ran while the global registry lock was held"
-    );
-
     let scope_stack = current_scope_stack();
     assert!(
         scope_stack.try_write().is_ok(),
-        "middleware callback ran while the scope stack lock was held"
+        "middleware callback ran while its scope stack lock was held"
+    );
+}
+
+/// Queued payload sanitizers may overlap later hot-path registry reads. They
+/// still must not run while holding their captured scope-stack lock.
+fn assert_queued_sanitizer_scope_lock_is_free() {
+    let scope_stack = current_scope_stack();
+    assert!(
+        scope_stack.try_write().is_ok(),
+        "queued sanitizer ran while the scope stack lock was held"
     );
 }
 
@@ -3439,7 +3444,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_sanitize_request_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(args)
         }),
     )
@@ -3451,7 +3456,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_sanitize_request_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(args)
         }),
     )
@@ -3485,7 +3490,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |_, result| {
             record_middleware_callback(&tracked, "tool_sanitize_response_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(result)
         }),
     )
@@ -3497,7 +3502,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |_, result| {
             record_middleware_callback(&tracked, "tool_sanitize_response_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(result)
         }),
     )
@@ -3519,6 +3524,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
     .await
     .unwrap();
     assert_eq!(result["ok"], true);
+    flush_subscribers().unwrap();
     assert_middleware_callback_labels(
         &callbacks,
         &[
@@ -3547,6 +3553,45 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
             .build(),
     )
     .unwrap();
+}
+
+#[tokio::test]
+async fn managed_llm_injects_runtime_owned_traceparent() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+    let captured = Arc::new(Mutex::new(None::<LlmRequest>));
+    let captured_request = captured.clone();
+    let request = LlmRequest {
+        headers: serde_json::Map::from_iter([
+            ("TraceParent".to_string(), json!("user-value")),
+            ("TRACEPARENT".to_string(), json!("duplicate")),
+        ]),
+        content: json!({"prompt": "hello"}),
+    };
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("traceparent-test")
+            .request(request)
+            .func(Arc::new(move |request| {
+                *captured_request.lock().unwrap() = Some(request);
+                Box::pin(async { Ok(json!({"ok": true})) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    let request = captured.lock().unwrap().take().unwrap();
+    assert_eq!(request.headers.len(), 1);
+    let traceparent = request
+        .headers
+        .get("traceparent")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(traceparent.starts_with("00-"));
+    assert!(traceparent.ends_with("-01"));
+    assert_eq!(traceparent.len(), 55);
 }
 
 #[tokio::test]
@@ -3614,7 +3659,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(request))
         }),
     )
@@ -3626,7 +3671,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(request))
         }),
     )
@@ -3683,7 +3728,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(response))
         }),
     )
@@ -3695,7 +3740,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(response))
         }),
     )
@@ -3760,6 +3805,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         chunk.unwrap();
     }
     stream.close().await.unwrap();
+    flush_subscribers().unwrap();
     assert_middleware_callback_labels(
         &callbacks,
         &[
@@ -3902,25 +3948,19 @@ async fn test_full_pipeline_integration() {
     .await
     .unwrap();
 
-    // Verify the pipeline order:
-    // 1. conditional (runs on raw args, before intercepts)
-    // 2. request_intercept (transforms args)
-    // 3. sanitize_request (inside tool_call)
-    // 4. execution_intercept -> original_execution
-    // 5. sanitize_response (inside tool_call_end)
+    flush_subscribers().unwrap();
+
+    // Application middleware remains ordered on the managed path. Payload
+    // sanitizers run on the publication path, where request still precedes
+    // response but may race with tool execution.
     let recorded = order.lock().unwrap();
-    assert_eq!(
-        *recorded,
-        vec![
-            "conditional",
-            "request_intercept",
-            "sanitize_request",
-            "execution_intercept",
-            "original_execution",
-            "sanitize_response",
-        ],
-        "Full pipeline should execute in the correct order"
-    );
+    let index = |name: &str| recorded.iter().position(|entry| entry == name).unwrap();
+    assert!(index("conditional") < index("request_intercept"));
+    assert!(index("request_intercept") < index("execution_intercept"));
+    assert!(index("execution_intercept") < index("original_execution"));
+    assert!(index("request_intercept") < index("sanitize_request"));
+    assert!(index("sanitize_request") < index("sanitize_response"));
+    assert!(index("original_execution") < index("sanitize_response"));
 
     // Verify the request intercept's modification persists through the pipeline
     assert_eq!(result["intercepted"], true);
@@ -4378,6 +4418,272 @@ async fn test_managed_llm_event_sanitizers_run_off_execution_path_in_fifo_order(
 
     deregister_scope_sanitize_start_guardrail("managed_async_publication_sanitizer").unwrap();
     deregister_subscriber("managed_async_publication_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_managed_llm_payload_sanitizers_are_queued_off_execution_path() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let request_started = Arc::new(tokio::sync::Notify::new());
+    let request_release = Arc::new(tokio::sync::Notify::new());
+    register_llm_sanitize_request_guardrail(
+        "managed_queued_llm_request",
+        1,
+        Arc::new({
+            let request_started = Arc::clone(&request_started);
+            let request_release = Arc::clone(&request_release);
+            move |request, _context| {
+                let request_started = Arc::clone(&request_started);
+                let request_release = Arc::clone(&request_release);
+                Box::pin(async move {
+                    request_started.notify_one();
+                    request_release.notified().await;
+                    let mut request = request;
+                    request.content["sanitized"] = json!(true);
+                    Ok(Some(request))
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let response_started = Arc::new(tokio::sync::Notify::new());
+    let response_release = Arc::new(tokio::sync::Notify::new());
+    register_llm_sanitize_response_guardrail(
+        "managed_queued_llm_response",
+        1,
+        Arc::new({
+            let response_started = Arc::clone(&response_started);
+            let response_release = Arc::clone(&response_release);
+            move |response, _context| {
+                let response_started = Arc::clone(&response_started);
+                let response_release = Arc::clone(&response_release);
+                Box::pin(async move {
+                    response_started.notify_one();
+                    response_release.notified().await;
+                    let mut response = response;
+                    response["sanitized"] = json!(true);
+                    Ok(Some(response))
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    register_subscriber(
+        "managed_queued_llm_observer",
+        Arc::new({
+            let events = Arc::clone(&events);
+            move |event| events.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
+
+    let call = tokio::spawn(async {
+        llm_call_execute(
+            LlmCallExecuteParams::builder()
+                .name("managed-queued-llm")
+                .request(LlmRequest {
+                    headers: serde_json::Map::new(),
+                    content: json!({"prompt": "hello"}),
+                })
+                .func(Arc::new(|_| {
+                    Box::pin(async { Ok(json!({"response": "done"})) })
+                }))
+                .build(),
+        )
+        .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        request_started.notified(),
+    )
+    .await
+    .expect("managed request sanitizer did not start");
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), call)
+        .await
+        .expect("request sanitizer blocked managed provider execution")
+        .expect("managed call task should join")
+        .expect("managed call should succeed");
+    let completed_at = Utc::now();
+    assert_eq!(result, json!({"response": "done"}));
+
+    request_release.notify_one();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        response_started.notified(),
+    )
+    .await
+    .expect("managed response sanitizer did not start");
+    assert_flush_waits_for_pending_completion(|| response_release.notify_one());
+    let events = events.lock().unwrap();
+    let start = events
+        .iter()
+        .find(|event| {
+            event.name() == "managed-queued-llm"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .expect("managed LLM START event should be published after flush");
+    assert_eq!(start.input().unwrap()["content"]["sanitized"], true);
+    let end = events
+        .iter()
+        .find(|event| {
+            event.name() == "managed-queued-llm"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .expect("managed LLM END event should be published after flush");
+    assert_eq!(end.data().unwrap()["sanitized"], true);
+    assert!(*end.timestamp() <= completed_at);
+    drop(events);
+    deregister_llm_sanitize_request_guardrail("managed_queued_llm_request").unwrap();
+    deregister_llm_sanitize_response_guardrail("managed_queued_llm_response").unwrap();
+    deregister_subscriber("managed_queued_llm_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_managed_tool_payload_sanitizers_are_queued_off_execution_path() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let sanitizer_started = Arc::new(tokio::sync::Notify::new());
+    let sanitizer_release = Arc::new(tokio::sync::Notify::new());
+    register_tool_sanitize_request_guardrail(
+        "managed_queued_tool_request",
+        1,
+        Arc::new({
+            let sanitizer_started = Arc::clone(&sanitizer_started);
+            let sanitizer_release = Arc::clone(&sanitizer_release);
+            move |_name, args| {
+                let sanitizer_started = Arc::clone(&sanitizer_started);
+                let sanitizer_release = Arc::clone(&sanitizer_release);
+                Box::pin(async move {
+                    sanitizer_started.notify_one();
+                    sanitizer_release.notified().await;
+                    Ok(args)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    register_subscriber("managed_queued_tool_observer", Arc::new(|_| {})).unwrap();
+
+    let call = tokio::spawn(async {
+        tool_call_execute(
+            nemo_relay::api::tool::ToolCallExecuteParams::builder()
+                .name("managed-queued-tool")
+                .args(json!({"input": true}))
+                .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+                .build(),
+        )
+        .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sanitizer_started.notified(),
+    )
+    .await
+    .expect("managed tool request sanitizer did not start");
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), call)
+        .await
+        .expect("request sanitizer blocked managed tool execution")
+        .expect("managed tool task should join")
+        .expect("managed tool call should succeed");
+    assert_eq!(result, json!({"input": true}));
+
+    sanitizer_release.notify_one();
+    flush_subscribers().unwrap();
+    deregister_tool_sanitize_request_guardrail("managed_queued_tool_request").unwrap();
+    deregister_subscriber("managed_queued_tool_observer").unwrap();
+}
+
+#[tokio::test]
+async fn test_stream_termination_does_not_await_response_sanitization() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let sanitizer_started = Arc::new(tokio::sync::Notify::new());
+    let sanitizer_release = Arc::new(tokio::sync::Notify::new());
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    register_llm_sanitize_response_guardrail(
+        "managed_queued_stream_response",
+        1,
+        Arc::new({
+            let sanitizer_started = Arc::clone(&sanitizer_started);
+            let sanitizer_release = Arc::clone(&sanitizer_release);
+            move |response, _context| {
+                let sanitizer_started = Arc::clone(&sanitizer_started);
+                let sanitizer_release = Arc::clone(&sanitizer_release);
+                Box::pin(async move {
+                    sanitizer_started.notify_one();
+                    sanitizer_release.notified().await;
+                    Ok(Some(response))
+                })
+            }
+        }),
+    )
+    .unwrap();
+    register_subscriber(
+        "managed_queued_stream_observer",
+        Arc::new({
+            let events = Arc::clone(&events);
+            move |event| events.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("managed-queued-stream")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({"prompt": "hello"}),
+            })
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    Ok(LlmJsonStream::new(tokio_stream::iter(vec![Ok(json!({
+                        "chunk": "done"
+                    }))])))
+                })
+            }))
+            .collector(Box::new(|_| Ok(())))
+            .finalizer(Box::new(|| json!({"response": "done"})))
+            .build(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while let Some(item) = stream.next().await {
+            item.unwrap();
+        }
+    })
+    .await
+    .expect("response sanitizer blocked stream termination");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sanitizer_started.notified(),
+    )
+    .await
+    .expect("stream response sanitizer did not start");
+    let terminal_timestamp = Utc::now();
+
+    assert_flush_waits_for_pending_completion(|| sanitizer_release.notify_one());
+    let end = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            event.name() == "managed-queued-stream"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .cloned()
+        .expect("stream END event should be published after flush");
+    assert!(*end.timestamp() <= terminal_timestamp);
+
+    deregister_llm_sanitize_response_guardrail("managed_queued_stream_response").unwrap();
+    deregister_subscriber("managed_queued_stream_observer").unwrap();
 }
 
 #[tokio::test]
