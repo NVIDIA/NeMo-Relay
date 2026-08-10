@@ -140,12 +140,14 @@ impl NativePlugin for FixtureNativePlugin {
                             None,
                             Some(&Json::String("isolated-next-input".into())),
                         )?;
-                        let result = next.call(args).await?;
-                        scope.close(Some(&Json::String("isolated-next-output".into())), None)?;
+                        let call_result = next.call(args).await;
+                        let close_result =
+                            scope.close(Some(&Json::String("isolated-next-output".into())), None);
                         if previous.restore() != NemoRelayStatus::Ok {
                             return Err("failed to restore callback scope stack".into());
                         }
-                        result
+                        close_result?;
+                        call_result?
                     } else if args
                         .get("use_concurrent_next")
                         .and_then(Json::as_bool)

@@ -200,10 +200,19 @@ pub struct LlmSanitizeRequestCodec<'a> {
     handle: *const NemoRelayNativeLlmRequestCodec,
     async_host: Option<NemoRelayNativeHostApiV4>,
     completion: *const NemoRelayNativeAsyncCompletion,
+    completion_release: Option<unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion)>,
     _lifetime: PhantomData<&'a NemoRelayNativeLlmRequestCodec>,
 }
 unsafe impl Send for LlmSanitizeRequestCodec<'_> {}
 unsafe impl Sync for LlmSanitizeRequestCodec<'_> {}
+
+impl Drop for LlmSanitizeRequestCodec<'_> {
+    fn drop(&mut self) {
+        if let Some(release) = self.completion_release {
+            unsafe { release(self.completion) };
+        }
+    }
+}
 
 impl LlmSanitizeRequestCodec<'_> {
     /// Decode an opaque request into Relay's normalized request model.
@@ -261,10 +270,19 @@ pub struct LlmSanitizeResponseCodec<'a> {
     handle: *const NemoRelayNativeLlmResponseCodec,
     async_host: Option<NemoRelayNativeHostApiV4>,
     completion: *const NemoRelayNativeAsyncCompletion,
+    completion_release: Option<unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion)>,
     _lifetime: PhantomData<&'a NemoRelayNativeLlmResponseCodec>,
 }
 unsafe impl Send for LlmSanitizeResponseCodec<'_> {}
 unsafe impl Sync for LlmSanitizeResponseCodec<'_> {}
+
+impl Drop for LlmSanitizeResponseCodec<'_> {
+    fn drop(&mut self) {
+        if let Some(release) = self.completion_release {
+            unsafe { release(self.completion) };
+        }
+    }
+}
 
 impl LlmSanitizeResponseCodec<'_> {
     /// Decode an opaque response into Relay's normalized response model.
@@ -1175,6 +1193,14 @@ pub struct NemoRelayNativeHostApiV4 {
     /// Releases the plugin-owned stream reference exactly once.
     pub async_llm_stream_release:
         unsafe extern "C" fn(stream: *const NemoRelayNativeLlmAsyncStream),
+    /// Retains a completion capability for a codec facade that outlives the
+    /// callback's original completion reference.
+    pub async_completion_retain:
+        unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion) -> NemoRelayStatus,
+    /// Returns true only when the preceding stream operation reported retryable
+    /// queue backpressure.
+    pub async_stream_is_backpressured:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool,
 }
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
@@ -1354,6 +1380,10 @@ impl From<ScopeType> for NemoRelayNativeScopeType {
 }
 
 /// RAII guard for a host scope opened by [`PluginRuntime::scope`].
+///
+/// A guard may move between threads only while its scope stack is bound on the
+/// destination thread. Async middleware restores that binding around each poll;
+/// tasks created with `tokio::spawn` do not inherit it and must not own a guard.
 pub struct ScopeGuard<'a> {
     runtime: &'a PluginRuntime,
     handle: Option<ScopeHandle<'a>>,
@@ -1582,6 +1612,9 @@ impl<'a> ScopeStack<'a> {
     ///
     /// Prefer [`PluginRuntime::bind_scope_stack_thread`] for synchronous code.
     /// Async middleware may pair this with a captured binding across an await.
+    /// Capture the previous binding first and restore it after the future
+    /// completes; prefer [`PluginRuntime::bind_scope_stack_thread`] for
+    /// synchronous code.
     pub fn set_thread(&self) -> NemoRelayStatus {
         unsafe { (self.host.scope_stack_set_thread)(self.ptr) }
     }
@@ -1882,7 +1915,7 @@ impl<'a> PluginContext<'a> {
                 Some(drop_typed_callback::<F>),
             )
         };
-        finish_typed_registration::<F>(self.host, status, user_data, "subscriber")
+        finish_typed_registration(self.host, status, user_data, "subscriber")
     }
 
     /// Registers a raw event subscriber callback.
@@ -1898,7 +1931,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_subscriber)(self.raw, name, cb, user_data, free_fn)
         })
     }
@@ -1917,7 +1950,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_mark_sanitize_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -1938,7 +1971,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_scope_sanitize_start_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -1959,7 +1992,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_scope_sanitize_end_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -1980,7 +2013,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_sanitize_request_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2001,7 +2034,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_sanitize_response_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2022,7 +2055,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_conditional_execution_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2044,7 +2077,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_request_intercept)(
                 self.raw,
                 name,
@@ -2071,7 +2104,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2092,7 +2125,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_sanitize_request_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2113,7 +2146,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_sanitize_response_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2134,7 +2167,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_conditional_execution_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2156,7 +2189,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_request_intercept)(
                 self.raw,
                 name,
@@ -2183,7 +2216,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2204,7 +2237,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_stream_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2219,7 +2252,8 @@ impl<'a> PluginContext<'a> {
     ///
     /// # Safety
     /// `cb`, `user_data`, and `free_fn` must remain valid until the host
-    /// deregisters the callback or invokes `free_fn`. A callback returning
+    /// deregisters the callback or invokes `free_fn`. This call consumes the
+    /// `user_data` ownership even when it rejects the host ABI. A callback returning
     /// `Pending` must settle and release its completion/next references.
     /// [`NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept`] is
     /// rejected; use [`Self::register_async_stream_middleware_raw`] instead.
@@ -2237,10 +2271,13 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
             return NemoRelayStatus::InvalidArg;
         }
         let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
-        self.with_name(name, |_, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |_, name| unsafe {
             (host.plugin_context_register_async_middleware)(
                 self.raw,
                 kind as u32,
@@ -2258,7 +2295,8 @@ impl<'a> PluginContext<'a> {
     ///
     /// # Safety
     /// The callback and user data must remain valid until deregistration or
-    /// `free_fn`; callback-owned `next` and `stream` handles must each be
+    /// `free_fn`; this call consumes `user_data` even when it rejects the host
+    /// ABI. Callback-owned `next` and `stream` handles must each be
     /// released exactly once. Stream pushes and rejection are nonblocking:
     /// `Internal` with a host last-error containing `backpressured` means the
     /// bounded queue is full and the operation may be retried. The output
@@ -2276,24 +2314,34 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
             return NemoRelayStatus::InvalidArg;
         }
         let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
-        self.with_name(name, |_, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |_, name| unsafe {
             (host.plugin_context_register_async_stream_middleware)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
         })
     }
 
-    fn with_name(
+    fn with_name_and_callback(
         &self,
         name: &str,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
         f: impl FnOnce(&NemoRelayNativeHostApiV1, *const NemoRelayNativeString) -> NemoRelayStatus,
     ) -> NemoRelayStatus {
         let name = match HostString::try_new(self.host, name) {
             Ok(name) => name,
-            Err(status) => return status,
+            Err(status) => {
+                if let Some(free_fn) = free_fn {
+                    unsafe { free_fn(user_data) };
+                }
+                return status;
+            }
         };
         f(self.host, name.as_ptr())
     }
@@ -2321,16 +2369,16 @@ unsafe extern "C" fn drop_typed_callback<F>(user_data: *mut c_void) {
     }
 }
 
-fn finish_typed_registration<F>(
+fn finish_typed_registration(
     host: &NemoRelayNativeHostApiV1,
     status: NemoRelayStatus,
     user_data: *mut c_void,
     label: &str,
 ) -> Result<()> {
+    let _ = user_data;
     if status == NemoRelayStatus::Ok {
         Ok(())
     } else {
-        unsafe { drop_typed_callback::<F>(user_data) };
         Err(status_error(host, status, label))
     }
 }
@@ -2747,7 +2795,7 @@ where
             host_ref,
             "native plugin executor worker_threads must be greater than zero",
         );
-        return NemoRelayStatus::InvalidArg;
+        return NemoRelayStatus::Internal;
     }
     let Some(kind_handle) = HostString::new(host_ref, &kind) else {
         return NemoRelayStatus::Internal;

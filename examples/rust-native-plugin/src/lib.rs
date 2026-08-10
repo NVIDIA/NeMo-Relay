@@ -334,6 +334,8 @@ impl NativePlugin for ExampleNativePlugin {
                         .and_then(Json::as_bool)
                         .unwrap_or(false)
                     {
+                        // Demonstrates concurrent continuations only. Each call reaches the
+                        // downstream provider, so this duplicates its cost and side effects.
                         let first_next = next.clone();
                         let (first, second) = tokio::join!(
                             first_next.call(request.clone()),

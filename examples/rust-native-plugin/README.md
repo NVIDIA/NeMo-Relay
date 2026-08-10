@@ -12,7 +12,8 @@ subscribers, emits runtime marks/scopes, and creates an isolated scope stack.
 Typed middleware returns futures driven by the SDK-owned Tokio executor; the
 subscriber remains synchronous. The middleware demonstrates timers, async I/O,
 codec use across an await, concurrent opt-in `next` calls, and stream
-transformation.
+transformation. Set `native_concurrent_next` to `true` in an LLM request's
+content to exercise the concurrent continuation path.
 
 The example intentionally depends on `nemo-relay-plugin`, not on the host
 `nemo-relay` runtime crate. Rust DTOs stay inside the plugin crate; the

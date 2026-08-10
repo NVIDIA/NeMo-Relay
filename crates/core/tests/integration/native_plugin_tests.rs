@@ -1065,7 +1065,7 @@ async fn native_request_intercept_rejects_manifest_that_admits_relay_0_5() {
         .expect_err("the request-intercept registration should reject Relay 0.5 compatibility")
         .to_string();
     assert!(
-        error.contains("llm request intercept failed: InvalidArg"),
+        error.contains("LLM request intercept failed: InvalidArg"),
         "{error}"
     );
 

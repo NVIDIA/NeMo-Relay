@@ -24,6 +24,7 @@ use tokio_util::task::TaskTracker;
 use super::*;
 
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const EXECUTOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Configuration for the executor owned by one exported native plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,8 +102,11 @@ impl Drop for NativeExecutor {
             .unwrap_or_else(|error| error.into_inner())
             .take();
         if let Some(runtime) = runtime {
-            runtime.block_on(self.tracker.wait());
-            drop(runtime);
+            // `Runtime::block_on` and dropping a runtime both panic when the
+            // final executor reference is released from a Tokio worker. The
+            // cancellation token asks tracked tasks to finish; Tokio performs
+            // the bounded, runtime-context-safe shutdown afterwards.
+            runtime.shutdown_timeout(EXECUTOR_SHUTDOWN_TIMEOUT);
         }
     }
 }
@@ -158,28 +162,46 @@ struct CompletionRef {
 unsafe impl Send for CompletionRef {}
 
 impl CompletionRef {
-    fn request_context(self, codec: LlmCodecIdentity) -> LlmSanitizeRequestContext<'static> {
-        let resolved =
-            (!matches!(codec, LlmCodecIdentity::None)).then_some(LlmSanitizeRequestCodec {
+    fn request_context(
+        self,
+        codec: LlmCodecIdentity,
+    ) -> Result<LlmSanitizeRequestContext<'static>> {
+        let resolved = if matches!(codec, LlmCodecIdentity::None) {
+            None
+        } else {
+            let status = unsafe { (self.host.0.async_completion_retain)(self.raw) };
+            status_result(status, "retain native async completion capability")?;
+            Some(LlmSanitizeRequestCodec {
                 host: self.host.0.v3.v1,
                 handle: ptr::null(),
                 async_host: Some(self.host.0),
                 completion: self.raw,
+                completion_release: Some(self.host.0.v3.async_completion_release),
                 _lifetime: PhantomData,
-            });
-        LlmSanitizeRequestContext { codec, resolved }
+            })
+        };
+        Ok(LlmSanitizeRequestContext { codec, resolved })
     }
 
-    fn response_context(self, codec: LlmCodecIdentity) -> LlmSanitizeResponseContext<'static> {
-        let resolved =
-            (!matches!(codec, LlmCodecIdentity::None)).then_some(LlmSanitizeResponseCodec {
+    fn response_context(
+        self,
+        codec: LlmCodecIdentity,
+    ) -> Result<LlmSanitizeResponseContext<'static>> {
+        let resolved = if matches!(codec, LlmCodecIdentity::None) {
+            None
+        } else {
+            let status = unsafe { (self.host.0.async_completion_retain)(self.raw) };
+            status_result(status, "retain native async completion capability")?;
+            Some(LlmSanitizeResponseCodec {
                 host: self.host.0.v3.v1,
                 handle: ptr::null(),
                 async_host: Some(self.host.0),
                 completion: self.raw,
+                completion_release: Some(self.host.0.v3.async_completion_release),
                 _lifetime: PhantomData,
-            });
-        LlmSanitizeResponseContext { codec, resolved }
+            })
+        };
+        Ok(LlmSanitizeResponseContext { codec, resolved })
     }
 }
 
@@ -579,9 +601,8 @@ fn drive_unary(
 }
 
 async fn wait_for_completion_cancellation(completion: &Completion) {
-    let mut interval = tokio::time::interval(CANCELLATION_POLL_INTERVAL);
     loop {
-        interval.tick().await;
+        tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
         if completion.is_cancelled() {
             return;
         }
@@ -630,12 +651,52 @@ impl ScopePollBinding {
     fn exit(&mut self, previous: *mut NemoRelayNativeScopeStackBinding) -> Result<()> {
         let status = unsafe { (self.host.scope_stack_capture_thread)(&mut self.captured) };
         if status != NemoRelayStatus::Ok || self.captured.is_null() {
+            let restore_status = unsafe { (self.host.scope_stack_restore_thread)(previous) };
+            if restore_status != NemoRelayStatus::Ok {
+                unsafe { (self.host.scope_stack_binding_free)(previous) };
+                return Err(format!(
+                    "failed to recapture callback scope stack: {status:?}; failed to restore executor scope stack: {restore_status:?}"
+                ));
+            }
             return Err(format!(
                 "failed to recapture callback scope stack: {status:?}"
             ));
         }
         let status = unsafe { (self.host.scope_stack_restore_thread)(previous) };
         status_result(status, "restore executor scope stack")
+    }
+}
+
+struct ScopePollRestore<'a> {
+    binding: &'a mut ScopePollBinding,
+    previous: Option<*mut NemoRelayNativeScopeStackBinding>,
+}
+
+impl<'a> ScopePollRestore<'a> {
+    fn new(
+        binding: &'a mut ScopePollBinding,
+        previous: *mut NemoRelayNativeScopeStackBinding,
+    ) -> Self {
+        Self {
+            binding,
+            previous: Some(previous),
+        }
+    }
+
+    fn restore(&mut self) -> Result<()> {
+        let previous = self.previous.take().expect("scope binding restored once");
+        self.binding.exit(previous)
+    }
+}
+
+impl Drop for ScopePollRestore<'_> {
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            // Do not let a panic from the wrapped future leave its scope stack
+            // on an SDK executor worker. Drop cannot report a restoration
+            // failure, but `exit` still restores the previous binding first.
+            let _ = self.binding.exit(previous);
+        }
     }
 }
 
@@ -668,10 +729,9 @@ impl<F: Future> Future for ScopedFuture<F> {
             .binding
             .enter()
             .unwrap_or_else(|error| panic!("{error}"));
+        let mut restore = ScopePollRestore::new(&mut this.binding, previous);
         let result = unsafe { Pin::new_unchecked(&mut this.future) }.poll(cx);
-        this.binding
-            .exit(previous)
-            .unwrap_or_else(|error| panic!("{error}"));
+        restore.restore().unwrap_or_else(|error| panic!("{error}"));
         result
     }
 }
@@ -745,7 +805,11 @@ impl OutputStream {
                 unsafe { (self.host.0.v3.async_stream_push_json)(self.raw, value.as_ptr()) };
             match status {
                 NemoRelayStatus::Ok => return Ok(()),
-                NemoRelayStatus::Internal => tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await,
+                NemoRelayStatus::Internal
+                    if unsafe { (self.host.0.async_stream_is_backpressured)(self.raw) } =>
+                {
+                    tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
+                }
                 status => return Err(format!("push native stream chunk failed: {status:?}")),
             }
         }
@@ -767,7 +831,9 @@ impl OutputStream {
                 let status =
                     unsafe { (self.host.0.v3.async_stream_reject)(self.raw, error.as_ptr()) };
                 match status {
-                    NemoRelayStatus::Internal => {
+                    NemoRelayStatus::Internal
+                        if unsafe { (self.host.0.async_stream_is_backpressured)(self.raw) } =>
+                    {
                         tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
                     }
                     _ => break,
@@ -876,9 +942,8 @@ unsafe extern "C" fn stream_trampoline(
 }
 
 async fn wait_for_stream_cancellation(output: &OutputStream) {
-    let mut interval = tokio::time::interval(CANCELLATION_POLL_INTERVAL);
     loop {
-        interval.tick().await;
+        tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
         if output.cancelled() {
             return;
         }
@@ -910,6 +975,9 @@ impl CodecIdentityInvocation {
                 }
                 "anthropic_messages" => Ok(LlmCodecIdentity::BuiltIn(
                     BuiltinLlmCodec::AnthropicMessages,
+                )),
+                "gemini_generate_content" => Ok(LlmCodecIdentity::BuiltIn(
+                    BuiltinLlmCodec::GeminiGenerateContent,
                 )),
                 _ => Err(format!("unknown built-in LLM codec: {id}")),
             },
@@ -1232,7 +1300,7 @@ impl PluginContext<'_> {
                     let invocation: CodecInvocation<Payload> =
                         serde_json::from_value(value).map_err(|error| error.to_string())?;
                     let codec = invocation.context.identity()?;
-                    let context = completion.request_context(codec);
+                    let context = completion.request_context(codec)?;
                     serde_json::to_value(callback(invocation.payload.request, context).await?)
                         .map_err(|error| error.to_string())
                 })
@@ -1267,7 +1335,7 @@ impl PluginContext<'_> {
                     let invocation: CodecInvocation<Payload> =
                         serde_json::from_value(value).map_err(|error| error.to_string())?;
                     let codec = invocation.context.identity()?;
-                    let context = completion.response_context(codec);
+                    let context = completion.response_context(codec)?;
                     serde_json::to_value(callback(invocation.payload.response, context).await?)
                         .map_err(|error| error.to_string())
                 })
@@ -1432,7 +1500,7 @@ fn registration_operation(kind: NemoRelayNativeAsyncMiddlewareKind) -> &'static 
         NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest => "LLM request sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeResponse => "LLM response sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::LlmConditionalExecution => "LLM conditional guardrail",
-        NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept => "llm request intercept",
+        NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept => "LLM request intercept",
         NemoRelayNativeAsyncMiddlewareKind::LlmExecutionIntercept => "LLM execution intercept",
         NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept => {
             "LLM stream execution intercept"

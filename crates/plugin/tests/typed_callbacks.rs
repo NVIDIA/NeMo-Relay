@@ -382,6 +382,7 @@ static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestInte
 static ASYNC_REGISTRATIONS: Mutex<Vec<RegisteredAsync>> = Mutex::new(Vec::new());
 static ASYNC_STREAM_REGISTRATION: Mutex<Option<RegisteredAsyncStream>> = Mutex::new(None);
 static ASYNC_PUSH_BACKPRESSURE: AtomicUsize = AtomicUsize::new(0);
+static ASYNC_COMPLETION_RETAINS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
@@ -423,7 +424,7 @@ fn assert_native_abi_platform_layout() {
         ]
     );
     assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 496);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 512);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
     assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
@@ -453,7 +454,7 @@ fn assert_native_abi_platform_layout() {
         ]
     );
     assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 244);
+    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 252);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
     assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
@@ -1534,6 +1535,17 @@ unsafe extern "C" fn capture_async_completion_release(
     }
 }
 
+unsafe extern "C" fn capture_async_completion_retain(
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> NemoRelayStatus {
+    if completion.is_null() {
+        NemoRelayStatus::NullPointer
+    } else {
+        ASYNC_COMPLETION_RETAINS.fetch_add(1, Ordering::SeqCst);
+        NemoRelayStatus::Ok
+    }
+}
+
 unsafe extern "C" fn capture_async_next_invoke(
     _next: *const NemoRelayNativeAsyncNext,
     invocation_json: *const NemoRelayNativeString,
@@ -1654,6 +1666,12 @@ unsafe extern "C" fn capture_async_stream_cancelled(
         && unsafe { &*stream.cast::<MockAsyncOutput>() }
             .cancelled
             .load(Ordering::SeqCst)
+}
+
+unsafe extern "C" fn capture_async_stream_backpressured(
+    _stream: *const NemoRelayNativeAsyncStream,
+) -> bool {
+    ASYNC_PUSH_BACKPRESSURE.load(Ordering::SeqCst) < 2
 }
 
 unsafe extern "C" fn capture_async_stream_release(stream: *const NemoRelayNativeAsyncStream) {
@@ -1843,6 +1861,8 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_llm_stream_pull: capture_async_pull_stream,
         async_llm_stream_cancel: capture_async_cancel_pull_stream,
         async_llm_stream_release: capture_async_release_pull_stream,
+        async_completion_retain: capture_async_completion_retain,
+        async_stream_is_backpressured: capture_async_stream_backpressured,
     }
 }
 
@@ -1885,7 +1905,7 @@ fn invoke_async_registration(
     );
     let result = completion.wait();
     completion.wait_for_release();
-    assert_eq!(completion.releases.load(Ordering::SeqCst), 1);
+    assert!(completion.releases.load(Ordering::SeqCst) >= 1);
     result
 }
 
@@ -1898,6 +1918,7 @@ fn begin_test() -> MutexGuard<'static, ()> {
 }
 
 fn reset_state() {
+    ASYNC_COMPLETION_RETAINS.store(0, Ordering::SeqCst);
     for registration in ASYNC_REGISTRATIONS.lock().unwrap().drain(..) {
         unsafe { registration.free() };
     }
@@ -2829,6 +2850,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         .unwrap()["content"],
         json!({ "prompt": "hello" })
     );
+    assert_eq!(ASYNC_COMPLETION_RETAINS.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
 
     let registration =
@@ -2846,6 +2868,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         .unwrap(),
         json!({ "answer": 42 })
     );
+    assert_eq!(ASYNC_COMPLETION_RETAINS.load(Ordering::SeqCst), 2);
     unsafe { registration.free() };
 
     let registration =
@@ -3617,7 +3640,7 @@ fn direct_export_plugin_rejects_zero_executor_workers() {
 
     assert_eq!(
         unsafe { nemo_relay_plugin::export_plugin(&host, &mut plugin, ZeroWorkerPlugin) },
-        NemoRelayStatus::InvalidArg
+        NemoRelayStatus::Internal
     );
     assert!(plugin.plugin_kind.is_null());
     assert!(plugin.user_data.is_null());

@@ -917,6 +917,8 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
         async_llm_stream_pull: native_async_llm_stream_pull,
         async_llm_stream_cancel: native_async_llm_stream_cancel,
         async_llm_stream_release: native_async_llm_stream_release,
+        async_completion_retain: native_async_completion_retain,
+        async_stream_is_backpressured: native_async_stream_is_backpressured,
     }
 }
 
@@ -1623,6 +1625,7 @@ struct NativeAsyncStream {
     sender: Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
     cancelled: AtomicBool,
     settled: AtomicBool,
+    backpressured: AtomicBool,
     downstream_aborts: Mutex<HashMap<tokio::task::Id, tokio::task::AbortHandle>>,
     settlement: Mutex<()>,
     #[cfg(test)]
@@ -2046,6 +2049,16 @@ unsafe extern "C" fn native_async_completion_release(
     }
 }
 
+unsafe extern "C" fn native_async_completion_retain(
+    completion: *const NemoRelayNativeAsyncCompletion,
+) -> NemoRelayStatus {
+    if completion.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { Arc::increment_strong_count(completion.cast::<NativeAsyncCompletion>()) };
+    NemoRelayStatus::Ok
+}
+
 unsafe extern "C" fn native_async_next_release(next: *const NemoRelayNativeAsyncNext) {
     if !next.is_null() {
         let next = unsafe { Arc::from_raw(next as *const NativeAsyncNext) };
@@ -2082,9 +2095,15 @@ fn defer_native_handle_drop(value: impl Send + 'static) {
         if let Err(error) = sender.send(value) {
             // The only safe fallback is to retain the handle. Synchronously
             // dropping it could unload plugin code on its executor thread.
+            tracing::error!(
+                "native plugin reaper channel closed; leaking a deferred plugin handle"
+            );
             std::mem::forget(error.0);
         }
     } else {
+        tracing::error!(
+            "native plugin reaper thread failed to start; leaking deferred plugin handles"
+        );
         std::mem::forget(value);
     }
 }
@@ -2100,6 +2119,7 @@ unsafe extern "C" fn native_async_stream_push_json(
     if stream.cancelled.load(Ordering::Acquire) {
         return NemoRelayStatus::InvalidArg;
     }
+    stream.backpressured.store(false, Ordering::Release);
     let chunk = match parse_json_arg(chunk_json, "native async stream chunk") {
         Ok(chunk) => chunk,
         Err(status) => return status,
@@ -2129,6 +2149,7 @@ unsafe extern "C" fn native_async_stream_push_json(
     match sender.try_send(Ok(chunk)) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            stream.backpressured.store(true, Ordering::Release);
             set_native_last_error(
                 "native async stream is backpressured; retry the chunk after the consumer advances",
             );
@@ -2187,6 +2208,7 @@ unsafe extern "C" fn native_async_stream_reject(
     let Some(stream) = (unsafe { (stream as *const NativeAsyncStream).as_ref() }) else {
         return NemoRelayStatus::NullPointer;
     };
+    stream.backpressured.store(false, Ordering::Release);
     let message =
         read_native_string(message).unwrap_or_else(|_| "native async stream rejected".to_string());
     #[cfg(test)]
@@ -2224,6 +2246,7 @@ unsafe extern "C" fn native_async_stream_reject(
             NemoRelayStatus::Ok
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            stream.backpressured.store(true, Ordering::Release);
             set_native_last_error(
                 "native async stream is backpressured; retry rejection after the consumer advances",
             );
@@ -2238,6 +2261,13 @@ unsafe extern "C" fn native_async_stream_is_cancelled(
 ) -> bool {
     unsafe { (stream as *const NativeAsyncStream).as_ref() }
         .is_none_or(|stream| stream.cancelled.load(Ordering::Acquire))
+}
+
+unsafe extern "C" fn native_async_stream_is_backpressured(
+    stream: *const NemoRelayNativeAsyncStream,
+) -> bool {
+    unsafe { (stream as *const NativeAsyncStream).as_ref() }
+        .is_some_and(|stream| stream.backpressured.load(Ordering::Acquire))
 }
 
 unsafe extern "C" fn native_async_stream_release(stream: *const NemoRelayNativeAsyncStream) {
@@ -3264,6 +3294,7 @@ fn wrap_native_incremental_llm_stream_execution_with_user_data(
                 sender: Mutex::new(Some(sender)),
                 cancelled: AtomicBool::new(false),
                 settled: AtomicBool::new(false),
+                backpressured: AtomicBool::new(false),
                 downstream_aborts: Mutex::new(HashMap::new()),
                 settlement: Mutex::new(()),
                 #[cfg(test)]

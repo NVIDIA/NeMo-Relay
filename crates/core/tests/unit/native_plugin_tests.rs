@@ -582,6 +582,7 @@ fn native_stream_callback_guard_covers_terminal_drop_modes() {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -640,6 +641,7 @@ async fn native_async_stream_forwarding_reports_conversion_and_stream_errors() {
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
+            backpressured: AtomicBool::new(false),
             downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
             before_settlement_lock: None,
@@ -783,6 +785,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         sender: Mutex::new(None),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -809,6 +812,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         sender: Mutex::new(Some(full_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -819,10 +823,12 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         unsafe { native_async_stream_push_json(full_ref, chunk) },
         NemoRelayStatus::Internal
     );
+    assert!(unsafe { native_async_stream_is_backpressured(full_ref) });
     assert_eq!(
         unsafe { native_async_stream_reject(full_ref, chunk) },
         NemoRelayStatus::Internal
     );
+    assert!(unsafe { native_async_stream_is_backpressured(full_ref) });
     unsafe { native_async_stream_release(full_ref) };
 
     let (closed_sender, closed_receiver) = tokio::sync::mpsc::channel::<FlowResult<Json>>(1);
@@ -831,6 +837,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         sender: Mutex::new(Some(closed_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -841,6 +848,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         unsafe { native_async_stream_push_json(closed_ref, chunk) },
         NemoRelayStatus::InvalidArg
     );
+    assert!(!unsafe { native_async_stream_is_backpressured(closed_ref) });
     assert_eq!(
         unsafe { native_async_stream_reject(closed_ref, chunk) },
         NemoRelayStatus::InvalidArg
@@ -852,6 +860,7 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
         sender: Mutex::new(Some(settled_sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(true),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -927,6 +936,7 @@ async fn native_async_stream_next_entrypoint_validates_handle_kind_and_request()
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -1953,6 +1963,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                                 sender: Mutex::new(Some(sender)),
                                 cancelled: AtomicBool::new(false),
                                 settled: AtomicBool::new(false),
+                                backpressured: AtomicBool::new(false),
                                 downstream_aborts: Mutex::new(HashMap::new()),
                                 settlement: Mutex::new(()),
                                 before_settlement_lock: None,
@@ -2181,6 +2192,7 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -2342,6 +2354,7 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(true),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -2454,6 +2467,7 @@ fn native_async_stream_next_supports_repeated_concurrent_calls() {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -2570,6 +2584,7 @@ fn native_async_stream_settlement_rejects_late_next_and_aborts_in_flight_next() 
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
+            backpressured: AtomicBool::new(false),
             downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
             before_settlement_lock: None,
@@ -2690,6 +2705,7 @@ fn native_async_stream_next_stops_callbacks_after_false() {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -2763,6 +2779,7 @@ fn native_async_stream_in_flight_cancellation_releases_callback_state() {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -2844,6 +2861,7 @@ fn native_async_stream_cancellation_before_first_poll_releases_callback_state() 
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,
@@ -3401,6 +3419,7 @@ fn native_async_stream_settlement_cannot_succeed_after_cancellation() {
             sender: Mutex::new(Some(sender)),
             cancelled: AtomicBool::new(false),
             settled: AtomicBool::new(false),
+            backpressured: AtomicBool::new(false),
             downstream_aborts: Mutex::new(HashMap::new()),
             settlement: Mutex::new(()),
             before_settlement_lock: Some(Arc::clone(&settlement_checkpoint)),
@@ -3469,6 +3488,7 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
         sender: Mutex::new(Some(sender)),
         cancelled: AtomicBool::new(false),
         settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
         downstream_aborts: Mutex::new(HashMap::new()),
         settlement: Mutex::new(()),
         before_settlement_lock: None,

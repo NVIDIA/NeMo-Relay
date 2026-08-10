@@ -30,7 +30,7 @@ id = "acme.native_policy"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.5,<1.0"
 native_api = "1"
 
 [defaults]
@@ -56,8 +56,9 @@ from the manifest. The exported symbol must return a descriptor whose
 `plugin_kind` matches `plugin.id` exactly.
 
 Typed native middleware requires `compat.relay = ">=0.8.0,<1.0"`. Relay rejects
-the registration when the manifest admits a host that predates the SDK-owned
-executor and native ABI v4.
+its registration when the manifest admits a host that predates the SDK-owned
+executor and native ABI v4. Plugins that use only synchronous registrations,
+such as this example, should retain `compat.relay = ">=0.5,<1.0"`.
 
 ## Create a Native Plugin
 
@@ -171,7 +172,7 @@ the last such call returns.
 
 The Rust SDK registers typed middleware through these completion APIs and runs
 the returned futures on one SDK-owned multi-thread Tokio runtime per plugin.
-The default is two workers; override `NativePlugin::executor_config()` to use a
+The default is two workers; override `NativePlugin::executor_config` to use a
 different nonzero count. Do not block executor workers. Relay scope context is
 installed around each root-future poll, but child tasks created with
 `tokio::spawn` do not automatically inherit it. Typed subscribers remain
