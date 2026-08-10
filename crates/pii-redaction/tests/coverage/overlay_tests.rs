@@ -585,3 +585,103 @@ fn gemini_overlay_does_not_overwrite_finish_reason() {
         "Gemini overlay must not overwrite native finishReason with the derived ToolUse value"
     );
 }
+
+#[test]
+fn oci_genai_overlay_sanitizes_flat_cohere_tool_calls() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "COHERE",
+            "text": "raw secret",
+            "finishReason": "COMPLETE",
+            "toolCalls": [
+                {"name": "one", "parameters": {"secret": "raw-1"}},
+                {"name": "two", "parameters": {"secret": "raw-2"}}
+            ]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        tool_calls: Some(vec![tool_call(
+            "call_0",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::Complete),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let chat_response = &overlaid["chatResponse"];
+    assert_eq!(chat_response["text"], json!("[REDACTED]"));
+    let calls = chat_response["toolCalls"].as_array().unwrap();
+    assert_eq!(calls.len(), 1, "dropped sanitized calls must be truncated");
+    assert_eq!(calls[0]["parameters"], json!({"secret": "[REDACTED]"}));
+    assert!(
+        calls[0].get("id").is_none(),
+        "COHERE wire tool calls carry no id and must not gain one"
+    );
+}
+
+#[test]
+fn oci_genai_overlay_sanitizes_cohere_v2_root_message() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "COHEREV2",
+            "message": {
+                "role": "ASSISTANT",
+                "content": [{"type": "TEXT", "text": "raw secret"}],
+                "toolCalls": [{
+                    "id": "call_1",
+                    "type": "FUNCTION",
+                    "function": {"name": "one", "arguments": "{\"secret\":\"raw-1\"}"}
+                }]
+            },
+            "finishReason": "TOOL_CALL"
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        tool_calls: Some(vec![tool_call(
+            "call_1",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let message = &overlaid["chatResponse"]["message"];
+    assert_eq!(message["content"][0]["text"], json!("[REDACTED]"));
+    assert_eq!(
+        message["toolCalls"][0]["function"]["arguments"],
+        json!("{\"secret\":\"[REDACTED]\"}")
+    );
+    assert_eq!(overlaid["chatResponse"]["finishReason"], json!("TOOL_CALL"));
+}
+
+#[test]
+fn oci_genai_overlay_sanitizes_generic_string_content() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "ASSISTANT", "content": "raw secret"}
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    assert_eq!(
+        overlaid["chatResponse"]["choices"][0]["message"]["content"],
+        json!("[REDACTED]")
+    );
+}

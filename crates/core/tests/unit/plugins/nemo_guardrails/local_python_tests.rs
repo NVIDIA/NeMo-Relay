@@ -1125,6 +1125,12 @@ fn stream_text_extraction_handles_supported_codecs() {
             json!({"type": "content_block_delta", "delta": {"type": "input_json_delta"}}),
         ),
         (LocalGuardrailsCodec::GeminiGenerateContent, Json::Null),
+        // A tool-call-only OCI delta carries no user-visible text and must not
+        // reach the guardrail worker.
+        (
+            LocalGuardrailsCodec::OCIGenAI,
+            json!({"index": 0, "message": {"content": [], "toolCalls": [{"arguments": "{"}]}}),
+        ),
     ] {
         assert_eq!(extract_stream_text(codec, &chunk), None);
     }

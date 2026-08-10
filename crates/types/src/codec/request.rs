@@ -543,7 +543,7 @@ pub enum ApiSpecificRequest {
         /// Serving mode object (`servingType` plus `modelId` or `endpointId`).
         #[serde(skip_serializing_if = "Option::is_none")]
         serving_mode: Option<Json>,
-        /// Chat request API format (`GENERIC` or `COHERE`).
+        /// Chat request API format (`GENERIC`, `COHERE`, or `COHEREV2`).
         #[serde(skip_serializing_if = "Option::is_none")]
         api_format: Option<String>,
     },

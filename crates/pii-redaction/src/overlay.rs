@@ -304,6 +304,28 @@ fn overlay_oci_chat_response(
                 .as_ref()
                 .map(oci_cohere_finish_reason),
         );
+        overlay_oci_cohere_tool_calls(chat_response, annotated.tool_calls.as_deref());
+        return;
+    }
+
+    if api_format == "COHEREV2" {
+        // COHEREV2 carries a single root-level assistant `message` (typed
+        // content parts, nested-function tool calls) instead of `choices`.
+        set_optional_string_field(
+            chat_response,
+            "finishReason",
+            annotated
+                .finish_reason
+                .as_ref()
+                .map(oci_cohere_v2_finish_reason),
+        );
+        let Some(message) = chat_response
+            .get_mut("message")
+            .and_then(Json::as_object_mut)
+        else {
+            return;
+        };
+        overlay_oci_message(message, annotated);
         return;
     }
 
@@ -326,10 +348,56 @@ fn overlay_oci_chat_response(
     let Some(message) = choice.get_mut("message").and_then(Json::as_object_mut) else {
         return;
     };
-    if let Some(blocks) = message.get_mut("content").and_then(Json::as_array_mut) {
-        overlay_oci_text_parts(blocks, annotated_message_text(annotated.message.as_ref()));
+    overlay_oci_message(message, annotated);
+}
+
+/// Sanitize an OCI assistant message: typed TEXT parts or a bare string
+/// `content` (both shapes the decoder accepts), plus tool calls.
+fn overlay_oci_message(message: &mut Map<String, Json>, annotated: &AnnotatedLlmResponse) {
+    match message.get_mut("content") {
+        Some(Json::Array(blocks)) => {
+            overlay_oci_text_parts(blocks, annotated_message_text(annotated.message.as_ref()));
+        }
+        Some(Json::String(_)) => {
+            set_optional_string_field(
+                message,
+                "content",
+                annotated_message_text(annotated.message.as_ref()).as_deref(),
+            );
+        }
+        _ => {}
     }
     overlay_oci_tool_calls(message, annotated.tool_calls.as_deref());
+}
+
+/// Sanitize flat COHERE (v1) tool calls: `{name, parameters}` entries directly
+/// on the chat response, with `parameters` as a parsed JSON object and no `id`
+/// on the wire.
+fn overlay_oci_cohere_tool_calls(
+    chat_response: &mut Map<String, Json>,
+    tool_calls: Option<&[ResponseToolCall]>,
+) {
+    let Some(raw_calls) = chat_response
+        .get_mut("toolCalls")
+        .and_then(Json::as_array_mut)
+    else {
+        return;
+    };
+    let Some(tool_calls) = tool_calls else {
+        chat_response.remove("toolCalls");
+        return;
+    };
+
+    raw_calls.truncate(tool_calls.len());
+
+    for (raw_call, sanitized_call) in raw_calls.iter_mut().zip(tool_calls.iter()) {
+        let Some(raw_call) = raw_call.as_object_mut() else {
+            chat_response.remove("toolCalls");
+            return;
+        };
+        set_optional_string_field(raw_call, "name", Some(sanitized_call.name.as_str()));
+        raw_call.insert("parameters".into(), sanitized_call.arguments.clone());
+    }
 }
 
 fn overlay_oci_text_parts(blocks: &mut [Json], message_text: Option<String>) {
@@ -674,6 +742,16 @@ fn oci_cohere_finish_reason(reason: &FinishReason) -> &str {
         FinishReason::Complete => "COMPLETE",
         FinishReason::Length => "MAX_TOKENS",
         FinishReason::ToolUse | FinishReason::ContentFilter => "COMPLETE",
+        FinishReason::Unknown(other) => other.as_str(),
+    }
+}
+
+fn oci_cohere_v2_finish_reason(reason: &FinishReason) -> &str {
+    match reason {
+        FinishReason::Complete => "COMPLETE",
+        FinishReason::Length => "MAX_TOKENS",
+        FinishReason::ToolUse => "TOOL_CALL",
+        FinishReason::ContentFilter => "COMPLETE",
         FinishReason::Unknown(other) => other.as_str(),
     }
 }

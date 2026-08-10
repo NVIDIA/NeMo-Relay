@@ -1400,3 +1400,84 @@ fn oci_streaming_codec_tool_call_only_stream_decodes_without_message() {
     assert_eq!(annotated.message, None);
     assert_eq!(annotated.tool_calls.as_ref().unwrap().len(), 1);
 }
+
+#[test]
+fn test_cohere_edit_removes_stale_preamble_override() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(cohere_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    // Drop the leading system message (the decoded preambleOverride).
+    assert!(matches!(
+        annotated.messages.first(),
+        Some(Message::System { .. })
+    ));
+    annotated.messages.remove(0);
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = encoded.content["chatRequest"].as_object().unwrap();
+    assert!(
+        !chat_request.contains_key("preambleOverride"),
+        "a removed system message must not leave the original preamble on the wire"
+    );
+}
+
+fn cohere_v2_chat_details() -> Json {
+    json!({
+        "compartmentId": "ocid1.compartment.oc1..example",
+        "servingMode": {"servingType": "ON_DEMAND", "modelId": "cohere.command-a-03-2025"},
+        "chatRequest": {
+            "apiFormat": "COHEREV2",
+            "messages": [
+                {"role": "USER", "content": [{"type": "TEXT", "text": "What is the weather?"}]}
+            ],
+            "maxTokens": 100,
+            "stopSequences": ["END"],
+            "citationOptions": {"mode": "OFF"}
+        }
+    })
+}
+
+#[test]
+fn test_cohere_v2_request_decode_and_identity() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(cohere_v2_chat_details());
+    let annotated = codec.decode(&original).unwrap();
+
+    assert_eq!(annotated.messages.len(), 1);
+    assert!(matches!(&annotated.messages[0], Message::User { .. }));
+    let params = annotated.params.as_ref().unwrap();
+    assert_eq!(params.stop, Some(vec!["END".to_string()]));
+    assert_eq!(params.max_tokens, Some(100));
+    // V2-only request fields ride along in extra rather than being dropped.
+    assert_eq!(annotated.extra["citationOptions"], json!({"mode": "OFF"}));
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded.content, cohere_v2_chat_details());
+}
+
+#[test]
+fn test_cohere_v2_request_edit_patches_stop_sequences() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(cohere_v2_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.params.as_mut().unwrap().stop = Some(vec!["HALT".to_string()]);
+    annotated.messages[0] = Message::User {
+        content: MessageContent::Text("What is the weather in [REDACTED]?".into()),
+        name: None,
+    };
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = &encoded.content["chatRequest"];
+    assert_eq!(chat_request["stopSequences"], json!(["HALT"]));
+    assert!(
+        chat_request.get("stop").is_none(),
+        "COHEREV2 edits must patch stopSequences, not the GENERIC stop key"
+    );
+    assert_eq!(
+        chat_request["messages"][0]["content"],
+        json!([{"type": "TEXT", "text": "What is the weather in [REDACTED]?"}])
+    );
+    assert_eq!(chat_request["citationOptions"], json!({"mode": "OFF"}));
+}

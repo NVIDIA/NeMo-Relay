@@ -335,7 +335,7 @@ pub enum ApiSpecificResponse {
     /// OCI Generative AI-specific fields.
     #[serde(rename = "oci_genai")]
     OCIGenAI {
-        /// Chat response API format (`GENERIC` or `COHERE`).
+        /// Chat response API format (`GENERIC`, `COHERE`, or `COHEREV2`).
         #[serde(skip_serializing_if = "Option::is_none")]
         api_format: Option<String>,
         /// Model version reported on the `ChatResult` envelope.

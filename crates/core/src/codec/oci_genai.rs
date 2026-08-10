@@ -21,9 +21,12 @@
 //!   - `COHERE`: a single `message` string plus `chatHistory` turns with
 //!     `USER`/`CHATBOT`/`SYSTEM` roles and an optional `preambleOverride`.
 //!     Used by Cohere Command models.
-//!   - `COHEREV2` (responses): a single assistant `message` with typed content
-//!     parts and nested `function` tool calls, per the OCI
-//!     `CohereChatResponseV2` schema.
+//!   - `COHEREV2`: responses are a single assistant `message` with typed
+//!     content parts and nested `function` tool calls, per the OCI
+//!     `CohereChatResponseV2` schema. Requests follow the GENERIC `messages`
+//!     path with COHERE-style `stopSequences`; V2-only request fields the
+//!     normalized shape does not model (`citationOptions`, `documents`, ...)
+//!     ride along in `extra` and survive edits untouched.
 //! - **Model identity**: Carried in `servingMode.modelId` (on-demand) or
 //!   `servingMode.endpointId` (dedicated), not in the chat request body.
 //! - **Responses**: `ChatResult` payloads (`modelId`, `chatResponse`); `usage`
@@ -135,6 +138,19 @@ const MODELED_COHERE_REQUEST_KEYS: &[&str] = &[
     "message",
     "chatHistory",
     "preambleOverride",
+    "maxTokens",
+    "temperature",
+    "topP",
+    "stopSequences",
+    "tools",
+    "toolChoice",
+];
+
+/// Chat-request keys modeled in [`AnnotatedLlmRequest`] for the COHEREV2
+/// format: GENERIC-style `messages` with COHERE-style `stopSequences`.
+const MODELED_COHERE_V2_REQUEST_KEYS: &[&str] = &[
+    "apiFormat",
+    "messages",
     "maxTokens",
     "temperature",
     "topP",
@@ -634,6 +650,11 @@ fn encode_cohere_messages(
             Json::String(cohere_text(content)?),
         );
         remaining = &remaining[1..];
+    } else {
+        // The encoder merges into the raw request, so without this removal a
+        // preamble deleted (or re-roled) by an intercept would survive on the
+        // wire while the normalized annotation no longer contains it.
+        chat_request.remove("preambleOverride");
     }
 
     // The COHERE chat request requires a non-empty `message` prompt; an edited
@@ -701,7 +722,8 @@ fn decode_params(
     let temperature = super::optional_f64(chat_request, "temperature", SURFACE)?;
     let max_tokens = super::optional_u64(chat_request, "maxTokens", SURFACE)?;
     let top_p = super::optional_f64(chat_request, "topP", SURFACE)?;
-    let stop_key = if api_format == "COHERE" {
+    // Both Cohere formats spell the stop list `stopSequences`.
+    let stop_key = if api_format.starts_with("COHERE") {
         "stopSequences"
     } else {
         "stop"
@@ -758,7 +780,7 @@ fn patch_params(
     }
     let stop = edited.and_then(|params| params.stop.as_ref());
     if stop.is_some() && stop != baseline.and_then(|params| params.stop.as_ref()) {
-        let stop_key = if api_format == "COHERE" {
+        let stop_key = if api_format.starts_with("COHERE") {
             "stopSequences"
         } else {
             "stop"
@@ -998,10 +1020,10 @@ impl LlmCodec for OCIGenAIChatCodec {
             .filter(|value| !value.is_null())
             .map(|value| ToolChoice::ProviderNative(native_component(value)));
 
-        let modeled = if api_format == "COHERE" {
-            MODELED_COHERE_REQUEST_KEYS
-        } else {
-            MODELED_GENERIC_REQUEST_KEYS
+        let modeled = match api_format.as_str() {
+            "COHERE" => MODELED_COHERE_REQUEST_KEYS,
+            "COHEREV2" => MODELED_COHERE_V2_REQUEST_KEYS,
+            _ => MODELED_GENERIC_REQUEST_KEYS,
         };
         let extra: serde_json::Map<String, Json> = chat_request
             .iter()
