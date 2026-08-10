@@ -92,6 +92,8 @@ pub struct LlmSanitizeRequestContext<'a> {
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmSanitizeRequestCodec<'a>>,
 }
+// SAFETY: this context is constructed only by the async SDK from a retained
+// completion capability; callback-scoped native contexts never construct it.
 unsafe impl Send for LlmSanitizeRequestContext<'_> {}
 
 /// Per-call response codec context delivered to an LLM sanitizer.
@@ -100,6 +102,8 @@ pub struct LlmSanitizeResponseContext<'a> {
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmSanitizeResponseCodec<'a>>,
 }
+// SAFETY: this context is constructed only by the async SDK from a retained
+// completion capability; callback-scoped native contexts never construct it.
 unsafe impl Send for LlmSanitizeResponseContext<'_> {}
 
 /// Status codes returned by stable native ABI functions.
@@ -203,7 +207,11 @@ pub struct LlmSanitizeRequestCodec<'a> {
     completion_release: Option<unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion)>,
     _lifetime: PhantomData<&'a NemoRelayNativeLlmRequestCodec>,
 }
+// SAFETY: the only construction path is the async SDK, which retains the
+// completion capability until this facade is dropped.
 unsafe impl Send for LlmSanitizeRequestCodec<'_> {}
+// SAFETY: calls use the immutable host API and the retained completion
+// capability, which the host permits from concurrent plugin tasks.
 unsafe impl Sync for LlmSanitizeRequestCodec<'_> {}
 
 impl Drop for LlmSanitizeRequestCodec<'_> {
@@ -273,7 +281,11 @@ pub struct LlmSanitizeResponseCodec<'a> {
     completion_release: Option<unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion)>,
     _lifetime: PhantomData<&'a NemoRelayNativeLlmResponseCodec>,
 }
+// SAFETY: the only construction path is the async SDK, which retains the
+// completion capability until this facade is dropped.
 unsafe impl Send for LlmSanitizeResponseCodec<'_> {}
+// SAFETY: calls use the immutable host API and the retained completion
+// capability, which the host permits from concurrent plugin tasks.
 unsafe impl Sync for LlmSanitizeResponseCodec<'_> {}
 
 impl Drop for LlmSanitizeResponseCodec<'_> {

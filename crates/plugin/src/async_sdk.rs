@@ -24,6 +24,7 @@ use tokio_util::task::TaskTracker;
 use super::*;
 
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const CANCELLATION_POLL_MAX_INTERVAL: Duration = Duration::from_millis(160);
 const EXECUTOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Configuration for the executor owned by one exported native plugin.
@@ -601,11 +602,13 @@ fn drive_unary(
 }
 
 async fn wait_for_completion_cancellation(completion: &Completion) {
+    let mut delay = CANCELLATION_POLL_INTERVAL;
     loop {
-        tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
+        tokio::time::sleep(delay).await;
         if completion.is_cancelled() {
             return;
         }
+        delay = delay.saturating_mul(2).min(CANCELLATION_POLL_MAX_INTERVAL);
     }
 }
 
@@ -942,11 +945,13 @@ unsafe extern "C" fn stream_trampoline(
 }
 
 async fn wait_for_stream_cancellation(output: &OutputStream) {
+    let mut delay = CANCELLATION_POLL_INTERVAL;
     loop {
-        tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
+        tokio::time::sleep(delay).await;
         if output.cancelled() {
             return;
         }
+        delay = delay.saturating_mul(2).min(CANCELLATION_POLL_MAX_INTERVAL);
     }
 }
 
