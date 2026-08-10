@@ -227,11 +227,11 @@ def _render_python_package(
 ) -> None:
     """Append one Python package section to the markdown output."""
     parts.append(f"## {name} ({version})\n\n")
-    parts.append("### Licenses\n")
+    parts.append("### Licenses\n\n")
     parts.append(f"License: {_md_inline_safe(license_name)}\n\n")
     for path_label, text in license_texts:
-        parts.append(f"  - {_md_inline_safe(path_label)}:\n")
-        parts.append(MARKDOWN_CODE_FENCE)
+        parts.append(f"  - The following license text is from {_md_inline_safe(path_label)}.\n\n")
+        parts.append("```text\n")
         parts.append(text if text.endswith("\n") else text + "\n")
         parts.append(MARKDOWN_CODE_BLOCK_END)
 

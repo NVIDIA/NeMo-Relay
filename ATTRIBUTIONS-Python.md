@@ -14,10 +14,12 @@ Please do not edit it directly. Regenerate with `./scripts/generate_attributions
 ## aiohappyeyeballs (2.6.1)
 
 ### Licenses
+
 License: `PSF-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 A. HISTORY OF THE SOFTWARE
 ==========================
 
@@ -302,10 +304,12 @@ PERFORMANCE OF THIS SOFTWARE.
 ## aiohttp (3.14.1)
 
 ### Licenses
+
 License: `Apache-2.0 AND MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -512,10 +516,12 @@ Apache License
 ## aiosignal (1.4.0)
 
 ### Licenses
+
 License: `Apache 2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -722,10 +728,12 @@ Apache License
 ## annotated-types (0.7.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2022 the contributors
@@ -752,10 +760,12 @@ SOFTWARE.
 ## anthropic (0.120.2)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright 2023 Anthropic, PBC.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
@@ -768,10 +778,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ## anyio (4.13.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2018 Alex Grönholm
@@ -797,10 +809,12 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## asttokens (3.0.1)
 
 ### Licenses
+
 License: `Apache 2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         https://www.apache.org/licenses/
@@ -1007,10 +1021,12 @@ Apache License
 ## attrs (26.1.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2015 Hynek Schlawack and the attrs contributors
@@ -1037,10 +1053,12 @@ SOFTWARE.
 ## beautifulsoup4 (4.14.3)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Beautiful Soup is made available under the MIT license:
 
  Copyright (c) Leonard Richardson
@@ -1077,10 +1095,12 @@ Isaac Muse
 ## bracex (3.0.1)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 MIT License
 
 Copyright (c) 2018 - 2026 Isaac Muse
@@ -1107,10 +1127,12 @@ SOFTWARE.
 ## certifi (2026.2.25)
 
 ### Licenses
+
 License: `MPL-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 This package contains a modified version of ca-bundle.crt:
 
 ca-bundle.crt -- Bundle of CA Root Certificates
@@ -1136,10 +1158,12 @@ one at http://mozilla.org/MPL/2.0/.
 ## cffi (2.0.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Except when otherwise stated (look for LICENSE files in directories or
 information at the beginning of each file) all software and
 documentation is licensed as follows:
@@ -1166,10 +1190,12 @@ documentation is licensed as follows:
 ## cfgv (3.5.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2018 Anthony Sottile
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -1194,10 +1220,12 @@ THE SOFTWARE.
 ## charset-normalizer (3.4.7)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2025 TAHRI Ahmed R.
@@ -1224,10 +1252,12 @@ SOFTWARE.
 ## colorama (0.4.6)
 
 ### Licenses
+
 License: `BSD License`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 Copyright (c) 2010 Jonathan Hartley
 All rights reserved.
 
@@ -1260,10 +1290,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## coverage (7.13.5)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -1445,10 +1477,12 @@ Apache License
 ## cryptography (48.0.0)
 
 ### Licenses
+
 License: `Apache-2.0 OR BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 This software is made available under the terms of *either* of the licenses
 found in LICENSE.APACHE or LICENSE.BSD. Contributions to cryptography are made
 under the terms of *both* these licenses.
@@ -1457,10 +1491,12 @@ under the terms of *both* these licenses.
 ## decorator (5.2.1)
 
 ### Licenses
+
 License: `BSD-2-Clause`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 Copyright (c) 2005-2025, Michele Simionato
 All rights reserved.
 
@@ -1493,10 +1529,12 @@ DAMAGE.
 ## deepagents (0.7.4)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) LangChain, Inc.
@@ -1523,10 +1561,12 @@ SOFTWARE.
 ## distlib (0.4.0)
 
 ### Licenses
+
 License: `PSF-2.0`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 A. HISTORY OF THE SOFTWARE
 ==========================
 
@@ -1816,10 +1856,12 @@ OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ## distro (1.9.0)
 
 ### Licenses
+
 License: `Apache License, Version 2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -2026,10 +2068,12 @@ Apache License
 ## docstring-parser (0.18.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2018 Marcin Kurczewski
@@ -2056,10 +2100,12 @@ SOFTWARE.
 ## executing (2.2.1)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 MIT License
 
 Copyright (c) 2019 Alex Hall
@@ -2086,10 +2132,12 @@ SOFTWARE.
 ## filelock (3.25.2)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2025 Bernát Gábor and contributors
@@ -2116,10 +2164,12 @@ SOFTWARE.
 ## filetype (1.2.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2016 Tomás Aparicio
@@ -2146,10 +2196,12 @@ SOFTWARE.
 ## frozenlist (1.8.0)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -2356,10 +2408,12 @@ Apache License
 ## google-auth (2.52.0)
 
 ### Licenses
+
 License: `Apache 2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -2566,10 +2620,12 @@ Apache License
 ## google-genai (1.75.0)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -2776,10 +2832,12 @@ Apache License
 ## grpcio (1.81.1)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -3407,10 +3465,12 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 ## h11 (0.16.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2016 Nathaniel J. Smith <njs@pobox.com> and other contributors
@@ -3438,10 +3498,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## httpcore (1.0.9)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 Copyright © 2020, [Encode OSS Ltd](https://www.encode.io/).
 All rights reserved.
 
@@ -3474,10 +3536,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## httpx (0.28.1)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 Copyright © 2019, [Encode OSS Ltd](https://www.encode.io/).
 All rights reserved.
 
@@ -3495,10 +3559,12 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## identify (2.6.18)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2017 Chris Kuehl, Anthony Sottile
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -3523,10 +3589,12 @@ THE SOFTWARE.
 ## idna (3.11)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 BSD 3-Clause License
 
 Copyright (c) 2013-2025, Kim Davies and contributors.
@@ -3563,10 +3631,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## iniconfig (2.3.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2010 - 2023 Holger Krekel and others
@@ -3593,10 +3663,12 @@ SOFTWARE.
 ## ipython (8.39.0)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 BSD 3-Clause License
 
 - Copyright (c) 2008-Present, IPython Development Team
@@ -3635,10 +3707,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## jedi (0.19.2)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 All contributions towards Jedi are MIT licensed.
 
 -------------------------------------------------------------------------------
@@ -3668,10 +3742,12 @@ THE SOFTWARE.
 ## jiter (0.14.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2022 to present Samuel Colvin
@@ -3698,10 +3774,12 @@ SOFTWARE.
 ## jsonpatch (1.33)
 
 ### Licenses
+
 License: `Modified BSD License`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2011 Stefan Kögl <stefan@skoegl.net>
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
@@ -3718,10 +3796,12 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## jsonpointer (3.1.1)
 
 ### Licenses
+
 License: `Modified BSD License`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 Copyright (c) 2011 Stefan Kögl <stefan@skoegl.net>
 All rights reserved.
 
@@ -3752,10 +3832,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## langchain (1.3.14)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) LangChain, Inc.
@@ -3782,10 +3864,12 @@ SOFTWARE.
 ## langchain-anthropic (1.5.3)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2023 LangChain, Inc.
@@ -3812,20 +3896,24 @@ SOFTWARE.
 ## langchain-core (1.5.3)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 (No license file found in locked artifact for langchain-core; see package metadata or PyPI.)
 ```
 
 ## langchain-google-genai (4.3.2)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2023 LangChain, Inc.
@@ -3852,10 +3940,12 @@ SOFTWARE.
 ## langchain-nvidia-ai-endpoints (1.4.1)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2023 LangChain, Inc.
@@ -3882,10 +3972,12 @@ SOFTWARE.
 ## langchain-protocol (0.0.18)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2026 LangChain, Inc.
@@ -3912,10 +4004,12 @@ SOFTWARE.
 ## langgraph (1.2.9)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2024 LangChain, Inc.
@@ -3942,10 +4036,12 @@ SOFTWARE.
 ## langgraph-checkpoint (4.1.1)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2024 LangChain, Inc.
@@ -3972,10 +4068,12 @@ SOFTWARE.
 ## langgraph-prebuilt (1.1.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2024 LangChain, Inc.
@@ -4002,10 +4100,12 @@ SOFTWARE.
 ## langgraph-sdk (0.4.2)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2024 LangChain, Inc.
@@ -4032,20 +4132,24 @@ SOFTWARE.
 ## langsmith (0.10.15)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 (No license file found in locked artifact for langsmith; see package metadata or PyPI.)
 ```
 
 ## matplotlib-inline (0.2.1)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 BSD 3-Clause License
 
 Copyright (c) 2019-2022, IPython Development Team.
@@ -4080,10 +4184,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## maturin (1.12.6)
 
 ### Licenses
+
 License: `MIT OR Apache-2.0`
 
-  - `license-mit`:
-```
+  - The following license text is from `license-mit`.
+
+```text
 Copyright (c) 2018 konstin
 
 Permission is hereby granted, free of charge, to any
@@ -4114,10 +4220,12 @@ DEALINGS IN THE SOFTWARE.
 ## multidict (6.7.1)
 
 ### Licenses
+
 License: `Apache License 2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright 2016 Andrew Svetlov and aio-libs contributors
 
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -4136,10 +4244,12 @@ Copyright 2016 Andrew Svetlov and aio-libs contributors
 ## nodeenv (1.10.0)
 
 ### Licenses
+
 License: `BSD`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2011, Eugene Kalinin.
 
 Some rights reserved.
@@ -4177,10 +4287,12 @@ DAMAGE.
 ## opentelemetry-proto (1.43.0)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -4387,10 +4499,12 @@ Apache License
 ## orjson (3.11.9)
 
 ### Licenses
+
 License: `MPL-2.0 AND (Apache-2.0 OR MIT)`
 
-  - `LICENSE-APACHE`:
-```
+  - The following license text is from `LICENSE-APACHE`.
+
+```text
 Apache License
                         Version 2.0, January 2004
                      http://www.apache.org/licenses/
@@ -4597,10 +4711,12 @@ limitations under the License.
 ## ormsgpack (1.12.2)
 
 ### Licenses
+
 License: `Apache-2.0 OR MIT`
 
-  - `LICENSE-APACHE`:
-```
+  - The following license text is from `LICENSE-APACHE`.
+
+```text
 Apache License
                         Version 2.0, January 2004
                      http://www.apache.org/licenses/
@@ -4807,10 +4923,12 @@ limitations under the License.
 ## packaging (25.0)
 
 ### Licenses
+
 License: `Apache Software License OR BSD License`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 This software is made available under the terms of *either* of the licenses
 found in LICENSE.APACHE or LICENSE.BSD. Contributions to this software is made
 under the terms of *both* these licenses.
@@ -4819,10 +4937,12 @@ under the terms of *both* these licenses.
 ## parso (0.8.6)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 All contributions towards parso are MIT licensed.
 
 Some Python files have been taken from the standard library and are therefore
@@ -4914,10 +5034,12 @@ Agreement.
 ## pexpect (4.9.0)
 
 ### Licenses
+
 License: `ISC license`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 ISC LICENSE
 
     This license is approved by the OSI and FSF as GPL-compatible.
@@ -4942,10 +5064,12 @@ ISC LICENSE
 ## pip-licenses (5.5.5)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2018 raimon
@@ -4972,10 +5096,12 @@ SOFTWARE.
 ## platformdirs (4.9.4)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2010-202x The platformdirs developers
@@ -5002,10 +5128,12 @@ SOFTWARE.
 ## pluggy (1.6.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2015 holger krekel (rather uses bitbucket/hpk42)
@@ -5032,10 +5160,12 @@ SOFTWARE.
 ## pre-commit (4.5.1)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2014 pre-commit dev team: Anthony Sottile, Ken Struys
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -5060,10 +5190,12 @@ THE SOFTWARE.
 ## prettytable (3.17.0)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 # Copyright (c) 2009-2014 Luke Maurits <luke@maurits.id.au>
 # All rights reserved.
 # With contributions from:
@@ -5099,10 +5231,12 @@ License: `BSD-3-Clause`
 ## prompt-toolkit (3.0.52)
 
 ### Licenses
+
 License: `BSD License`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2014, Jonathan Slenders
 All rights reserved.
 
@@ -5135,10 +5269,12 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## propcache (0.4.1)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -5345,10 +5481,12 @@ Apache License
 ## protobuf (7.35.1)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright 2008 Google Inc.  All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -5386,10 +5524,12 @@ support library is itself covered by the above license.
 ## ptyprocess (0.7.0)
 
 ### Licenses
+
 License: `ISC`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Ptyprocess is under the ISC license, as code derived from Pexpect.
     http://opensource.org/licenses/ISC
 
@@ -5410,10 +5550,12 @@ OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ## pure-eval (0.2.3)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 MIT License
 
 Copyright (c) 2019 Alex Hall
@@ -5440,10 +5582,12 @@ SOFTWARE.
 ## pyasn1 (0.6.3)
 
 ### Licenses
+
 License: `BSD-2-Clause`
 
-  - `LICENSE.rst`:
-```
+  - The following license text is from `LICENSE.rst`.
+
+```text
 Copyright (c) 2005-2020, Ilya Etingof <etingof@gmail.com>
 All rights reserved.
 
@@ -5473,10 +5617,12 @@ POSSIBILITY OF SUCH DAMAGE.
 ## pyasn1-modules (0.4.2)
 
 ### Licenses
+
 License: `BSD`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 Copyright (c) 2005-2020, Ilya Etingof <etingof@gmail.com>
 All rights reserved.
 
@@ -5506,10 +5652,12 @@ POSSIBILITY OF SUCH DAMAGE.
 ## pycparser (3.0)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 pycparser -- A C parser in Python
 
 Copyright (c) 2008-2022, Eli Bendersky
@@ -5542,10 +5690,12 @@ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## pydantic (2.12.5)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2017 to present Pydantic Services Inc. and individual contributors.
@@ -5572,10 +5722,12 @@ SOFTWARE.
 ## pydantic-core (2.41.5)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2022 Samuel Colvin
@@ -5602,10 +5754,12 @@ SOFTWARE.
 ## pygments (2.20.0)
 
 ### Licenses
+
 License: `BSD-2-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2006-2022 by the respective authors (see AUTHORS file).
 All rights reserved.
 
@@ -5636,10 +5790,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## pytest (9.0.3)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2004 Holger Krekel and others
@@ -5666,10 +5822,12 @@ SOFTWARE.
 ## pytest-asyncio (1.3.0)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -5876,10 +6034,12 @@ Apache License
 ## pytest-cov (7.1.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License
 
 Copyright (c) 2010 Meme Dough
@@ -5906,10 +6066,12 @@ THE SOFTWARE.
 ## python-discovery (1.2.1)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the
 "Software"), to deal in the Software without restriction, including
@@ -5933,10 +6095,12 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## pyyaml (6.0.3)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2017-2021 Ingy döt Net
 Copyright (c) 2006-2016 Kirill Simonov
 
@@ -5962,10 +6126,12 @@ SOFTWARE.
 ## requests (2.33.1)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -6145,10 +6311,12 @@ Apache License
 ## requests-toolbelt (1.0.0)
 
 ### Licenses
+
 License: `Apache 2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright 2014 Ian Cordasco, Cory Benfield
 
    Licensed under the Apache License, Version 2.0 (the "License");
@@ -6167,10 +6335,12 @@ Copyright 2014 Ian Cordasco, Cory Benfield
 ## ruff (0.15.9)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2022 Charles Marsh
@@ -6606,10 +6776,12 @@ are:
 ## sniffio (1.3.1)
 
 ### Licenses
+
 License: `MIT OR Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 This software is made available under the terms of *either* of the
 licenses found in LICENSE.APACHE2 or LICENSE.MIT. Contributions to are
 made under the terms of *both* these licenses.
@@ -6618,10 +6790,12 @@ made under the terms of *both* these licenses.
 ## soupsieve (2.8.4)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 MIT License
 
 Copyright (c) 2018 - 2026 Isaac Muse <isaacmuse@gmail.com>
@@ -6648,10 +6822,12 @@ SOFTWARE.
 ## stack-data (0.6.3)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 MIT License
 
 Copyright (c) 2019 Alex Hall
@@ -6678,10 +6854,12 @@ SOFTWARE.
 ## tenacity (9.1.4)
 
 ### Licenses
+
 License: `Apache 2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -6888,10 +7066,12 @@ Apache License
 ## tomli (2.4.1)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2021 Taneli Hukkinen
@@ -6918,10 +7098,12 @@ SOFTWARE.
 ## traitlets (5.14.3)
 
 ### Licenses
+
 License: `BSD 3-Clause License`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 BSD 3-Clause License
 
 - Copyright (c) 2001-, IPython Development Team
@@ -6957,10 +7139,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## ty (0.0.29)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) 2025 Astral Software Inc.
@@ -6987,10 +7171,12 @@ SOFTWARE.
 ## typing-extensions (4.15.0)
 
 ### Licenses
+
 License: `PSF-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 A. HISTORY OF THE SOFTWARE
 ==========================
 
@@ -7275,10 +7461,12 @@ PERFORMANCE OF THIS SOFTWARE.
 ## typing-inspection (0.4.2)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 MIT License
 
 Copyright (c) Pydantic Services Inc. 2025 to present
@@ -7305,10 +7493,12 @@ SOFTWARE.
 ## urllib3 (2.7.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.txt`:
-```
+  - The following license text is from `LICENSE.txt`.
+
+```text
 MIT License
 
 Copyright (c) 2008-2020 Andrey Petrov and contributors.
@@ -7335,10 +7525,12 @@ SOFTWARE.
 ## uuid-utils (0.14.1)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 Copyright © 2023, Amin Alaee.
 All rights reserved.
 
@@ -7371,10 +7563,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## uv (0.11.29)
 
 ### Licenses
+
 License: `MIT OR Apache-2.0`
 
-  - `LICENSE-APACHE`:
-```
+  - The following license text is from `LICENSE-APACHE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -7581,10 +7775,12 @@ Apache License
 ## virtualenv (21.2.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2020-202x The virtualenv developers
 
 Permission is hereby granted, free of charge, to any person obtaining
@@ -7610,10 +7806,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ## wcmatch (11.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE.md`:
-```
+  - The following license text is from `LICENSE.md`.
+
+```text
 MIT License
 
 Copyright (c) 2018 - 2026 Isaac Muse
@@ -7640,10 +7838,12 @@ SOFTWARE.
 ## wcwidth (0.6.0)
 
 ### Licenses
+
 License: `MIT`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 The MIT License (MIT)
 
 Copyright (c) 2014 Jeff Quast <contact@jeffquast.com>
@@ -7676,10 +7876,12 @@ disclaims all warranties with regard to this software.
 ## websockets (15.0.1)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) Aymeric Augustin and contributors
 
 Redistribution and use in source and binary forms, with or without
@@ -7709,10 +7911,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## xxhash (3.7.0)
 
 ### Licenses
+
 License: `BSD`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2014-2024, Yue Du
 All rights reserved.
 
@@ -7740,10 +7944,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ## yarl (1.23.0)
 
 ### Licenses
+
 License: `Apache-2.0`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -7950,10 +8156,12 @@ Apache License
 ## ziglang (0.15.2)
 
 ### Licenses
+
 License: `MIT`
 
-  - `licenses/ziglang/LICENSE`:
-```
+  - The following license text is from `licenses/ziglang/LICENSE`.
+
+```text
 The MIT License (Expat)
 
 Copyright (c) Zig contributors
@@ -7980,10 +8188,12 @@ THE SOFTWARE.
 ## zstandard (0.25.0)
 
 ### Licenses
+
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
-```
+  - The following license text is from `LICENSE`.
+
+```text
 Copyright (c) 2016, Gregory Szorc
 All rights reserved.
 
