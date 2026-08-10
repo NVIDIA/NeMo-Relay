@@ -18,7 +18,9 @@ use nemo_relay::api::optimization::LlmOptimizationRecorder;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmJsonStream, LlmStreamInner, NemoRelayContextState};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
+use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::error::FlowError;
 use nemo_relay::error::Result;
 use nemo_relay::json::Json;
@@ -469,6 +471,72 @@ async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
     );
 
     deregister_subscriber("stream_drop_end_test").unwrap();
+}
+
+#[tokio::test]
+async fn dropped_stream_after_terminal_response_emits_success() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "stream_terminal_drop_status_test",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let terminal_event = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_complete",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "done"}]
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+        }
+    });
+    let streaming_codec = OpenAIResponsesStreamingCodec::new();
+    let collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"input": "finish"}),
+    };
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("openai.responses")
+            .request(&request)
+            .attributes(LlmAttributes::STREAMING)
+            .build(),
+    )
+    .unwrap();
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(terminal_event.clone())]),
+        handle,
+        collector,
+        finalizer,
+        None,
+        None,
+        Some(Arc::new(OpenAIResponsesCodec)),
+    );
+
+    assert_eq!(wrapper.next().await.unwrap().unwrap(), terminal_event);
+    drop(wrapper);
+
+    let events = captured_snapshot(&events);
+    let end_event = events
+        .iter()
+        .find(|event| is_llm_end(event))
+        .expect("expected END event after the terminal response was dropped");
+    let metadata = end_event.metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("OK"));
+    assert!(metadata.get("otel.status_description").is_none());
+
+    deregister_subscriber("stream_terminal_drop_status_test").unwrap();
 }
 
 #[tokio::test]

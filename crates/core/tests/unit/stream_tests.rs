@@ -30,11 +30,26 @@ fn partial_stream_usage_is_not_treated_as_authoritative_without_terminal_evidenc
     };
     assert!(!has_authoritative_final_usage(Some(&partial)));
 
-    let terminal = AnnotatedLlmResponse {
-        finish_reason: Some(FinishReason::Complete),
+    for finish_reason in [
+        FinishReason::Complete,
+        FinishReason::Length,
+        FinishReason::ToolUse,
+        FinishReason::ContentFilter,
+    ] {
+        let terminal = AnnotatedLlmResponse {
+            finish_reason: Some(finish_reason),
+            ..partial.clone()
+        };
+        assert!(has_authoritative_final_usage(Some(&terminal)));
+        assert!(has_authoritative_terminal_outcome(Some(&terminal)));
+    }
+
+    let failed = AnnotatedLlmResponse {
+        finish_reason: Some(FinishReason::Unknown("failed".to_string())),
         ..partial
     };
-    assert!(has_authoritative_final_usage(Some(&terminal)));
+    assert!(has_authoritative_final_usage(Some(&failed)));
+    assert!(!has_authoritative_terminal_outcome(Some(&failed)));
 }
 
 #[test]

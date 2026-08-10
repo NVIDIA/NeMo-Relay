@@ -18,9 +18,10 @@ use nemo_relay::api::event::ScopeCategory;
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
-    deregister_llm_stream_execution_intercept, deregister_tool_conditional_execution_guardrail,
-    register_llm_execution_intercept, register_llm_request_intercept,
-    register_llm_stream_execution_intercept, register_tool_conditional_execution_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_scope_sanitize_end_guardrail,
+    deregister_tool_conditional_execution_guardrail, register_llm_execution_intercept,
+    register_llm_request_intercept, register_llm_stream_execution_intercept,
+    register_scope_sanitize_end_guardrail, register_tool_conditional_execution_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
@@ -123,6 +124,14 @@ struct SubscriberCleanup(&'static str);
 impl Drop for SubscriberCleanup {
     fn drop(&mut self) {
         let _ = deregister_subscriber(self.0);
+    }
+}
+
+struct ScopeEndSanitizerCleanup(&'static str);
+
+impl Drop for ScopeEndSanitizerCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_scope_sanitize_end_guardrail(self.0);
     }
 }
 
@@ -988,6 +997,19 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
+    for hook_event_name in ["sessionStart", "UserPromptSubmit"] {
+        let response = client
+            .post(format!("{url}/hooks/codex"))
+            .json(&json!({
+                "session_id": "plugin-shutdown-open-session",
+                "hook_event_name": hook_event_name,
+                "prompt": "Leave this turn open until Relay shuts down."
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
@@ -1019,6 +1041,180 @@ async fn serve_listener_activates_plugin_config_and_clears_on_shutdown() {
             .as_array()
             .is_some_and(|events| events.len() >= 2)
     );
+    assert!(
+        trajectories.iter().any(|trajectory| {
+            atif_matches_session(trajectory, "plugin-shutdown-open-session")
+                && trajectory["extra"]["observed_events"]
+                    .as_array()
+                    .is_some_and(|events| {
+                        events.iter().any(|event| {
+                            event["name"] == json!("codex-turn")
+                                && event["scope_category"] == json!("end")
+                        })
+                    })
+        }),
+        "full server teardown must flush an open session's terminal ATIF snapshot before clearing plugins: {}",
+        serde_json::to_string_pretty(&trajectories).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn terminal_hook_responses_wait_for_their_atif_snapshot() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = nemo_relay::plugin::clear_plugin_configuration();
+
+    let temp = tempfile::tempdir().unwrap();
+    let atif_dir = temp.path().join("atif");
+    std::fs::create_dir_all(&atif_dir).unwrap();
+    let mut config = test_config();
+    config.plugin_config = Some(json!({
+        "version": 1,
+        "components": [{
+            "kind": "observability",
+            "enabled": true,
+            "config": {
+                "version": 3,
+                "atif": {
+                    "enabled": true,
+                    "output_directory": atif_dir,
+                    "filename_template": "trajectory-{session_id}.json"
+                }
+            }
+        }]
+    }));
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let url = format!("http://{address}");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let handle =
+        tokio::spawn(async move { serve_listener(listener, config, Some(shutdown_rx)).await });
+    wait_for_gateway(&url).await;
+    let client = test_http_client();
+
+    for (path, session_id, turn_name, terminal_event, sanitizer_name) in [
+        (
+            "/hooks/codex",
+            "codex-atif-response-boundary",
+            "codex-turn",
+            "Stop",
+            "codex-atif-response-boundary-sanitizer",
+        ),
+        (
+            "/hooks/claude-code",
+            "claude-atif-response-boundary",
+            "claude-code-turn",
+            "SessionEnd",
+            "claude-atif-response-boundary-sanitizer",
+        ),
+    ] {
+        for hook_event_name in ["sessionStart", "UserPromptSubmit"] {
+            let response = client
+                .post(format!("{url}{path}"))
+                .json(&json!({
+                    "session_id": session_id,
+                    "hook_event_name": hook_event_name,
+                    "prompt": "Return one short answer."
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        let _ = deregister_scope_sanitize_end_guardrail(sanitizer_name);
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let started_tx = Arc::new(Mutex::new(Some(started_tx)));
+        let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+        let expected_session_id = session_id.to_string();
+        let expected_turn_name = turn_name.to_string();
+        register_scope_sanitize_end_guardrail(
+            sanitizer_name,
+            0,
+            Arc::new(move |event, fields| {
+                let should_block = event.scope_category() == Some(ScopeCategory::End)
+                    && event.name() == expected_turn_name
+                    && event
+                        .metadata()
+                        .and_then(|metadata| metadata.get("session_id"))
+                        .and_then(Value::as_str)
+                        == Some(expected_session_id.as_str());
+                let started = should_block
+                    .then(|| started_tx.lock().unwrap().take())
+                    .flatten();
+                let release = should_block
+                    .then(|| release_rx.lock().unwrap().take())
+                    .flatten();
+                Box::pin(async move {
+                    if let Some(started) = started {
+                        let _ = started.send(());
+                        if let Some(release) = release {
+                            let _ = release.await;
+                        }
+                    }
+                    Ok(fields)
+                })
+            }),
+        )
+        .unwrap();
+        let sanitizer_cleanup = ScopeEndSanitizerCleanup(sanitizer_name);
+
+        let terminal_client = client.clone();
+        let terminal_url = format!("{url}{path}");
+        let terminal_session_id = session_id.to_string();
+        let mut terminal = tokio::spawn(async move {
+            terminal_client
+                .post(terminal_url)
+                .json(&json!({
+                    "session_id": terminal_session_id,
+                    "hook_event_name": terminal_event,
+                    "response": "Done."
+                }))
+                .send()
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), started_rx)
+            .await
+            .expect("terminal scope sanitizer should start")
+            .unwrap();
+
+        let early_response =
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut terminal)
+                .await
+                .ok();
+        let returned_early = early_response.is_some();
+        let _ = release_tx.send(());
+        let response = match early_response {
+            Some(response) => response.unwrap(),
+            None => terminal.await.unwrap(),
+        };
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            !returned_early,
+            "{terminal_event} returned before its terminal subscribers completed"
+        );
+
+        let trajectories = std::fs::read_dir(temp.path().join("atif"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                serde_json::from_slice::<Value>(&std::fs::read(entry.path()).ok()?).ok()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            trajectories
+                .iter()
+                .any(|trajectory| atif_matches_session(trajectory, session_id)),
+            "terminal hook response must not precede the ATIF snapshot for {session_id}: {}",
+            serde_json::to_string_pretty(&trajectories).unwrap()
+        );
+        drop(sanitizer_cleanup);
+    }
+
+    shutdown_tx.send(()).unwrap();
+    handle.await.unwrap().unwrap();
 }
 
 #[tokio::test]
