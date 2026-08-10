@@ -9,7 +9,6 @@ pub(crate) enum ConfigurationScope {
     #[default]
     Default,
     User,
-    Project,
     Global,
     /// More than one mutually exclusive command scope was supplied.
     Invalid,
@@ -18,6 +17,8 @@ pub(crate) enum ConfigurationScope {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PluginsEditRequest {
     pub(crate) scope: ConfigurationScope,
+    /// Low-layer physical file inherited from top-level runtime configuration.
+    pub(crate) explicit_path: Option<PathBuf>,
 }
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PluginsAddRequest {

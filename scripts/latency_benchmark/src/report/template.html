@@ -1,0 +1,210 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NeMo Relay Latency Report</title>
+    <style>
+__BENCHMARK_STYLES__
+    </style>
+  </head>
+  <body>
+    <header class="hero">
+      <div class="page-shell">
+        <h1>NeMo Relay Latency Report</h1>
+      </div>
+    </header>
+
+    <main class="page-shell">
+      <section aria-labelledby="summary-title">
+        <h2 id="summary-title">Run Summary</h2>
+        <div class="summary-grid" id="summary-cards"></div>
+        <details>
+          <summary>Environment and resolved configuration</summary>
+          <div class="details-grid">
+            <div>
+              <h3>Environment</h3>
+              <div class="table-wrap" id="environment-table"></div>
+            </div>
+            <div>
+              <h3>Configuration</h3>
+              <div class="table-wrap" id="parameters-table"></div>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section class="guidance" aria-labelledby="reading-title">
+        <h2 id="reading-title">How to Read This Report</h2>
+        <div class="definition-grid">
+          <article>
+            <h3>Absolute Latency</h3>
+            <p>
+              Elapsed wall time for one path. Use it to understand the complete
+              local operation, including process work where applicable.
+            </p>
+          </article>
+          <article>
+            <h3>Paired Delta</h3>
+            <p>
+              The left path minus its baseline in the same measurement cycle.
+              Positive values mean added time. Small negative values can occur
+              because of scheduler and measurement noise.
+            </p>
+          </article>
+          <article>
+            <h3>Percentiles</h3>
+            <p>
+              p50 is the median. p95 and p99 describe slower tail observations.
+              Min and max are the observed extremes and are more sensitive to
+              outliers.
+            </p>
+          </article>
+          <article>
+            <h3>Median 95% CI</h3>
+            <p>
+              The bootstrap interval estimates uncertainty around the median
+              paired delta. It is not a range containing 95% of observations.
+            </p>
+          </article>
+        </div>
+        <p class="callout">
+          Prefer paired added milliseconds over percentages. Loopback baselines
+          are very small, so a harmless absolute difference can look large as a
+          percentage. Do not draw performance conclusions from a smoke test.
+        </p>
+      </section>
+
+      <section id="gateway-section" aria-labelledby="gateway-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="gateway-title">Gateway</h2>
+          </div>
+          <p>
+            Compares deterministic provider calls made directly and through
+            minimal Relay, the ATOF file exporter, the OTLP exporter, and
+            opt-in middleware Relay gateways.
+          </p>
+        </div>
+        <div class="controls" aria-label="Gateway graph controls">
+          <label>Provider<select id="gateway-provider"></select></label>
+          <label>Mode<select id="gateway-mode"></select></label>
+          <label>Concurrency<select id="gateway-concurrency"></select></label>
+          <label>Metric<select id="gateway-metric"></select></label>
+          <label>Statistic<select id="gateway-percentile"></select></label>
+          <label>View<select id="gateway-view"></select></label>
+        </div>
+        <div class="chart-card">
+          <h3 id="gateway-chart-title">Gateway Latency by Payload Size</h3>
+          <p id="gateway-chart-description"></p>
+          <svg
+            id="gateway-chart"
+            class="line-chart"
+            aria-labelledby="gateway-chart-title gateway-chart-description"
+          ></svg>
+          <div class="legend" id="gateway-legend" aria-label="Graph legend"></div>
+        </div>
+        <div class="table-section">
+          <h3>Selected Gateway Data</h3>
+          <p>
+            The table is the accessible numeric counterpart to the graph. The
+            confidence interval is available for paired median deltas only.
+          </p>
+          <div class="table-wrap" id="gateway-table"></div>
+        </div>
+      </section>
+
+      <section id="hooks-section" aria-labelledby="hooks-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="hooks-title">Hooks</h2>
+          </div>
+          <p>
+            Measures full <code>nemo-relay hook-forward</code> subprocess wall
+            time for Codex and Claude Code. Paired deltas subtract a
+            <code>nemo-relay --version</code> process baseline.
+          </p>
+        </div>
+        <div class="chart-card">
+          <h3 id="hooks-chart-title">Hook Absolute p50</h3>
+          <p id="hooks-chart-description">Median subprocess wall time in milliseconds.</p>
+          <svg
+            id="hooks-chart"
+            class="bar-chart"
+            aria-labelledby="hooks-chart-title hooks-chart-description"
+          ></svg>
+        </div>
+        <div class="split-tables">
+          <div>
+            <h3>Absolute Latency</h3>
+            <div class="table-wrap" id="hooks-absolute-table"></div>
+          </div>
+          <div>
+            <h3>Paired Delta From Process Baseline</h3>
+            <div class="table-wrap" id="hooks-comparison-table"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="startup-section" aria-labelledby="startup-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="startup-title">Startup</h2>
+          </div>
+          <p>
+            Measures cold Relay process launch through a healthy gateway. Paired
+            deltas subtract the same process baseline used by the hook suite.
+          </p>
+        </div>
+        <div class="chart-card">
+          <h3 id="startup-chart-title">Startup Absolute p50</h3>
+          <p id="startup-chart-description">Median process or readiness time in milliseconds.</p>
+          <svg
+            id="startup-chart"
+            class="bar-chart"
+            aria-labelledby="startup-chart-title startup-chart-description"
+          ></svg>
+        </div>
+        <div class="split-tables">
+          <div>
+            <h3>Absolute Latency</h3>
+            <div class="table-wrap" id="startup-absolute-table"></div>
+          </div>
+          <div>
+            <h3>Paired Delta From Process Baseline</h3>
+            <div class="table-wrap" id="startup-comparison-table"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="delivery-section" aria-labelledby="delivery-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="delivery-title">Exporter Delivery</h2>
+          </div>
+          <p>
+            These counts confirm that the ATOF file exporter and OTLP exporter
+            delivered data. They are correctness signals, not latency metrics.
+          </p>
+        </div>
+        <div class="summary-grid" id="delivery-cards"></div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="page-shell">
+        Generated by <code>just latency-benchmark</code>. Keep the
+        companion JSON file when sharing or analyzing this report.
+      </div>
+    </footer>
+
+    <script id="benchmark-data" type="application/json">__BENCHMARK_DATA__</script>
+    <script>
+__BENCHMARK_SCRIPT__
+    </script>
+  </body>
+</html>

@@ -3,6 +3,7 @@
 
 use clap::Parser;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use super::completions::CompletionsCommand;
 use super::serve::ServerArgs;
@@ -10,10 +11,72 @@ use super::*;
 use crate::commands::configure::ConfigSubcommand;
 use crate::commands::model_pricing::{PricingSubcommand, PricingValidateCommand};
 use crate::commands::plugins::{
-    PluginsCommand, PluginsInspectCommand, PluginsListCommand, PluginsSubcommand,
-    PluginsValidateCommand,
+    PluginsCommand, PluginsEditCommand, PluginsInspectCommand, PluginsListCommand,
+    PluginsScopeArgs, PluginsSubcommand, PluginsValidateCommand,
 };
 use crate::commands::root::AgentArg;
+
+#[test]
+fn plugins_edit_treats_explicit_target_as_the_user_layer() {
+    let config = PathBuf::from("/managed/config.toml");
+    let server = crate::server::GatewayOverrides {
+        config: Some(config),
+        ..crate::server::GatewayOverrides::default()
+    };
+
+    let default = PluginsEditCommand::default();
+    let request = plugins::edit_request(default, &server);
+    assert_eq!(
+        request.explicit_path,
+        Some(PathBuf::from("/managed/plugins.toml"))
+    );
+
+    let server = crate::server::GatewayOverrides {
+        config: Some(PathBuf::from("/managed/config.toml")),
+        plugin_config_path: Some(PathBuf::from("/override/plugins.toml")),
+        ..crate::server::GatewayOverrides::default()
+    };
+    let request = plugins::edit_request(PluginsEditCommand::default(), &server);
+    assert_eq!(
+        request.explicit_path,
+        Some(PathBuf::from("/override/plugins.toml"))
+    );
+
+    let user = PluginsEditCommand {
+        scope: PluginsScopeArgs {
+            user: true,
+            ..PluginsScopeArgs::default()
+        },
+    };
+    let request = plugins::edit_request(user, &server);
+    assert_eq!(
+        request.explicit_path,
+        Some(PathBuf::from("/override/plugins.toml"))
+    );
+
+    let global = PluginsEditCommand {
+        scope: PluginsScopeArgs {
+            global: true,
+            ..PluginsScopeArgs::default()
+        },
+    };
+    let request = plugins::edit_request(global, &server);
+    assert_eq!(request.explicit_path, None);
+}
+
+#[test]
+fn easy_path_setup_inherits_explicit_plugin_target() {
+    let plugin_config_path = PathBuf::from("/managed/plugins.toml");
+    let inherited = crate::server::GatewayOverrides {
+        plugin_config_path: Some(plugin_config_path.clone()),
+        ..crate::server::GatewayOverrides::default()
+    };
+
+    assert_eq!(
+        run::easy_path_plugin_config_path(&inherited),
+        Some(plugin_config_path)
+    );
+}
 
 #[test]
 fn operational_command_names_cover_logging_exempt_commands() {
@@ -145,7 +208,7 @@ fn cli_logging_options_override_environment_source() {
     ])
     .unwrap();
 
-    let config = cli.logging.resolve(None, false).unwrap();
+    let config = cli.logging.resolve(None).unwrap();
 
     assert_eq!(config.level, nemo_relay::logging::LogLevel::Trace);
     assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
@@ -154,6 +217,7 @@ fn cli_logging_options_override_environment_source() {
 
 #[test]
 fn cli_logging_resolves_explicit_relay_config() {
+    let _cwd = crate::test_support::CwdTestScope::locked();
     let _environment = crate::test_support::EnvScope::set(&[
         ("NEMO_RELAY_LOG", None),
         ("NEMO_RELAY_LOG_STDERR_FORMAT", None),
@@ -178,10 +242,7 @@ stderr_format = "jsonl"
     ])
     .unwrap();
 
-    let config = cli
-        .logging
-        .resolve(cli.server.config.as_deref(), false)
-        .unwrap();
+    let config = cli.logging.resolve(cli.server.config.as_deref()).unwrap();
 
     assert_eq!(config.level, nemo_relay::logging::LogLevel::Warn);
     assert_eq!(config.stderr_format, nemo_relay::logging::LogFormat::Jsonl);
@@ -210,7 +271,7 @@ fn command_logging_policy_excludes_only_configuration_editors() {
     let config = Cli::try_parse_from(["nemo-relay", "config"]).unwrap();
     assert!(config.command.as_ref().unwrap().skips_logging());
 
-    let plugins_edit = Cli::try_parse_from(["nemo-relay", "plugins", "edit", "--project"]).unwrap();
+    let plugins_edit = Cli::try_parse_from(["nemo-relay", "plugins", "edit", "--user"]).unwrap();
     assert!(plugins_edit.command.as_ref().unwrap().skips_logging());
 
     let plugins_list = Cli::try_parse_from(["nemo-relay", "plugins", "list"]).unwrap();
@@ -236,17 +297,25 @@ fn cli_parses_config_edit_scopes_and_rejects_conflicts() {
         panic!("expected config edit command");
     };
     assert!(!command.user);
-    assert!(!command.project);
     assert!(!command.global);
 
-    let project = Cli::try_parse_from(["nemo-relay", "config", "edit", "--project"]).unwrap();
-    let Command::Config(command) = project.command.unwrap() else {
-        panic!("expected config command");
-    };
-    let Some(ConfigSubcommand::Edit(command)) = command.command else {
-        panic!("expected config edit command");
-    };
-    assert!(command.project);
+    let explicit = Cli::try_parse_from([
+        "nemo-relay",
+        "--config",
+        "/managed/config.toml",
+        "config",
+        "edit",
+    ])
+    .unwrap();
+    assert_eq!(
+        explicit.server.config,
+        Some(PathBuf::from("/managed/config.toml"))
+    );
+
+    assert!(Cli::try_parse_from(["nemo-relay", "config", "edit", "--project"]).is_err());
+    assert!(Cli::try_parse_from(["nemo-relay", "plugins", "edit", "--project"]).is_err());
+    assert!(Cli::try_parse_from(["nemo-relay", "model-pricing", "init", "--project"]).is_err());
+    assert!(Cli::try_parse_from(["nemo-relay", "config", "--reset", "--scope", "user"]).is_err());
 
     let error =
         Cli::try_parse_from(["nemo-relay", "config", "edit", "--user", "--global"]).unwrap_err();
@@ -268,6 +337,36 @@ fn doctor_rejects_conflicting_agent_and_plugin_targets() {
 }
 
 #[test]
+fn doctor_accepts_offline_flag() {
+    let cli = Cli::try_parse_from(["nemo-relay", "doctor", "--offline"]).unwrap();
+    match cli.command {
+        Some(Command::Doctor(command)) => assert!(command.offline),
+        other => panic!("expected doctor command, got {other:?}"),
+    }
+}
+
+#[test]
+fn agent_shortcut_parser_accepts_dry_run_before_forwarded_arguments() {
+    for shortcut in ["claude", "codex"] {
+        let cli = Cli::try_parse_from([
+            "nemo-relay",
+            shortcut,
+            "--dry-run",
+            "--",
+            shortcut,
+            "synthetic argument",
+        ])
+        .unwrap();
+        let command = match cli.command {
+            Some(Command::Claude(command)) | Some(Command::Codex(command)) => command,
+            other => panic!("expected agent shortcut command, got {other:?}"),
+        };
+        assert!(command.dry_run);
+        assert_eq!(command.command, [shortcut, "synthetic argument"]);
+    }
+}
+
+#[test]
 fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
     let visited = std::cell::RefCell::new(Vec::new());
     let error = install::run_agent_operations(CodingAgent::ALL.to_vec(), "install", |agent| {
@@ -275,7 +374,6 @@ fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
         match agent {
             CodingAgent::Codex => Err(error::CliError::Install("codex failure".into())),
             CodingAgent::ClaudeCode => Ok(ExitCode::FAILURE),
-            CodingAgent::Hermes => Ok(ExitCode::SUCCESS),
         }
     })
     .unwrap_err()
@@ -415,7 +513,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
     ])
     .unwrap();
     assert_eq!(
-        run_command(cli.command.unwrap(), &cli.server)
+        run_command(cli.command.unwrap(), &cli.server, None)
             .await
             .unwrap(),
         ExitCode::SUCCESS
@@ -431,7 +529,7 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
     ])
     .unwrap();
     assert_eq!(
-        run_command(cli.command.unwrap(), &cli.server)
+        run_command(cli.command.unwrap(), &cli.server, None)
             .await
             .unwrap(),
         ExitCode::SUCCESS

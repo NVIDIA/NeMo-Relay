@@ -252,6 +252,10 @@ typedef char *(*NemoRelayEventSanitizeCb)(void *user_data,
 /**
  * Optional destructor for user data passed to callbacks.
  * Called when the runtime no longer needs the associated callback.
+ *
+ * Middleware callbacks may run concurrently on Relay runtime or publication
+ * threads. Callers must keep `user_data` valid and thread-safe until this
+ * destructor runs.
  */
 typedef void (*NemoRelayFreeFn)(void *user_data);
 
@@ -361,6 +365,10 @@ typedef NemoRelayStatus (*NemoRelayLlmRequestInterceptCb)(void *user_data,
 /**
  * Runtime-provided "next" callback for LLM execution middleware chain.
  * Takes a native JSON C string, returns a response JSON C string.
+ * `next_ctx` is borrowed and valid only until the intercept callback returns;
+ * callers must not retain it or invoke `next_fn` asynchronously. The returned
+ * string belongs to the caller and must be released with
+ * `nemo_relay_string_free`.
  */
 typedef char *(*NemoRelayLlmExecNextFn)(const char *native_json, void *next_ctx);
 
@@ -405,7 +413,10 @@ typedef char *(*NemoRelayToolConditionalCb)(void *user_data, const char *name, c
 /**
  * Runtime-provided "next" callback for tool execution middleware chain.
  * Call this from an intercept to invoke the next layer (or original function).
- * `next_ctx` is an opaque pointer managed by the runtime.
+ * `next_ctx` is borrowed and valid only until the intercept callback returns;
+ * callers must not retain it or invoke `next_fn` asynchronously. The returned
+ * string belongs to the caller and must be released with
+ * `nemo_relay_string_free`.
  */
 typedef char *(*NemoRelayToolExecNextFn)(const char *args_json, void *next_ctx);
 
@@ -435,10 +446,30 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 
 /**
+ * Initializes the Go binding runtime and installs default operational logging.
+ *
+ * Logging configuration is resolved from `NEMO_RELAY_LOG`,
+ * `NEMO_RELAY_LOG_STDERR_FORMAT`, or `NEMO_RELAY_LOG_CONFIG_PATH`, with built-in defaults when
+ * none are set. Repeated initialization is a no-op.
+ */
+NemoRelayStatus nemo_relay_initialize_default_logging(void);
+
+/**
+ * Shuts down and releases the default operational logging runtime.
+ *
+ * Pending file-sink records are drained before this function returns. Repeated shutdown is a
+ * no-op.
+ */
+NemoRelayStatus nemo_relay_shutdown_default_logging(void);
+
+/**
  * Run the registered tool request intercept chain on the given arguments.
  *
  * This helper applies only the request-intercept middleware and does not emit
  * lifecycle events or execute the tool callback.
+ *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
  *
  * # Parameters
  * - `name`: Tool name (null-terminated C string).
@@ -459,6 +490,9 @@ NemoRelayStatus nemo_relay_tool_request_intercepts(const char *name,
 
 /**
  * Run the registered tool conditional execution guardrail chain.
+ *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
  *
  * Returns `NemoRelayStatus::Ok` if all guardrails pass, or
  * `NemoRelayStatus::GuardrailRejected` if blocked.
@@ -481,6 +515,9 @@ NemoRelayStatus nemo_relay_tool_conditional_execution(const char *name, const ch
  *
  * This helper applies only the request-intercept middleware and does not emit
  * lifecycle events or execute the provider callback.
+ *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
  *
  * # Parameters
  * - `name`: Optional provider name as a null-terminated C string. Pass null to
@@ -553,6 +590,9 @@ NemoRelayStatus nemo_relay_llm_request_intercept_outcome_json_new_v2(const struc
 
 /**
  * Run the registered LLM conditional execution guardrail chain.
+ *
+ * This legacy helper blocks its caller. If called from a Tokio runtime,
+ * middleware must not depend on work driven exclusively by that caller thread.
  *
  * Returns `NemoRelayStatus::Ok` if all guardrails pass, or
  * `NemoRelayStatus::GuardrailRejected` if blocked.
@@ -923,6 +963,17 @@ struct FfiCodecHandle *nemo_relay_openai_responses_codec_new(void);
 struct FfiCodecHandle *nemo_relay_anthropic_messages_codec_new(void);
 
 /**
+ * Create a new Gemini generateContent API codec handle.
+ *
+ * The returned handle implements both request codec (decode/encode) and
+ * response codec (decode_response). Free with `nemo_relay_codec_free`.
+ *
+ * # Safety
+ * Caller must free the returned handle via `nemo_relay_codec_free`.
+ */
+struct FfiCodecHandle *nemo_relay_gemini_generate_content_codec_new(void);
+
+/**
  * Execute an LLM call end-to-end: run conditional-execution guardrails (on raw
  * request), then request intercepts, sanitize-request guardrails, execution
  * intercepts, the callback, and sanitize-response
@@ -1256,7 +1307,8 @@ NemoRelayStatus nemo_relay_register_subscriber(const char *name,
 NemoRelayStatus nemo_relay_deregister_subscriber(const char *name);
 
 /**
- * Wait for subscriber callbacks queued before this call to finish.
+ * Wait for subscriber callbacks queued before this call and events emitted
+ * transitively by those callbacks to finish.
  *
  * Call this function outside native subscriber callbacks. A re-entrant call returns without
  * waiting to avoid blocking the dispatcher, so callbacks later in the same dispatch snapshot can

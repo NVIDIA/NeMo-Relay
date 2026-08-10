@@ -13,6 +13,8 @@ output_dir := ""
 ref_name := ""
 # Linux package artifacts target this minimum glibc version for compatibility.
 linux_glibc_version := "2.17"
+# Supported Node package platform key. CI sets this from its package matrix.
+node_platform := ""
 
 bash_helpers := '''
 set -euo pipefail
@@ -57,7 +59,11 @@ PY
 uv_python_executable() {
     (
         cd "$NEMO_RELAY_REPO_ROOT"
-        uv python find
+        if [[ -n "${UV_PYTHON:-}" ]]; then
+            uv python find "$UV_PYTHON"
+        else
+            uv python find
+        fi
     )
 }
 
@@ -451,8 +457,17 @@ import sys
 version = sys.argv[1]
 if version.startswith("v"):
     raise SystemExit("Release tags must not start with 'v'; use raw SemVer such as 0.1.0")
-if not re.fullmatch(r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?", version):
-    raise SystemExit(f"Unsupported release tag '{version}'; use 0.1.0 or prereleases like 0.1.0-rc.1")
+numeric_identifier = r"(?:0|[1-9][0-9]*)"
+if not re.fullmatch(
+    rf"{numeric_identifier}\.{numeric_identifier}\.{numeric_identifier}"
+    rf"(?:-(?:alpha|beta|rc)\.{numeric_identifier})?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?",
+    version,
+):
+    raise SystemExit(
+        f"Unsupported Cargo version '{version}'; use 0.1.0, prereleases like "
+        "0.1.0-rc.1, or build metadata like 0.1.0+deadbeef"
+    )
 
 path = Path("Cargo.toml")
 text = path.read_text()
@@ -689,6 +704,35 @@ else:
 if updated != text:
     path.write_text(updated)
 print("crates/python/Cargo.toml uses the workspace version")
+
+path = Path("python/cli-bin/pyproject.toml")
+text = path.read_text()
+updated, count = re.subn(
+    r'^version = "(.*)"$',
+    f'version = "{version}"',
+    text,
+    count=1,
+    flags=re.MULTILINE,
+)
+if count != 1:
+    raise SystemExit("Failed to update version in python/cli-bin/pyproject.toml")
+if updated != text:
+    path.write_text(updated)
+print(f"python/cli-bin/pyproject.toml version updated to {version}")
+
+path = Path("pyproject.toml")
+text = path.read_text()
+updated, count = re.subn(
+    r'("nemo-relay-cli-bin==)[^"]+(")',
+    rf'\g<1>{version}\g<2>',
+    text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit("Failed to update the nemo-relay CLI extra version")
+if updated != text:
+    path.write_text(updated)
+print(f"nemo-relay CLI extra updated to {version}")
 PY
 }
 
@@ -827,6 +871,52 @@ prepend_go_bin_to_path() {
     export PATH="$go_bin:$PATH"
 }
 
+prepare_test_plugin_fixtures() {
+    local target_dir="$NEMO_RELAY_REPO_ROOT/target/test-plugin-fixtures"
+    local native_library=""
+    local worker_executable="nemo-relay-worker-plugin-fixture"
+    local host_os=""
+
+    host_os="$(uname -s 2>/dev/null || true)"
+    case "${RUNNER_OS:-}:${OSTYPE:-}:$host_os" in
+        Windows:*|*:msys*:*|*:win32*:*|*:*:MINGW*|*:*:MSYS*|*:*:CYGWIN*)
+            native_library="nemo_relay_plugin_fixture.dll"
+            worker_executable="${worker_executable}.exe"
+            ;;
+        *:darwin*:*|*:*:Darwin)
+            native_library="libnemo_relay_plugin_fixture.dylib"
+            ;;
+        *)
+            native_library="libnemo_relay_plugin_fixture.so"
+            ;;
+    esac
+
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo build --quiet --locked \
+        --manifest-path crates/core/tests/fixtures/native_plugin/Cargo.toml \
+        --target-dir "$target_dir"
+    cargo build --quiet --locked \
+        --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml \
+        --target-dir "$target_dir"
+
+    export NEMO_RELAY_TEST_NATIVE_PLUGIN="$target_dir/debug/$native_library"
+    export NEMO_RELAY_TEST_WORKER_PLUGIN="$target_dir/debug/$worker_executable"
+    if [[ ! -f "$NEMO_RELAY_TEST_NATIVE_PLUGIN" ]]; then
+        echo "ERROR: missing native plugin test fixture: $NEMO_RELAY_TEST_NATIVE_PLUGIN" >&2
+        exit 1
+    fi
+    if [[ ! -f "$NEMO_RELAY_TEST_WORKER_PLUGIN" ]]; then
+        echo "ERROR: missing worker plugin test fixture: $NEMO_RELAY_TEST_WORKER_PLUGIN" >&2
+        exit 1
+    fi
+
+    if command -v cygpath >/dev/null 2>&1; then
+        NEMO_RELAY_TEST_NATIVE_PLUGIN="$(cygpath -w "$NEMO_RELAY_TEST_NATIVE_PLUGIN")"
+        NEMO_RELAY_TEST_WORKER_PLUGIN="$(cygpath -w "$NEMO_RELAY_TEST_WORKER_PLUGIN")"
+        export NEMO_RELAY_TEST_NATIVE_PLUGIN NEMO_RELAY_TEST_WORKER_PLUGIN
+    fi
+}
+
 prepare_llvm_cov_workspace() {
     eval "$(cargo llvm-cov show-env --sh)"
     cargo llvm-cov clean --workspace
@@ -836,7 +926,7 @@ rust_source_coverage_supported() {
     local host
     host="$(rustc -vV | sed -n 's/^host: //p')"
     case "$host" in
-        aarch64-pc-windows-msvc)
+        aarch64-pc-windows-msvc|*-unknown-linux-musl)
             return 1
             ;;
         *)
@@ -898,7 +988,9 @@ build-rust:
         prepare_llvm_cov_workspace
         cargo test --workspace --no-run
     else
-        cargo build --workspace
+        # Maturin supplies the platform-specific linker configuration for the
+        # Python extension in build-python.
+        cargo build --workspace --exclude nemo-relay-python
     fi
 
 # --set [ci=true|false]
@@ -973,11 +1065,22 @@ check-python-worker-proto:
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     PY
 
-generate-worker-plugin-lockfile:
+generate-test-plugin-lockfiles:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
+    cargo generate-lockfile --manifest-path crates/core/tests/fixtures/native_plugin/Cargo.toml
     cargo generate-lockfile --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml
+
+generate-worker-plugin-lockfile: generate-test-plugin-lockfiles
+
+# Build the native and worker dynamic-plugin fixtures once for test processes.
+build-test-plugin-fixtures:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    prepare_test_plugin_fixtures
+    printf 'Native plugin fixture: %s\n' "$NEMO_RELAY_TEST_NATIVE_PLUGIN"
+    printf 'Worker plugin fixture: %s\n' "$NEMO_RELAY_TEST_WORKER_PLUGIN"
 
 
 # --set [ci=true|false]
@@ -1066,9 +1169,27 @@ test-codex-plugin-e2e:
 test-claude-plugin-e2e:
     ./scripts/test-claude-plugin-e2e.sh
 
-# Opt-in: requires a supported Hermes Agent installation and is intentionally outside test-rust/CI.
-test-hermes-mcp-e2e:
-    ./scripts/test-hermes-mcp-e2e.sh
+# Opt-in: builds the release CLI and runs configurable local latency suites.
+[positional-arguments]
+latency-benchmark *benchmark_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    result_dir={{ quote(output_dir) }}
+    result_dir="${result_dir:-target/benchmark-results}"
+    for argument in "$@"; do
+        if [[ "$argument" == "-h" || "$argument" == "--help" ]]; then
+            exec uv run --locked python -m scripts.latency_benchmark.src "$@"
+        fi
+    done
+    cargo build --locked --release -p nemo-relay-cli
+    uv run --locked python -m scripts.latency_benchmark.src \
+        --relay-bin target/release/nemo-relay \
+        --output "$result_dir/nemo-relay-latency-report.json" \
+        "$@"
+
+# Runs the fast latency benchmark fixture tests without building Relay.
+test-latency-benchmark:
+    uv run --locked python -m pytest scripts/latency_benchmark/tests
 
 # --set [output_dir=<path>] [ci=true|false]
 test-rust:
@@ -1116,7 +1237,8 @@ test-rust:
         if rust_source_coverage_supported; then
             prepare_llvm_cov_workspace
         fi
-        cargo nextest run --workspace --profile ci --no-fail-fast
+        prepare_test_plugin_fixtures
+        cargo nextest run --locked --workspace --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported; then
             cargo llvm-cov report \
@@ -1125,6 +1247,7 @@ test-rust:
                 --output-path "$coverage_out"
         fi
     else
+        prepare_test_plugin_fixtures
         cargo test --workspace --exclude nemo-relay-ffi
         cargo test -p nemo-relay-ffi -- --test-threads=1
     fi
@@ -1172,6 +1295,8 @@ test-python:
     fi
     use_project_python_source "$python_executable"
     "$python_executable" -m maturin develop --skip-install
+    prepare_test_plugin_fixtures
+    pytest_cmd+=(--durations=25)
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
@@ -1333,6 +1458,7 @@ test-go:
     esac
     cd "$NEMO_RELAY_REPO_ROOT"
     cargo build $flag -p nemo-relay-ffi
+    prepare_test_plugin_fixtures
 
     if [[ "$is_windows" == true ]]; then
         export CC=clang
@@ -1451,6 +1577,22 @@ set-version version="":
     cd "$NEMO_RELAY_REPO_ROOT"
     set_project_version "$version"
 
+# Set only the Cargo workspace version for release artifact builds.
+# [version] or --set ref_name=<version>
+set-cargo-version version="":
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    version="{{ version }}"
+    if [[ -z "$version" ]]; then
+        version="{{ ref_name }}"
+    fi
+    if [[ -z "$version" ]]; then
+        echo "Error: version is required for set-cargo-version" >&2
+        exit 1
+    fi
+    cd "$NEMO_RELAY_REPO_ROOT"
+    set_cargo_workspace_version "$version"
+
 # --set [output_dir=<path>] [ref_name=<name>]
 package-rust:
     #!/usr/bin/env bash
@@ -1530,6 +1672,11 @@ package-node:
     # If `ref_name` is empty, append the current short HEAD SHA to the version.
     # If `ref_name` is set, write it as the exact package version before packing.
     linux_glibc_version="{{ linux_glibc_version }}"
+    node_platform="{{ node_platform }}"
+    python_executable="python"
+    if ! command -v "$python_executable" >/dev/null 2>&1; then
+        python_executable="python3"
+    fi
     output_dir="{{ output_dir }}"
     cd "$NEMO_RELAY_REPO_ROOT"
     package_dir="$(prepare_package_dir npm)"
@@ -1557,7 +1704,34 @@ package-node:
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     npm run --workspace=nemo-relay-node "${build_args[@]}"
-    npm pack --workspace=nemo-relay-node --pack-destination "$package_dir"
+    if [[ -z "$node_platform" ]]; then
+        case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) node_platform="linux-amd64" ;;
+            Linux-aarch64|Linux-arm64) node_platform="linux-arm64" ;;
+            Darwin-arm64) node_platform="macos-arm64" ;;
+            MINGW*|MSYS*|CYGWIN*)
+                if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                    node_platform="windows-arm64"
+                else
+                    node_platform="windows-amd64"
+                fi
+                ;;
+            *)
+                echo "Error: unsupported Node package host $(uname -s)/$(uname -m)" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    package_args=(
+        --node-dir crates/node
+        --platform "$node_platform"
+        --version "$package_version"
+        --output-dir "$package_dir"
+    )
+    if [[ "$node_platform" == "linux-amd64" ]]; then
+        package_args+=(--metapackage)
+    fi
+    "$python_executable" scripts/package-node-bin.py "${package_args[@]}"
     shopt -s nullglob
     packages=("$package_dir"/*.tgz)
     if ((${#packages[@]} == 0)); then
@@ -1639,6 +1813,34 @@ package-python:
     fi
 
 # --set [output_dir=<path>] [ref_name=<name>]
+package-python-sdist:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    output_dir="{{ output_dir }}"
+    export_uv_python_runtime
+    cd "$NEMO_RELAY_REPO_ROOT"
+    package_dir="$(prepare_package_dir sdists)"
+    sync_args=(--no-install-project --no-install-package nemo-relay)
+    uv sync --inexact "${sync_args[@]}"
+    activate_project_venv
+    if [[ -z "{{ ref_name }}" ]]; then
+        sha="$(head_git_sha)"
+        version="$(read_workspace_version)"
+        echo "Non-release build: appending commit hash to version"
+        set_python_package_version "${version}+${sha}" true
+    else
+        echo "Using explicit version {{ ref_name }}"
+        set_python_package_version "{{ ref_name }}" true
+    fi
+    maturin sdist --out "$package_dir"
+    shopt -s nullglob
+    sdists=("$package_dir"/nemo_relay-*.tar.gz)
+    if ((${#sdists[@]} == 0)); then
+        echo "Error: No nemo-relay source distributions found in $package_dir"
+        exit 1
+    fi
+
+# --set [output_dir=<path>] [ref_name=<name>]
 package-python-plugin:
     #!/usr/bin/env bash
     {{ bash_helpers }}
@@ -1674,3 +1876,18 @@ package-python-plugin:
         echo "Error: No Python plugin wheels found in $package_dir"
         exit 1
     fi
+    python_executable="$(project_python_executable)"
+    "$python_executable" scripts/validate_python_plugin_package.py
+
+# Package a prebuilt CLI binary for PyPI.
+package-cli-bin binary target version package_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$NEMO_RELAY_REPO_ROOT"
+    args=(
+        --binary "{{ binary }}"
+        --target "{{ target }}"
+        --version "{{ version }}"
+        --output-dir "{{ package_dir }}"
+    )
+    uv run --no-project python scripts/package-cli-bin.py "${args[@]}"

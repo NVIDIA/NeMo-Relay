@@ -64,7 +64,7 @@ def get_weather(location: str) -> str:
     return f"The weather in {location} is sunny and 72 degrees."
 
 agent = create_agent(
-    model="nvidia:nvidia/nemotron-3-nano-30b-a3b",
+    model="nvidia:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     tools=[get_weather],
     middleware=[NemoRelayMiddleware()],
     system_prompt="Use tools when they are relevant. Keep the final answer brief.",

@@ -5,7 +5,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -24,7 +24,9 @@ fn gateway_bin() -> &'static str {
 }
 
 const ACTIVE_GENERATION_TOKEN: &str = "active-generation";
-const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(30);
+const BOOTSTRAP_PROTOCOL_VERSION: u64 = 3;
+const CHILD_PROCESS_TIMEOUT_SECONDS: u64 = 5;
+const SIDECAR_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn write_active_generation(temp: &std::path::Path) -> std::path::PathBuf {
     let generation = temp.join("plugin/.nemo-relay-generation");
@@ -82,6 +84,13 @@ fn read_jsonl_records(path: &Path) -> Vec<serde_json::Value> {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
+}
+
+fn read_jsonl_event(path: &Path, event: &str) -> serde_json::Value {
+    read_jsonl_records(path)
+        .into_iter()
+        .find(|record| record["event"] == event)
+        .unwrap_or_else(|| panic!("missing {event} record in {}", path.display()))
 }
 
 fn write_dynamic_plugin_manifest(dir: &std::path::Path, plugin_id: &str) {
@@ -312,6 +321,57 @@ fn cli_jsonl_logging_records_successful_command_lifecycle_without_leaking_secret
 }
 
 #[test]
+fn cli_explicit_logging_ignores_project_path_alias() {
+    let temp = tempfile::tempdir().unwrap();
+    let cwd = temp.path().join("workspace");
+    let project_config = cwd.join(".nemo-relay/config.toml");
+    let explicit_config = temp.path().join("explicit/config.toml");
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(explicit_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &explicit_config,
+        r#"
+[[logging.sinks]]
+path = "relay.log"
+level = "debug"
+queue_capacity = 64
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &project_config,
+        r#"
+[[logging.sinks]]
+path = "./relay.log"
+level = "info"
+format = "jsonl"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            explicit_config.to_str().unwrap(),
+            "agents",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "layered aliases should initialize one logging sink: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("duplicate logging sink path"));
+}
+
+#[test]
 fn cli_claude_startup_probe_bypass_is_debug_only() {
     let default_stderr = run_claude_startup_probe(None);
     assert!(
@@ -498,19 +558,6 @@ fn cli_mcp_help_describes_lifecycle_bound_native_gateway() {
 }
 
 #[test]
-fn cli_config_help_keeps_hermes_persistent_state_under_uninstall() {
-    let output = Command::new(gateway_bin())
-        .args(["config", "--help"])
-        .output()
-        .unwrap();
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("nemo-relay uninstall hermes"));
-    assert!(!stdout.contains("Hermes-scoped reset also removes"));
-}
-
-#[test]
 fn cli_mcp_starts_gateway_before_initialize_and_exits_cleanly() {
     let temp = tempfile::tempdir().unwrap();
     let mut child = Command::new(gateway_bin())
@@ -588,8 +635,9 @@ fn cli_mcp_starts_gateway_even_when_stdio_closes_before_request() {
 fn cli_mcp_rejects_an_unauthenticated_transparent_gateway() {
     let temp = tempfile::tempdir().unwrap();
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"transparent"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"transparent"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     let (gateway_url, received) = spawn_single_request_server(200, &body);
     let mut child = Command::new(gateway_bin())
@@ -630,124 +678,6 @@ fn cli_mcp_rejects_an_unauthenticated_transparent_gateway() {
     );
     assert!(find_runtime_file(temp.path(), "gateway-sidecar.log").is_none());
     assert!(find_runtime_file(temp.path(), "codex.owner.json").is_none());
-}
-
-#[cfg(unix)]
-#[test]
-fn cli_internal_hermes_install_writes_mcp_hooks_trust_and_doctor_ready_state() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let hermes_home = temp.path().join("hermes");
-    let xdg = temp.path().join("xdg");
-    let runtime = temp.path().join("runtime");
-    let bin = temp.path().join("bin");
-    for directory in [&home, &hermes_home, &xdg, &runtime, &bin] {
-        std::fs::create_dir_all(directory).unwrap();
-    }
-    let hermes = bin.join("hermes");
-    std::fs::write(&hermes, "#!/bin/sh\necho 'Hermes Agent v0.18.2 (test)'\n").unwrap();
-    std::fs::set_permissions(&hermes, std::fs::Permissions::from_mode(0o755)).unwrap();
-    std::os::unix::fs::symlink(gateway_bin(), bin.join("nemo-relay")).unwrap();
-    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
-    .unwrap();
-
-    let install = Command::new(gateway_bin())
-        .args(["install", "hermes", "--skip-doctor"])
-        .env("HOME", &home)
-        .env("HERMES_HOME", &hermes_home)
-        .env("XDG_CONFIG_HOME", &xdg)
-        .env("XDG_RUNTIME_DIR", &runtime)
-        .env("PATH", &path)
-        .env("OPENAI_API_KEY", "not-written-to-config")
-        .output()
-        .unwrap();
-    assert!(
-        install.status.success(),
-        "{}",
-        String::from_utf8_lossy(&install.stderr)
-    );
-
-    let config_path = hermes_home.join("config.yaml");
-    let config: serde_json::Value =
-        serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
-    let server = &config["mcp_servers"]["nemo-relay"];
-    assert_eq!(server["command"], gateway_bin());
-    assert_eq!(server["args"], serde_json::json!(["mcp"]));
-    assert_eq!(server["env"]["NEMO_RELAY_GATEWAY_BIND"], "127.0.0.1:47632");
-    assert_eq!(server["env"]["OPENAI_API_KEY"], "${OPENAI_API_KEY}");
-    assert!(
-        !std::fs::read_to_string(&config_path)
-            .unwrap()
-            .contains("not-written-to-config")
-    );
-    let command = config["hooks"]["on_session_start"][0]["command"]
-        .as_str()
-        .unwrap();
-    assert!(command.contains("hook-forward hermes"));
-    let approvals: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(hermes_home.join("shell-hooks-allowlist.json")).unwrap(),
-    )
-    .unwrap();
-    let approvals = approvals["approvals"].as_array().unwrap();
-    assert_eq!(approvals.len(), 13);
-    assert!(approvals.iter().all(|entry| entry["command"] == command));
-
-    let relay_config_dir = xdg.join("nemo-relay");
-    std::fs::create_dir_all(&relay_config_dir).unwrap();
-    std::fs::write(
-        relay_config_dir.join("config.toml"),
-        format!(
-            "[agents.hermes]\ncommand = {:?}\nhooks_path = {:?}\n",
-            hermes.display().to_string(),
-            config_path.display().to_string()
-        ),
-    )
-    .unwrap();
-    let doctor = Command::new(gateway_bin())
-        .args(["doctor", "hermes", "--json"])
-        .env("HOME", &home)
-        .env("HERMES_HOME", &hermes_home)
-        .env("XDG_CONFIG_HOME", &xdg)
-        .env("XDG_RUNTIME_DIR", &runtime)
-        .env("PATH", &path)
-        .env("OPENAI_API_KEY", "runtime-only")
-        .output()
-        .unwrap();
-    assert!(
-        doctor.status.success(),
-        "{}",
-        String::from_utf8_lossy(&doctor.stderr)
-    );
-    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
-    assert_eq!(report["agents"][0]["name"], "hermes");
-    assert_eq!(report["agents"][0]["status"], "pass");
-    assert!(
-        report["agents"][0]["annotation"]
-            .as_str()
-            .unwrap()
-            .contains("MCP lifecycle")
-    );
-
-    let uninstall = Command::new(gateway_bin())
-        .args(["uninstall", "hermes"])
-        .env("HOME", &home)
-        .env("HERMES_HOME", &hermes_home)
-        .env("XDG_CONFIG_HOME", &xdg)
-        .env("PATH", &path)
-        .output()
-        .unwrap();
-    assert!(
-        uninstall.status.success(),
-        "{}",
-        String::from_utf8_lossy(&uninstall.stderr)
-    );
-    assert!(!config_path.exists());
-    assert!(!hermes_home.join("shell-hooks-allowlist.json").exists());
-    assert!(!hermes_home.join(".nemo-relay-generation").exists());
 }
 
 fn start_mcp_client(temp: &std::path::Path, bind: SocketAddr) -> (Child, ChildStdin) {
@@ -818,7 +748,7 @@ fn start_mcp_client_with_generation(
 
 #[test]
 fn cli_hooks_and_mcp_share_the_same_persistent_identity_for_each_host() {
-    for agent in ["codex", "claude", "hermes"] {
+    for agent in ["codex", "claude"] {
         let temp = tempfile::tempdir().unwrap();
         let probe = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = probe.local_addr().unwrap();
@@ -1066,8 +996,9 @@ fn write_fake_bootstrap_health(
     let nonce = bootstrap_request_header(request, "x-nemo-relay-bootstrap-nonce").unwrap();
     let proof_header = fake_bootstrap_proof_header(proof, key_path, fingerprint, nonce);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
@@ -1110,8 +1041,9 @@ fn handle_fake_bootstrap_tunnel(
     let health = read_http_request(&mut stream);
     requests.lock().unwrap().push(health);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"test-instance"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"test-instance"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
@@ -1254,6 +1186,60 @@ fn cli_codex_hook_launch_resolution_error_respects_forwarding_policy() {
 }
 
 #[test]
+fn cli_hook_forward_explicit_policy_overrides_the_environment() {
+    let temp = tempfile::tempdir().unwrap();
+    let generation = write_active_generation(temp.path());
+    for (policy, environment, succeeds) in [
+        ("--fail-open", Some("1"), true),
+        ("--fail-closed", None, false),
+    ] {
+        let mut command = Command::new(gateway_bin());
+        command
+            .args([
+                "hook-forward",
+                "codex",
+                "--gateway-url",
+                "http://127.0.0.1:1",
+                "--generation-file",
+            ])
+            .arg(&generation)
+            .arg("--generation-token")
+            .arg(ACTIVE_GENERATION_TOKEN)
+            .arg(policy)
+            .env("HOME", temp.path())
+            .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+            .env("XDG_RUNTIME_DIR", temp.path().join("runtime"))
+            .env("TMPDIR", temp.path())
+            .env("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS", "not-a-number")
+            .env_remove("NEMO_RELAY_FAIL_CLOSED")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(value) = environment {
+            command.env("NEMO_RELAY_FAIL_CLOSED", value);
+        }
+        let mut child = command.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(b"{}").unwrap();
+        let output = wait_child_with_output(child);
+        assert_eq!(output.status.success(), succeeds, "{policy}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS")
+        );
+    }
+}
+
+#[test]
+fn cli_hook_forward_rejects_conflicting_failure_policies() {
+    let output = Command::new(gateway_bin())
+        .args(["hook-forward", "codex", "--fail-open", "--fail-closed"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+}
+
+#[test]
 fn cli_codex_hook_launch_resolution_error_retains_default_payload_cap() {
     const DEFAULT_HOOK_PAYLOAD_BYTES: usize = 20 * 1024 * 1024;
     let temp = tempfile::tempdir().unwrap();
@@ -1341,7 +1327,7 @@ fn find_runtime_files_matching(
 }
 
 fn wait_child(child: &mut Child) -> ExitStatus {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(CHILD_PROCESS_TIMEOUT_SECONDS);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
@@ -1349,7 +1335,7 @@ fn wait_child(child: &mut Child) -> ExitStatus {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("child process did not exit within 10 seconds");
+            panic!("child process did not exit within {CHILD_PROCESS_TIMEOUT_SECONDS} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     }
@@ -1398,7 +1384,7 @@ fn wait_child_with_output(mut child: Child) -> Output {
 
     let stdout = read_pipe(child.stdout.take());
     let stderr = read_pipe(child.stderr.take());
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(CHILD_PROCESS_TIMEOUT_SECONDS);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
@@ -1406,7 +1392,7 @@ fn wait_child_with_output(mut child: Child) -> Output {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("child process did not exit within 10 seconds");
+            panic!("child process did not exit within {CHILD_PROCESS_TIMEOUT_SECONDS} seconds");
         }
         thread::sleep(Duration::from_millis(20));
     };
@@ -1482,7 +1468,7 @@ fn run_persistent_hook_with_token(
 }
 
 fn wait_for_port_closed(address: SocketAddr) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_err() {
             return;
@@ -1574,7 +1560,7 @@ fn cli_mcp_clients_share_gateway_until_final_idle_shutdown() {
     let health = relay_health(address);
     assert_eq!(health["service"], "nemo-relay");
     assert_eq!(health["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(health["bootstrap_protocol"], 2);
+    assert_eq!(health["bootstrap_protocol"], BOOTSTRAP_PROTOCOL_VERSION);
     assert!(
         health["instance_id"]
             .as_str()
@@ -1802,7 +1788,11 @@ fn cli_agents_json_emits_supported_agent_shapes() {
     assert!(output.status.success());
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let agents = parsed.as_array().unwrap();
-    assert!(agents.iter().any(|agent| agent["name"] == "codex"));
+    let names = agents
+        .iter()
+        .map(|agent| agent["name"].as_str().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(names, std::collections::BTreeSet::from(["claude", "codex"]));
     assert!(agents.iter().all(|agent| agent["status"].is_string()));
 }
 
@@ -1821,7 +1811,7 @@ fn cli_doctor_json_emits_versioned_report() {
 
     assert!(output.status.success());
     let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["schema_version"], 2);
     assert!(parsed["environment"].is_object());
     assert!(parsed["configuration"].is_object());
     assert!(parsed["agents"].is_array());
@@ -1864,7 +1854,7 @@ fn cli_plugins_validate_rejects_malformed_python_entrypoints_by_path_and_id() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     let plugin_id = "acme.invalid-python-entrypoint";
     std::fs::create_dir_all(&config_dir).unwrap();
     write_python_dynamic_plugin_manifest(&plugin_dir, plugin_id);
@@ -1920,6 +1910,7 @@ fn cli_plugins_list_json_emits_empty_versioned_success_output() {
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "").unwrap();
     let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
         .args([
@@ -1971,7 +1962,7 @@ fn cli_plugins_list_all_json_includes_tombstoned_records() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2037,6 +2028,7 @@ allowed = false
     .unwrap();
 
     let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", &xdg)
         .env("HOME", temp.path())
         .args(["plugins", "validate"])
@@ -2177,7 +2169,7 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-blocked-list");
@@ -2186,7 +2178,7 @@ fn cli_plugins_list_json_reports_blocked_policy_for_installed_plugin() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2252,7 +2244,7 @@ fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-trust-list");
@@ -2261,7 +2253,7 @@ fn cli_plugins_list_json_reports_invalid_trust_in_validation_state() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2313,7 +2305,7 @@ fn cli_plugins_validate_json_reports_blocked_policy_for_installed_id_target() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.cli-blocked-id");
@@ -2322,7 +2314,7 @@ fn cli_plugins_validate_json_reports_blocked_policy_for_installed_id_target() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2389,7 +2381,7 @@ fn cli_plugins_inspect_json_emits_installed_plugin_details() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2419,7 +2411,7 @@ fn cli_plugins_inspect_json_emits_installed_plugin_details() {
     assert_eq!(parsed["target"], "acme.inspect-json");
     assert_eq!(parsed["data"]["id"], "acme.inspect-json");
     assert_eq!(parsed["data"]["kind"], "worker");
-    assert_eq!(parsed["data"]["scope"], "project");
+    assert_eq!(parsed["data"]["scope"], "user");
     assert_eq!(parsed["data"]["policy_state"], "valid");
     assert_eq!(parsed["data"]["startup_class"], "optional");
     assert_eq!(parsed["data"]["attestation_mode"], "integrity_only");
@@ -2432,7 +2424,7 @@ fn cli_plugins_inspect_json_reports_blocked_policy_for_installed_plugin() {
     let temp = tempfile::tempdir().unwrap();
     let cwd = temp.path().join("workdir");
     let plugin_dir = cwd.join("plugins").join("acme");
-    let config_dir = cwd.join(".nemo-relay");
+    let config_dir = temp.path().join("xdg/nemo-relay");
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     write_dynamic_plugin_manifest(&plugin_dir, "acme.inspect-blocked");
@@ -2441,7 +2433,7 @@ fn cli_plugins_inspect_json_reports_blocked_policy_for_installed_plugin() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2513,7 +2505,7 @@ fn cli_plugins_mutation_commands_emit_terse_confirmation_output() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2582,7 +2574,7 @@ fn cli_plugins_mutation_commands_emit_terse_confirmation_output() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2609,7 +2601,7 @@ fn cli_plugins_enable_tombstoned_plugin_returns_refused_exit_code() {
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
         .env("HOME", temp.path())
-        .args(["plugins", "add", "--project"])
+        .args(["plugins", "add", "--user"])
         .arg(&plugin_dir)
         .output()
         .unwrap();
@@ -2727,19 +2719,19 @@ fn cli_model_pricing_validate_rejects_invalid_catalog() {
 }
 
 #[test]
-fn cli_model_pricing_init_creates_project_pricing_component() {
+fn cli_model_pricing_init_creates_user_pricing_component() {
     let temp = tempfile::tempdir().unwrap();
-    let project = temp.path().join("project");
-    std::fs::create_dir_all(&project).unwrap();
+    let xdg = temp.path().join("xdg");
 
     let output = Command::new(gateway_bin())
-        .current_dir(&project)
-        .args(["model-pricing", "init", "--project"])
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["model-pricing", "init", "--user"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
-    let path = project.join(".nemo-relay/plugins.toml");
+    let path = xdg.join("nemo-relay/plugins.toml");
     let rendered = std::fs::read_to_string(path).unwrap();
     assert!(rendered.contains("kind = \"pricing\""));
     assert!(!rendered.contains("include_bundled"));
@@ -2863,12 +2855,13 @@ fn cli_help_lists_easy_path_agent_shortcuts() {
     let output = Command::new(gateway_bin()).arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    for agent in ["claude", "codex", "hermes"] {
+    for agent in ["claude", "codex"] {
         assert!(
             stdout.contains(&format!("  {agent}")),
             "expected `--help` to list `{agent}` subcommand, got:\n{stdout}"
         );
     }
+    assert!(!stdout.contains("  hermes"));
     assert!(!stdout.contains("  cursor"));
 }
 
@@ -2886,6 +2879,32 @@ fn cli_rejects_removed_cursor_entry_points() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("invalid value 'cursor'"));
+}
+
+#[test]
+fn cli_rejects_removed_hermes_entry_points() {
+    for arguments in [
+        vec!["hermes"],
+        vec!["run", "--agent", "hermes", "--dry-run"],
+        vec!["install", "hermes", "--dry-run"],
+        vec!["uninstall", "hermes", "--dry-run"],
+        vec!["doctor", "--plugin", "hermes"],
+        vec!["config", "hermes"],
+        vec!["mcp", "--agent", "hermes"],
+        vec!["hook-forward", "hermes"],
+    ] {
+        let output = Command::new(gateway_bin())
+            .args(&arguments)
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "expected normal argument validation for {arguments:?}; stdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -3040,33 +3059,6 @@ fn cli_easy_path_invokes_setup_when_no_config_found() {
 }
 
 #[test]
-fn cli_hermes_easy_path_invokes_setup_when_no_config_found() {
-    let temp = tempfile::tempdir().unwrap();
-    let xdg = temp.path().join("xdg");
-    std::fs::create_dir_all(&xdg).unwrap();
-    let cwd = temp.path().join("workdir");
-    std::fs::create_dir_all(&cwd).unwrap();
-
-    let output = Command::new(gateway_bin())
-        .current_dir(&cwd)
-        .env("XDG_CONFIG_HOME", &xdg)
-        .env("HOME", temp.path())
-        .arg("hermes")
-        .output()
-        .unwrap();
-
-    assert!(
-        !output.status.success(),
-        "Hermes easy path should exit non-zero when no config + no TTY for setup"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("setup requires a TTY"),
-        "expected non-TTY setup error in stderr, got:\n{stderr}"
-    );
-}
-
-#[test]
 fn cli_bare_invocation_invokes_setup_when_no_config_found() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
@@ -3098,8 +3090,9 @@ fn cli_bare_invocation_runs_doctor_when_config_exists() {
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
-    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream]\n").unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(xdg.join("nemo-relay")).unwrap();
+    std::fs::write(xdg.join("nemo-relay/config.toml"), "[upstream]\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -3125,9 +3118,10 @@ fn cli_bare_invocation_reports_invalid_config_resolution() {
     let xdg = temp.path().join("xdg");
     std::fs::create_dir_all(&xdg).unwrap();
     let cwd = temp.path().join("workdir");
-    std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream]\n").unwrap();
-    std::fs::write(cwd.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::create_dir_all(xdg.join("nemo-relay")).unwrap();
+    std::fs::write(xdg.join("nemo-relay/config.toml"), "[upstream]\n").unwrap();
+    std::fs::write(xdg.join("nemo-relay/plugins.toml"), "components = [\n").unwrap();
 
     let output = Command::new(gateway_bin())
         .current_dir(&cwd)
@@ -3204,15 +3198,261 @@ fn cli_doctor_json_reports_a_missing_explicit_config() {
 }
 
 #[test]
-fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
+fn cli_doctor_reports_a_missing_explicit_logging_config() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     let cwd = temp.path().join("workdir");
-    let config = temp.path().join("explicit/config.toml");
+    let config = temp.path().join("missing/logging.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .arg("doctor")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Configuration"));
+    assert!(stdout.contains("Resolution"));
+    assert!(stdout.contains("could not resolve logging configuration"));
+    assert!(stdout.contains(config.to_str().unwrap()));
+    assert!(stdout.contains("Agents detected"));
+    assert!(stdout.contains("Some checks FAILED"));
+}
+
+#[test]
+fn cli_doctor_json_reports_a_missing_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("missing/logging.toml");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let resolution = &report["configuration"]["resolution"];
+    assert_eq!(resolution["status"], "fail");
+    assert!(
+        resolution["details"]
+            .as_str()
+            .unwrap()
+            .contains(config.to_str().unwrap())
+    );
+}
+
+#[test]
+fn cli_doctor_reports_invalid_explicit_logging_config_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    for (path, expected) in [
+        (PathBuf::from("logging.toml"), "must be absolute"),
+        (
+            temp.path().join("logging.json"),
+            "must identify a .toml file",
+        ),
+    ] {
+        let output = Command::new(gateway_bin())
+            .current_dir(&cwd)
+            .env("XDG_CONFIG_HOME", &xdg)
+            .env("HOME", temp.path())
+            .args(["--log-config-path"])
+            .arg(&path)
+            .args(["doctor", "--json"])
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success(), "path: {}", path.display());
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let resolution = &report["configuration"]["resolution"];
+        assert_eq!(resolution["status"], "fail");
+        assert!(
+            resolution["details"].as_str().unwrap().contains(expected),
+            "path: {}, details: {}",
+            path.display(),
+            resolution["details"]
+        );
+    }
+}
+
+#[test]
+fn cli_doctor_accepts_a_valid_explicit_logging_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&xdg).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    let (config, _log_path) = write_jsonl_logging_config(temp.path());
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&config)
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "pass");
+}
+
+#[test]
+fn cli_doctor_reports_unsupported_ancestor_project_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("services/relay");
+    let project_config = project.join(".nemo-relay/config.toml");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+    std::fs::write(
+        &project_config,
+        "[gateway]\nmax_hook_payload_bytes = 1048576\n",
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["configuration"].get("workspace").is_none());
+    let unsupported = report["configuration"]["unsupported_project_files"]
+        .as_array()
+        .unwrap();
+    let warning = unsupported
+        .iter()
+        .find(|entry| {
+            entry["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("config.toml"))
+        })
+        .unwrap();
+    let reported_path = PathBuf::from(warning["path"].as_str().unwrap());
+    assert!(
+        reported_path.exists(),
+        "doctor reported undiscovered workspace path {}",
+        reported_path.display()
+    );
+    assert_eq!(
+        reported_path.canonicalize().unwrap(),
+        project_config.canonicalize().unwrap()
+    );
+    assert_eq!(warning["status"], "warn");
+    assert_eq!(warning["active"], false);
+}
+
+#[test]
+fn cli_doctor_json_reports_effective_upstream_auth_presence() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("workspace");
+    let nested = project.join("nested");
+    let user_config = temp.path().join("xdg/nemo-relay/config.toml");
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        &user_config,
+        r#"
+[upstream]
+openai_base_url = "http://project-openai"
+openai_auth_header = "Bearer project-openai"
+anthropic_base_url = "http://project-anthropic"
+anthropic_auth_header = "Basic project-anthropic"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer project-openai"));
+    assert!(!stdout.contains("Basic project-anthropic"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["upstream_auth"]["openai"], "unset");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "configured"
+    );
+}
+
+#[test]
+fn cli_doctor_json_reports_unknown_upstream_auth_when_resolution_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[upstream]\nopenai_auth_header = \"\"\"\\\nBearer private\nsecret\"\"\"\n",
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .env("OPENAI_API_KEY", "sk-runtime")
+        .args(["--config", config.to_str().unwrap(), "doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer private"));
+    assert!(!stdout.contains("secret"));
+    assert!(!stdout.contains("sk-runtime"));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["configuration"]["resolution"]["status"], "fail");
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["openai"],
+        "unknown"
+    );
+    assert_eq!(
+        report["configuration"]["upstream_auth"]["anthropic"],
+        "unknown"
+    );
+}
+
+#[test]
+fn cli_doctor_explicit_config_warns_about_ignored_malformed_project_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let xdg = temp.path().join("xdg");
+    let cwd = temp.path().join("workdir");
+    let config = temp.path().join("explicit").join("config.toml");
+    let workspace_config = cwd.join(".nemo-relay").join("config.toml");
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/config.toml"), "[upstream\n").unwrap();
+    std::fs::write(&workspace_config, "[upstream\n").unwrap();
     std::fs::write(&config, "[upstream]\n").unwrap();
 
     let output = Command::new(gateway_bin())
@@ -3223,25 +3463,39 @@ fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
         .output()
         .unwrap();
 
-    assert!(
-        output.status.success(),
-        "explicit config should ignore invalid workspace config: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success());
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
-        report["configuration"]["workspace"]["path"],
+        report["configuration"]["explicit"]["path"],
         config.display().to_string()
     );
-    assert_eq!(report["configuration"]["workspace"]["status"], "pass");
-    assert_eq!(report["configuration"]["workspace"]["active"], true);
+    assert_eq!(report["configuration"]["explicit"]["status"], "pass");
+    assert_eq!(report["configuration"]["explicit"]["active"], true);
+    let warning = report["configuration"]["unsupported_project_files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| {
+            entry["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("config.toml"))
+        })
+        .unwrap();
+    assert_eq!(
+        PathBuf::from(warning["path"].as_str().unwrap())
+            .canonicalize()
+            .unwrap(),
+        workspace_config.canonicalize().unwrap()
+    );
+    assert_eq!(warning["status"], "warn");
+    assert_eq!(warning["active"], false);
     assert_eq!(report["configuration"]["global"]["status"], "info");
     assert_eq!(report["configuration"]["global"]["active"], false);
     assert!(
         report["configuration"]["global"]["details"]
             .as_str()
             .unwrap()
-            .contains("--config scopes configuration")
+            .contains("replaced by explicit --config")
     );
 
     let human_output = Command::new(gateway_bin())
@@ -3255,21 +3509,24 @@ fn cli_doctor_explicit_config_ignores_invalid_workspace_runtime_config() {
     let stdout = String::from_utf8_lossy(&human_output.stdout);
     assert!(stdout.contains("Explicit"));
     assert!(stdout.contains(config.to_str().unwrap()));
-    assert!(stdout.contains("not selected because --config scopes configuration"));
+    assert!(stdout.contains("Unsupported"));
+    assert!(stdout.contains("ignored"));
+    assert!(stdout.contains("replaced by explicit --config"));
 }
 
 #[test]
-fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
+fn cli_doctor_reports_invalid_explicit_config_and_layered_plugins() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
     let cwd = temp.path().join("workdir");
     let config_dir = temp.path().join("explicit");
     let config = config_dir.join("config.toml");
+    let project_plugins = cwd.join(".nemo-relay").join("plugins.toml");
     std::fs::create_dir_all(&xdg).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::create_dir_all(cwd.join(".nemo-relay")).unwrap();
-    std::fs::write(cwd.join(".nemo-relay/plugins.toml"), "components = [\n").unwrap();
+    std::fs::write(&project_plugins, "components = [\n").unwrap();
 
     std::fs::write(&config, "[upstream\n").unwrap();
     let invalid_config = Command::new(gateway_bin())
@@ -3301,6 +3558,19 @@ fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
         "version = 1\ncomponents = []\n",
     )
     .unwrap();
+    let ignored_project_plugins = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--config", config.to_str().unwrap(), "doctor"])
+        .output()
+        .unwrap();
+    assert!(ignored_project_plugins.status.success());
+    let stdout = String::from_utf8_lossy(&ignored_project_plugins.stdout);
+    assert!(stdout.contains("Unsupported"));
+    assert!(stdout.contains("ignored"));
+
+    std::fs::write(&project_plugins, "version = 1\ncomponents = []\n").unwrap();
     let valid_config = Command::new(gateway_bin())
         .current_dir(&cwd)
         .env("XDG_CONFIG_HOME", &xdg)
@@ -3310,9 +3580,31 @@ fn cli_doctor_reports_invalid_explicit_config_and_sibling_plugins() {
         .unwrap();
     let report: serde_json::Value = serde_json::from_slice(&valid_config.stdout).unwrap();
     assert_eq!(report["configuration"]["resolution"]["status"], "pass");
-    assert_eq!(
-        report["configuration"]["plugin_configs"][0]["path"],
-        config_dir.join("plugins.toml").display().to_string()
+    let plugin_configs = report["configuration"]["plugin_configs"]
+        .as_array()
+        .unwrap();
+    let path = config_dir.join("plugins.toml");
+    let expected = path.canonicalize().unwrap();
+    let layer = plugin_configs
+        .iter()
+        .find(|config| {
+            config["path"]
+                .as_str()
+                .map(PathBuf::from)
+                .and_then(|reported| reported.canonicalize().ok())
+                .is_some_and(|reported| reported == expected)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "doctor should report layered plugin source {}",
+                path.display()
+            )
+        });
+    assert_ne!(
+        layer["status"],
+        "fail",
+        "doctor should clear invalid diagnostics for {}",
+        path.display()
     );
 }
 
@@ -3341,7 +3633,7 @@ fn cli_plugin_doctor_is_not_preempted_by_a_missing_runtime_config() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no installed Claude Code, Codex, or Hermes integration state"));
+    assert!(stderr.contains("no installed Claude Code or Codex integration state"));
     assert!(!stderr.contains("explicit configuration file"));
 }
 
@@ -3358,13 +3650,14 @@ fn cli_run_dry_run_resolves_config_and_command() {
 openai_base_url = "http://file-openai"
 anthropic_base_url = "http://file-anthropic"
 
-[agents.hermes]
-command = "hermes --yolo chat"
+[agents.codex]
+command = "codex exec"
 "#,
     )
     .unwrap();
 
     let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
         .env("XDG_CONFIG_HOME", &xdg)
         .env("HOME", temp.path())
         .args([
@@ -3372,7 +3665,7 @@ command = "hermes --yolo chat"
             config.to_str().unwrap(),
             "run",
             "--agent",
-            "hermes",
+            "codex",
             "--dry-run",
         ])
         .output()
@@ -3380,9 +3673,204 @@ command = "hermes --yolo chat"
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("agent = hermes"));
+    assert!(stdout.contains("agent = codex"));
     assert!(stdout.contains("openai_base_url = http://file-openai"));
-    assert!(stdout.contains("argv = hermes --yolo chat"));
+    let argv = stdout
+        .lines()
+        .find(|line| line.starts_with("argv = "))
+        .expect("dry-run output should include argv");
+    assert!(argv.starts_with("argv = codex "), "{stdout}");
+    assert!(argv.ends_with(" exec"), "{stdout}");
+}
+
+#[test]
+fn invocation_diagnostic_cli_warns_during_dry_run_without_rewriting_the_plan() {
+    let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[upstream]
+openai_base_url = "http://127.0.0.1:1"
+anthropic_base_url = "http://127.0.0.1:1"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "claude",
+            "--dry-run",
+            "--",
+            "/opt/bin/claude-code.exe",
+            "-p",
+            "synthetic prompt",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("/opt/bin/claude-code.exe"));
+    assert!(!stderr.contains("synthetic prompt"));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("/opt/bin/claude-code.exe -p synthetic prompt"),
+        "{stdout}"
+    );
+
+    let diagnostic = read_jsonl_event(&log_path, "agent_invocation_warning");
+    assert_eq!(diagnostic["fields"]["agent"], "claude");
+    assert_eq!(diagnostic["fields"]["duplicate_executable"], "claude");
+    let diagnostic = diagnostic.to_string();
+    assert!(!diagnostic.contains("/opt/bin/claude-code.exe"));
+    assert!(!diagnostic.contains("synthetic prompt"));
+}
+
+#[test]
+fn invocation_diagnostic_does_not_preflight_live_launches() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[agents.claude]
+command = "nemo-relay-test-agent-that-does-not-exist"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "claude",
+            "--",
+            "claude",
+            "private synthetic value",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("error_kind=io"), "{stderr}");
+}
+
+#[test]
+fn invocation_diagnostic_cli_ignores_agent_names_after_a_different_first_token() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config.toml");
+    std::fs::write(
+        &config,
+        r#"
+[upstream]
+openai_base_url = "http://127.0.0.1:1"
+anthropic_base_url = "http://127.0.0.1:1"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(temp.path())
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "run",
+            "--agent",
+            "claude",
+            "--dry-run",
+            "--",
+            "-p",
+            "compare claude with codex",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn invocation_diagnostic_cli_warns_for_agent_shortcut() {
+    let temp = tempfile::tempdir().unwrap();
+    let (logging_config, log_path) = write_jsonl_logging_config(temp.path());
+    let xdg = temp.path().join("xdg");
+    std::fs::create_dir_all(&xdg).unwrap();
+    let cwd = temp.path().join("workdir");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&cwd)
+        .env("XDG_CONFIG_HOME", &xdg)
+        .env("HOME", temp.path())
+        .args(["--log-config-path"])
+        .arg(&logging_config)
+        .args([
+            "claude",
+            "--dry-run",
+            "--",
+            "claude",
+            "-p",
+            "private synthetic value",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("possible_duplicate_agent_executable"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("private synthetic value"), "{stderr}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let argv = stdout
+        .lines()
+        .find(|line| line.starts_with("argv = "))
+        .expect("dry run should print the resolved argv");
+    assert!(
+        argv.ends_with(" claude -p private synthetic value"),
+        "{argv}"
+    );
+
+    let diagnostic = read_jsonl_event(&log_path, "agent_invocation_warning").to_string();
+    assert!(!diagnostic.contains("private synthetic value"));
+    assert!(
+        !xdg.join("nemo-relay/config.toml").exists(),
+        "shortcut dry run must not invoke first-use setup"
+    );
 }
 
 #[test]
@@ -3412,7 +3900,7 @@ fn cli_run_dry_run_rejects_missing_explicit_config() {
 }
 
 #[test]
-fn cli_run_dry_run_uses_project_user_and_env_config_layers() {
+fn cli_run_dry_run_ignores_project_and_uses_user_and_env_config() {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     let nested = project.join("nested");
@@ -3489,6 +3977,44 @@ mode = "append"
     assert!(stdout.contains("argv = codex"));
     let expected_atof_path = std::path::Path::new("logs").join("events.jsonl");
     assert!(stdout.contains(&format!("ATOF {}", expected_atof_path.display())));
+}
+
+#[test]
+fn cli_run_dry_run_reports_effective_upstream_auth_presence() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let nested = project.join("nested");
+    let user_config = temp.path().join("xdg/nemo-relay/config.toml");
+    std::fs::create_dir_all(user_config.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(
+        user_config,
+        r#"
+[upstream]
+openai_base_url = "http://project-openai"
+openai_auth_header = "Bearer project-openai"
+anthropic_base_url = "http://project-anthropic"
+anthropic_auth_header = "Basic project-anthropic"
+"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .current_dir(&nested)
+        .env("XDG_CONFIG_HOME", temp.path().join("xdg"))
+        .env("HOME", temp.path())
+        .env("NEMO_RELAY_OPENAI_BASE_URL", "http://env-openai")
+        .args(["run", "--agent", "codex", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Bearer project-openai"));
+    assert!(!stdout.contains("Basic project-anthropic"));
+    assert!(stdout.contains("openai_base_url = http://env-openai"));
+    assert!(stdout.contains("openai_auth = unset"));
+    assert!(stdout.contains("anthropic_auth = configured"));
 }
 
 #[test]
@@ -3683,8 +4209,9 @@ try:
     read_until("RELAY_SHELL> ")
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
 
-    os.write(master, b"bg\n")
-    read_until("RELAY_SHELL> ")
+    # Continue Relay's stopped shell job directly. Shell `bg` bookkeeping varies across the
+    # macOS runner shell, but Relay only observes the process-group SIGCONT.
+    os.killpg(relay_group, signal.SIGCONT)
     time.sleep(0.1)
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
     os.write(master, b"echo BG_SHELL_OK\n")
@@ -3703,10 +4230,10 @@ try:
     # terminal to the child without requiring a second `fg`.
     os.write(master, b"delay-next-continue\n")
     read_until("AGENT_DELAY_ARMED")
+    read_until("\n")
     os.write(master, b"\x1a")
     read_until("RELAY_SHELL> ")
-    os.write(master, b"bg\n")
-    read_until("RELAY_SHELL> ")
+    os.killpg(relay_group, signal.SIGCONT)
     wait_until_present("AGENT_BG_DELAY")
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
     os.write(master, b"fg\n")
@@ -3743,6 +4270,7 @@ finally:
     .unwrap();
 
     let output = Command::new("python3")
+        .current_dir(temp.path())
         .arg(&driver)
         .arg(gateway_bin())
         .arg(&config)
@@ -3838,6 +4366,7 @@ fn assert_non_tty_signal_forwarding(
 ) {
     let pids = root.join(format!("agent-pids-{signal_name}"));
     let mut relay = Command::new(gateway_bin())
+        .current_dir(root)
         .args([
             "--config",
             config.to_str().unwrap(),
@@ -3872,7 +4401,7 @@ fn assert_non_tty_signal_forwarding(
 
 #[cfg(unix)]
 fn wait_for_agent_pid_file(relay: &mut std::process::Child, pids: &Path, signal_name: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !pids.is_file() {
         if Instant::now() >= deadline {
             // SAFETY: Relay's PID is live and owned by this test; SIGTERM exercises its registered
@@ -4104,8 +4633,9 @@ fn write_phase_health_response(
         .ok_or_else(|| "health probe omitted its nonce".to_string())?;
     let proof = fake_bootstrap_proof(key, fingerprint, nonce);
     let body = format!(
-        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":2,"instance_id":"phase-health"}}"#,
-        env!("CARGO_PKG_VERSION")
+        r#"{{"status":"ok","service":"nemo-relay","version":"{}","bootstrap_protocol":{},"instance_id":"phase-health"}}"#,
+        env!("CARGO_PKG_VERSION"),
+        BOOTSTRAP_PROTOCOL_VERSION,
     );
     stream
         .write_all(
@@ -4123,7 +4653,7 @@ fn collect_replacement_requests(
     stopped: &AtomicBool,
     requests: &Mutex<Vec<String>>,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while !stopped.load(Ordering::Relaxed) && Instant::now() < deadline {
         match listener.accept() {
             Ok((mut stream, _)) => {
@@ -4235,38 +4765,10 @@ fn cli_hook_forward_bypasses_ambient_proxies_for_loopback_delivery() {
 }
 
 #[test]
-fn cli_hook_forward_hermes_shell_hook_returns_empty_object() {
-    let (server_url, received) = spawn_single_request_server(200, r#"{}"#);
-    let mut child = Command::new(gateway_bin())
-        .args(["hook-forward", "hermes", "--fail-closed"])
-        .env("NEMO_RELAY_GATEWAY_URL", &server_url)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(br#"{"session_id":"smoke-hermes","hook_event_name":"on_session_start"}"#)
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-    let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
-
-    assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), r#"{}"#);
-    assert!(request.contains("POST /hooks/hermes HTTP/1.1"));
-    assert!(
-        request.contains(r#"{"session_id":"smoke-hermes","hook_event_name":"on_session_start"}"#)
-    );
-}
-
-#[test]
 fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let (server_url, received) = spawn_single_request_server(503, "unavailable");
     let mut child = Command::new(gateway_bin())
-        .args(["hook-forward", "hermes", "--fail-closed"])
+        .args(["hook-forward", "codex", "--fail-closed"])
         .env("NEMO_RELAY_GATEWAY_URL", &server_url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -4278,7 +4780,7 @@ fn cli_hook_forward_reports_http_failure_when_fail_closed() {
     let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
 
     assert!(!output.status.success());
-    assert!(request.contains("POST /hooks/hermes HTTP/1.1"));
+    assert!(request.contains("POST /hooks/codex HTTP/1.1"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("HTTP 503"));
 }
 
@@ -4330,7 +4832,7 @@ fn cli_hook_forward_bounds_responses_under_both_failure_policies() {
             spawn_single_request_server(200, "x".repeat(MAX_HOOK_RESPONSE_BYTES + 1));
         let mut command = Command::new(gateway_bin());
         command
-            .args(["hook-forward", "hermes"])
+            .args(["hook-forward", "codex"])
             .env("NEMO_RELAY_GATEWAY_URL", &server_url)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

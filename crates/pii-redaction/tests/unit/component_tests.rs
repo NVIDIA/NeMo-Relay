@@ -296,8 +296,8 @@ impl LlmCodec for IdentifiedRequestCodec {
     }
 }
 
-#[test]
-fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs() {
+#[tokio::test]
+async fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "regex_replace".to_string(),
@@ -324,7 +324,9 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
         },
         LlmSanitizeRequestContext::for_request_codec(Some(Arc::new(OpenAIResponsesCodec))),
     )
-    .expect("the active OpenAI Responses codec must override the legacy fallback");
+    .await
+    .expect("the active OpenAI Responses codec must override the legacy fallback")
+    .expect("the active OpenAI Responses codec must retain the payload");
     assert_eq!(
         active_request.content["input"][0]["content"][0]["text"],
         json!("[REDACTED]")
@@ -350,7 +352,9 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
                 inner: OpenAIResponsesCodec,
             }))),
         )
-        .expect("an active runtime or opaque request codec must remain usable");
+        .await
+        .expect("an active runtime or opaque request codec must remain usable")
+        .expect("an active runtime or opaque request codec must retain the payload");
         assert_eq!(
             active_request.content["input"][0]["content"][0]["text"],
             json!("[REDACTED]")
@@ -373,14 +377,19 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
             BuiltinLlmCodec::OpenAiResponses,
         )),
     )
-    .expect("the active OpenAI Responses codec must override the legacy fallback");
+    .await
+    .expect("the active OpenAI Responses codec must override the legacy fallback")
+    .expect("the active OpenAI Responses codec must retain the payload");
     assert_eq!(
         active_responses["output"][0]["content"][0]["text"],
         json!("[REDACTED]")
     );
 
     assert!(
-        sanitize_response(responses_payload.clone(), no_codec_context()).is_none(),
+        sanitize_response(responses_payload.clone(), no_codec_context())
+            .await
+            .expect("sanitizer callback must succeed")
+            .is_none(),
         "an incompatible configured fallback codec must omit a normalized payload"
     );
 
@@ -389,6 +398,8 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
             responses_payload,
             LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::Opaque),
         )
+        .await
+        .expect("sanitizer callback must succeed")
         .is_none(),
         "a normalized-path policy must omit an unknown active provider payload"
     );
@@ -403,13 +414,15 @@ fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_codecs(
                 "com.example.chat.v1".to_owned(),
             )),
         )
+        .await
+        .expect("sanitizer callback must succeed")
         .is_none(),
         "a normalized-path policy must omit a runtime codec until it has a compatible projection"
     );
 }
 
-#[test]
-fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
+#[tokio::test]
+async fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "regex_replace".to_string(),
@@ -432,17 +445,22 @@ fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
             },
             no_codec_request_context(),
         )
+        .await
+        .expect("sanitizer callback must succeed")
         .is_none(),
         "a shallow legacy surface match must not enable a raw-payload fallback"
     );
     assert!(
-        sanitize_response(json!({"choices": "sk-response-secret"}), no_codec_context()).is_none(),
+        sanitize_response(json!({"choices": "sk-response-secret"}), no_codec_context())
+            .await
+            .expect("sanitizer callback must succeed")
+            .is_none(),
         "a legacy response codec failure must omit the payload instead of emitting raw content"
     );
 }
 
-#[test]
-fn normalized_openai_chat_api_specific_policy_omits_multiple_choices() {
+#[tokio::test]
+async fn normalized_openai_chat_api_specific_policy_omits_multiple_choices() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "remove".to_string(),
@@ -475,12 +493,14 @@ fn normalized_openai_chat_api_specific_policy_omits_multiple_choices() {
                 BuiltinLlmCodec::OpenAiChat,
             )),
         )
+        .await
+        .expect("sanitizer callback must succeed")
         .is_none()
     );
 }
 
-#[test]
-fn normalized_llm_paths_use_configured_anthropic_codec_without_a_system_message() {
+#[tokio::test]
+async fn normalized_llm_paths_use_configured_anthropic_codec_without_a_system_message() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "regex_replace".to_string(),
@@ -504,7 +524,9 @@ fn normalized_llm_paths_use_configured_anthropic_codec_without_a_system_message(
         },
         no_codec_request_context(),
     )
-    .expect("the configured Anthropic codec must sanitize a valid message-only request");
+    .await
+    .expect("the configured Anthropic codec must sanitize a valid message-only request")
+    .expect("the configured Anthropic codec must retain the payload");
 
     assert_eq!(
         sanitized.content["messages"][0]["content"],
@@ -512,8 +534,8 @@ fn normalized_llm_paths_use_configured_anthropic_codec_without_a_system_message(
     );
 }
 
-#[test]
-fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
+#[tokio::test]
+async fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
     let callback = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
         Some("openai_chat"),
         "preserve",
@@ -548,6 +570,8 @@ fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
             "person_name": "Alice Example"
         }),
     }, no_codec_request_context())
+    .await
+    .unwrap()
     .unwrap();
 
     assert_eq!(request.content["model"], "claude-sonnet-4-6");
@@ -595,8 +619,8 @@ fn trajectory_preset_redacts_chat_content_without_erasing_request_structure() {
     );
 }
 
-#[test]
-fn trajectory_preset_preserves_response_analytics_and_redacts_response_content() {
+#[tokio::test]
+async fn trajectory_preset_preserves_response_analytics_and_redacts_response_content() {
     let callback = crate::builtin::llm_sanitize_response_callback(trajectory_backend(
         Some("openai_chat"),
         "preserve",
@@ -617,6 +641,8 @@ fn trajectory_preset_preserves_response_analytics_and_redacts_response_content()
         }),
         no_codec_context(),
     )
+    .await
+    .unwrap()
     .unwrap();
 
     assert_eq!(sanitized["id"], "chatcmpl_1");
@@ -643,8 +669,8 @@ fn trajectory_preset_preserves_response_analytics_and_redacts_response_content()
     assert_eq!(sanitized["cost"]["total"], 1.25);
 }
 
-#[test]
-fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
+#[tokio::test]
+async fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
     let responses_request = crate::builtin::llm_sanitize_request_callback(trajectory_backend(
         Some("openai_responses"),
         "preserve",
@@ -657,6 +683,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
             "max_output_tokens": 100
         }),
     }, no_codec_request_context())
+    .await
+    .unwrap()
     .unwrap();
     assert_eq!(responses_request.content["model"], "gpt-5");
     assert_eq!(responses_request.content["input"][0]["role"], "user");
@@ -681,6 +709,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
         }),
         no_codec_context(),
     )
+    .await
+    .unwrap()
     .unwrap();
     assert_eq!(responses_response["id"], "resp_1");
     assert_eq!(responses_response["status"], "completed");
@@ -706,6 +736,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
             "max_tokens": 128
         }),
     }, no_codec_request_context())
+    .await
+    .unwrap()
     .unwrap();
     assert_eq!(anthropic_request.content["model"], "claude-sonnet-4-6");
     assert_eq!(anthropic_request.content["system"], "[REDACTED]");
@@ -735,6 +767,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
         "stop_reason": "end_turn",
         "usage": {"input_tokens": 12, "output_tokens": 6, "cache_read_input_tokens": 8}
     }), no_codec_context())
+    .await
+    .unwrap()
     .unwrap();
     assert_eq!(anthropic_response["id"], "msg_1");
     assert_eq!(anthropic_response["role"], "assistant");
@@ -745,8 +779,8 @@ fn trajectory_preset_covers_responses_and_anthropic_provider_shapes() {
     assert_eq!(anthropic_response["usage"]["cache_read_input_tokens"], 8);
 }
 
-#[test]
-fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
+#[tokio::test]
+async fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     let chunk = Event::Mark(MarkEvent::new(
         BaseEvent::builder().name("llm.chunk").build(),
@@ -754,7 +788,7 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
         Some(CategoryProfile::builder().subtype("llm.chunk").build()),
     ));
     let sanitized = callback(
-        &chunk,
+        Arc::new(chunk.clone()),
         EventSanitizeFields {
             data: Some(json!({
                 "chunk_index": 2,
@@ -764,7 +798,9 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
             category_profile: chunk.category_profile().cloned(),
             metadata: None,
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(sanitized.data.as_ref().unwrap()["chunk_index"], 2);
     assert_eq!(
         sanitized.data.as_ref().unwrap()["event_type"],
@@ -787,7 +823,7 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
         ),
     ));
     let sanitized = callback(
-        &optimization,
+        Arc::new(optimization.clone()),
         EventSanitizeFields {
             data: Some(json!({
                 "producer": "neutral.router",
@@ -803,7 +839,9 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
             category_profile: optimization.category_profile().cloned(),
             metadata: None,
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(
         sanitized.data.as_ref().unwrap()["producer"],
         "neutral.router"
@@ -829,7 +867,7 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
         None,
     ));
     let sanitized = callback(
-        &nested_agent,
+        Arc::new(nested_agent),
         EventSanitizeFields {
             data: Some(json!({
                 "request_id": "request-1",
@@ -839,7 +877,9 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
             category_profile: None,
             metadata: Some(json!({"parent_scope_id": "scope-1", "note": "private note"})),
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(sanitized.data.as_ref().unwrap()["request_id"], "request-1");
     assert_eq!(
         sanitized.data.as_ref().unwrap()["instruction"],
@@ -860,8 +900,8 @@ fn trajectory_preset_redacts_known_marks_and_nested_scope_content() {
     assert_eq!(sanitized.metadata.as_ref().unwrap()["note"], "[REDACTED]");
 }
 
-#[test]
-fn trajectory_preset_preserves_trusted_scope_metadata_only() {
+#[tokio::test]
+async fn trajectory_preset_preserves_trusted_scope_metadata_only() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     let metadata = json!({
         "nemo_relay_scope_role": "turn",
@@ -922,13 +962,15 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
             None,
         ));
         let sanitized = callback(
-            &event,
+            Arc::new(event),
             EventSanitizeFields {
                 data: None,
                 category_profile: None,
                 metadata: Some(metadata.clone()),
             },
-        );
+        )
+        .await
+        .unwrap();
         assert_eq!(sanitized.metadata, Some(expected_metadata.clone()));
     }
 
@@ -940,7 +982,7 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         None,
     ));
     let sanitized = callback(
-        &malformed,
+        Arc::new(malformed),
         EventSanitizeFields {
             data: None,
             category_profile: None,
@@ -951,7 +993,9 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
                 "provider_payload_exact": "private context"
             })),
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(
         sanitized.metadata,
         Some(json!({
@@ -968,21 +1012,23 @@ fn trajectory_preset_preserves_trusted_scope_metadata_only() {
         Some(CategoryProfile::builder().subtype("llm.chunk").build()),
     ));
     let sanitized = callback(
-        &mark,
+        Arc::new(mark.clone()),
         EventSanitizeFields {
             data: None,
             category_profile: mark.category_profile().cloned(),
             metadata: Some(json!({"harness": "codex", "source": "hook"})),
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(
         sanitized.metadata,
         Some(json!({"harness": "[REDACTED]", "source": "[REDACTED]"}))
     );
 }
 
-#[test]
-fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
+#[tokio::test]
+async fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder().name("neutral.plugin.evidence").build(),
         Some(EventCategory::custom()),
@@ -999,11 +1045,16 @@ fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
     };
 
     let preserve = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
-    assert_eq!(preserve(&event, fields.clone()), fields);
+    assert_eq!(
+        preserve(Arc::new(event.clone()), fields.clone())
+            .await
+            .unwrap(),
+        fields
+    );
 
     let redact =
         crate::builtin::event_sanitize_callback(trajectory_backend(None, "redact_all_leaves"));
-    let sanitized = redact(&event, fields);
+    let sanitized = redact(Arc::new(event), fields).await.unwrap();
     assert_eq!(
         sanitized.data.unwrap(),
         json!({
@@ -1016,8 +1067,8 @@ fn trajectory_custom_mark_policy_is_explicit_and_shape_preserving() {
     assert_eq!(profile.extra["opaque"]["label"], "[REDACTED]");
 }
 
-#[test]
-fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations() {
+#[tokio::test]
+async fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations() {
     let callback = crate::builtin::event_sanitize_callback(trajectory_backend(None, "preserve"));
     let annotated_response: nemo_relay::codec::response::AnnotatedLlmResponse =
         serde_json::from_value(json!({
@@ -1068,7 +1119,7 @@ fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations
         None,
     ));
     let sanitized = callback(
-        &event,
+        Arc::new(event),
         EventSanitizeFields {
             data: Some(json!({"already": "sanitized by the response callback"})),
             category_profile: Some(
@@ -1079,7 +1130,9 @@ fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations
             ),
             metadata: None,
         },
-    );
+    )
+    .await
+    .unwrap();
 
     let profile = sanitized.category_profile.unwrap();
     assert_eq!(profile.model_name.as_deref(), Some("claude-sonnet-4-6"));
@@ -1116,8 +1169,8 @@ fn trajectory_profile_preserves_typed_llm_accounting_while_redacting_annotations
     );
 }
 
-#[test]
-fn preserved_custom_marks_remain_eligible_for_a_later_email_profile() {
+#[tokio::test]
+async fn preserved_custom_marks_remain_eligible_for_a_later_email_profile() {
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder().name("neutral.plugin.evidence").build(),
         Some(EventCategory::custom()),
@@ -1141,7 +1194,8 @@ fn preserved_custom_marks_remain_eligible_for_a_later_email_profile() {
         .unwrap(),
     );
 
-    let sanitized = email(&event, trajectory(&event, fields));
+    let fields = trajectory(Arc::new(event.clone()), fields).await.unwrap();
+    let sanitized = email(Arc::new(event), fields).await.unwrap();
     assert_eq!(sanitized.data.as_ref().unwrap()["owner"], "[REDACTED]");
     assert_eq!(sanitized.data.as_ref().unwrap()["score"], 0.9);
     assert_eq!(
@@ -1365,7 +1419,11 @@ fn local_profile_registrations_receive_generated_namespaces() {
     reset_runtime();
 
     register_local_backend_provider(Arc::new(|_, ctx| {
-        ctx.register_mark_sanitize_guardrail("shared", 100, Arc::new(|_, fields| fields))
+        ctx.register_mark_sanitize_guardrail(
+            "shared",
+            100,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        )
     }))
     .unwrap();
 
@@ -1430,8 +1488,8 @@ fn failed_later_profile_rolls_back_earlier_profile_registrations() {
     deregister_subscriber("pii-profile-rollback").unwrap();
 }
 
-#[test]
-fn event_sanitizer_transforms_data_category_profile_and_metadata_independently() {
+#[tokio::test]
+async fn event_sanitizer_transforms_data_category_profile_and_metadata_independently() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "regex_replace".into(),
@@ -1449,7 +1507,7 @@ fn event_sanitizer_transforms_data_category_profile_and_metadata_independently()
         None,
     ));
     let sanitized = callback(
-        &event,
+        Arc::new(event),
         EventSanitizeFields {
             data: Some(json!({"email": "person@example.com"})),
             category_profile: Some(
@@ -1459,7 +1517,9 @@ fn event_sanitizer_transforms_data_category_profile_and_metadata_independently()
             ),
             metadata: Some(json!({"owner": "person@example.com"})),
         },
-    );
+    )
+    .await
+    .unwrap();
     assert_eq!(sanitized.data.unwrap()["email"], "[REDACTED]");
     assert_eq!(
         sanitized.category_profile.unwrap().subtype.as_deref(),
@@ -1468,8 +1528,8 @@ fn event_sanitizer_transforms_data_category_profile_and_metadata_independently()
     assert_eq!(sanitized.metadata.unwrap()["owner"], "[REDACTED]");
 }
 
-#[test]
-fn llm_and_tool_scope_metadata_is_sanitized_without_reprocessing_typed_fields() {
+#[tokio::test]
+async fn llm_and_tool_scope_metadata_is_sanitized_without_reprocessing_typed_fields() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "redact".into(),
@@ -1493,13 +1553,15 @@ fn llm_and_tool_scope_metadata_is_sanitized_without_reprocessing_typed_fields() 
             .subtype("person@example.com")
             .build();
         let sanitized = callback(
-            &event,
+            Arc::new(event),
             EventSanitizeFields {
                 data: Some(json!({"content": "person@example.com"})),
                 category_profile: Some(original_profile.clone()),
                 metadata: Some(json!({"owner": "person@example.com"})),
             },
-        );
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             sanitized.data.unwrap()["content"],
@@ -1511,8 +1573,8 @@ fn llm_and_tool_scope_metadata_is_sanitized_without_reprocessing_typed_fields() 
     }
 }
 
-#[test]
-fn scope_event_sanitizer_respects_enabled_llm_and_tool_surfaces() {
+#[tokio::test]
+async fn scope_event_sanitizer_respects_enabled_llm_and_tool_surfaces() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "redact".into(),
@@ -1547,13 +1609,15 @@ fn scope_event_sanitizer_respects_enabled_llm_and_tool_surfaces() {
                 .subtype("person@example.com")
                 .build();
             let sanitized = callback(
-                &event,
+                Arc::new(event),
                 EventSanitizeFields {
                     data: Some(json!({"content": "person@example.com"})),
                     category_profile: Some(original_profile.clone()),
                     metadata: Some(json!({"owner": "person@example.com"})),
                 },
-            );
+            )
+            .await
+            .unwrap();
 
             assert_eq!(sanitized.data.unwrap()["content"], "person@example.com");
             assert_eq!(sanitized.category_profile.unwrap(), original_profile);
@@ -1562,8 +1626,8 @@ fn scope_event_sanitizer_respects_enabled_llm_and_tool_surfaces() {
     }
 }
 
-#[test]
-fn event_sanitizer_discards_category_profile_when_sanitization_fails() {
+#[tokio::test]
+async fn event_sanitizer_discards_category_profile_when_sanitization_fails() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {
             action: "regex_replace".into(),
@@ -1581,7 +1645,7 @@ fn event_sanitizer_discards_category_profile_when_sanitization_fails() {
         None,
     ));
     let sanitized = callback(
-        &event,
+        Arc::new(event),
         EventSanitizeFields {
             data: None,
             category_profile: Some(CategoryProfile {
@@ -1593,7 +1657,9 @@ fn event_sanitizer_discards_category_profile_when_sanitization_fails() {
             }),
             metadata: None,
         },
-    );
+    )
+    .await
+    .unwrap();
 
     assert!(sanitized.category_profile.is_none());
 }
@@ -1726,6 +1792,32 @@ fn validate_allows_llm_surfaces_without_codec() {
     })));
 
     assert!(report.diagnostics.is_empty(), "{report:?}");
+}
+
+#[test]
+fn validate_rejects_ambiguous_gemini_codec_name() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let report = validate_plugin_config(&plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini",
+        "input": true,
+        "output": true,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/messages/0/content"]
+        }
+    })));
+
+    assert!(report.diagnostics.iter().any(|diag| {
+        diag.field.as_deref() == Some("codec")
+            && diag.message.contains("gemini_generate_content")
+            && !diag.message.contains("gemini,")
+            && !diag.message.ends_with("gemini")
+    }));
 }
 
 #[test]
@@ -4282,6 +4374,338 @@ async fn builtin_backend_removes_targeted_message_names_and_ignores_missing_norm
 }
 
 #[tokio::test]
+async fn builtin_backend_sanitizes_gemini_generate_content_via_codec() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/messages/0/content"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-generate-content");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "contents": [{"role": "user", "parts": [{"text": "sk-gemini-secret"}]}],
+        }),
+    };
+
+    let _handle = llm_call(
+        LlmCallParams::builder()
+            .name("gemini-generate-content")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "headers": {},
+            "content": {
+                "contents": [{"role": "user", "parts": [{"text": "[REDACTED]"}]}]
+            }
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-gemini-generate-content").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_sanitizes_gemini_provider_native_tools_via_codec() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/tools/1/value/googleSearch/apiKey"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-native-tools");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+            "tools": [{
+                "functionDeclarations": [{"name": "lookup"}],
+                "googleSearch": {"apiKey": "sk-tool-secret"}
+            }]
+        }),
+    };
+
+    let _handle = llm_call(
+        LlmCallParams::builder()
+            .name("gemini_generate_content")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input(),
+        Some(&json!({
+            "headers": {},
+            "content": {
+                "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                "tools": [{
+                    "functionDeclarations": [{"name": "lookup"}],
+                    "googleSearch": {"apiKey": "[REDACTED]"}
+                }]
+            }
+        }))
+    );
+
+    deregister_subscriber("pii-redaction-gemini-native-tools").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_sanitizes_gemini_provider_native_request_content_via_codec() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/messages/0/content/1/value/fileData/fileUri"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-native-request-content");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {"text": "summarize this file"},
+                    {
+                        "fileData": {
+                            "mimeType": "text/plain",
+                            "fileUri": "https://example.test/sk-file-secret"
+                        }
+                    }
+                ]
+            }]
+        }),
+    };
+
+    let _handle = llm_call(
+        LlmCallParams::builder()
+            .name("gemini_generate_content")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input().unwrap()["content"]["contents"][0]["parts"][1]["fileData"]["fileUri"],
+        json!("https://example.test/[REDACTED]")
+    );
+    assert!(
+        !serde_json::to_string(&captured_events[0])
+            .unwrap()
+            .contains("sk-file-secret")
+    );
+
+    deregister_subscriber("pii-redaction-gemini-native-request-content").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_sanitizes_gemini_function_response_nested_parts_via_codec() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": true,
+        "output": false,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/messages/2/content/1/value/inlineData/data"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-function-response-parts");
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({
+            "contents": [
+                {"role": "user", "parts": [{"text": "show my ordered instrument"}]},
+                {"role": "model", "parts": [{
+                    "functionCall": {"id": "call_img", "name": "get_image", "args": {}},
+                    "thoughtSignature": "sig_CALL=="
+                }]},
+                {"role": "user", "parts": [{
+                    "functionResponse": {
+                        "id": "call_img",
+                        "name": "get_image",
+                        "response": {"image_ref": {"$ref": "instrument.jpg"}},
+                        "parts": [{
+                            "inlineData": {
+                                "displayName": "instrument.jpg",
+                                "mimeType": "image/jpeg",
+                                "data": "sk-image-secret"
+                            }
+                        }]
+                    }
+                }]}
+            ]
+        }),
+    };
+
+    let _handle = llm_call(
+        LlmCallParams::builder()
+            .name("gemini_generate_content")
+            .request(&request)
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 1);
+    assert_eq!(
+        captured_events[0].input().unwrap()["content"]["contents"][2]["parts"][0]["functionResponse"]
+            ["parts"][0]["inlineData"]["data"],
+        json!("[REDACTED]")
+    );
+    assert!(
+        !serde_json::to_string(&captured_events[0])
+            .unwrap()
+            .contains("sk-image-secret")
+    );
+
+    deregister_subscriber("pii-redaction-gemini-function-response-parts").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_sanitizes_gemini_provider_native_response_content_via_codec() {
+    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/message/1/value/codeExecutionResult/output"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-native-response-content");
+    let response = json!({
+        "candidates": [{
+            "content": {
+                "role": "model",
+                "parts": [
+                    {"text": "ran code"},
+                    {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "sk-code-secret"}}
+                ]
+            },
+            "finishReason": "STOP",
+            "index": 0
+        }]
+    });
+
+    let _ = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("gemini_generate_content")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "contents": [{"role": "user", "parts": [{"text": "run code"}]}]
+                }),
+            })
+            .func(noop_openai_chat_exec_fn(response.clone()))
+            .response_codec(Arc::new(GeminiGenerateContentCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert_eq!(
+        captured_events[1].output().unwrap()["candidates"][0]["content"]["parts"][1]["codeExecutionResult"]
+            ["output"],
+        json!("[REDACTED]")
+    );
+    assert!(
+        !serde_json::to_string(&captured_events[1])
+            .unwrap()
+            .contains("sk-code-secret")
+    );
+
+    deregister_subscriber("pii-redaction-gemini-native-response-content").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
 async fn builtin_backend_omits_request_and_annotation_for_unsafe_normalized_array_removal() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();
@@ -5114,5 +5538,158 @@ async fn builtin_backend_sanitizes_openai_responses_output_text_alias_on_stream_
     assert!(!end.to_json_string().unwrap().contains("sk-stream-secret"));
 
     deregister_subscriber("pii-redaction-openai-responses-output-text-stream").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_omits_multi_candidate_gemini_normalized_response() {
+    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/message"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-multi-candidate-response");
+    let response = json!({
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "sk-first-secret"}]},
+                "finishReason": "STOP",
+                "index": 0
+            },
+            {
+                "content": {"role": "model", "parts": [{"text": "sk-second-secret"}]},
+                "finishReason": "STOP",
+                "index": 1
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 10}
+    });
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("gemini-multi-candidate")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+                }),
+            })
+            // noop_openai_chat_exec_fn is codec-agnostic: it returns whatever JSON is passed.
+            .func(noop_openai_chat_exec_fn(response.clone()))
+            .response_codec(Arc::new(GeminiGenerateContentCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    // The raw response is returned unchanged (fail-closed: no partial redaction).
+    assert_eq!(result, response);
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    // The end event must carry no annotated output (omitted due to multi-candidate).
+    assert!(captured_events[1].output().is_none());
+    assert!(captured_events[1].annotated_response().is_none());
+    // Neither secret must appear in the serialized event.
+    let serialized_end = serde_json::to_string(&captured_events[1]).unwrap();
+    assert!(!serialized_end.contains("sk-first-secret"));
+    assert!(!serialized_end.contains("sk-second-secret"));
+
+    deregister_subscriber("pii-redaction-gemini-multi-candidate-response").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[tokio::test]
+async fn builtin_backend_sanitizes_raw_multi_candidate_gemini_response() {
+    use crate::codec::gemini_generate_content::GeminiGenerateContentCodec;
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "codec": "gemini_generate_content",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "regex_replace",
+            "pattern": "sk-[A-Za-z0-9_-]+",
+            "replacement": "[REDACTED]",
+            "target_paths": ["/candidates/1/content/parts/0/text"]
+        }
+    })))
+    .await
+    .unwrap();
+
+    let events = capture_events("pii-redaction-gemini-raw-multi-candidate-response");
+    let response = json!({
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "sk-first-secret"}]},
+                "finishReason": "STOP",
+                "index": 0
+            },
+            {
+                "content": {"role": "model", "parts": [{"text": "sk-second-secret"}]},
+                "finishReason": "STOP",
+                "index": 1
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 10}
+    });
+
+    let result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("gemini-raw-multi-candidate")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "contents": [{"role": "user", "parts": [{"text": "hello"}]}]
+                }),
+            })
+            .func(noop_openai_chat_exec_fn(response.clone()))
+            .response_codec(Arc::new(GeminiGenerateContentCodec))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result, response,
+        "PII sanitization must not mutate the caller result"
+    );
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    let output = captured_events[1].output().expect("sanitized output event");
+    assert_eq!(
+        output["candidates"][0]["content"]["parts"][0]["text"],
+        json!("sk-first-secret"),
+        "raw targeting must not trigger normalized multi-candidate omission"
+    );
+    assert_eq!(
+        output["candidates"][1]["content"]["parts"][0]["text"],
+        json!("[REDACTED]")
+    );
+    assert!(captured_events[1].annotated_response().is_some());
+
+    deregister_subscriber("pii-redaction-gemini-raw-multi-candidate-response").unwrap();
     clear_plugin_configuration().unwrap();
 }

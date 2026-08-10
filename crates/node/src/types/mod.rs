@@ -8,6 +8,7 @@
 //! Doc comments on `#[napi]` items are emitted into the generated `index.d.ts`.
 
 use napi_derive::napi;
+use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -94,6 +95,7 @@ impl From<CoreScopeType> for ScopeType {
 #[napi]
 pub struct ScopeStack {
     pub(crate) inner: ScopeStackHandle,
+    pub(crate) publication_buffer: Option<PublicationBuffer>,
 }
 
 #[napi]
@@ -103,13 +105,17 @@ impl ScopeStack {
     pub fn new() -> Self {
         Self {
             inner: create_scope_stack(),
+            publication_buffer: None,
         }
     }
 }
 
 impl From<ScopeStackHandle> for ScopeStack {
     fn from(h: ScopeStackHandle) -> Self {
-        Self { inner: h }
+        Self {
+            inner: h,
+            publication_buffer: None,
+        }
     }
 }
 
@@ -433,6 +439,67 @@ impl OpenAIResponsesCodec {
             ),
             inner_response_codec: std::sync::Arc::new(
                 nemo_relay::codec::openai_responses::OpenAIResponsesCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+        let orig: CoreLlmRequest = serde_json::from_value(original)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
+
+/// Built-in codec for the Gemini generateContent API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decodeResponse). Construct with `new GeminiGenerateContentCodec()`.
+#[napi(js_name = "GeminiGenerateContentCodec")]
+pub struct GeminiGenerateContentCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+}
+
+#[napi]
+impl GeminiGenerateContentCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(
+                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
+            ),
+            inner_response_codec: std::sync::Arc::new(
+                nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec,
             ),
         }
     }

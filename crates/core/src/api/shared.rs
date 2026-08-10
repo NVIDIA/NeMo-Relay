@@ -5,10 +5,13 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::api::event::{Event, ScopeCategory};
+use crate::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use crate::api::llm::LlmRequest;
+use crate::api::registry::Guardrail;
 use crate::api::runtime::global_context;
-use crate::api::runtime::{EventSubscriberFn, NemoRelayContextState, ScopeStackHandle};
+use crate::api::runtime::{
+    EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
+};
 use crate::api::runtime::{current_scope_stack, task_scope_top};
 use crate::api::scope::ScopeHandle;
 use crate::api::scope::ScopeType;
@@ -41,22 +44,47 @@ pub(crate) fn snapshot_event_subscribers(
     Ok(state.collect_event_subscribers(&scope_local_subscribers))
 }
 
-/// Apply the event sanitizer chain visible on the current scope stack.
-pub(crate) fn sanitize_event(event: Event) -> Option<Event> {
-    sanitize_event_with_scope_stack(event, &current_scope_stack())
-}
-
-/// Apply the event sanitizer chain visible on a captured scope stack.
-pub(crate) fn sanitize_event_with_scope_stack(
-    event: Event,
+/// Snapshot the event sanitizers visible to an event without invoking them.
+///
+/// Scope and mark emission use this to capture middleware ownership while the
+/// scope is still active, then let the serial dispatcher sanitize and publish
+/// the immutable event snapshot later. This keeps public scope APIs
+/// synchronous while ensuring scope removal cannot affect queued work.
+pub(crate) fn snapshot_event_sanitizers(
+    event: &Event,
     scope_stack: &ScopeStackHandle,
-) -> Option<Event> {
+) -> Option<Vec<Guardrail<EventSanitizeFn>>> {
     let entries = {
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = match scope_stack.read() {
+            Ok(guard) => guard,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_snapshot_failed";
+                    "Event sanitizer snapshot failed; clearing observability fields: {error}"
+                );
+                return Some(vec![Guardrail::new(
+                    "event-sanitizer-snapshot-failure",
+                    i32::MIN,
+                    Arc::new(|_, _| Box::pin(async { Ok(EventSanitizeFields::default()) })),
+                )]);
+            }
+        };
         let context = global_context();
         let state = match context.read() {
             Ok(state) => state,
-            Err(_) => return None,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_sanitizer_snapshot_failed";
+                    "Event sanitizer snapshot failed; clearing observability fields: {error}"
+                );
+                return Some(vec![Guardrail::new(
+                    "event-sanitizer-snapshot-failure",
+                    i32::MIN,
+                    Arc::new(|_, _| Box::pin(async { Ok(EventSanitizeFields::default()) })),
+                )]);
+            }
         };
         match &event {
             Event::Mark(_) => {
@@ -88,9 +116,7 @@ pub(crate) fn sanitize_event_with_scope_stack(
             }
         }
     };
-    Some(NemoRelayContextState::event_sanitize_snapshot_chain(
-        event, &entries,
-    ))
+    Some(entries)
 }
 
 pub(crate) fn ensure_runtime_owner() -> Result<()> {
@@ -188,6 +214,21 @@ pub(crate) fn metadata_with_otel_status(
     metadata
 }
 
+pub(crate) fn metadata_with_otel_error(metadata: Option<Json>, error: &FlowError) -> Option<Json> {
+    let mut metadata = metadata_with_otel_status(metadata, "ERROR", Some(error.to_string()));
+    if let Some(Json::Object(metadata)) = metadata.as_mut() {
+        metadata
+            .entry("error.type".to_string())
+            .or_insert_with(|| Json::String(error.otel_error_type().to_string()));
+        if let Some(exception_type) = error.exception_type() {
+            metadata
+                .entry("exception.type".to_string())
+                .or_insert_with(|| Json::String(exception_type.to_string()));
+        }
+    }
+    metadata
+}
+
 pub(crate) type InterceptedLlmRequest = (
     LlmRequest,
     Option<Arc<AnnotatedLlmRequest>>,
@@ -196,26 +237,26 @@ pub(crate) type InterceptedLlmRequest = (
 );
 
 #[cfg(test)]
-pub(crate) fn run_request_intercepts_with_codec(
+pub(crate) async fn run_request_intercepts_with_codec(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
 ) -> Result<InterceptedLlmRequest> {
-    run_request_intercepts_with_codec_inner(name, request, codec, None)
+    run_request_intercepts_with_codec_inner(name, request, codec, None).await
 }
 
 /// Run request intercepts and record optimization contributions directly into
 /// the managed call's bounded accumulator as each intercept completes.
-pub(crate) fn run_request_intercepts_with_codec_and_recorder(
+pub(crate) async fn run_request_intercepts_with_codec_and_recorder(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
     recorder: &crate::api::optimization::LlmOptimizationRecorder,
 ) -> Result<InterceptedLlmRequest> {
-    run_request_intercepts_with_codec_inner(name, request, codec, Some(recorder))
+    run_request_intercepts_with_codec_inner(name, request, codec, Some(recorder)).await
 }
 
-fn run_request_intercepts_with_codec_inner(
+async fn run_request_intercepts_with_codec_inner(
     name: &str,
     request: LlmRequest,
     codec: Option<Arc<dyn LlmCodec>>,
@@ -228,7 +269,9 @@ fn run_request_intercepts_with_codec_inner(
 
     let entries = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        let scope_guard = scope_stack
+            .read()
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let scope_locals = scope_guard
             .collect_scope_local_registries(|registries| &registries.llm_request_intercepts);
 
@@ -246,7 +289,8 @@ fn run_request_intercepts_with_codec_inner(
             &entries,
             codec.is_some(),
             recorder,
-        )?;
+        )
+        .await?;
     let mut request = outcome.request;
     inject_dynamo_session_ids(&mut request);
     let pending_marks = outcome.pending_marks;

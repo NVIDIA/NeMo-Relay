@@ -222,7 +222,7 @@ class TestAdaptivePluginConfiguration:
             )
             with scope.scope("adaptive-runtime-translate", ScopeType.Agent) as handle:
                 runtime.bind_scope(handle)
-                translated = llm.request_intercepts("anthropic", request)
+                translated = await llm.request_intercepts("anthropic", request)
                 assert translated.request.content == {
                     "messages": [{"role": "user", "content": "Hello"}],
                     "system": "You are helpful.",
@@ -251,7 +251,7 @@ class TestAdaptivePluginConfiguration:
             assert report["diagnostics"] == []
             assert plugin.report() == report
         finally:
-            plugin.clear()
+            await plugin.clear_async()
 
     async def test_configure_allows_normal_llm_call(self):
         await plugin.initialize(
@@ -277,7 +277,7 @@ class TestAdaptivePluginConfiguration:
             result = await llm.execute("test-model", request, my_llm)
             assert result["response"] == "ok"
         finally:
-            plugin.clear()
+            await plugin.clear_async()
 
     async def test_python_plugin_is_called_from_core_plugin_system(self):
         class HeaderPlugin:
@@ -399,7 +399,7 @@ class TestAdaptivePluginConfiguration:
                 assert chunk["x-python-llm-stream-exec"] == "priority:17"
             assert collected[0]["x-python-llm-stream-exec"] == "priority:17"
         finally:
-            plugin.clear()
+            await plugin.clear_async()
             plugin.deregister("python.test_plugin")
 
     def test_list_kinds_includes_registered_plugin(self):

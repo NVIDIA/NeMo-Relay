@@ -89,7 +89,7 @@ async def main():
         # Run instrumented application work here.
         pass
     finally:
-        nemo_relay.plugin.clear()
+        await nemo_relay.plugin.clear_async()
 
 asyncio.run(main())
 ```

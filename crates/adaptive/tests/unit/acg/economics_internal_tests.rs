@@ -121,6 +121,7 @@ fn economics_internal_build_prefix_stats_stops_at_first_non_stable_block() {
             score(1, StabilityClass::Variable, 0.4, 0.9),
         ],
         stable_prefix_length: 2,
+        stable_prefix_fingerprint: None,
         total_observations: 6,
     };
 

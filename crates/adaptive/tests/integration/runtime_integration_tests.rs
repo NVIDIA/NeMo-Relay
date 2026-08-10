@@ -61,10 +61,6 @@ fn enable_operational_logs() {
     });
 }
 
-fn short_hash(value: &str) -> &str {
-    value.get(..16).unwrap_or(value)
-}
-
 fn reset_global() {
     enable_operational_logs();
     let _ = clear_plugin_configuration();
@@ -525,11 +521,7 @@ async fn runtime_integration_acg_learner_reuses_learning_buckets_across_growing_
     let requests = sample_growing_chat_requests("claude-3-5-sonnet");
     let learner = AcgLearner::new(agent_id, 8, StabilityThresholds::default());
     let learning_key = format!(
-        "{agent_id}::model=claude-3-5-sonnet::seed={}::system=sha256:3087d8fd4::tools=no-tools",
-        short_hash(&format!(
-            "user:{}",
-            nemo_relay_adaptive::acg::sha256_hex("Summarize the latest findings")
-        )),
+        "{agent_id}::model=claude-3-5-sonnet::seed=stable-scaffold::system=sha256:3087d8fd4b98c564984d0f184c06bf6346f0788022d7cb521231e65f673936ac::tools=no-tools"
     );
 
     learner
@@ -605,6 +597,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
             content: json!({"messages": []}),
         },
     )
+    .await
     .unwrap();
     assert_eq!(request.request.content["messages"], json!([]));
 
@@ -739,9 +732,11 @@ impl Plugin for HeaderPlugin {
                 false,
                 Arc::new(|_name, mut request, annotated| {
                     request.headers.insert("x-plugin".into(), json!("set"));
-                    Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                        request, annotated,
-                    ))
+                    Box::pin(async move {
+                        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                            request, annotated,
+                        ))
+                    })
                 }),
             )?;
             ctx.register_tool_request_intercept(
@@ -752,7 +747,7 @@ impl Plugin for HeaderPlugin {
                     if let Json::Object(ref mut map) = args {
                         map.insert("x-tool-plugin".into(), json!(true));
                     }
-                    Ok(args)
+                    Box::pin(async move { Ok(args) })
                 }),
             )?;
             ctx.register_llm_execution_intercept(
@@ -823,6 +818,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
             content: json!({"messages": []}),
         },
     )
+    .await
     .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!("set")));
 

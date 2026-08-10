@@ -61,6 +61,11 @@ The Go package provides the following capabilities:
 - **Local source-first workflow**: Build the FFI library locally, then test or
   consume the Go module from the checkout.
 
+Go middleware callbacks are synchronous. Relay waits for each callback on a
+native thread, so blocking I/O and other long-running callback work occupy that
+thread and can reduce middleware throughput. The Go binding does not provide
+completion-based middleware registration.
+
 ## Installation
 
 Build the FFI library from a repository checkout before using the Go binding:
@@ -105,6 +110,12 @@ import (
 )
 
 func main() {
+	defer func() {
+		if err := nemo.ShutdownLogging(); err != nil {
+			log.Printf("shut down NeMo Relay logging: %v", err)
+		}
+	}()
+
 	if err := nemo.RegisterSubscriber("printer", func(event nemo.Event) {
 		fmt.Printf("%s %s\n", event.Kind(), event.Name())
 		fmt.Println(string(event.JSON()))

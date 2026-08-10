@@ -41,25 +41,24 @@ function rejectWithPrimitive(value) {
   return Promise.reject(value);
 }
 
+async function assertCompletesWithin(promise, message) {
+  let timeout;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new assert.AssertionError({ message })), 2000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function sparseArray() {
   const values = new Array(2);
   values[1] = 1;
   return values;
-}
-
-async function waitForSubscriberCallbacks(predicate, timeoutMs = 15000) {
-  flushSubscribers();
-  // flushSubscribers() waits for Relay's Rust subscriber dispatcher, but JS
-  // subscriber callbacks are queued onto Node's event loop through N-API
-  // ThreadsafeFunction. Yield event-loop turns until the observed JS-side
-  // callback state is ready, with a timeout to avoid hanging the test forever.
-  const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
-    if (Date.now() >= deadline) {
-      throw new Error('timed out waiting for subscriber callbacks');
-    }
-    await new Promise((resolve) => setImmediate(resolve));
-  }
 }
 
 // ===========================================================================
@@ -135,10 +134,7 @@ describe('Tool lifecycle', () => {
     try {
       const handle = toolCall('evt_tool', {}, null, null, null, null);
       toolCallEnd(handle, {}, null, null);
-      const deadline = Date.now() + 2000;
-      while (events.length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       assert.ok(events.length >= 2, 'Expected at least 2 events');
     } finally {
       deregisterSubscriber('node_tool_evt_sub');
@@ -180,10 +176,7 @@ describe('Tool lifecycle', () => {
         },
       );
 
-      const deadline = Date.now() + 2000;
-      while (events.filter((e) => e.name === 'field_tool').length < 2 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
 
       const start = events.find(
         (e) => e.name === 'field_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'start',
@@ -387,11 +380,11 @@ describe('Tool execute', () => {
 
       await assert.rejects(
         () =>
-          toolCallExecuteAsync(
+          toolCallExecute(
             'exec_status_error_tool',
             {},
-            async () => {
-              throw new Error('tool status failure');
+            () => {
+              throw new TypeError('tool status failure');
             },
             null,
             null,
@@ -403,23 +396,7 @@ describe('Tool execute', () => {
         /tool status failure/,
       );
 
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some(
-            (e) =>
-              e.name === 'exec_status_ok_tool' &&
-              e.kind === 'scope' &&
-              e.category === 'tool' &&
-              e.scope_category === 'end',
-          ) &&
-          events.some(
-            (e) =>
-              e.name === 'exec_status_error_tool' &&
-              e.kind === 'scope' &&
-              e.category === 'tool' &&
-              e.scope_category === 'end',
-          ),
-      );
+      await flushSubscribers();
       const okEnd = events.find(
         (e) =>
           e.name === 'exec_status_ok_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
@@ -438,6 +415,8 @@ describe('Tool execute', () => {
       assert.equal(errorEnd.metadata.caller, 'node-tool-error');
       assert.equal(errorEnd.metadata['otel.status_code'], 'ERROR');
       assert.match(errorEnd.metadata['otel.status_description'], /tool status failure/);
+      assert.equal(errorEnd.metadata['error.type'], 'internal_error');
+      assert.equal(errorEnd.metadata['exception.type'], 'TypeError');
     } finally {
       deregisterSubscriber('node_tool_status_metadata_sub');
     }
@@ -520,19 +499,7 @@ describe('Tool guardrails', () => {
       assert.deepEqual(result, {
         x: 1,
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_req_evt_tool' &&
-            e.kind === 'scope' &&
-            e.category === 'tool' &&
-            e.scope_category === 'start',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const start = events.find(
         (e) =>
           e.name === 'san_req_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'start',
@@ -579,16 +546,7 @@ describe('Tool guardrails', () => {
       assert.deepEqual(result, {
         ok: true,
       });
-      const deadline = Date.now() + 2000;
-      while (
-        !events.some(
-          (e) =>
-            e.name === 'san_resp_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
-        ) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await flushSubscribers();
       const end = events.find(
         (e) =>
           e.name === 'san_resp_evt_tool' && e.kind === 'scope' && e.category === 'tool' && e.scope_category === 'end',
@@ -606,6 +564,60 @@ describe('Tool guardrails', () => {
   it('conditional guardrail (allow)', () => {
     registerToolConditionalExecutionGuardrail('node_tool_cond', 10, (name, args) => null);
     deregisterToolConditionalExecutionGuardrail('node_tool_cond');
+  });
+
+  it('conditional guardrail awaits a Promise result', async () => {
+    registerToolConditionalExecutionGuardrail('node_tool_cond_promise', 10, async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return null;
+    });
+    try {
+      const result = await toolCallExecute('tool_cond_promise', { ok: true }, (args) => args, null, null, null, null);
+      assert.deepEqual(result, { ok: true });
+    } finally {
+      deregisterToolConditionalExecutionGuardrail('node_tool_cond_promise');
+    }
+  });
+
+  it('Promise middleware preserves its invocation scope before and after await', async () => {
+    const originalStack = lib.currentScopeStack();
+    const invocationStack = lib.createScopeStack();
+    const unrelatedStack = lib.createScopeStack();
+    const observed = [];
+    let invocationScope;
+    lib.registerToolConditionalExecutionGuardrail('node_tool_cond_scope_context', 10, async () => {
+      observed.push(lib.getHandle().uuid);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(lib.getHandle().uuid);
+      return null;
+    });
+    try {
+      const execution = lib.withScopeStack(invocationStack, () => {
+        invocationScope = lib.pushScope('middleware-invocation', lib.ScopeType.Agent);
+        return lib.toolCallExecute('tool_cond_scope_context', {}, (args) => args);
+      });
+      lib.setThreadScopeStack(unrelatedStack);
+      await execution;
+      assert.deepEqual(observed, [invocationScope.uuid, invocationScope.uuid]);
+    } finally {
+      lib.withScopeStack(invocationStack, () => lib.popScope(invocationScope));
+      lib.setThreadScopeStack(originalStack);
+      lib.deregisterToolConditionalExecutionGuardrail('node_tool_cond_scope_context');
+    }
+  });
+
+  it('conditional guardrail propagates a rejected Promise', async () => {
+    registerToolConditionalExecutionGuardrail('node_tool_cond_reject', 10, async () => {
+      throw new Error('guardrail rejected promise');
+    });
+    try {
+      await assert.rejects(
+        () => toolCallExecute('tool_cond_reject', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        /guardrail rejected promise/i,
+      );
+    } finally {
+      deregisterToolConditionalExecutionGuardrail('node_tool_cond_reject');
+    }
   });
 
   it('conditional guardrail treats implicit undefined as allow', async () => {
@@ -670,7 +682,7 @@ describe('Tool guardrails', () => {
     }
   });
 
-  it('sanitize guardrail failures preserve the observable payload', async () => {
+  it('sanitize guardrail failures omit the observable payload', async () => {
     clearLastCallbackError();
     const events = [];
     registerSubscriber('node_tool_san_throw_sub', (event) => events.push(event));
@@ -679,7 +691,7 @@ describe('Tool guardrails', () => {
     });
     try {
       await toolCallExecute('tool_sanitize_throw', { original: true }, (args) => args, null, null, null, null);
-      await waitForSubscriberCallbacks(() => events.some((event) => event.name === 'tool_sanitize_throw'));
+      await flushSubscribers();
       const start = events.find(
         (event) =>
           event.name === 'tool_sanitize_throw' &&
@@ -687,13 +699,45 @@ describe('Tool guardrails', () => {
           event.category === 'tool' &&
           event.scope_category === 'start',
       );
-      assert.deepEqual(start.data, { original: true });
+      assert.equal(start.data, null);
       assert.match(getLastCallbackError() ?? '', /sanitize boom/i);
     } finally {
       deregisterToolSanitizeRequestGuardrail('node_tool_san_throw');
       deregisterSubscriber('node_tool_san_throw_sub');
       clearLastCallbackError();
     }
+  });
+
+  it('manual async sanitizers can flush subscribers without deadlocking', async () => {
+    const events = [];
+    let requestFlushed = false;
+    let responseFlushed = false;
+    registerSubscriber('node_manual_tool_flush_subscriber', (event) => events.push(event));
+    registerToolSanitizeRequestGuardrail('node_manual_tool_flush_request', 10, async (_name, args) => {
+      await flushSubscribers();
+      requestFlushed = true;
+      return { ...args, requestSanitized: true };
+    });
+    registerToolSanitizeResponseGuardrail('node_manual_tool_flush_response', 10, async (_name, response) => {
+      await flushSubscribers();
+      responseFlushed = true;
+      return { ...response, responseSanitized: true };
+    });
+    try {
+      const handle = toolCall('node_manual_tool_flush', { original: true });
+      toolCallEnd(handle, { ok: true });
+      await flushSubscribers();
+    } finally {
+      deregisterToolSanitizeRequestGuardrail('node_manual_tool_flush_request');
+      deregisterToolSanitizeResponseGuardrail('node_manual_tool_flush_response');
+      deregisterSubscriber('node_manual_tool_flush_subscriber');
+    }
+    assert.equal(requestFlushed, true);
+    assert.equal(responseFlushed, true);
+    const start = events.find((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'start');
+    const end = events.find((event) => event.name === 'node_manual_tool_flush' && event.scope_category === 'end');
+    assert.deepEqual(start.data, { original: true, requestSanitized: true });
+    assert.deepEqual(end.data, { ok: true, responseSanitized: true });
   });
 
   it('conditional guardrail (block)', () => {
@@ -782,6 +826,41 @@ describe('Tool intercepts', () => {
     deregisterToolRequestIntercept('node_tool_req_mod');
   });
 
+  it('request intercept awaits a Promise result', async () => {
+    registerToolRequestIntercept('node_tool_req_promise', 10, false, async (_name, args) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      return { ...args, promised: true };
+    });
+    try {
+      const result = await toolCallExecute(
+        'tool_req_promise',
+        { original: true },
+        (args) => args,
+        null,
+        null,
+        null,
+        null,
+      );
+      assert.deepEqual(result, { original: true, promised: true });
+    } finally {
+      deregisterToolRequestIntercept('node_tool_req_promise');
+    }
+  });
+
+  it('request intercept propagates a rejected Promise', async () => {
+    registerToolRequestIntercept('node_tool_req_reject', 10, false, async () => {
+      throw new Error('request intercept rejected promise');
+    });
+    try {
+      await assert.rejects(
+        () => toolCallExecute('tool_req_reject', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        /request intercept rejected promise/i,
+      );
+    } finally {
+      deregisterToolRequestIntercept('node_tool_req_reject');
+    }
+  });
+
   it('request intercept throws a catchable error without terminating Node', async () => {
     registerToolRequestIntercept('node_tool_req_throw', 10, false, () => {
       throw new Error('tool request intercept boom');
@@ -857,12 +936,7 @@ describe('Tool intercepts', () => {
       );
       assert.equal(result.original, false);
       assert.equal(result.wrapped, true);
-      await waitForSubscriberCallbacks(
-        () =>
-          events.some(
-            (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'end',
-          ) && events.some((event) => event.name === 'node.tool.execution'),
-      );
+      await flushSubscribers();
       const start = events.find(
         (event) => event.name === 'replaced_tool' && event.kind === 'scope' && event.scope_category === 'start',
       );
@@ -879,6 +953,319 @@ describe('Tool intercepts', () => {
     } finally {
       deregisterToolExecutionIntercept('node_tool_exec_repl');
       deregisterSubscriber('node_tool_exec_mark_sub');
+    }
+  });
+
+  it('execution callbacks preserve the managed propagation parent across await', async () => {
+    const events = [];
+    const observed = [];
+    registerSubscriber('node_tool_exec_propagation_parent', (event) => events.push(event));
+    registerToolExecutionIntercept('node_tool_exec_propagation_parent', 10, async (args, next) => {
+      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid]);
+      await new Promise((resolve) => setImmediate(resolve));
+      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid]);
+      return { result: await next(args) };
+    });
+    try {
+      const result = await toolCallExecuteAsync('propagation_parent_tool', {}, async () => {
+        observed.push(['provider-before', lib.capturePropagationContext().parentUuid]);
+        await new Promise((resolve) => setImmediate(resolve));
+        observed.push(['provider-after', lib.capturePropagationContext().parentUuid]);
+        return { ok: true };
+      });
+      assert.deepEqual(result, { ok: true });
+      await flushSubscribers();
+      const start = events.find(
+        (event) =>
+          event.name === 'propagation_parent_tool' && event.kind === 'scope' && event.scope_category === 'start',
+      );
+      assert.ok(start, 'expected managed tool start event');
+      assert.deepEqual(observed, [
+        ['intercept-before', start.uuid],
+        ['intercept-after', start.uuid],
+        ['provider-before', start.uuid],
+        ['provider-after', start.uuid],
+      ]);
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_propagation_parent');
+      deregisterSubscriber('node_tool_exec_propagation_parent');
+    }
+  });
+
+  it('execution settlement expires scope replacements inherited by detached work', async () => {
+    const baseline = {
+      active: lib.scopeStackActive(),
+      parentUuid: lib.capturePropagationContext().parentUuid,
+    };
+    const replacementStack = lib.createScopeStack();
+    let releaseLateContext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateContext = resolve;
+    });
+    let lateContext;
+
+    await toolCallExecuteAsync('scope_replacement_expiry_tool', {}, async () => {
+      lib.setThreadScopeStack(replacementStack);
+      lateContext = lateGate.then(() => ({
+        active: lib.scopeStackActive(),
+        parentUuid: lib.capturePropagationContext().parentUuid,
+      }));
+      await new Promise((resolve) => setImmediate(resolve));
+      return { ok: true };
+    });
+
+    releaseLateContext();
+    assert.deepEqual(await lateContext, baseline);
+  });
+
+  it('execution intercept rejects a detached next call after settlement', async () => {
+    let releaseLateNext;
+    const lateGate = new Promise((resolve) => {
+      releaseLateNext = resolve;
+    });
+    let lateNext;
+    let providerCalls = 0;
+    registerToolExecutionIntercept('node_tool_exec_late_next', 10, async (args, next) => {
+      lateNext = lateGate.then(() => next(args));
+      return { result: { source: 'intercept' } };
+    });
+    try {
+      const result = await toolCallExecute('late_next_tool', { value: 1 }, (args) => {
+        providerCalls += 1;
+        return args;
+      });
+      assert.deepEqual(result, { source: 'intercept' });
+      releaseLateNext();
+      await assert.rejects(lateNext, /execution continuation is no longer active/i);
+      assert.equal(providerCalls, 0);
+    } finally {
+      releaseLateNext?.();
+      await lateNext?.catch(() => {});
+      deregisterToolExecutionIntercept('node_tool_exec_late_next');
+    }
+  });
+
+  it('execution intercept aborts an already-started async provider after settlement', async () => {
+    let releaseProvider;
+    const providerGate = new Promise((resolve) => {
+      releaseProvider = resolve;
+    });
+    let providerStarted;
+    const started = new Promise((resolve) => {
+      providerStarted = resolve;
+    });
+    let providerAborted;
+    const aborted = new Promise((resolve) => {
+      providerAborted = resolve;
+    });
+    let downstream;
+    let providerSideEffects = 0;
+    registerToolExecutionIntercept('node_tool_exec_abort_started_provider', 10, async (args, next) => {
+      downstream = next(args);
+      downstream.catch(() => undefined);
+      await started;
+      return { result: { source: 'intercept' } };
+    });
+    try {
+      const result = await toolCallExecuteAsync('abort_started_tool', { value: 1 }, async (_args, signal) => {
+        providerStarted();
+        await Promise.race([
+          providerGate,
+          new Promise((_, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                providerAborted();
+                reject(new Error('provider aborted'));
+              },
+              { once: true },
+            );
+          }),
+        ]);
+        providerSideEffects += 1;
+        return { source: 'provider' };
+      });
+      assert.deepEqual(result, { source: 'intercept' });
+      await assert.rejects(downstream, /execution continuation is no longer active/i);
+      await assertCompletesWithin(aborted, 'provider did not receive cancellation after continuation revocation');
+      releaseProvider();
+      assert.equal(providerSideEffects, 0);
+    } finally {
+      releaseProvider?.();
+      await downstream?.catch(() => {});
+      deregisterToolExecutionIntercept('node_tool_exec_abort_started_provider');
+    }
+  });
+
+  it('execution intercept isolates concurrent next scope branches', async () => {
+    let releaseBoth;
+    const bothPushed = new Promise((resolve) => {
+      releaseBoth = resolve;
+    });
+    let pushed = 0;
+    registerToolExecutionIntercept('node_tool_exec_concurrent_next_scopes', 10, async (_args, next) => {
+      const [first, second] = await Promise.all([next({ branch: 'first' }), next({ branch: 'second' })]);
+      return { result: [first, second] };
+    });
+    try {
+      const result = await toolCallExecuteAsync('concurrent_next_tool', {}, async (args) => {
+        const handle = pushScope(`node-next-${args.branch}`, ScopeType.Custom);
+        try {
+          pushed += 1;
+          if (pushed === 2) {
+            releaseBoth();
+          }
+          await bothPushed;
+          if (args.branch === 'first') {
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          assert.equal(lib.getHandle().uuid, handle.uuid);
+          return args;
+        } finally {
+          popScope(handle);
+        }
+      });
+      assert.deepEqual(result, [{ branch: 'first' }, { branch: 'second' }]);
+    } finally {
+      releaseBoth?.();
+      deregisterToolExecutionIntercept('node_tool_exec_concurrent_next_scopes');
+    }
+  });
+
+  it('execution intercept isolates concurrent branch scope-stack replacements', async () => {
+    const firstStack = lib.createScopeStack();
+    const secondStack = lib.createScopeStack();
+    const firstScope = lib.withScopeStack(firstStack, () => lib.getHandle().uuid);
+    const secondScope = lib.withScopeStack(secondStack, () => lib.getHandle().uuid);
+    let firstStackInstalled;
+    const firstInstalled = new Promise((resolve) => {
+      firstStackInstalled = resolve;
+    });
+    let secondStackInstalled;
+    const secondInstalled = new Promise((resolve) => {
+      secondStackInstalled = resolve;
+    });
+    let parentScope;
+
+    registerToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements', 10, async (args, next) => {
+      parentScope = lib.getHandle().uuid;
+      const first = lib.withScopeStack(firstStack, async () => {
+        firstStackInstalled();
+        await secondInstalled;
+        return next({ ...args, branch: 'first' });
+      });
+      const second = lib.withScopeStack(secondStack, async () => {
+        await firstInstalled;
+        secondStackInstalled();
+        return next({ ...args, branch: 'second' });
+      });
+      const branches = await Promise.all([first, second]);
+      assert.equal(lib.getHandle().uuid, parentScope);
+      const parent = await next({ ...args, branch: 'parent' });
+      return { result: [...branches, parent] };
+    });
+    try {
+      const result = await toolCallExecuteAsync('concurrent_scope_replacements_tool', {}, async (args) => ({
+        branch: args.branch,
+        scope: lib.getHandle().uuid,
+      }));
+      assert.deepEqual(result, [
+        { branch: 'first', scope: firstScope },
+        { branch: 'second', scope: secondScope },
+        { branch: 'parent', scope: parentScope },
+      ]);
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_concurrent_scope_replacements');
+    }
+  });
+
+  it('execution intercept rejects non-JSON next arguments without aborting Node', async () => {
+    registerToolExecutionIntercept('node_tool_exec_bigint_next', 10, async (_args, next) => ({
+      result: await next(1n),
+    }));
+    try {
+      await assert.rejects(
+        () => toolCallExecute('bigint_next_tool', {}, (args) => args),
+        /unsupported bigint value.*JSON/i,
+      );
+    } finally {
+      deregisterToolExecutionIntercept('node_tool_exec_bigint_next');
+    }
+  });
+
+  it('execution intercept next preserves the invocation scope across the chain', async () => {
+    const originalStack = lib.currentScopeStack();
+    const invocationStack = lib.createScopeStack();
+    const unrelatedStack = lib.createScopeStack();
+    const observed = [];
+    let invocationScope;
+
+    const intercept = (label) => async (args, next) => {
+      observed.push([label, 'before', lib.getHandle().uuid]);
+      await new Promise((resolve) => setImmediate(resolve));
+      const result = await next(args);
+      observed.push([label, 'after', lib.getHandle().uuid]);
+      return { result };
+    };
+
+    registerToolExecutionIntercept('node_tool_exec_scope_outer', 10, intercept('outer'));
+    registerToolExecutionIntercept('node_tool_exec_scope_inner', 20, intercept('inner'));
+    try {
+      const execution = lib.withScopeStack(invocationStack, () => {
+        invocationScope = lib.pushScope('execution-intercept-invocation', lib.ScopeType.Agent);
+        return toolCallExecute('execution_intercept_scope', {}, (args) => args);
+      });
+      lib.setThreadScopeStack(unrelatedStack);
+      await execution;
+      assert.deepEqual(observed, [
+        ['outer', 'before', invocationScope.uuid],
+        ['inner', 'before', invocationScope.uuid],
+        ['inner', 'after', invocationScope.uuid],
+        ['outer', 'after', invocationScope.uuid],
+      ]);
+    } finally {
+      lib.withScopeStack(invocationStack, () => lib.popScope(invocationScope));
+      lib.setThreadScopeStack(originalStack);
+      deregisterToolExecutionIntercept('node_tool_exec_scope_outer');
+      deregisterToolExecutionIntercept('node_tool_exec_scope_inner');
+    }
+  });
+
+  it('snapshotted execution intercept survives deregistration', async () => {
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+
+    registerToolExecutionIntercept('node_tool_exec_snapshot_target', 100, async (args, next) => ({
+      result: {
+        ...(await next(args)),
+        snapshotted: true,
+      },
+    }));
+    registerToolExecutionIntercept('node_tool_exec_snapshot_blocker', -100, async (args, next) => {
+      blockerEntered();
+      await release;
+      return { result: await next(args) };
+    });
+
+    try {
+      const execution = toolCallExecute('snapshotted_tool', {}, () => ({ downstream: true }), null, null, null, null);
+      await entered;
+      assert.equal(deregisterToolExecutionIntercept('node_tool_exec_snapshot_target'), true);
+      releaseBlocker();
+      assert.deepEqual(await execution, {
+        downstream: true,
+        snapshotted: true,
+      });
+    } finally {
+      releaseBlocker();
+      deregisterToolExecutionIntercept('node_tool_exec_snapshot_blocker');
+      deregisterToolExecutionIntercept('node_tool_exec_snapshot_target');
     }
   });
 
@@ -934,7 +1321,7 @@ describe('Tool intercepts', () => {
     }
   });
 
-  it('async execute falls back to unknown error for primitive rejections', async () => {
+  it('async execute preserves primitive rejection values', async () => {
     await assert.rejects(
       () =>
         toolCallExecuteAsync(
@@ -948,7 +1335,7 @@ describe('Tool intercepts', () => {
           null,
           null,
         ),
-      /unknown error/i,
+      /internal error: 42/i,
     );
   });
 

@@ -14,6 +14,7 @@ use super::{
 };
 use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
+use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
     ThreadScopeStackBinding,
@@ -182,7 +183,10 @@ impl Drop for PyLlmStream {
 /// Each ``ScopeStack`` wraps an independent scope stack with its own root
 /// scope. Use ``create_scope_stack()`` to obtain one.
 #[pyclass(name = "ScopeStack")]
-pub struct PyScopeStack(pub ScopeStackHandle);
+pub struct PyScopeStack {
+    pub(crate) inner: ScopeStackHandle,
+    pub(crate) publication_buffer: Option<PublicationBuffer>,
+}
 
 #[pymethods]
 impl PyScopeStack {
@@ -193,7 +197,10 @@ impl PyScopeStack {
 
 /// Opaque captured native thread binding used to restore a Python scope context.
 #[pyclass(name = "_ThreadScopeStackBinding")]
-pub struct PyThreadScopeStackBinding(pub ThreadScopeStackBinding);
+pub struct PyThreadScopeStackBinding {
+    pub(crate) inner: ThreadScopeStackBinding,
+    pub(crate) publication_buffer: Option<PublicationBuffer>,
+}
 
 #[pymethods]
 impl PyThreadScopeStackBinding {

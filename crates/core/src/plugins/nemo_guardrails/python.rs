@@ -892,6 +892,7 @@ enum LocalGuardrailsCodec {
     OpenAIResponses,
     AnthropicMessages,
     OCIGenAI,
+    GeminiGenerateContent,
 }
 
 impl LocalGuardrailsCodec {
@@ -901,6 +902,7 @@ impl LocalGuardrailsCodec {
             Self::OpenAIResponses => ProviderSurface::OpenAIResponses,
             Self::AnthropicMessages => ProviderSurface::AnthropicMessages,
             Self::OCIGenAI => ProviderSurface::OCIGenAI,
+            Self::GeminiGenerateContent => ProviderSurface::GeminiGenerateContent,
         }
     }
 
@@ -910,6 +912,7 @@ impl LocalGuardrailsCodec {
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
             ProviderSurface::OCIGenAI => Self::OCIGenAI,
+            ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
         }
     }
 
@@ -1110,7 +1113,10 @@ impl LlmStreamInner for GuardedProviderStream {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "stream cancellation, monitoring, delivery, and cleanup must remain ordered in one coordinator"
+)]
 async fn forward_guarded_provider_stream(
     mut provider_stream: LlmJsonStream,
     codec: LocalGuardrailsCodec,
@@ -1133,51 +1139,132 @@ async fn forward_guarded_provider_stream(
         let Some(item) = item else {
             break;
         };
-        let chunk = match item {
-            Ok(chunk) => chunk,
-            Err(err) => {
-                let _ = chunk_tx.send(Err(err)).await;
-                let _ = text_tx.send(None).await;
-                let _ = monitor.take().expect("monitor available").await;
-                break;
-            }
+        let Some(chunk) =
+            receive_guarded_provider_chunk(item, &text_tx, &chunk_tx, &mut monitor).await
+        else {
+            break;
         };
 
-        if let Some(message) = blocked_message(&blocked) {
-            let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
-            let _ = text_tx.send(None).await;
-            let _ = monitor.take().expect("monitor available").await;
+        if stop_blocked_provider_stream(&text_tx, &chunk_tx, &blocked, &mut monitor).await {
             break;
         }
-        if let Some(text) = extract_stream_text(codec, &chunk)
-            && text_tx.send(Some(text)).await.is_err()
+        if !forward_guarded_stream_text(codec, &chunk, &text_tx, &chunk_tx, &blocked, &mut monitor)
+            .await
         {
-            send_stream_monitor_error(
-                monitor.take().expect("monitor available"),
-                &chunk_tx,
-                &blocked,
-            )
-            .await;
             break;
         }
 
-        let sent = tokio::select! {
-            _ = cancel.changed() => break,
-            sent = chunk_tx.send(Ok(chunk)) => sent,
-        };
-        if sent.is_err() {
-            let _ = text_tx.send(None).await;
-            let _ = monitor.take().expect("monitor available").await;
+        if !send_guarded_provider_chunk(chunk, &text_tx, &chunk_tx, &mut monitor, &mut cancel).await
+        {
             break;
         }
     }
+    finish_guarded_provider_stream(
+        &mut provider_stream,
+        &text_tx,
+        &chunk_tx,
+        &blocked,
+        &mut monitor,
+        &cancel,
+        &closed,
+    )
+    .await;
+}
+
+async fn receive_guarded_provider_chunk(
+    item: FlowResult<Json>,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+) -> Option<Json> {
+    match item {
+        Ok(chunk) => Some(chunk),
+        Err(err) => {
+            let _ = chunk_tx.send(Err(err)).await;
+            let _ = text_tx.send(None).await;
+            let _ = monitor.take().expect("monitor available").await;
+            None
+        }
+    }
+}
+
+async fn stop_blocked_provider_stream(
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    blocked: &Arc<Mutex<Option<String>>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+) -> bool {
+    let Some(message) = blocked_message(blocked) else {
+        return false;
+    };
+    let _ = chunk_tx.send(Err(streaming_output_blocked(message))).await;
+    let _ = text_tx.send(None).await;
+    let _ = monitor.take().expect("monitor available").await;
+    true
+}
+
+async fn forward_guarded_stream_text(
+    codec: LocalGuardrailsCodec,
+    chunk: &Json,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    blocked: &Arc<Mutex<Option<String>>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+) -> bool {
+    let Some(text) = extract_stream_text(codec, chunk) else {
+        return true;
+    };
+    if text_tx.send(Some(text)).await.is_ok() {
+        return true;
+    }
+    send_stream_monitor_error(
+        monitor.take().expect("monitor available"),
+        chunk_tx,
+        blocked,
+    )
+    .await;
+    false
+}
+
+async fn send_guarded_provider_chunk(
+    chunk: Json,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+    cancel: &mut watch::Receiver<bool>,
+) -> bool {
+    let sent = tokio::select! {
+        _ = cancel.changed() => return false,
+        sent = chunk_tx.send(Ok(chunk)) => sent,
+    };
+    if sent.is_ok() {
+        return true;
+    }
+    let _ = text_tx.send(None).await;
+    let _ = monitor.take().expect("monitor available").await;
+    false
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "stream cleanup needs all channels and lifecycle handles"
+)]
+async fn finish_guarded_provider_stream(
+    provider_stream: &mut LlmJsonStream,
+    text_tx: &mpsc::Sender<Option<String>>,
+    chunk_tx: &mpsc::Sender<FlowResult<Json>>,
+    blocked: &Arc<Mutex<Option<String>>>,
+    monitor: &mut Option<JoinHandle<FlowResult<()>>>,
+    cancel: &watch::Receiver<bool>,
+    closed: &watch::Sender<Option<FlowResult<()>>>,
+) {
     let _ = text_tx.send(None).await;
     if *cancel.borrow() {
         if let Some(monitor) = monitor.take() {
             monitor.abort();
         }
     } else if let Some(monitor) = monitor.take() {
-        let _ = send_stream_monitor_error(monitor, &chunk_tx, &blocked).await;
+        let _ = send_stream_monitor_error(monitor, chunk_tx, blocked).await;
     }
     closed.send_replace(Some(provider_stream.close().await));
 }
@@ -1224,92 +1311,108 @@ fn streaming_output_blocked(message: String) -> FlowError {
 fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<String> {
     let chunk = chunk.as_object()?;
     match codec {
-        LocalGuardrailsCodec::OpenAIChat => {
-            let choices = chunk.get("choices")?.as_array()?;
-            let mut parts = vec![];
-            for choice in choices {
-                let content = choice
-                    .get("delta")
-                    .and_then(Json::as_object)
-                    .and_then(|delta| delta.get("content"))
-                    .and_then(Json::as_str);
-                if let Some(content) = content
-                    && !content.is_empty()
-                {
-                    parts.push(content);
-                }
+        LocalGuardrailsCodec::OpenAIChat => extract_openai_chat_stream_text(chunk),
+        LocalGuardrailsCodec::OpenAIResponses => extract_openai_response_stream_text(chunk),
+        LocalGuardrailsCodec::AnthropicMessages => extract_anthropic_stream_text(chunk),
+        LocalGuardrailsCodec::OCIGenAI => extract_oci_genai_stream_text(chunk),
+        LocalGuardrailsCodec::GeminiGenerateContent => extract_gemini_stream_text(chunk),
+    }
+}
+
+/// Collect the concatenated TEXT-part text from OCI GENERIC stream deltas or
+/// the bare `text` fragment of COHERE deltas. Events may arrive wrapped in a
+/// `chatResponse` envelope, and GENERIC deltas are either a bare choice
+/// (`message` at the top level) or carry a `choices` array of deltas,
+/// mirroring the stream shapes the OCI streaming codec accepts.
+fn extract_oci_genai_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    let chunk = chunk
+        .get("chatResponse")
+        .and_then(Json::as_object)
+        .unwrap_or(chunk);
+    if let Some(text) = chunk.get("text").and_then(Json::as_str) {
+        return (!text.is_empty()).then(|| text.to_string());
+    }
+    fn collect_generic_text(message: &Json, collected: &mut String) {
+        let Some(parts) = message.get("content").and_then(Json::as_array) else {
+            return;
+        };
+        for part in parts {
+            if part.get("type").and_then(Json::as_str) == Some("TEXT")
+                && let Some(text) = part.get("text").and_then(Json::as_str)
+            {
+                collected.push_str(text);
             }
-            (!parts.is_empty()).then(|| parts.join(""))
-        }
-        LocalGuardrailsCodec::OpenAIResponses => {
-            if chunk.get("type").and_then(Json::as_str) == Some("response.output_text.delta") {
-                chunk
-                    .get("delta")
-                    .and_then(Json::as_str)
-                    .filter(|delta| !delta.is_empty())
-                    .map(str::to_string)
-            } else {
-                None
-            }
-        }
-        LocalGuardrailsCodec::AnthropicMessages => {
-            if chunk.get("type").and_then(Json::as_str) != Some("content_block_delta") {
-                return None;
-            }
-            let delta = chunk.get("delta")?.as_object()?;
-            if delta.get("type").and_then(Json::as_str) != Some("text_delta") {
-                return None;
-            }
-            delta
-                .get("text")
-                .and_then(Json::as_str)
-                .filter(|text| !text.is_empty())
-                .map(str::to_string)
-        }
-        LocalGuardrailsCodec::OCIGenAI => {
-            // OCI GENERIC stream events carry choice deltas whose message
-            // content is a TEXT part list; COHERE stream events carry a bare
-            // `text` fragment. Events may arrive wrapped in `chatResponse`.
-            let chunk = chunk
-                .get("chatResponse")
-                .and_then(Json::as_object)
-                .unwrap_or(chunk);
-            if let Some(text) = chunk.get("text").and_then(Json::as_str) {
-                return (!text.is_empty()).then(|| text.to_string());
-            }
-            // GENERIC deltas are either a bare choice (`message` at the top
-            // level) or carry a `choices` array of deltas, mirroring the
-            // stream shapes the OCI streaming codec accepts.
-            fn collect_generic_text(message: &Json, collected: &mut String) {
-                let Some(parts) = message.get("content").and_then(Json::as_array) else {
-                    return;
-                };
-                for part in parts {
-                    if part.get("type").and_then(Json::as_str) == Some("TEXT")
-                        && let Some(text) = part.get("text").and_then(Json::as_str)
-                    {
-                        collected.push_str(text);
-                    }
-                }
-            }
-            let mut collected = String::new();
-            match chunk.get("choices").and_then(Json::as_array) {
-                Some(choices) => {
-                    for choice in choices {
-                        if let Some(message) = choice.get("message") {
-                            collect_generic_text(message, &mut collected);
-                        }
-                    }
-                }
-                None => {
-                    if let Some(message) = chunk.get("message") {
-                        collect_generic_text(message, &mut collected);
-                    }
-                }
-            }
-            (!collected.is_empty()).then_some(collected)
         }
     }
+    let mut collected = String::new();
+    match chunk.get("choices").and_then(Json::as_array) {
+        Some(choices) => {
+            for choice in choices {
+                if let Some(message) = choice.get("message") {
+                    collect_generic_text(message, &mut collected);
+                }
+            }
+        }
+        None => {
+            if let Some(message) = chunk.get("message") {
+                collect_generic_text(message, &mut collected);
+            }
+        }
+    }
+    (!collected.is_empty()).then_some(collected)
+}
+
+fn extract_openai_chat_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    let choices = chunk.get("choices")?.as_array()?;
+    let parts = choices
+        .iter()
+        .filter_map(|choice| {
+            choice
+                .get("delta")
+                .and_then(Json::as_object)
+                .and_then(|delta| delta.get("content"))
+                .and_then(Json::as_str)
+                .filter(|content| !content.is_empty())
+        })
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(""))
+}
+
+fn extract_openai_response_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    (chunk.get("type").and_then(Json::as_str) == Some("response.output_text.delta"))
+        .then(|| chunk.get("delta").and_then(Json::as_str))
+        .flatten()
+        .filter(|delta| !delta.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_anthropic_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    if chunk.get("type").and_then(Json::as_str) != Some("content_block_delta") {
+        return None;
+    }
+    let delta = chunk.get("delta")?.as_object()?;
+    (delta.get("type").and_then(Json::as_str) == Some("text_delta"))
+        .then(|| delta.get("text").and_then(Json::as_str))
+        .flatten()
+        .filter(|text| !text.is_empty())
+        .map(str::to_string)
+}
+
+fn extract_gemini_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    let parts = chunk
+        .get("candidates")?
+        .as_array()?
+        .first()?
+        .get("content")?
+        .get("parts")?
+        .as_array()?;
+    let texts = parts
+        .iter()
+        .filter(|part| part.get("thought").and_then(Json::as_bool) != Some(true))
+        .filter_map(|part| part.get("text").and_then(Json::as_str))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    (!texts.is_empty()).then(|| texts.join(""))
 }
 
 async fn monitor_guardrails_stream(

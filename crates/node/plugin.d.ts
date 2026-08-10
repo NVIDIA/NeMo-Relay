@@ -9,7 +9,7 @@ import type { LlmCodec, LlmResponseCodec } from './typed';
 /** Codec identity available while a managed LLM event is sanitized. */
 export type LlmCodecIdentity =
   | { kind: 'none' }
-  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' }
+  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'gemini_generate_content' }
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };
 
@@ -49,6 +49,17 @@ export interface ConfigDiagnostic {
 /** Validation or activation report for a plugin configuration. */
 export interface ConfigReport {
   diagnostics: ConfigDiagnostic[];
+  runtime_diagnostics?: RuntimeDiagnostic[];
+}
+
+/** One bounded aggregate of a runtime plugin failure. */
+export interface RuntimeDiagnostic {
+  code: string;
+  component: string;
+  field?: string;
+  message: string;
+  session_id?: string;
+  count: number;
 }
 
 /** One top-level plugin component. */
@@ -189,68 +200,75 @@ export interface ToolExecutionInterceptOutcome {
 
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
-  /** Register an infallible event subscriber for this component. */
-  registerSubscriber(name: string, callback: (event: Json) => void): void;
+  /**
+   * Register an event subscriber for this component. Callback failures are isolated and reported
+   * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
+   */
+  registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,
     priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
   ): void;
   /** Register a scope-start event sanitizer for this component. */
   registerScopeSanitizeStartGuardrail(
     name: string,
     priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
   ): void;
   /** Register a scope-end event sanitizer for this component. */
   registerScopeSanitizeEndGuardrail(
     name: string,
     priority: number,
-    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields,
+    callback: (event: Json, fields: EventSanitizeFields) => EventSanitizeFields | Promise<EventSanitizeFields>,
   ): void;
   /** Register a tool sanitize-request guardrail for this component. */
   registerToolSanitizeRequestGuardrail(
     name: string,
     priority: number,
-    callback: (name: string, args: Json) => Json,
+    callback: (name: string, args: Json) => Json | Promise<Json>,
   ): void;
   /** Register a tool sanitize-response guardrail for this component. */
   registerToolSanitizeResponseGuardrail(
     name: string,
     priority: number,
-    callback: (name: string, result: Json) => Json,
+    callback: (name: string, result: Json) => Json | Promise<Json>,
   ): void;
   /** Register a tool conditional-execution guardrail for this component. */
   registerToolConditionalExecutionGuardrail(
     name: string,
     priority: number,
-    callback: (name: string, args: Json) => string | null,
+    callback: (name: string, args: Json) => string | null | Promise<string | null>,
   ): void;
   /** Register an LLM sanitize-request guardrail. The callback receives `(request, context)`. */
   registerLlmSanitizeRequestGuardrail(
     name: string,
     priority: number,
-    callback: (request: Json, context: LlmSanitizeRequestContext) => Json | null,
+    callback: (request: Json, context: LlmSanitizeRequestContext) => Json | null | Promise<Json | null>,
   ): void;
   /** Register an LLM sanitize-response guardrail. The callback receives `(response, context)`. */
   registerLlmSanitizeResponseGuardrail(
     name: string,
     priority: number,
-    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null,
+    callback: (response: Json, context: LlmSanitizeResponseContext) => Json | null | Promise<Json | null>,
   ): void;
   /** Register an LLM conditional-execution guardrail for this component. */
   registerLlmConditionalExecutionGuardrail(
     name: string,
     priority: number,
-    callback: (request: Json) => string | null,
+    callback: (request: Json) => string | null | Promise<string | null>,
   ): void;
   /** Register an LLM request intercept for this component. */
   registerLlmRequestIntercept(
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (args: { name: string; request: Json; annotated: Json | null }) => LlmRequestInterceptOutcome,
+    callback: (args: {
+      name: string;
+      request: Json;
+      annotated: Json | null;
+    }) => LlmRequestInterceptOutcome | Promise<LlmRequestInterceptOutcome>,
   ): void;
   /** Register an LLM execution intercept for this component. */
   registerLlmExecutionIntercept(
@@ -258,21 +276,23 @@ export interface PluginContext {
     priority: number,
     callback: (request: Json, next: (request: Json) => Json | Promise<Json>) => Json | Promise<Json>,
   ): void;
-  /** Register an LLM streaming execution intercept for this component. */
+  /**
+   * Register an LLM streaming execution intercept for this component.
+   *
+   * The `next` callback resolves to all downstream chunks. Returning an array
+   * preserves those chunks; any other JSON value produces one chunk.
+   */
   registerLlmStreamExecutionIntercept(
     name: string,
     priority: number,
-    callback: (
-      request: Json,
-      next: (request: Json) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
-    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
+    callback: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>,
   ): void;
   /** Register a tool request intercept for this component. */
   registerToolRequestIntercept(
     name: string,
     priority: number,
     breakChain: boolean,
-    callback: (name: string, args: Json) => Json,
+    callback: (name: string, args: Json) => Json | Promise<Json>,
   ): void;
   /**
    * Register tool execution middleware that returns a canonical outcome.

@@ -7,7 +7,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use crate::configuration::ResolvedDynamicPluginConfig;
+use crate::configuration::{GatewayConfig, ResolvedConfig, ResolvedDynamicPluginConfig};
 use crate::server::GatewayOverrides;
 use crate::test_support::{EnvScope, accept_bounded, read_headers};
 
@@ -47,7 +47,7 @@ fn start_doctor_http_capture_server() -> (String, Arc<Mutex<String>>, std::threa
 
 fn empty_report() -> DoctorReport {
     DoctorReport {
-        schema_version: 1,
+        schema_version: 2,
         binary_version: "0.0.0-test",
         target_agent: None,
         environment: EnvironmentInfo {
@@ -56,24 +56,23 @@ fn empty_report() -> DoctorReport {
             shell: Some("zsh".into()),
         },
         configuration: ConfigurationInfo {
-            explicit_config: false,
-            workspace: ConfigLayer {
-                path: PathBuf::from("/x/.nemo-relay/config.toml"),
-                status: Status::Info,
-                active: false,
-                details: "not present".into(),
-            },
+            explicit: None,
             global: ConfigLayer {
                 path: PathBuf::from("/x/.config/nemo-relay/config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
             },
+            unsupported_project_files: vec![],
             system: ConfigLayer {
-                path: PathBuf::from("/etc/nemo-relay/config.toml"),
+                path: crate::configuration::system_config_dir().join("config.toml"),
                 status: Status::Info,
                 active: false,
                 details: "not present".into(),
+            },
+            upstream_auth: UpstreamAuthInfo {
+                openai: SecretPresence::Unset,
+                anthropic: SecretPresence::Unset,
             },
             plugin_configs: vec![],
             plugin_resolution: Check {
@@ -95,6 +94,27 @@ fn empty_report() -> DoctorReport {
         observability: vec![],
         completions: vec![],
     }
+}
+
+async fn collect_live_observability(gateway: &GatewayConfig) -> Vec<Check> {
+    collect_observability(gateway, DoctorProbeMode::Live).await
+}
+
+async fn collect_offline_observability(gateway: &GatewayConfig) -> Vec<Check> {
+    collect_observability(gateway, DoctorProbeMode::Offline).await
+}
+
+async fn live_observability_http_exporter_checks(config: &serde_json::Value) -> Vec<Check> {
+    observability_http_exporter_checks(config, DoctorProbeMode::Live).await
+}
+
+async fn offline_observability_http_exporter_checks(config: &serde_json::Value) -> Vec<Check> {
+    observability_http_exporter_checks(config, DoctorProbeMode::Offline).await
+}
+
+#[cfg(test)]
+async fn offline_atof_endpoint(index: usize, endpoint: &serde_json::Value) -> Check {
+    probe_atof_stream_sink(index, endpoint, DoctorProbeMode::Offline).await
 }
 
 #[test]
@@ -126,11 +146,19 @@ fn exit_code_passes_with_warn_only() {
 }
 
 #[test]
-fn exit_code_fails_when_workspace_config_is_invalid() {
+fn unsupported_project_config_warns_without_failing() {
     let mut report = empty_report();
-    report.configuration.workspace.status = Status::Fail;
-    report.configuration.workspace.details = "invalid TOML".into();
-    assert_eq!(exit_code(&report), 1);
+    report
+        .configuration
+        .unsupported_project_files
+        .push(ConfigLayer {
+            path: PathBuf::from("/x/.nemo-relay/config.toml"),
+            status: Status::Warn,
+            active: false,
+            details: "unsupported project configuration; ignored by Relay".into(),
+        });
+    assert_eq!(exit_code(&report), 0);
+    assert!(report_has_warn(&report));
 }
 
 #[test]
@@ -185,7 +213,7 @@ fn exit_code_fails_when_an_installed_host_plugin_is_unready() {
     assert!(rendered.contains("Persistent integrations"));
     assert!(rendered.contains("repair: nemo-relay install codex --force"));
     let json: serde_json::Value = serde_json::from_str(&format_json(&report).unwrap()).unwrap();
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["host_plugins"][0]["checks"][0]["ok"], false);
     assert_eq!(
         json["host_plugins"][0]["remediation"],
@@ -248,6 +276,29 @@ fn format_human_distinguishes_plugin_files_from_plugin_resolution() {
 
     assert!(rendered.contains("Plugin files /tmp/plugins.toml"));
     assert!(rendered.contains("Plugins    · plugins.toml not configured"));
+}
+
+#[test]
+fn format_human_reports_effective_upstream_auth_presence() {
+    let mut report = empty_report();
+    report.configuration.upstream_auth = UpstreamAuthInfo {
+        openai: SecretPresence::Configured,
+        anthropic: SecretPresence::Unset,
+    };
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Upstream   openai=configured anthropic=unset"));
+}
+
+#[test]
+fn format_human_reports_unknown_upstream_auth_presence() {
+    let mut report = empty_report();
+    report.configuration.upstream_auth = UpstreamAuthInfo::unknown();
+
+    let rendered = format_human(&report);
+
+    assert!(rendered.contains("Upstream   openai=unknown anthropic=unknown"));
 }
 
 #[test]
@@ -322,13 +373,7 @@ async fn agents_report_surfaces_merged_config_resolution_errors() {
     let config = config_home.join("nemo-relay").join("config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     std::fs::write(&config, "[upstream\n").unwrap();
-    let _env = EnvScope::set(&[
-        ("XDG_CONFIG_HOME", Some(config_home.as_os_str())),
-        (
-            "NEMO_RELAY_CONFIG_SCOPE",
-            Some(std::ffi::OsStr::new("user")),
-        ),
-    ]);
+    let _env = EnvScope::set(&[("XDG_CONFIG_HOME", Some(config_home.as_os_str()))]);
 
     let error = agents_report().await.unwrap_err().to_string();
 
@@ -360,7 +405,7 @@ fn format_json_is_stable_and_versioned() {
     let json = format_json(&report).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     // schema_version pins the wire format. Bump only on breaking renames/removals.
-    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["schema_version"], 2);
     assert!(parsed["target_agent"].is_null());
     assert!(parsed["environment"]["os"].is_string());
     assert!(parsed["agents"].is_array());
@@ -413,6 +458,22 @@ fn layer_status_reports_missing_valid_invalid_and_non_directory_paths() {
     let valid_layer = layer_status(&valid);
     assert_eq!(valid_layer.status, Status::Pass);
     assert!(valid_layer.active);
+
+    let invalid_shape = temp.path().join("invalid-shape.toml");
+    std::fs::write(
+        &invalid_shape,
+        "[upstream.openai]\nbase_url = \"http://local\"\n",
+    )
+    .unwrap();
+    let invalid_shape_layer = layer_status(&invalid_shape);
+    assert_eq!(invalid_shape_layer.status, Status::Fail);
+    assert!(!invalid_shape_layer.active);
+    assert!(
+        invalid_shape_layer
+            .details
+            .contains("invalid gateway configuration shape")
+    );
+    assert!(invalid_shape_layer.details.contains("openai"));
 
     let invalid = temp.path().join("invalid.toml");
     std::fs::write(&invalid, "[upstream\n").unwrap();
@@ -567,14 +628,14 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
     let configuration = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &ResolvedConfig::default(),
         &GatewayOverrides::default(),
         Check {
             name: "Resolution",
             status: Status::Warn,
             details: "using fallback layer".into(),
         },
-        vec!["codex".into(), "hermes".into()],
-        &[],
+        vec!["codex".into(), "claude".into()],
         &PluginConfigurationDiagnostics {
             sources: vec![],
             error: None,
@@ -586,10 +647,20 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
         },
     );
 
-    assert_eq!(configuration.workspace.status, Status::Pass);
-    assert!(configuration.workspace.active);
+    assert_eq!(configuration.unsupported_project_files.len(), 1);
+    assert_eq!(
+        configuration.unsupported_project_files[0].path,
+        workspace_config
+    );
+    assert_eq!(
+        configuration.unsupported_project_files[0].status,
+        Status::Warn
+    );
+    assert!(!configuration.unsupported_project_files[0].active);
     assert_eq!(configuration.global.path, global_config);
     assert_eq!(configuration.global.status, Status::Fail);
+    assert_eq!(configuration.upstream_auth.openai, SecretPresence::Unset);
+    assert_eq!(configuration.upstream_auth.anthropic, SecretPresence::Unset);
     assert!(configuration.global.details.contains("invalid TOML"));
 
     let mut report = empty_report();
@@ -597,7 +668,7 @@ fn collect_configuration_uses_xdg_global_path_and_renders_resolution_branches() 
     let rendered = format_human(&report);
     assert!(rendered.contains("Global"));
     assert!(rendered.contains("Resolution ! using fallback layer"));
-    assert!(rendered.contains("Agents     codex, hermes"));
+    assert!(rendered.contains("Agents     codex, claude"));
 }
 
 #[test]
@@ -624,10 +695,7 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
         Status::Pass
     );
 
-    let mut agents = AgentConfigs::default();
-    agents.hermes.hooks_path = Some(PathBuf::from("/tmp/hermes.yaml"));
-    assert!(agent_configured(CodingAgent::Hermes, &agents));
-    assert_eq!(configured_agent_names(&agents), vec!["hermes".to_string()]);
+    let agents = AgentConfigs::default();
     assert_eq!(
         hook_status(CodingAgent::ClaudeCode, &agents),
         (Status::Pass, "hooks: injected during run".into())
@@ -635,13 +703,6 @@ fn agent_helper_statuses_cover_configured_target_and_hook_paths() {
     assert_eq!(
         hook_status(CodingAgent::Codex, &agents),
         (Status::Pass, "hooks: injected during run".into())
-    );
-    assert_eq!(
-        hook_status(CodingAgent::Hermes, &AgentConfigs::default()),
-        (
-            Status::Pass,
-            "hooks: injected through an isolated HERMES_HOME during run".into()
-        )
     );
 }
 
@@ -778,20 +839,6 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
     assert_eq!(optional.status, Status::Warn);
     assert!(optional.annotation.contains("could not determine version"));
 }
-
-#[test]
-fn hermes_hook_status_reports_actionable_persistent_diagnosis_failures() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut agents = AgentConfigs::default();
-    agents.hermes.hooks_path = Some(temp.path().join("missing-config.yaml"));
-
-    let (status, details) = hook_status(CodingAgent::Hermes, &agents);
-
-    assert_eq!(status, Status::Fail);
-    assert!(details.contains("persistent MCP/hooks"), "{details}");
-    assert!(details.contains("install hermes --force"), "{details}");
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn probe_version_returns_none_for_empty_output_and_spawn_failures() {
@@ -842,6 +889,14 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
     let info = collect_configuration(
         Some(&workspace),
         Some(&home),
+        &ResolvedConfig {
+            gateway: GatewayConfig {
+                openai_auth_header: Some("Bearer openai".into()),
+                anthropic_auth_header: None,
+                ..GatewayConfig::default()
+            },
+            ..ResolvedConfig::default()
+        },
         &GatewayOverrides::default(),
         Check {
             name: "Resolution",
@@ -849,7 +904,6 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
             details: "valid".into(),
         },
         vec!["codex".into()],
-        &[],
         &PluginConfigurationDiagnostics {
             sources: vec![],
             error: None,
@@ -860,9 +914,11 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
             },
         },
     );
-    assert_eq!(info.workspace.status, Status::Pass);
+    assert_eq!(info.unsupported_project_files.len(), 1);
     assert!(info.global.path.starts_with(&home));
     assert_eq!(info.configured_agents, vec!["codex".to_string()]);
+    assert_eq!(info.upstream_auth.openai, SecretPresence::Configured);
+    assert_eq!(info.upstream_auth.anthropic, SecretPresence::Unset);
 
     assert_eq!(
         crate::process::resolve_executable("definitely-missing"),
@@ -880,6 +936,48 @@ fn configuration_and_path_helpers_cover_direct_paths_and_fallbacks() {
         crate::process::resolve_executable(binary.to_str().unwrap()).as_deref(),
         Some(binary.as_path())
     );
+}
+
+#[test]
+fn upstream_auth_info_reports_openai_env_fallback_as_configured() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", Some(std::ffi::OsStr::new("sk-openai"))),
+        ("ANTHROPIC_API_KEY", None),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Configured);
+    assert_eq!(info.anthropic, SecretPresence::Unset);
+}
+
+#[test]
+fn upstream_auth_info_reports_anthropic_env_fallback_as_configured() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", None),
+        (
+            "ANTHROPIC_API_KEY",
+            Some(std::ffi::OsStr::new("sk-anthropic")),
+        ),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Unset);
+    assert_eq!(info.anthropic, SecretPresence::Configured);
+}
+
+#[test]
+fn upstream_auth_info_treats_whitespace_env_values_as_unset() {
+    let _env = EnvScope::set(&[
+        ("OPENAI_API_KEY", Some(std::ffi::OsStr::new("   "))),
+        ("ANTHROPIC_API_KEY", Some(std::ffi::OsStr::new("\t  "))),
+    ]);
+
+    let info = UpstreamAuthInfo::from_effective_gateway_auth(&GatewayConfig::default());
+
+    assert_eq!(info.openai, SecretPresence::Unset);
+    assert_eq!(info.anthropic, SecretPresence::Unset);
 }
 
 #[test]
@@ -970,26 +1068,31 @@ async fn opentelemetry_doctor_uses_tcp_probe_for_grpc_endpoints() {
         }
     });
 
-    let checks = observability_http_exporter_checks(&config).await;
+    let checks = live_observability_http_exporter_checks(&config).await;
 
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0].status, Status::Pass);
-    assert!(checks[0].details.contains("gRPC TCP connection succeeded"));
+    assert!(
+        checks[0]
+            .details
+            .contains("live gRPC reachability probe connected to the TCP port")
+    );
+    assert!(checks[0].details.contains("OTLP handshake not verified"));
     assert!(checks[0].details.contains("endpoints[0] (gen_ai)"));
     accept.join().unwrap();
 }
 
 #[tokio::test]
-async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
+async fn opentelemetry_doctor_resolves_bare_http_endpoints_and_warns_on_missing_routes() {
     assert!(
-        observability_http_exporter_checks(&serde_json::json!({
+        live_observability_http_exporter_checks(&serde_json::json!({
             "opentelemetry": {"enabled": true, "endpoints": "not-a-list"}
         }))
         .await
         .is_empty()
     );
 
-    let missing = observability_http_exporter_checks(&serde_json::json!({
+    let missing = live_observability_http_exporter_checks(&serde_json::json!({
         "opentelemetry": {
             "enabled": true,
             "endpoints": [{"type": "openinference"}]
@@ -1006,10 +1109,10 @@ async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
         let mut stream = accept_bounded(&listener);
         let _ = read_headers(&mut stream);
         stream
-            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+            .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
     });
-    let checks = observability_http_exporter_checks(&serde_json::json!({
+    let checks = live_observability_http_exporter_checks(&serde_json::json!({
         "opentelemetry": {
             "enabled": true,
             "endpoints": [{"type": "full", "endpoint": endpoint}]
@@ -1018,7 +1121,159 @@ async fn opentelemetry_doctor_covers_http_missing_and_malformed_endpoints() {
     .await;
     assert_eq!(checks[0].status, Status::Pass);
     assert!(checks[0].details.contains("endpoints[0] (full)"));
+    assert!(
+        checks[0]
+            .details
+            .contains("/v1/traces (live HTTP reachability probe returned HTTP 405)")
+    );
     accept.join().unwrap();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let accept = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&listener);
+        let request = read_headers(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        request
+    });
+    let checks = live_observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": endpoint}]
+        }
+    }))
+    .await;
+    assert_eq!(checks[0].status, Status::Pass);
+    assert!(
+        checks[0]
+            .details
+            .contains("/ (live HTTP reachability probe returned HTTP 405)")
+    );
+    let request = accept.join().unwrap();
+    assert!(request.starts_with("GET / HTTP/1.1"));
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/wrong", listener.local_addr().unwrap());
+    let accept = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&listener);
+        let _ = read_headers(&mut stream);
+        stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let checks = live_observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{"type": "full", "endpoint": endpoint}]
+        }
+    }))
+    .await;
+    assert_eq!(checks[0].status, Status::Warn);
+    assert!(
+        checks[0]
+            .details
+            .contains("/wrong (live HTTP reachability probe returned HTTP 404)")
+    );
+    accept.join().unwrap();
+}
+
+#[tokio::test]
+async fn opentelemetry_doctor_skips_live_network_probes_offline() {
+    let checks = offline_observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "gen_ai",
+                    "transport": "grpc",
+                    "endpoint": "http://127.0.0.1:4317"
+                },
+                {
+                    "type": "openinference",
+                    "endpoint": "http://127.0.0.1:4318"
+                }
+            ]
+        }
+    }))
+    .await;
+
+    assert_eq!(checks.len(), 2);
+    assert!(checks.iter().all(|check| check.status == Status::Info));
+    assert!(
+        checks[0]
+            .details
+            .contains("endpoints[0] (gen_ai): live network probe skipped (--offline)")
+    );
+    assert!(
+        checks[1]
+            .details
+            .contains("endpoints[1] (openinference): live network probe skipped (--offline)")
+    );
+}
+
+#[tokio::test]
+async fn opentelemetry_doctor_offline_still_rejects_malformed_endpoints() {
+    let checks = offline_observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "gen_ai",
+                    "transport": "grpc",
+                    "endpoint": "http://:4317"
+                },
+                {
+                    "type": "full",
+                    "endpoint": "http://:4318"
+                }
+            ]
+        }
+    }))
+    .await;
+
+    assert_eq!(checks.len(), 2);
+    assert!(checks[0].details.starts_with("endpoints[0] (gen_ai): "));
+    assert!(checks[0].details.contains("gRPC endpoint"));
+    assert!(checks[1].details.starts_with("endpoints[1] (full): "));
+    assert!(checks[1].details.contains("OTLP HTTP endpoint"));
+    assert!(checks.iter().all(|check| check.status == Status::Fail));
+}
+
+#[tokio::test]
+async fn opentelemetry_doctor_offline_rejects_unsupported_endpoint_schemes() {
+    let checks = offline_observability_http_exporter_checks(&serde_json::json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "gen_ai",
+                    "transport": "grpc",
+                    "endpoint": "ftp://collector.example:4317"
+                },
+                {
+                    "type": "full",
+                    "endpoint": "file:///tmp/collector"
+                }
+            ]
+        }
+    }))
+    .await;
+
+    assert_eq!(checks.len(), 2);
+    assert_eq!(checks[0].status, Status::Fail);
+    assert_eq!(checks[1].status, Status::Fail);
+    assert!(
+        checks[0]
+            .details
+            .contains("gRPC endpoint must use http:// or https://")
+    );
+    assert!(
+        checks[1]
+            .details
+            .contains("OTLP HTTP endpoint must use http:// or https://")
+    );
 }
 
 #[test]
@@ -1075,7 +1330,7 @@ async fn collect_observability_warns_for_missing_atif_dir_without_creating_it() 
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     let atif_check = checks
         .iter()
@@ -1112,13 +1367,227 @@ async fn collect_observability_registers_adaptive_before_validation() {
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     assert!(
         !checks.iter().any(|check| check
             .details
             .contains("plugin component kind 'adaptive' is unsupported")),
         "doctor should register adaptive before plugin validation: {checks:?}"
+    );
+}
+
+#[tokio::test]
+async fn collect_observability_reports_response_cache_on_when_configured() {
+    // The response cache is a section of the adaptive component; doctor should
+    // find it and report the in-memory backend reachable.
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "response_cache": {
+                            "ttl_seconds": 3600,
+                            "namespace": "doctor-test",
+                            "backend": { "kind": "in_memory" }
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_live_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Pass, "checks: {checks:?}");
+    assert!(
+        cache.details.contains("in_memory") && cache.details.contains("reachable"),
+        "details: {}",
+        cache.details
+    );
+}
+
+#[tokio::test]
+async fn collect_observability_skips_redis_response_cache_probe_offline() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "response_cache": {
+                            "ttl_seconds": 3600,
+                            "namespace": "doctor-test",
+                            "backend": {
+                                "kind": "redis",
+                                "config": {
+                                    "url": "redis://127.0.0.1:6379",
+                                    "key_prefix": "doctor-test:"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_offline_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Info, "checks: {checks:?}");
+    assert_eq!(
+        cache.details,
+        "configured; live redis backend probe skipped (--offline)"
+    );
+}
+
+#[tokio::test]
+async fn collect_observability_fails_invalid_redis_response_cache_target_offline() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "response_cache": {
+                            "ttl_seconds": 3600,
+                            "namespace": "doctor-test",
+                            "backend": {
+                                "kind": "redis",
+                                "config": {
+                                    "url": "not-a-redis-url",
+                                    "key_prefix": "doctor-test:"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_offline_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Fail, "checks: {checks:?}");
+    assert!(
+        cache.details.contains("invalid backend target"),
+        "details: {}",
+        cache.details
+    );
+    assert!(
+        cache.details.contains("redis client"),
+        "details: {}",
+        cache.details
+    );
+    assert!(
+        !cache.details.contains("probe skipped"),
+        "must not report skipped for an invalid backend target"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn response_cache_backend_check_reports_timeout() {
+    let check = response_cache_backend_check(std::future::pending()).await;
+
+    assert_eq!(check.name, "Response cache");
+    assert_eq!(check.status, Status::Fail);
+    assert_eq!(
+        check.details,
+        "backend not reachable: probe timed out after 2s"
+    );
+}
+
+#[tokio::test]
+async fn response_cache_backend_check_preserves_backend_error() {
+    let check = response_cache_backend_check(async { Err("connection refused".to_string()) }).await;
+
+    assert_eq!(check.name, "Response cache");
+    assert_eq!(check.status, Status::Fail);
+    assert_eq!(check.details, "backend not reachable: connection refused");
+}
+
+#[tokio::test]
+async fn collect_observability_reports_response_cache_not_configured_without_section() {
+    // Adaptive present but no `response_cache` section -> reported as not configured.
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                { "kind": "adaptive", "enabled": true, "config": { "version": 1 } }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_live_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Info);
+    assert!(
+        cache.details.contains("not configured"),
+        "details: {}",
+        cache.details
+    );
+}
+
+#[tokio::test]
+async fn collect_observability_reports_response_cache_fail_when_config_invalid() {
+    // An invalid section (ttl_seconds = 0) must not be reported as a reachable
+    // "Pass" alongside the validation failure.
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": { "response_cache": { "ttl_seconds": 0 } }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_live_observability(&gateway).await;
+
+    let cache = checks
+        .iter()
+        .find(|check| check.name == "Response cache")
+        .expect("a Response cache check should be present");
+    assert_eq!(cache.status, Status::Fail);
+    assert!(
+        cache.details.contains("config invalid"),
+        "details: {}",
+        cache.details
+    );
+    assert!(
+        !cache.details.contains("reachable"),
+        "must not claim reachable for an invalid config"
     );
 }
 
@@ -1154,7 +1623,7 @@ async fn collect_observability_registers_pii_redaction_before_validation() {
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     assert!(
         !checks.iter().any(|check| check
@@ -1186,7 +1655,7 @@ async fn collect_observability_reports_invalid_pii_redaction_config() {
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     let diagnostic = checks
         .iter()
@@ -1222,7 +1691,7 @@ async fn collect_observability_probes_atof_streaming_endpoint() {
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
     let body = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
             let captured = body.lock().unwrap().clone();
@@ -1249,11 +1718,11 @@ async fn collect_observability_probes_atof_streaming_endpoint() {
 
 #[tokio::test]
 async fn collect_observability_covers_absent_invalid_and_componentless_configs() {
-    let absent = collect_observability(&GatewayConfig::default()).await;
+    let absent = collect_live_observability(&GatewayConfig::default()).await;
     assert_eq!(absent[0].status, Status::Info);
     assert!(absent[0].details.contains("not configured"));
 
-    let invalid = collect_observability(&GatewayConfig {
+    let invalid = collect_live_observability(&GatewayConfig {
         plugin_config: Some(serde_json::json!({"version": "bad"})),
         ..GatewayConfig::default()
     })
@@ -1261,7 +1730,7 @@ async fn collect_observability_covers_absent_invalid_and_componentless_configs()
     assert_eq!(invalid[0].status, Status::Fail);
     assert!(invalid[0].details.contains("invalid plugin config"));
 
-    let no_observability = collect_observability(&GatewayConfig {
+    let no_observability = collect_live_observability(&GatewayConfig {
         plugin_config: Some(serde_json::json!({
             "version": 1,
             "components": []
@@ -1306,7 +1775,7 @@ async fn collect_observability_rejects_websocket_endpoint_http_scheme() {
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     let endpoint = checks
         .iter()
@@ -1360,8 +1829,42 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
             .contains("headers.x-test must be a string")
     );
 
-    let mixed_case_duplicate = probe_atof_endpoint(
+    let blank_static_header = probe_atof_endpoint(
         4,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {"x-test": "   "}
+        }),
+    )
+    .await;
+    assert_eq!(blank_static_header.status, Status::Fail);
+    assert!(
+        blank_static_header
+            .details
+            .contains("headers.x-test must not be blank")
+    );
+
+    let _env = EnvScope::set(&[(
+        "NEMO_RELAY_INVALID_ATOF_HEADER",
+        Some(std::ffi::OsStr::new("bad\nvalue")),
+    )]);
+    let invalid_header_env = probe_atof_endpoint(
+        5,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "header_env": {"x-test": "NEMO_RELAY_INVALID_ATOF_HEADER"}
+        }),
+    )
+    .await;
+    assert_eq!(invalid_header_env.status, Status::Fail);
+    assert!(
+        invalid_header_env
+            .details
+            .contains("header_env.x-test invalid")
+    );
+
+    let mixed_case_duplicate = probe_atof_endpoint(
+        6,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "headers": {"Authorization": "Bearer literal"},
@@ -1376,8 +1879,26 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
             .contains("cannot appear in both headers and header_env")
     );
 
+    let duplicate_static_header = probe_atof_endpoint(
+        7,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {
+                "Authorization": "Bearer a",
+                "authorization": "Bearer b"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(duplicate_static_header.status, Status::Fail);
+    assert!(
+        duplicate_static_header
+            .details
+            .contains("appears more than once")
+    );
+
     let unsupported = probe_atof_endpoint(
-        5,
+        8,
         &serde_json::json!({
             "url": "http://127.0.0.1:1/events",
             "transport": "grpc"
@@ -1386,6 +1907,90 @@ async fn atof_endpoint_validation_rejects_missing_url_headers_timeout_and_transp
     .await;
     assert_eq!(unsupported.status, Status::Fail);
     assert!(unsupported.details.contains("unsupported transport"));
+}
+
+#[tokio::test]
+async fn atof_endpoint_offline_skips_live_network_probe_after_validation() {
+    let skipped = offline_atof_endpoint(
+        0,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "transport": "http_post"
+        }),
+    )
+    .await;
+
+    assert_eq!(skipped.status, Status::Info);
+    assert_eq!(
+        skipped.details,
+        "sinks[0] http_post http://127.0.0.1:1/events: live network probe skipped (--offline)"
+    );
+}
+
+#[tokio::test]
+async fn atof_endpoint_offline_still_rejects_invalid_transport_and_scheme() {
+    let invalid_websocket = offline_atof_endpoint(
+        0,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "transport": "websocket"
+        }),
+    )
+    .await;
+    assert_eq!(invalid_websocket.status, Status::Fail);
+    assert!(
+        invalid_websocket
+            .details
+            .contains("invalid scheme (must be ws or wss)")
+    );
+
+    let unsupported_transport = offline_atof_endpoint(
+        1,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "transport": "udp"
+        }),
+    )
+    .await;
+    assert_eq!(unsupported_transport.status, Status::Fail);
+    assert!(
+        unsupported_transport
+            .details
+            .contains("unsupported transport")
+    );
+
+    let blank_static_header = offline_atof_endpoint(
+        2,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {"x-test": "   "}
+        }),
+    )
+    .await;
+    assert_eq!(blank_static_header.status, Status::Fail);
+    assert!(
+        blank_static_header
+            .details
+            .contains("headers.x-test must not be blank")
+    );
+
+    let duplicate_static_header = offline_atof_endpoint(
+        3,
+        &serde_json::json!({
+            "url": "http://127.0.0.1:1/events",
+            "headers": {
+                "Authorization": "Bearer a",
+                "authorization": "Bearer b"
+            }
+        }),
+    )
+    .await;
+    assert_eq!(duplicate_static_header.status, Status::Fail);
+    assert!(
+        duplicate_static_header
+            .details
+            .contains("appears more than once")
+    );
 }
 
 #[tokio::test]
@@ -1498,7 +2103,7 @@ async fn atof_http_and_websocket_timeout_errors_are_reported() {
 }
 
 #[tokio::test]
-async fn probe_http_named_warns_on_http_errors() {
+async fn otlp_http_probe_warns_on_http_errors() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let handle = std::thread::spawn(move || {
@@ -1510,14 +2115,14 @@ async fn probe_http_named_warns_on_http_errors() {
             .unwrap();
     });
 
-    let check = probe_http_named("OpenTelemetry endpoint", &url).await;
+    let check = probe_otlp_http_named("OpenTelemetry endpoint", &url).await;
     assert_eq!(check.status, Status::Warn);
     assert!(check.details.contains("HTTP 500"));
     handle.join().unwrap();
 }
 
 #[tokio::test]
-async fn http_probe_passes_success_and_ndjson_upload_success() {
+async fn otlp_http_probe_passes_success_method_not_allowed_and_ndjson_upload_success() {
     let success_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let success_url = format!("http://{}", success_listener.local_addr().unwrap());
     let success_handle = std::thread::spawn(move || {
@@ -1528,9 +2133,24 @@ async fn http_probe_passes_success_and_ndjson_upload_success() {
             .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
             .unwrap();
     });
-    let check = probe_http_named("OpenTelemetry endpoint", &success_url).await;
+    let check = probe_otlp_http_named("OpenTelemetry endpoint", &success_url).await;
     assert_eq!(check.status, Status::Pass);
     success_handle.join().unwrap();
+
+    let method_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let method_url = format!("http://{}", method_listener.local_addr().unwrap());
+    let method_handle = std::thread::spawn(move || {
+        let mut stream = accept_bounded(&method_listener);
+        let mut buf = [0_u8; 1024];
+        let _ = stream.read(&mut buf).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let check = probe_otlp_http_named("OpenTelemetry endpoint", &method_url).await;
+    assert_eq!(check.status, Status::Pass);
+    assert!(check.details.contains("HTTP 405"));
+    method_handle.join().unwrap();
 
     let (url, body, server_thread) = start_doctor_http_capture_server();
     let check = probe_atof_ndjson(
@@ -1593,7 +2213,7 @@ async fn collect_observability_validates_pricing_file_source() {
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     let pricing = checks
         .iter()
@@ -1625,7 +2245,7 @@ async fn collect_observability_fails_for_missing_pricing_file_source() {
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     let pricing = checks
         .iter()

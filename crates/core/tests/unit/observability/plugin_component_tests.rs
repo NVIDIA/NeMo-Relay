@@ -20,10 +20,35 @@ use serde_json::json;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::sync::mpsc;
+use std::sync::Arc;
 #[cfg(feature = "atof-streaming")]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug)]
+struct ShutdownFailureSpanProcessor {
+    message: String,
+    shutdown_calls: Arc<AtomicUsize>,
+}
+
+impl opentelemetry_sdk::trace::SpanProcessor for ShutdownFailureSpanProcessor {
+    fn on_start(&self, _span: &mut opentelemetry_sdk::trace::Span, _cx: &opentelemetry::Context) {}
+
+    fn on_end(&self, _span: opentelemetry_sdk::trace::SpanData) {}
+
+    fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+        Ok(())
+    }
+
+    fn shutdown_with_timeout(&self, _timeout: Duration) -> opentelemetry_sdk::error::OTelSdkResult {
+        self.shutdown_calls.fetch_add(1, Ordering::SeqCst);
+        Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
+            self.message.clone(),
+        ))
+    }
+}
 
 fn temp_dir(prefix: &str) -> PathBuf {
     let id = SystemTime::now()
@@ -83,7 +108,7 @@ fn start_http_capture_server(expected_requests: usize) -> (String, Arc<Mutex<Vec
     (url, captures)
 }
 
-#[cfg(all(feature = "atof-streaming", feature = "object-store"))]
+#[cfg(feature = "object-store")]
 fn start_http_status_server(
     status: &'static str,
 ) -> (String, std::thread::JoinHandle<std::io::Result<()>>) {
@@ -91,7 +116,7 @@ fn start_http_status_server(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || -> std::io::Result<()> {
         listener.set_nonblocking(true)?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let (mut stream, _) = loop {
             match listener.accept() {
                 Ok(connection) => break connection,
@@ -108,7 +133,7 @@ fn start_http_status_server(
             }
         };
         stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
         let mut request = Vec::new();
         let mut byte = [0_u8; 1];
         while !request.ends_with(b"\r\n\r\n") {
@@ -135,7 +160,7 @@ fn start_http_status_server(
         stream.read_exact(&mut body)?;
         write!(
             stream,
-            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nETag: \"test-etag\"\r\nConnection: close\r\n\r\n"
         )?;
         stream.flush()
     });
@@ -170,7 +195,7 @@ fn start_otlp_capture_server() -> (String, mpsc::Receiver<Vec<u8>>) {
     std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut request = Vec::new();
         let mut byte = [0_u8; 1];
@@ -222,6 +247,13 @@ fn plugin_config(config: Json) -> PluginConfig {
 #[test]
 fn editor_schema_tracks_observability_config_types() {
     let schema = ObservabilityConfig::editor_schema();
+    assert_eq!(
+        schema
+            .field("enable_full_payloads")
+            .expect("full payload field")
+            .kind,
+        EditorFieldKind::Boolean
+    );
     let atof = schema.field("atof").expect("atof section");
     assert_eq!(atof.label, "ATOF");
     assert_eq!(atof.kind, EditorFieldKind::Section);
@@ -274,6 +306,15 @@ fn editor_schema_tracks_observability_config_types() {
             .kind,
         EditorFieldKind::StringMap
     );
+    for field in [
+        "max_queue_size",
+        "max_export_batch_size",
+        "scheduled_delay_millis",
+    ] {
+        let field = otlp_endpoint_schema.field(field).expect("batch field");
+        assert_eq!(field.kind, EditorFieldKind::Integer);
+        assert!(field.optional);
+    }
     assert_eq!(
         default_opentelemetry_endpoint_editor_value(),
         json!({
@@ -400,6 +441,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
 
     let defaults = ObservabilityConfig::default();
     assert_eq!(defaults.version, 3);
+    assert!(!defaults.enable_full_payloads);
     assert!(defaults.atof.is_none());
     assert!(defaults.atif.is_none());
     assert!(defaults.opentelemetry.is_none());
@@ -408,16 +450,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(!atof.enabled);
     assert!(atof.sinks.is_empty());
 
-    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
-        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
-    }))
-    .unwrap();
-    let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
-        panic!("expected stream sink");
-    };
-    assert_eq!(stream.name.as_deref(), Some("switchyard"));
-    assert_eq!(stream.transport, "http_post");
-    assert_eq!(stream.field_name_policy, "preserve");
+    assert_default_stream_sink_shape();
 
     let atif = AtifSectionConfig::default();
     assert!(!atif.enabled);
@@ -437,6 +470,9 @@ fn default_config_and_component_conversion_cover_public_shape() {
             service_version: None,
             instrumentation_scope: default_otel_instrumentation_scope(),
             timeout_millis: default_timeout_millis(),
+            max_queue_size: None,
+            max_export_batch_size: None,
+            scheduled_delay_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::new(),
             resource_attributes: HashMap::new(),
@@ -457,6 +493,70 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(3));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
+    assert_endpoint_batch_fields_omitted(&generic.config["opentelemetry"]["endpoints"][0]);
+
+    assert_endpoint_batch_fields_deserialize();
+}
+
+fn assert_endpoint_batch_fields_omitted(serialized_endpoint: &Json) {
+    for field in [
+        "max_queue_size",
+        "max_export_batch_size",
+        "scheduled_delay_millis",
+    ] {
+        assert!(serialized_endpoint.get(field).is_none());
+    }
+}
+
+fn assert_endpoint_batch_fields_deserialize() {
+    let endpoint: OpenTelemetryEndpointConfig = serde_json::from_value(json!({
+        "type": "full",
+        "endpoint": "http://localhost:4318/v1/traces",
+        "max_queue_size": 4096,
+        "max_export_batch_size": 256,
+        "scheduled_delay_millis": 750,
+    }))
+    .unwrap();
+    assert_eq!(endpoint.max_queue_size, Some(4096));
+    assert_eq!(endpoint.max_export_batch_size, Some(256));
+    assert_eq!(endpoint.scheduled_delay_millis, Some(750));
+}
+
+#[test]
+fn full_payload_policy_activates_and_clears_with_the_plugin() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+
+    let config = plugin_config(json!({"enable_full_payloads": true}));
+    assert!(!validate_plugin_config(&config).has_errors());
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .observability_full_payloads_enabled
+    );
+
+    clear_plugin_configuration().unwrap();
+    assert!(
+        !global_context()
+            .read()
+            .unwrap()
+            .observability_full_payloads_enabled
+    );
+}
+
+fn assert_default_stream_sink_shape() {
+    let parsed_atof: AtofSectionConfig = serde_json::from_value(json!({
+        "sinks": [{"type": "stream", "name": "switchyard", "url": "http://localhost/events"}]
+    }))
+    .unwrap();
+    let AtofSinkSectionConfig::Stream(stream) = &parsed_atof.sinks[0] else {
+        panic!("expected stream sink");
+    };
+    assert_eq!(stream.name.as_deref(), Some("switchyard"));
+    assert_eq!(stream.transport, "http_post");
+    assert_eq!(stream.field_name_policy, "preserve");
 }
 
 #[test]
@@ -508,6 +608,9 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             service_version: None,
             instrumentation_scope: default_otel_instrumentation_scope(),
             timeout_millis: default_timeout_millis(),
+            max_queue_size: None,
+            max_export_batch_size: None,
+            scheduled_delay_millis: None,
             headers: HashMap::new(),
             header_env: HashMap::from([("authorization".to_string(), variable.to_string())]),
             resource_attributes: HashMap::new(),
@@ -532,6 +635,9 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        max_queue_size: None,
+        max_export_batch_size: None,
+        scheduled_delay_millis: None,
         headers: HashMap::new(),
         header_env: HashMap::new(),
         resource_attributes: HashMap::new(),
@@ -578,6 +684,39 @@ fn build_otel_config_rejects_each_activation_only_invalid_value() {
         .insert("authorization".to_string(), variable.to_string());
     assert!(build_otel_config(3, endpoint).is_err());
     unsafe { std::env::remove_var(variable) };
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(0);
+    assert!(build_otel_config(4, endpoint).is_err());
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_export_batch_size = Some(0);
+    assert!(build_otel_config(4, endpoint).is_err());
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.scheduled_delay_millis = Some(0);
+    assert!(build_otel_config(4, endpoint).is_err());
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(8);
+    endpoint.max_export_batch_size = Some(9);
+    assert!(build_otel_config(4, endpoint).is_err());
+}
+
+#[test]
+fn build_otel_config_carries_endpoint_batch_overrides() {
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(4096);
+    endpoint.max_export_batch_size = Some(256);
+    endpoint.scheduled_delay_millis = Some(750);
+    let config = build_otel_config(0, endpoint).unwrap();
+    assert_eq!(
+        config.batch_overrides(),
+        (Some(4096), Some(256), Some(Duration::from_millis(750)))
+    );
+
+    let config = build_otel_config(1, test_opentelemetry_endpoint()).unwrap();
+    assert_eq!(config.batch_overrides(), (None, None, None));
 }
 
 #[test]
@@ -628,11 +767,134 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
             "missing diagnostic for {field}: {diagnostics:?}"
         );
     }
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.max_queue_size = Some(0);
+    endpoint.max_export_batch_size = Some(2);
+    endpoint.scheduled_delay_millis = Some(0);
+    diagnostics.clear();
+    validate_opentelemetry_section(
+        &mut diagnostics,
+        &policy,
+        &OpenTelemetrySectionConfig {
+            enabled: true,
+            endpoints: vec![endpoint],
+        },
+    );
+    for field in [
+        "endpoints[0].max_queue_size",
+        "endpoints[0].max_export_batch_size",
+        "endpoints[0].scheduled_delay_millis",
+    ] {
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.field.as_deref() == Some(field)),
+            "missing diagnostic for {field}: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
+fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
+    let mut context = PluginRegistrationContext::new();
+    let error = register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            endpoints: Vec::new(),
+        },
+        &mut context,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("at least one endpoint"));
+}
+
+#[test]
+fn atof_stream_header_validation_reports_invalid_values_and_environment_names() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let policy = ConfigPolicy::default();
+    let mut diagnostics = Vec::new();
+
+    validate_atof_stream_header_env(&mut diagnostics, &policy, "header_env.empty", "");
+    validate_atof_stream_header_env(
+        &mut diagnostics,
+        &policy,
+        "header_env.padded",
+        " PADDED_ENV ",
+    );
+
+    let blank = "NEMO_RELAY_TEST_BLANK_ATOF_STREAM_HEADER_ENV";
+    // SAFETY: the observability mutex serializes access to this test-only variable.
+    unsafe { std::env::set_var(blank, "  ") };
+    validate_atof_stream_header_env(&mut diagnostics, &policy, "header_env.blank", blank);
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(blank) };
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("non-empty environment variable")
+    }));
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("surrounding whitespace"))
+    );
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("environment variable that is blank")
+    }));
+
+    #[cfg(feature = "atof-streaming")]
+    {
+        diagnostics.clear();
+        validate_atof_stream_header(
+            &mut diagnostics,
+            &policy,
+            "headers.invalid",
+            "x-test",
+            "invalid\nvalue",
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("value is invalid"))
+        );
+    }
+}
+
+#[test]
+fn atif_dispatcher_surfaces_fatal_and_runtime_failure_states() {
+    let mut dispatcher = AtifDispatcher::new(AtifSectionConfig::default());
+    assert_eq!(dispatcher.sink_targets(), vec![SinkLabel::Local]);
+    dispatcher.fatal_error = Some("fatal export failure".into());
+    assert!(
+        dispatcher
+            .last_error_result()
+            .unwrap_err()
+            .to_string()
+            .contains("fatal export failure")
+    );
+
+    dispatcher.fatal_error = None;
+    dispatcher.record_runtime_failure(
+        "atif.local_fallback_failed",
+        Some("output_directory".into()),
+        "local write failed".into(),
+        Some("session".into()),
+    );
+    assert_eq!(dispatcher.sink_targets(), vec![SinkLabel::Local]);
+    assert!(dispatcher.last_error_result().is_err());
 }
 
 #[test]
 fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
-    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let variable = "NEMO_RELAY_TEST_MISSING_OTEL_HEADER_ENV";
     unsafe { std::env::remove_var(variable) };
     let report = validate_plugin_config(&plugin_config(json!({
@@ -700,6 +962,9 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
                 "mark_projection": "tool",
                 "mark_exclude_names": ["notification"],
                 "attribute_mappings": [{"key": "nemo_relay.model_name", "alias": "model.alias"}],
+                "max_queue_size": 4096,
+                "max_export_batch_size": 256,
+                "scheduled_delay_millis": 750,
                 "capture_content": true
             }]
         }
@@ -725,8 +990,83 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
             Some("endpoints[0].mark_projection")
                 | Some("endpoints[0].mark_exclude_names")
                 | Some("endpoints[0].attribute_mappings")
+                | Some("endpoints[0].max_queue_size")
+                | Some("endpoints[0].max_export_batch_size")
+                | Some("endpoints[0].scheduled_delay_millis")
         )
     }));
+}
+
+#[test]
+fn opentelemetry_endpoint_rejects_invalid_attribute_mappings() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let invalid_mappings = [
+        (
+            json!([{"key": "", "alias": "some.alias"}]),
+            "attribute mapping key must not be blank",
+        ),
+        (
+            json!([{"key": "nemo_relay.mark.metadata.source", "alias": " "}]),
+            "attribute mapping alias must not be blank",
+        ),
+        (
+            json!([{"key": "nemo_relay.mark.metadata.source", "alias": "\u{200b}"}]),
+            "attribute mapping alias must not be blank",
+        ),
+        (
+            json!([
+                {"key": "nemo_relay.model_name", "alias": "duplicate.alias"},
+                {"key": "nemo_relay.tool.name", "alias": "duplicate.alias"}
+            ]),
+            "attribute mapping alias \"duplicate.alias\" is duplicated",
+        ),
+    ];
+
+    for (attribute_mappings, expected_message) in invalid_mappings {
+        let config = plugin_config(json!({
+            "opentelemetry": {
+                "enabled": true,
+                "endpoints": [{
+                    "type": "full",
+                    "endpoint": "http://localhost:4318/v1/traces",
+                    "attribute_mappings": attribute_mappings
+                }]
+            }
+        }));
+        let report = validate_plugin_config(&config);
+        assert!(report.has_errors());
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "observability.unsupported_value"
+                && diagnostic.field.as_deref() == Some("endpoints[0].attribute_mappings")
+                && diagnostic.message.contains(expected_message)
+        }));
+        assert!(futures::executor::block_on(initialize_plugins_exact(config)).is_err());
+    }
+}
+
+#[test]
+fn opentelemetry_endpoint_accepts_valid_attribute_mappings() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://localhost:4318/v1/traces",
+                "attribute_mappings": [{
+                    "key": "nemo_relay.model_name",
+                    "alias": "model.alias"
+                }]
+            }]
+        }
+    })));
+
+    assert!(
+        !report.has_errors(),
+        "valid attribute mapping produced diagnostics: {:?}",
+        report.diagnostics
+    );
 }
 
 #[test]
@@ -1659,7 +1999,20 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
     .unwrap();
     pop(&valid);
 
-    clear_plugin_configuration().unwrap();
+    flush_subscribers().unwrap();
+    assert!(
+        crate::plugin::active_plugin_report()
+            .unwrap()
+            .runtime_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "atif.destination_render_failed")
+    );
+    let teardown = clear_plugin_configuration().unwrap_err();
+    assert!(
+        teardown
+            .to_string()
+            .contains("atif.destination_render_failed")
+    );
     let invalid_filename = format!("trajectory-{}.json", invalid.uuid);
     assert!(
         !dir.join(&invalid_filename).exists()
@@ -1673,6 +2026,16 @@ fn atif_filename_template_routes_by_metadata_and_skips_invalid_paths() {
         ))
         .exists()
     );
+
+    futures::executor::block_on(initialize_plugins_exact(plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "output_directory": dir,
+            "filename_template": "trajectory-{session_id}.json"
+        }
+    }))))
+    .expect("ATIF teardown errors should not block later activation");
+    clear_plugin_configuration().expect("later ATIF teardown should succeed");
 }
 
 #[test]
@@ -2053,7 +2416,7 @@ fn atif_completed_top_level_agent_is_evicted_after_write() {
 
     let dispatcher = manager.lock().unwrap();
     assert!(dispatcher.fatal_error.is_none());
-    assert!(dispatcher.sink_errors.is_empty());
+    assert!(dispatcher.runtime_failures.is_empty());
     assert!(!dispatcher.agents.contains_key(&agent.uuid));
     assert!(!dispatcher.scope_subscribers.contains_key(&agent.uuid));
     assert!(path.exists());
@@ -2101,14 +2464,12 @@ fn atif_dispatcher_records_failed_agent_writes() {
         vec![(SinkLabel::Local, Err(std::io::Error::other("disk full")))],
     );
     assert!(scope_subscriber.is_some());
+    assert_eq!(dispatcher.runtime_failures.len(), 1);
     assert_eq!(
-        dispatcher
-            .sink_errors
-            .get(&SinkLabel::Local)
-            .map(String::as_str),
-        Some("disk full")
+        dispatcher.runtime_failures[0].code,
+        "atif.local_write_failed"
     );
-    assert!(dispatcher.last_error_result().is_ok());
+    assert!(dispatcher.last_error_result().is_err());
     drop(dispatcher);
     pop(&agent);
 }
@@ -2140,6 +2501,28 @@ fn write_atif_reports_missing_local_path_and_unregistered_remote_sink() {
     assert!(remote_error.contains("storage[0]"));
     #[cfg(not(feature = "object-store"))]
     assert!(remote_error.contains("ATIF storage support is not enabled in this build"));
+}
+
+#[test]
+fn write_atif_spills_to_local_when_all_remote_sinks_fail() {
+    let dir = temp_dir("observability-atif-remote-fallback");
+    let path = dir.join("trajectory.json");
+    let agent_uuid = Uuid::now_v7();
+    let write = PendingAtifWrite {
+        agent_uuid,
+        session_id: agent_uuid.to_string(),
+        filename: "trajectory.json".into(),
+        local_path: Some(path.clone()),
+        payload: b"{}".to_vec(),
+    };
+
+    let results = write_atif(&write, &[], &[SinkLabel::Remote(0)]);
+
+    assert_eq!(results.len(), 2);
+    assert!(results[0].1.is_err());
+    assert_eq!(results[1].0, SinkLabel::Local);
+    assert!(results[1].1.is_ok());
+    assert_eq!(fs::read(path).unwrap(), b"{}");
 }
 
 #[test]
@@ -2206,8 +2589,39 @@ fn atif_metadata_template_values_must_be_safe_path_fragments() {
             .prepare_destination("session-1", Some(&non_string))
             .is_err()
     );
+    let dispatcher_with_fallback = AtifDispatcher::new(AtifSectionConfig {
+        filename_template: "{metadata.artifact_path:-unassigned}/trajectory-{session_id}.json"
+            .to_string(),
+        ..AtifSectionConfig::default()
+    });
+    let error = dispatcher_with_fallback
+        .prepare_destination("session-1", Some(&non_string))
+        .unwrap_err();
+    assert!(error.contains("resolved to a non-string value"), "{error}");
+    let nested_non_string = json!({"artifact": 123});
+    let nested_dispatcher = AtifDispatcher::new(AtifSectionConfig {
+        filename_template: "{metadata.artifact.path:-unassigned}/trajectory-{session_id}.json"
+            .to_string(),
+        ..AtifSectionConfig::default()
+    });
+    let error = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_non_string))
+        .unwrap_err();
+    assert!(error.contains("traversed a non-object value"), "{error}");
+    let nested_null = json!({"artifact": null});
+    let destination = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_null))
+        .unwrap();
+    assert_eq!(destination.0, "unassigned/trajectory-session-1.json");
+    let nested_string = json!({"artifact": {"path": "tenant-a/team_1"}});
+    let destination = nested_dispatcher
+        .prepare_destination("session-1", Some(&nested_string))
+        .unwrap();
+    assert_eq!(destination.0, "tenant-a/team_1/trajectory-session-1.json");
 
     for template in [
+        "/tmp/trajectory-{session_id}.json",
+        "../trajectory-{session_id}.json",
         "{metadata.}/trajectory-{session_id}.json",
         "{metadata.tenant..id}/trajectory-{session_id}.json",
         "{metadata.tenant/trajectory-{session_id}.json",
@@ -2327,6 +2741,47 @@ fn atif_explicit_options_and_open_agent_teardown_are_written() {
 }
 
 #[test]
+#[cfg(feature = "object-store")]
+fn atif_open_agent_teardown_failure_retains_runtime_diagnostic_report() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dir = temp_dir("observability-atif-open-agent-delivery-failure");
+    let (endpoint, server) = start_http_status_server("500 Internal Server Error");
+    let config = plugin_config(json!({
+        "atif": {
+            "enabled": true,
+            "output_directory": dir,
+            "filename_template": "trajectory-{session_id}.json",
+            "storage": [{"type": "http", "endpoint": endpoint}]
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    let agent = push_agent("open-agent-delivery-failure");
+
+    let teardown = clear_plugin_configuration().unwrap_err();
+    assert!(teardown.to_string().contains("atif.remote_delivery_failed"));
+    server.join().unwrap().unwrap();
+
+    let report = crate::plugin::active_plugin_report()
+        .expect("failed teardown should retain its runtime diagnostics");
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "atif.remote_delivery_failed")
+        .expect("remote failure should be retained in the report");
+    assert_eq!(diagnostic.field.as_deref(), Some("storage[0]"));
+    assert_eq!(
+        diagnostic.session_id.as_deref(),
+        Some(agent.uuid.to_string().as_str())
+    );
+    assert!(!diagnostic.message.is_empty());
+
+    pop(&agent);
+    clear_plugin_configuration().unwrap();
+    assert!(crate::plugin::active_plugin_report().is_none());
+}
+
+#[test]
 fn atif_rejects_unsafe_template_and_ignores_non_top_level_agents() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
@@ -2383,12 +2838,12 @@ fn otlp_sections_register_inferred_subscribers_with_full_config() {
                 },
                 {
                     "type": "openinference",
-                    "endpoint": "http://127.0.0.1:4318/v1/traces",
+                    "endpoint": "http://127.0.0.1:4319/v1/traces",
                     "service_name": "oi-service"
                 },
                 {
                     "type": "gen_ai",
-                    "endpoint": "http://127.0.0.1:4318/v1/traces"
+                    "endpoint": "http://127.0.0.1:4320/v1/traces"
                 }
             ]
         }
@@ -2441,10 +2896,194 @@ fn opentelemetry_endpoints_fan_out_to_heterogeneous_and_repeated_types() {
 
     for request in [full_request, gen_ai_request, repeated_request] {
         let body = request
-            .recv_timeout(Duration::from_secs(10))
+            .recv_timeout(Duration::from_secs(5))
             .expect("each configured endpoint should receive the exported span");
         assert!(!body.is_empty());
     }
+}
+
+#[test]
+fn opentelemetry_rejects_canonical_equivalent_destinations() {
+    for (first, second) in [
+        (
+            "http://collector.example/v1/traces",
+            "http://collector.example:80/v1/traces",
+        ),
+        (
+            "https://collector.example/v1/traces",
+            "https://collector.example:443/v1/traces",
+        ),
+        (
+            "HTTP://COLLECTOR.EXAMPLE/v1/traces",
+            "http://collector.example/v1/traces",
+        ),
+        (
+            "http://collector.example//v1///traces",
+            "http://collector.example/v1/traces/",
+        ),
+        ("http://localhost/v1/traces", "http://LOCALHOST/v1/traces"),
+        ("http://localhost/v1/traces", "http://localhost./v1/traces"),
+        (
+            "http://localhost/v1/traces",
+            "http://agent.localhost/v1/traces",
+        ),
+        ("http://localhost/v1/traces", "http://127.0.0.2/v1/traces"),
+        ("http://localhost/v1/traces", "http://127.1/v1/traces"),
+        ("http://localhost/v1/traces", "http://[::1]/v1/traces"),
+    ] {
+        let config = plugin_config(json!({
+            "opentelemetry": {
+                "enabled": true,
+                "endpoints": [
+                    {"type": "full", "endpoint": first},
+                    {"type": "gen_ai", "endpoint": second}
+                ]
+            }
+        }));
+
+        let report = validate_plugin_config(&config);
+        assert!(
+            report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "observability.unsafe_otel_destination_collision"
+            }),
+            "expected equivalent destinations {first:?} and {second:?} to collide"
+        );
+    }
+
+    let grpc = plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "full",
+                    "transport": "grpc",
+                    "endpoint": "https://collector.example"
+                },
+                {
+                    "type": "gen_ai",
+                    "transport": "grpc",
+                    "endpoint": "https://collector.example:443/"
+                }
+            ]
+        }
+    }));
+    assert!(validate_plugin_config(&grpc).has_errors());
+}
+
+#[test]
+fn opentelemetry_allows_distinct_canonical_destinations() {
+    for (first, second) in [
+        (
+            "http://collector.example:4318/v1/traces",
+            "http://collector.example:4319/v1/traces",
+        ),
+        (
+            "http://collector.example:443/v1/traces",
+            "https://collector.example/v1/traces",
+        ),
+        (
+            "http://collector.example/v1/traces",
+            "http://collector.example/custom/traces",
+        ),
+        (
+            "http://collector.example/v1/traces",
+            "http://collector.example/v1%2Ftraces",
+        ),
+        (
+            "http://collector.example/v1/traces?tenant=one",
+            "http://collector.example/v1/traces?tenant=two",
+        ),
+        (
+            "http://localhost.example/v1/traces",
+            "http://localhost/v1/traces",
+        ),
+        ("http://[::2]/v1/traces", "http://localhost/v1/traces"),
+    ] {
+        let config = plugin_config(json!({
+            "opentelemetry": {
+                "enabled": true,
+                "endpoints": [
+                    {"type": "full", "endpoint": first},
+                    {"type": "gen_ai", "endpoint": second}
+                ]
+            }
+        }));
+
+        assert!(
+            !validate_plugin_config(&config).has_errors(),
+            "expected distinct destinations {first:?} and {second:?} to remain valid"
+        );
+    }
+
+    let different_transports = plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "full",
+                    "transport": "http_binary",
+                    "endpoint": "http://collector.example/v1/traces"
+                },
+                {
+                    "type": "gen_ai",
+                    "transport": "grpc",
+                    "endpoint": "http://collector.example/v1/traces"
+                }
+            ]
+        }
+    }));
+    assert!(!validate_plugin_config(&different_transports).has_errors());
+}
+
+#[test]
+fn opentelemetry_rejects_canonical_collision_during_validation_and_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "policy": {"unsupported_value": "ignore"},
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {"type": "full", "endpoint": " http://LOCALHOST:80//v1///traces/ "},
+                {"type": "gen_ai", "endpoint": "http://127.1/v1/traces"}
+            ]
+        }
+    }));
+
+    let report = validate_plugin_config(&config);
+    assert!(report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.unsafe_otel_destination_collision"
+            && diagnostic.field.as_deref() == Some("endpoints[1].endpoint")
+            && diagnostic.message.contains("endpoints[0] (full)")
+            && diagnostic.message.contains("endpoints[1] (gen_ai)")
+            && diagnostic
+                .message
+                .contains("http://<loopback>:80/v1/traces")
+    }));
+    assert!(futures::executor::block_on(initialize_plugins_exact(config)).is_err());
+    assert!(
+        !global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+}
+
+#[test]
+fn opentelemetry_allows_repeated_projection_types_at_the_same_destination() {
+    let config = plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {"type": "full", "endpoint": "http://LOCALHOST:80//v1///traces/"},
+                {"type": "full", "endpoint": "http://127.1/v1/traces"}
+            ]
+        }
+    }));
+
+    assert!(!validate_plugin_config(&config).has_errors());
 }
 
 #[test]
@@ -2472,7 +3111,7 @@ fn opentelemetry_endpoint_delivery_failure_does_not_block_other_endpoints() {
     let _ = clear_plugin_configuration();
 
     let body = healthy_request
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(Duration::from_secs(5))
         .expect("healthy endpoint should receive spans despite another endpoint failing");
     assert!(!body.is_empty());
 }
@@ -2534,6 +3173,62 @@ fn opentelemetry_shutdown_helper_attempts_every_constructed_endpoint() {
             "every constructed endpoint exporter should be shut down"
         );
     }
+}
+
+#[test]
+fn opentelemetry_shutdown_helper_retains_every_endpoint_failure() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let dropped_calls = Arc::new(AtomicUsize::new(0));
+    let timeout_calls = Arc::new(AtomicUsize::new(0));
+    let subscribers = [
+        (
+            format!("{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: otel.spans_dropped (2)"),
+            Arc::clone(&dropped_calls),
+        ),
+        (
+            "endpoint shutdown timed out".to_string(),
+            Arc::clone(&timeout_calls),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (message, shutdown_calls))| {
+        let processor = ShutdownFailureSpanProcessor {
+            message,
+            shutdown_calls,
+        };
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_span_processor(processor)
+            .build();
+        Arc::new(OpenTelemetrySubscriber::from_tracer_provider(
+            provider,
+            format!("shutdown-failure-{index}"),
+        ))
+    })
+    .collect::<Vec<_>>();
+
+    let OpenTelemetryShutdownFailure::Other(error) =
+        shutdown_opentelemetry_subscribers(&subscribers)
+            .expect("mixed endpoint shutdown failures should be reported")
+    else {
+        panic!("mixed endpoint shutdown failures must retain the registration failure outcome");
+    };
+    let error = error.to_string();
+
+    assert_eq!(dropped_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(timeout_calls.load(Ordering::SeqCst), 1);
+    assert!(
+        error.contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER),
+        "{error}"
+    );
+    assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    assert!(
+        !error.contains(&format!(
+            "registration failed: {OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}:"
+        )),
+        "mixed failures must not use the recoverable marker prefix: {error}"
+    );
 }
 
 #[test]
@@ -2865,6 +3560,9 @@ fn atif_storage_http_invalid_literal_header_value_is_rejected() {
 
 #[test]
 fn atif_storage_http_header_env_missing_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_MISSING_ZZZZ";
     // SAFETY: tests in this binary do not concurrently observe this uniquely
     // named env var, so removing it is safe.
@@ -2895,6 +3593,9 @@ fn atif_storage_http_header_env_missing_env_is_rejected() {
 
 #[test]
 fn atif_storage_http_header_env_empty_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_EMPTY_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -2951,6 +3652,9 @@ fn atif_storage_http_header_env_whitespace_name_is_rejected() {
 
 #[test]
 fn atif_storage_http_header_env_present_env_is_accepted() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_ATIF_HTTP_HEADER_OK_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -3022,6 +3726,9 @@ fn atif_storage_s3_parses_full_credential_block() {
 
 #[test]
 fn atif_storage_secret_var_missing_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_S3_SECRET_MISSING_ZZZZ";
     // SAFETY: tests in this binary do not concurrently observe this uniquely
     // named env var, so removing it is safe.
@@ -3052,6 +3759,9 @@ fn atif_storage_secret_var_missing_env_is_rejected() {
 
 #[test]
 fn atif_storage_secret_var_empty_env_is_rejected() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_S3_SECRET_EMPTY_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -3085,6 +3795,9 @@ fn atif_storage_secret_var_empty_env_is_rejected() {
 
 #[test]
 fn atif_storage_secret_var_present_env_is_accepted() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let var_name = "NEMO_RELAY_TEST_S3_SECRET_OK_ZZZZ";
     // SAFETY: this uniquely named env var is only touched by this test.
     unsafe {
@@ -3139,6 +3852,9 @@ fn atif_storage_secret_var_empty_name_is_rejected() {
 #[test]
 #[cfg(feature = "object-store")]
 fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let missing = "NEMO_RELAY_TEST_ATIF_HELPER_MISSING_ZZZZ";
     let empty = "NEMO_RELAY_TEST_ATIF_HELPER_EMPTY_ZZZZ";
     let secret = "NEMO_RELAY_TEST_ATIF_HELPER_SECRET_ZZZZ";
@@ -3215,5 +3931,140 @@ fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
         std::env::remove_var(empty);
         std::env::remove_var(secret);
         std::env::remove_var(token);
+    }
+}
+
+#[cfg(feature = "object-store")]
+fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
+    HttpStorageConfig {
+        endpoint: endpoint.into(),
+        headers: std::collections::HashMap::new(),
+        header_env: std::collections::HashMap::new(),
+        timeout_millis: 1_000,
+    }
+}
+
+#[test]
+#[cfg(feature = "object-store")]
+fn http_upload_config_rejects_endpoint_timeout_and_header_errors() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for endpoint in [" http://example.com", "://", "ftp://example.com"] {
+        assert!(HttpUploadConfig::resolve(2, &http_storage_config(endpoint)).is_err());
+    }
+
+    let mut config = http_storage_config("https://example.com/atif");
+    config.timeout_millis = 0;
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+
+    config.timeout_millis = 1_000;
+    config.headers.insert("bad header".into(), "value".into());
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+
+    config.headers.clear();
+    config.headers.insert("x-bad".into(), "bad\nvalue".into());
+    assert!(HttpUploadConfig::resolve(2, &config).is_err());
+
+    let variable = "NEMO_RELAY_TEST_ATIF_HTTP_RESOLVE_ZZZZ";
+    // SAFETY: this uniquely named environment variable is serialized by the observability mutex.
+    unsafe { std::env::set_var(variable, "Bearer resolved") };
+    config.headers.clear();
+    config
+        .header_env
+        .insert("authorization".into(), variable.into());
+    let resolved = HttpUploadConfig::resolve(2, &config).unwrap();
+    assert_eq!(
+        resolved.headers.get("authorization").map(String::as_str),
+        Some("Bearer resolved")
+    );
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(variable) };
+}
+
+#[tokio::test]
+#[cfg(feature = "object-store")]
+async fn post_atif_http_reports_transport_failure() {
+    let config = HttpUploadConfig::resolve(0, &http_storage_config("http://127.0.0.1:1")).unwrap();
+    let client = reqwest::Client::builder()
+        .timeout(config.timeout)
+        .build()
+        .unwrap();
+    assert!(
+        post_atif_http(
+            &client,
+            &config,
+            "trajectory.json".into(),
+            "session".into(),
+            b"{}".to_vec(),
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("HTTP ATIF upload")
+    );
+}
+
+#[test]
+#[cfg(feature = "object-store")]
+fn s3_remote_storage_uploads_to_a_custom_http_endpoint() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let variable = "NEMO_RELAY_TEST_S3_UPLOAD_SECRET_ZZZZ";
+    // SAFETY: the observability mutex serializes access to this test-only variable.
+    unsafe { std::env::set_var(variable, "secret") };
+    let (endpoint, server) = start_http_status_server("200 OK");
+    let storage = AtifRemoteStorage::from_config(
+        7,
+        &AtifStorageConfig::S3(S3StorageConfig {
+            bucket: "test-bucket".into(),
+            key_prefix: Some("trajectories".into()),
+            access_key_id: Some("access".into()),
+            secret_access_key_var: Some(variable.into()),
+            session_token_var: None,
+            region: Some("us-east-1".into()),
+            endpoint_url: Some(endpoint),
+            allow_http: Some(true),
+        }),
+    )
+    .unwrap();
+    let result = storage.put("trajectory.json", "session", b"{}");
+    server.join().unwrap().unwrap();
+    // SAFETY: cleanup of the test-only environment variable.
+    unsafe { std::env::remove_var(variable) };
+    result.unwrap();
+}
+
+#[test]
+fn observability_private_editor_and_validation_helpers_cover_edge_configs() {
+    assert_eq!(
+        default_atof_file_sink_editor_value(),
+        json!({
+            "type": "file",
+            "mode": "append"
+        })
+    );
+    assert_eq!(
+        default_atof_stream_sink_editor_value()["transport"],
+        json!("http_post")
+    );
+    assert_eq!(
+        default_opentelemetry_endpoint_editor_value()["service_name"],
+        json!("unknown_service")
+    );
+    let field = otel_editor_field("optional", EditorFieldKind::String, &[], true);
+    assert_eq!(field.name, "optional");
+    assert!(field.optional);
+
+    let plugin = ObservabilityPlugin;
+    assert!(!plugin.allows_multiple_components());
+    for value in [
+        json!({"atof": {"enabled": true, "filename": "removed.jsonl"}}),
+        json!({"atof": {"enabled": true, "sinks": []}}),
+        json!({"opentelemetry": {"enabled": true, "endpoints": []}}),
+    ] {
+        let config = value.as_object().unwrap();
+        assert!(!plugin.validate(config).is_empty());
     }
 }

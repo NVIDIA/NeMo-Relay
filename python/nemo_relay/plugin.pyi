@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Sequence
 from types import TracebackType
 from typing import AsyncContextManager, Literal, Protocol, Self, TypedDict
 
@@ -33,8 +34,19 @@ class ConfigDiagnostic(_ConfigDiagnosticRequired, total=False):
     component: str
     field: str
 
+class _RuntimeDiagnosticRequired(TypedDict):
+    code: str
+    component: str
+    message: str
+    count: int
+
+class RuntimeDiagnostic(_RuntimeDiagnosticRequired, total=False):
+    field: str
+    session_id: str
+
 class ConfigReport(TypedDict):
     diagnostics: list[ConfigDiagnostic]
+    runtime_diagnostics: list[RuntimeDiagnostic]
 
 class PluginContext(Protocol):
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None: ...
@@ -149,13 +161,17 @@ class PluginHostActivation:
         traceback: TracebackType | None,
     ) -> None: ...
 
+def load_dynamic_plugin_activation_specs(
+    plugin_config_path: str | os.PathLike[str],
+) -> list[DynamicPluginActivationSpec]: ...
 def validate(config: PluginConfig | JsonObject) -> ConfigReport: ...
 async def initialize(config: PluginConfig | JsonObject) -> ConfigReport: ...
 async def initialize_with_dynamic_plugins(
     config: PluginConfig | JsonObject,
-    dynamic_plugins: list[DynamicPluginActivationSpec | JsonObject],
+    dynamic_plugins: Sequence[DynamicPluginActivationSpec | JsonObject],
 ) -> PluginHostActivation: ...
 def clear() -> None: ...
+async def clear_async() -> None: ...
 def plugin(config: PluginConfig | JsonObject) -> AsyncContextManager[ConfigReport]: ...
 def report() -> ConfigReport | None: ...
 def list_kinds() -> list[str]: ...

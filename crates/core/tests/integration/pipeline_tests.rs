@@ -9,6 +9,9 @@
 
 use std::sync::{Arc, Mutex};
 
+mod test_support;
+use test_support::ready;
+
 use futures::StreamExt;
 use serde_json::json;
 
@@ -25,9 +28,10 @@ use nemo_relay::api::registry::{
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::global_context;
+use nemo_relay::api::runtime::subscriber_dispatcher::flush_subscribers_with_started_signal;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
-use nemo_relay::api::scope::ScopeType;
+use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
 use nemo_relay::codec::oci_genai::OCIGenAIChatCodec;
@@ -360,7 +364,7 @@ async fn test_decode_runs_before_intercepts() {
         false,
         Arc::new(move |_name, req, annotated| {
             *cap.lock().unwrap() = Some(annotated.clone());
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -415,7 +419,7 @@ async fn test_encode_runs_after_intercepts() {
             let mut ann = annotated.unwrap();
             ann.model = Some("modified".into());
             req.headers.insert("x-codec-route".into(), json!("blue"));
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req,
                 Some(ann),
             ))
@@ -518,7 +522,7 @@ async fn anthropic_issue_501_round_trips_and_applies_annotated_edits() {
             request
                 .headers
                 .insert("x-annotation-seen".into(), json!("yes"));
-            Ok(LlmRequestInterceptOutcome::new(request, Some(annotated)))
+            ready(LlmRequestInterceptOutcome::new(request, Some(annotated)))
         }),
     )
     .unwrap();
@@ -572,8 +576,10 @@ async fn test_codec_rejects_raw_content_mutation_before_lifecycle() {
         false,
         Arc::new(|_name, mut request, annotated| {
             request.content["model"] = json!("raw-model-edit");
-            Ok(LlmRequestInterceptOutcome::new(request, annotated)
-                .with_pending_mark(PendingMarkSpec::builder().name("must.not.emit").build()))
+            ready(
+                LlmRequestInterceptOutcome::new(request, annotated)
+                    .with_pending_mark(PendingMarkSpec::builder().name("must.not.emit").build()),
+            )
         }),
     )
     .unwrap();
@@ -584,7 +590,7 @@ async fn test_codec_rejects_raw_content_mutation_before_lifecycle() {
         false,
         Arc::new(move |_name, request, annotated| {
             *later_called.lock().unwrap() = true;
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            ready(LlmRequestInterceptOutcome::new(request, annotated))
         }),
     )
     .unwrap();
@@ -631,7 +637,9 @@ async fn test_codec_rejects_missing_annotation_before_lifecycle() {
         "codec_missing_annotation",
         1,
         false,
-        Arc::new(|_name, request, _annotated| Ok(LlmRequestInterceptOutcome::new(request, None))),
+        Arc::new(|_name, request, _annotated| {
+            ready(LlmRequestInterceptOutcome::new(request, None))
+        }),
     )
     .unwrap();
 
@@ -681,7 +689,7 @@ async fn test_stream_codec_rejects_raw_content_mutation_before_lifecycle() {
         false,
         Arc::new(|_name, mut request, annotated| {
             request.content["model"] = json!("raw-stream-edit");
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            ready(LlmRequestInterceptOutcome::new(request, annotated))
         }),
     )
     .unwrap();
@@ -742,7 +750,7 @@ async fn test_annotated_intercept_receives_both() {
         false,
         Arc::new(move |_name, req, annotated| {
             *cp.lock().unwrap() = Some((req.clone(), annotated.clone()));
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -800,7 +808,7 @@ async fn test_canonical_intercept_with_and_without_codec() {
         Arc::new(move |_name, mut req, annotated| {
             *lc1.lock().unwrap() = true;
             req.headers.insert("x-legacy".into(), json!("was-here"));
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -846,7 +854,7 @@ async fn test_canonical_intercept_with_and_without_codec() {
         Arc::new(move |_name, mut req, annotated| {
             *lc2.lock().unwrap() = true;
             req.headers.insert("x-legacy-2".into(), json!("also-here"));
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -904,7 +912,7 @@ async fn test_stream_path_also_decodes() {
         false,
         Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -931,6 +939,7 @@ async fn test_stream_path_also_decodes() {
 
     // Consume the stream to trigger full pipeline
     while let Some(_chunk) = stream.next().await {}
+    stream.close().await.unwrap();
 
     // Assert decode was called
     let dl = decode_log.lock().unwrap();
@@ -970,7 +979,7 @@ async fn test_shared_helper_both_paths() {
         false,
         Arc::new(move |_name, req, annotated| {
             *acc.lock().unwrap() += 1;
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -1049,7 +1058,7 @@ async fn test_explicit_codec_param_overrides() {
             if let Some(ref ann) = annotated {
                 *cm.lock().unwrap() = ann.model.clone();
             }
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -1098,7 +1107,7 @@ async fn test_encode_merge_not_replace() {
         Arc::new(|_name, req, annotated| {
             let mut ann = annotated.unwrap();
             ann.model = Some("new_model".into());
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req,
                 Some(ann),
             ))
@@ -1169,7 +1178,7 @@ async fn test_unified_chain_priority_order() {
         false,
         Arc::new(move |_name, req, annotated| {
             cl1.lock().unwrap().push("legacy_p10".into());
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -1184,7 +1193,7 @@ async fn test_unified_chain_priority_order() {
         false,
         Arc::new(move |_name, req, annotated| {
             cl2.lock().unwrap().push("annotated_p5".into());
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -1234,7 +1243,7 @@ async fn test_no_codec_annotated_intercept_receives_none() {
         false,
         Arc::new(move |_name, req, annotated| {
             *ca.lock().unwrap() = Some(annotated.clone());
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+            ready(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
                 req, annotated,
             ))
         }),
@@ -1533,7 +1542,7 @@ async fn test_response_codec_annotation_uses_sanitized_managed_response() {
     register_llm_sanitize_response_guardrail(
         "sanitize_resp_codec_annotation",
         1,
-        Arc::new(|_response, _context| Some(make_openai_chat_response("Sanitized"))),
+        Arc::new(|_response, _context| ready(Some(make_openai_chat_response("Sanitized")))),
     )
     .unwrap();
 
@@ -1734,10 +1743,10 @@ async fn test_request_codec_annotation_uses_sanitized_start_payload() {
         "sanitize_req_codec_annotation",
         1,
         Arc::new(|request, _context| {
-            Some(LlmRequest {
+            ready(Some(LlmRequest {
                 headers: request.headers,
                 content: make_openai_chat_request("Sanitized").content,
-            })
+            }))
         }),
     )
     .unwrap();
@@ -1818,6 +1827,7 @@ async fn test_stream_response_codec_populates_annotated_response() {
 
     // Drain the stream to trigger finalization and END event
     while let Some(_chunk) = stream.next().await {}
+    stream.close().await.unwrap();
 
     let captured = captured_events_snapshot(&events);
     let end_event = captured
@@ -1903,6 +1913,7 @@ async fn managed_buffered_and_streaming_close_price_the_committed_route_not_resp
     while let Some(item) = stream.next().await {
         item.unwrap();
     }
+    stream.close().await.unwrap();
 
     llm_call_execute(
         LlmCallExecuteParams::builder()
@@ -2001,7 +2012,7 @@ async fn test_stream_response_codec_annotation_uses_sanitized_aggregated_respons
     register_llm_sanitize_response_guardrail(
         "stream_sanitize_resp_codec_annotation",
         1,
-        Arc::new(|_response, _context| Some(make_openai_chat_response("Sanitized"))),
+        Arc::new(|_response, _context| ready(Some(make_openai_chat_response("Sanitized")))),
     )
     .unwrap();
 
@@ -2024,6 +2035,7 @@ async fn test_stream_response_codec_annotation_uses_sanitized_aggregated_respons
     .unwrap();
 
     while let Some(_chunk) = stream.next().await {}
+    stream.close().await.unwrap();
 
     let captured = captured_events_snapshot(&events);
     let end_event = captured
@@ -2045,4 +2057,171 @@ async fn test_stream_response_codec_annotation_uses_sanitized_aggregated_respons
 
     deregister_subscriber("stream_sanitized_resp_codec_sub").unwrap();
     deregister_llm_sanitize_response_guardrail("stream_sanitize_resp_codec_annotation").unwrap();
+}
+
+#[tokio::test]
+async fn test_stream_response_sanitizer_can_flush_subscribers() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_subscriber("stream_reentrant_flush_subscriber", Arc::new(|_| {})).unwrap();
+    register_llm_sanitize_response_guardrail(
+        "stream_reentrant_flush_sanitizer",
+        1,
+        Arc::new(|response, _context| {
+            Box::pin(async move {
+                flush_subscribers()?;
+                Ok(Some(response))
+            })
+        }),
+    )
+    .unwrap();
+
+    let mut stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("stream_reentrant_flush")
+            .request(make_openai_chat_request("stream me"))
+            .func(noop_stream_exec_fn())
+            .collector(Box::new(|_chunk| Ok(())))
+            .finalizer(Box::new(|| make_openai_chat_response("done")))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while stream.next().await.is_some() {}
+        stream.close().await
+    })
+    .await
+    .expect("stream finalization deadlocked in response sanitizer")
+    .unwrap();
+    flush_subscribers().unwrap();
+
+    deregister_llm_sanitize_response_guardrail("stream_reentrant_flush_sanitizer").unwrap();
+    deregister_subscriber("stream_reentrant_flush_subscriber").unwrap();
+}
+
+#[tokio::test]
+async fn test_dropped_stream_end_keeps_fifo_position_before_later_mark() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let sanitizer_started = Arc::new(tokio::sync::Notify::new());
+    let sanitizer_release = Arc::new(tokio::sync::Notify::new());
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured_events = events.clone();
+    register_subscriber(
+        "stream_fifo_subscriber",
+        Arc::new(move |event| {
+            captured_events.lock().unwrap().push(event.clone());
+        }),
+    )
+    .unwrap();
+    register_llm_sanitize_response_guardrail(
+        "stream_fifo_sanitizer",
+        1,
+        Arc::new({
+            let sanitizer_started = sanitizer_started.clone();
+            let sanitizer_release = sanitizer_release.clone();
+            move |response, _context| {
+                let sanitizer_started = sanitizer_started.clone();
+                let sanitizer_release = sanitizer_release.clone();
+                Box::pin(async move {
+                    sanitizer_started.notify_one();
+                    sanitizer_release.notified().await;
+                    Ok(Some(response))
+                })
+            }
+        }),
+    )
+    .unwrap();
+
+    let stream = llm_stream_call_execute(
+        LlmStreamCallExecuteParams::builder()
+            .name("stream_fifo")
+            .request(make_openai_chat_request("stream me"))
+            .func(Arc::new(|_| {
+                Box::pin(async {
+                    assert!(record_llm_optimization_contribution(
+                        routed_model_contribution()
+                    ));
+                    Ok(LlmJsonStream::new(tokio_stream::empty()))
+                })
+            }))
+            .collector(Box::new(|_chunk| Ok(())))
+            .finalizer(Box::new(|| make_openai_chat_response("done")))
+            .build(),
+    )
+    .await
+    .unwrap();
+    drop(stream);
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sanitizer_started.notified(),
+    )
+    .await
+    .expect("stream response sanitizer did not start");
+    event(
+        EmitMarkEventParams::builder()
+            .name("mark-after-stream-drop")
+            .build(),
+    )
+    .unwrap();
+
+    let (flush_started_tx, flush_started_rx) = std::sync::mpsc::channel();
+    let (flush_done_tx, flush_done_rx) = std::sync::mpsc::channel();
+    let flush_thread = std::thread::spawn(move || {
+        flush_done_tx
+            .send(flush_subscribers_with_started_signal(flush_started_tx))
+            .unwrap();
+    });
+    flush_started_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("subscriber flush request was not queued before waiting on the pending stream END");
+    assert!(
+        matches!(
+            flush_done_rx.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "flush must wait for the pending stream END"
+    );
+    sanitizer_release.notify_one();
+    flush_done_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("subscriber flush did not complete after sanitizer release")
+        .unwrap();
+    flush_thread.join().unwrap();
+
+    let events = events.lock().unwrap();
+    let end_index = events
+        .iter()
+        .position(|event| {
+            event.name() == "stream_fifo"
+                && is_scope_event(event, ScopeType::Llm, ScopeCategory::End)
+        })
+        .expect("stream END event");
+    let optimization_index = events
+        .iter()
+        .position(|event| event.name() == "nemo_relay.llm.optimization")
+        .expect("stream optimization mark");
+    let mark_index = events
+        .iter()
+        .position(|event| event.name() == "mark-after-stream-drop")
+        .expect("later mark event");
+    assert!(
+        optimization_index < end_index,
+        "optimization marks must retain their position before stream END"
+    );
+    assert!(
+        end_index < mark_index,
+        "stream END must retain its FIFO position before the later mark"
+    );
+
+    drop(events);
+    deregister_llm_sanitize_response_guardrail("stream_fifo_sanitizer").unwrap();
+    deregister_subscriber("stream_fifo_subscriber").unwrap();
 }

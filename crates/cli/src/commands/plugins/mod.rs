@@ -14,6 +14,17 @@ use std::process::ExitCode;
 use super::serve::ServerArgs;
 use crate::error::CliError;
 
+pub(super) fn edit_request(
+    command: subcommands::PluginsEditCommand,
+    server: &crate::server::GatewayOverrides,
+) -> crate::plugins::PluginsEditRequest {
+    let explicit_path = crate::configuration::explicit_plugin_config_path(
+        server.config.as_ref(),
+        server.plugin_config_path.as_ref(),
+    );
+    command.into_runtime(explicit_path)
+}
+
 pub(super) fn execute(command: PluginsCommand, server: &ServerArgs) -> Result<ExitCode, CliError> {
     let server = server.to_runtime();
     let json_context = command
@@ -23,7 +34,7 @@ pub(super) fn execute(command: PluginsCommand, server: &ServerArgs) -> Result<Ex
     let json = json_context.is_some();
     let result = match command.command {
         subcommands::PluginsSubcommand::Edit(command) => {
-            crate::plugins::edit(command.into_runtime())
+            crate::plugins::edit(edit_request(command, &server))
         }
         subcommands::PluginsSubcommand::Add(command) => {
             crate::plugins::lifecycle::add(command.into_runtime(), &server)

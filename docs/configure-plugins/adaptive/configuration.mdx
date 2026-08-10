@@ -1,7 +1,7 @@
 ---
 title: "Adaptive Configuration"
 sidebar-title: "Configuration"
-description: "Configure the built-in Adaptive component, including state, telemetry, hints, and ACG."
+description: "Configure the Adaptive component, including state, telemetry, hints, ACG, and response caching."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,9 +11,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 Use this page when you want to configure the built-in Adaptive plugin component
 as a whole. The component kind is `adaptive`.
 
-Adaptive plugin configuration uses the generic NeMo Relay plugin document shape.
-Field names stay `snake_case` in every binding and in `plugins.toml`, even when
-language helper functions use language-native naming conventions.
+Adaptive plugin configuration uses the generic NeMo Relay plugin document
+shape. Canonical plugin documents and `plugins.toml` use `snake_case`.
+Binding helpers can use language-native names and serialize them to canonical
+keys.
 
 For plugin file discovery, precedence, merge behavior, editor controls, and
 gateway conflict rules, refer to
@@ -32,10 +33,12 @@ The top-level adaptive object contains:
 | `adaptive_hints` | Request hint-injection behavior. |
 | `tool_parallelism` | Tool scheduling observation or scheduling behavior. |
 | `acg` | Adaptive Cache Governor prompt-cache planning. |
+| `response_cache` | Opt-in LLM response cache for repeated managed calls. Requires a non-empty trust-domain `namespace`. |
 | `policy` | Adaptive-local handling for unknown fields and unsupported values. |
 
-The requested area pages cover [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg) and
-[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints). State, telemetry, tool parallelism, and
+Dedicated pages cover [Adaptive Cache Governor (ACG)](/configure-plugins/adaptive/acg),
+[Adaptive Hints](/configure-plugins/adaptive/adaptive-hints), and
+[Response Cache](/configure-plugins/adaptive/response-cache). State, telemetry, tool parallelism, and
 policy remain whole-plugin settings:
 
 - Use `state.backend.kind = "in_memory"` for local experiments.
@@ -271,9 +274,9 @@ finally:
 </Tab>
 
 <Tab title="Node.js" language="node">
-The Node.js binding exposes the built-in adaptive runtime through the adaptive
-plugin component helpers. Use the Plugin Configuration example above when
-activating adaptive behavior from Node.js.
+The Node.js binding exposes `adaptive.AdaptiveRuntime` for manual lifecycle
+ownership. Construct it from the same `adaptiveConfig`, then call `register()`,
+`waitForIdle()`, and `shutdown()`.
 </Tab>
 
 <Tab title="Rust" language="rust">

@@ -89,6 +89,26 @@ fn set_conflicting_runtime_owner_for_tests() {
     };
 }
 
+fn observability_destination_document(destination: &str) -> Json {
+    json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "atof": {"enabled": true, "sinks": [destination]},
+                "opentelemetry": {"enabled": true, "endpoints": [destination]},
+                "atif": {"enabled": true, "storage": [destination]}
+            }
+        }]
+    })
+}
+
+fn programmatic_observability_config(config: Json) -> PluginConfig {
+    serde_json::from_value(json!({
+        "components": [{"kind": "observability", "config": config}]
+    }))
+    .unwrap()
+}
+
 impl Plugin for TestPlugin {
     fn plugin_kind(&self) -> &str {
         "test.plugin"
@@ -115,8 +135,10 @@ impl Plugin for TestPlugin {
                 1,
                 false,
                 Arc::new(|_name, mut request, annotated| {
-                    request.headers.insert("x-plugin".into(), json!(true));
-                    Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                    Box::pin(async move {
+                        request.headers.insert("x-plugin".into(), json!(true));
+                        Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                    })
                 }),
             )
         })
@@ -706,6 +728,33 @@ fn test_layer_config_preserves_multi_instance_kinds() {
 }
 
 #[test]
+fn config_layering_helpers_cover_malformed_and_scalar_shapes() {
+    let mut scalar = json!("lower");
+    layer_config(&mut scalar, json!("higher"));
+    assert_eq!(scalar, json!("higher"));
+
+    let mut malformed_left = json!({"not": "components"});
+    merge_plugin_components(&mut malformed_left, json!([]));
+    assert_eq!(malformed_left, json!([]));
+
+    let mut malformed_right = json!([]);
+    merge_plugin_components(&mut malformed_right, json!({"not": "components"}));
+    assert_eq!(malformed_right, json!({"not": "components"}));
+
+    let mut components = json!([]);
+    merge_plugin_components(&mut components, json!([{"enabled": true}]));
+    assert_eq!(components, json!([{"enabled": true}]));
+
+    let mut malformed_component = json!("lower");
+    merge_plugin_component(&mut malformed_component, json!({"kind": "higher"}));
+    assert_eq!(malformed_component, json!({"kind": "higher"}));
+
+    let mut object = json!({"existing": true});
+    merge_json_value(&mut object, json!({"added": true}));
+    assert_eq!(object, json!({"existing": true, "added": true}));
+}
+
+#[test]
 fn test_config_report_has_errors() {
     let report = ConfigReport {
         diagnostics: vec![ConfigDiagnostic {
@@ -715,6 +764,7 @@ fn test_config_report_has_errors() {
             field: None,
             message: "boom".into(),
         }],
+        ..ConfigReport::default()
     };
     assert!(report.has_errors());
 }
@@ -754,27 +804,29 @@ fn test_plugin_registration_context_registers_and_rolls_back() {
         .block_on(TestPlugin.register(&Map::new(), &mut ctx))
         .unwrap();
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
@@ -798,25 +850,27 @@ fn test_initialize_plugins_registers_and_clears_components() {
     assert!(!report.has_errors());
     assert!(active_plugin_report().is_some());
 
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!(true)));
 
     clear_plugin_configuration().unwrap();
-    let request = llm_request_intercepts(
-        "model",
-        LlmRequest {
-            headers: Map::new(),
-            content: json!({"messages": []}),
-        },
-    )
-    .unwrap();
+    let request = runtime
+        .block_on(llm_request_intercepts(
+            "model",
+            LlmRequest {
+                headers: Map::new(),
+                content: json!({"messages": []}),
+            },
+        ))
+        .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), None);
     reset_global();
 }
@@ -995,7 +1049,13 @@ fn test_plugin_helper_defaults_and_policy_diagnostics() {
     assert_eq!(diagnostics[0].component.as_deref(), Some("warn.plugin"));
     assert_eq!(diagnostics[0].field.as_deref(), Some("field"));
     assert_eq!(diagnostics[1].level, DiagnosticLevel::Error);
-    assert_eq!(join_error_messages(&ConfigReport { diagnostics }), "error");
+    assert_eq!(
+        join_error_messages(&ConfigReport {
+            diagnostics,
+            ..ConfigReport::default()
+        }),
+        "error"
+    );
 
     reset_global();
 }
@@ -1070,8 +1130,13 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     let mut ctx = PluginRegistrationContext::with_namespace("demo::");
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
         .unwrap();
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
@@ -1083,7 +1148,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
@@ -1413,6 +1478,37 @@ fn test_pending_registration_records_rollback_failures() {
 }
 
 #[test]
+fn test_pending_rollbacks_ignore_delivery_only_errors() {
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let delivery_error = || {
+        PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+            "delivery failed".into(),
+        ))
+    };
+    {
+        let mut pending = PendingPluginRegistrations::new(Some(Arc::clone(&failures)));
+        pending.extend(vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "delivery-only-registration",
+            Box::new(delivery_error),
+        )]);
+    }
+    {
+        let mut pending =
+            PendingPluginRegistrationContext::new("fixture.".into(), Some(Arc::clone(&failures)));
+        pending
+            .context
+            .add_registration(PluginRegistration::new_with_outcome(
+                "fixture",
+                "delivery-only-context-registration",
+                Box::new(delivery_error),
+            ));
+    }
+
+    assert!(failures.lock().unwrap().is_empty());
+}
+
+#[test]
 fn test_checked_teardown_reports_unremoved_registrations() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1437,6 +1533,204 @@ fn test_checked_teardown_reports_unremoved_registrations() {
     assert!(error.contains("stale-callback"), "{error}");
     assert!(error.contains("deregistration refused"), "{error}");
     assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_teardown_marker_text_does_not_imply_successful_removal() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new(
+            "fixture",
+            "stale-marker-callback",
+            Box::new(|| {
+                Err(PluginError::RegistrationFailed(format!(
+                    "unrelated failure mentioning {}",
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                )))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("stale-marker-callback"), "{error}");
+    assert!(error.contains("could not be removed"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "atif-shutdown",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "atif.remote_delivery_failed".into(),
+                    component: "observability".into(),
+                    field: Some("storage[0]".into()),
+                    message: "HTTP 500".into(),
+                    session_id: Some("session-123".into()),
+                    count: 1,
+                });
+                let error = PluginError::RegistrationFailed(format!(
+                    "{}: atif.remote_delivery_failed (1)",
+                    crate::plugin::ATIF_RUNTIME_DELIVERY_FAILURE_MARKER
+                ));
+                PluginRegistrationCleanupOutcome::RemovedWithError(error)
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("atif.remote_delivery_failed"), "{error}");
+    assert!(!error.contains("could not be removed"), "{error}");
+    let report = active_plugin_report().expect("failed teardown should retain its report");
+    assert_eq!(report.runtime_diagnostics.len(), 1);
+    let diagnostic = &report.runtime_diagnostics[0];
+    assert_eq!(diagnostic.code, "atif.remote_delivery_failed");
+    assert_eq!(diagnostic.field.as_deref(), Some("storage[0]"));
+    assert_eq!(diagnostic.message, "HTTP 500");
+    assert_eq!(diagnostic.session_id.as_deref(), Some("session-123"));
+
+    clear_plugin_configuration_inner();
+    assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn test_opentelemetry_delivery_failure_allows_later_plugin_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    format!(
+                        "{}: otel.spans_dropped (2)",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(outcome.callbacks_cleared);
+    assert!(outcome.result.is_err());
+    reset_global();
+}
+
+#[test]
+fn test_mixed_opentelemetry_shutdown_failure_blocks_later_configuration() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "opentelemetry-shutdown",
+            Box::new(|| {
+                PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                    format!(
+                        "OpenTelemetry shutdown failures: provider error: {}: otel.spans_dropped (2); endpoint shutdown timed out",
+                        crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER
+                    ),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let outcome = clear_plugin_configuration_inner();
+    assert!(!outcome.callbacks_cleared);
+    let error = outcome.result.unwrap_err().to_string();
+    assert!(error.contains("endpoint shutdown timed out"), "{error}");
+    reset_global();
+}
+
+#[test]
+fn test_replacement_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(
+        PluginConfig::default(),
+        ConfigReport::default(),
+        vec![PluginRegistration::new_with_outcome(
+            "fixture",
+            "atif-shutdown",
+            Box::new(|| {
+                record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+                    code: "atif.remote_delivery_failed".into(),
+                    component: "observability".into(),
+                    field: Some("storage[0]".into()),
+                    message: "HTTP 500".into(),
+                    session_id: Some("session-123".into()),
+                    count: 1,
+                });
+                PluginRegistrationCleanupOutcome::RemovedWithError(PluginError::RegistrationFailed(
+                    "ATIF delivery failed".into(),
+                ))
+            }),
+        )],
+    )
+    .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let error = runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("ATIF delivery failed"),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("fixture registration 'atif-shutdown' reported a delivery failure"),
+        "{error}"
+    );
+    assert!(
+        !plugin_configuration_is_active().unwrap(),
+        "a replacement aborted by delivery failure must not leave a configuration active"
+    );
+    let report = active_plugin_report().expect("failed replacement should retain its report");
+    assert_eq!(report.runtime_diagnostics.len(), 1);
+    assert_eq!(
+        report.runtime_diagnostics[0].code,
+        "atif.remote_delivery_failed"
+    );
+    assert_eq!(
+        report.runtime_diagnostics[0].field.as_deref(),
+        Some("storage[0]")
+    );
+    assert_eq!(report.runtime_diagnostics[0].count, 1);
+
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig::default()))
+        .expect("delivery-only teardown errors must not block a later initialization");
     reset_global();
 }
 
@@ -1586,69 +1880,78 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("plugin::");
-    ctx.register_mark_sanitize_guardrail("mark_sanitize", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark_sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     ctx.register_scope_sanitize_start_guardrail(
         "scope_sanitize_start",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_scope_sanitize_end_guardrail(
         "scope_sanitize_end",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_request_guardrail(
         "tool_sanitize_request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_response_guardrail(
         "tool_sanitize_response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     ctx.register_tool_conditional_execution_guardrail(
         "tool_conditional",
         1,
-        Arc::new(|name, _args| Ok((name == "blocked-tool").then(|| "blocked tool".to_string()))),
+        Arc::new(|name, _args| {
+            Box::pin(
+                async move { Ok((name == "blocked-tool").then(|| "blocked tool".to_string())) },
+            )
+        }),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
         "llm_sanitize_request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm_sanitize_response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
     ctx.register_llm_conditional_execution_guardrail(
         "llm_conditional",
         1,
         Arc::new(|request| {
-            Ok((request.headers.get("blocked") == Some(&json!(true)))
-                .then(|| "blocked llm".to_string()))
+            let blocked = request.headers.get("blocked") == Some(&json!(true));
+            Box::pin(async move { Ok(blocked.then(|| "blocked llm".to_string())) })
         }),
     )
     .unwrap();
 
-    match tool_conditional_execution("blocked-tool", &json!({})) {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    match runtime.block_on(tool_conditional_execution("blocked-tool", &json!({}))) {
         Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked tool"),
         other => panic!("expected tool guardrail rejection, got {other:?}"),
     }
 
-    match llm_conditional_execution(&LlmRequest {
+    match runtime.block_on(llm_conditional_execution(&LlmRequest {
         headers: Map::from_iter([(String::from("blocked"), json!(true))]),
         content: json!({"messages": []}),
-    }) {
+    })) {
         Err(FlowError::GuardrailRejected(message)) => assert_eq!(message, "blocked llm"),
         other => panic!("expected llm guardrail rejection, got {other:?}"),
     }
@@ -1656,13 +1959,18 @@ fn test_plugin_registration_context_supports_guardrail_helpers() {
     let mut registrations = ctx.into_registrations();
     rollback_registrations(&mut registrations);
 
-    assert!(tool_conditional_execution("blocked-tool", &json!({})).is_ok());
     assert!(
-        llm_conditional_execution(&LlmRequest {
-            headers: Map::from_iter([(String::from("blocked"), json!(true))]),
-            content: json!({"messages": []}),
-        })
-        .is_ok()
+        runtime
+            .block_on(tool_conditional_execution("blocked-tool", &json!({})))
+            .is_ok()
+    );
+    assert!(
+        runtime
+            .block_on(llm_conditional_execution(&LlmRequest {
+                headers: Map::from_iter([(String::from("blocked"), json!(true))]),
+                content: json!({"messages": []}),
+            }))
+            .is_ok()
     );
 
     reset_global();
@@ -1674,22 +1982,46 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("duplicate::");
-    ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_mark_sanitize_guardrail("mark", 1, Arc::new(|_, fields| fields)),
+        ctx.register_mark_sanitize_guardrail(
+            "mark",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "mark sanitizer:",
     );
-    ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_scope_sanitize_start_guardrail(
+        "scope-start",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_scope_sanitize_start_guardrail("scope-start", 1, Arc::new(|_, fields| fields)),
+        ctx.register_scope_sanitize_start_guardrail(
+            "scope-start",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "scope-start sanitizer:",
     );
-    ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_scope_sanitize_end_guardrail(
+        "scope-end",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     expect_registration_failed(
-        ctx.register_scope_sanitize_end_guardrail("scope-end", 1, Arc::new(|_, fields| fields)),
+        ctx.register_scope_sanitize_end_guardrail(
+            "scope-end",
+            1,
+            Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+        ),
         "scope-end sanitizer:",
     );
     ctx.register_llm_request_intercept(
@@ -1697,7 +2029,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
@@ -1707,7 +2039,7 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
             1,
             false,
             Arc::new(|_name, request, annotated| {
-                Ok(LlmRequestInterceptOutcome::new(request, annotated))
+                Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
             }),
         ),
         "llm request intercept:",
@@ -1716,14 +2048,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_sanitize_request_guardrail(
             "tool-sanitize-request",
             1,
-            Arc::new(|_, args| args),
+            Arc::new(|_, args| Box::pin(async move { Ok(args) })),
         ),
         "tool sanitize request guardrail:",
     );
@@ -1731,14 +2063,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_sanitize_response_guardrail(
             "tool-sanitize-response",
             1,
-            Arc::new(|_, response| response),
+            Arc::new(|_, response| Box::pin(async move { Ok(response) })),
         ),
         "tool sanitize response guardrail:",
     );
@@ -1746,14 +2078,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Arc::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_tool_conditional_execution_guardrail(
             "tool-conditional",
             1,
-            Arc::new(|_, _| Ok(None)),
+            Arc::new(|_, _| Box::pin(async { Ok(None) })),
         ),
         "tool conditional execution guardrail:",
     );
@@ -1761,14 +2093,14 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_request_guardrail(
             "llm-sanitize-request",
             1,
-            Arc::new(|request, _context| Some(request)),
+            Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
         ),
         "llm sanitize request guardrail:",
     );
@@ -1776,25 +2108,29 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
     expect_registration_failed(
         ctx.register_llm_sanitize_response_guardrail(
             "llm-sanitize-response",
             1,
-            Arc::new(|response, _context| Some(response)),
+            Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
         ),
         "llm sanitize response guardrail:",
     );
 
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
-        .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
     expect_registration_failed(
         ctx.register_llm_conditional_execution_guardrail(
             "llm-conditional",
             1,
-            Arc::new(|_| Ok(None)),
+            Arc::new(|_| Box::pin(async { Ok(None) })),
         ),
         "llm conditional execution guardrail:",
     );
@@ -1841,14 +2177,19 @@ fn test_plugin_registration_context_maps_duplicate_registration_errors() {
         "llm stream execution intercept:",
     );
 
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     expect_registration_failed(
         ctx.register_tool_request_intercept(
             "tool-request",
             1,
             false,
-            Arc::new(|_name, args| Ok(args)),
+            Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
         ),
         "tool request intercept:",
     );
@@ -1879,18 +2220,22 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     reset_global();
 
     let mut ctx = PluginRegistrationContext::with_namespace("teardown::");
-    ctx.register_mark_sanitize_guardrail("mark-sanitize", 1, Arc::new(|_, fields| fields))
-        .unwrap();
+    ctx.register_mark_sanitize_guardrail(
+        "mark-sanitize",
+        1,
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
+    )
+    .unwrap();
     ctx.register_scope_sanitize_start_guardrail(
         "scope-sanitize-start",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_scope_sanitize_end_guardrail(
         "scope-sanitize-end",
         1,
-        Arc::new(|_, fields| fields),
+        Arc::new(|_, fields| Box::pin(async move { Ok(fields) })),
     )
     .unwrap();
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
@@ -1900,42 +2245,46 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         1,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+            Box::pin(async move { Ok(LlmRequestInterceptOutcome::new(request, annotated)) })
         }),
     )
     .unwrap();
     ctx.register_tool_sanitize_request_guardrail(
         "tool-sanitize-request",
         1,
-        Arc::new(|_, args| args),
+        Arc::new(|_, args| Box::pin(async move { Ok(args) })),
     )
     .unwrap();
     ctx.register_tool_sanitize_response_guardrail(
         "tool-sanitize-response",
         1,
-        Arc::new(|_, response| response),
+        Arc::new(|_, response| Box::pin(async move { Ok(response) })),
     )
     .unwrap();
     ctx.register_tool_conditional_execution_guardrail(
         "tool-conditional",
         1,
-        Arc::new(|_, _| Ok(None)),
+        Arc::new(|_, _| Box::pin(async { Ok(None) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_request_guardrail(
         "llm-sanitize-request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     ctx.register_llm_sanitize_response_guardrail(
         "llm-sanitize-response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
-    ctx.register_llm_conditional_execution_guardrail("llm-conditional", 1, Arc::new(|_| Ok(None)))
-        .unwrap();
+    ctx.register_llm_conditional_execution_guardrail(
+        "llm-conditional",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(None) })),
+    )
+    .unwrap();
     ctx.register_llm_execution_intercept(
         "llm-exec",
         1,
@@ -1954,8 +2303,13 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
         }),
     )
     .unwrap();
-    ctx.register_tool_request_intercept("tool-request", 1, false, Arc::new(|_name, args| Ok(args)))
-        .unwrap();
+    ctx.register_tool_request_intercept(
+        "tool-request",
+        1,
+        false,
+        Arc::new(|_name, args| Box::pin(async move { Ok(args) })),
+    )
+    .unwrap();
     ctx.register_tool_execution_intercept(
         "tool-exec",
         1,
@@ -1985,11 +2339,18 @@ fn test_plugin_registration_context_maps_deregistration_errors() {
     set_conflicting_runtime_owner_for_tests();
     for (registration, expected) in registrations.iter_mut().zip(expected_messages) {
         match (registration.deregister)() {
-            Err(PluginError::RegistrationFailed(message)) => {
+            PluginRegistrationCleanupOutcome::NotRemoved(PluginError::RegistrationFailed(
+                message,
+            )) => {
                 assert!(message.contains(expected), "{message}");
             }
-            Err(other) => panic!("unexpected deregistration failure: {other}"),
-            Ok(()) => panic!("expected deregistration to fail"),
+            PluginRegistrationCleanupOutcome::NotRemoved(other) => {
+                panic!("unexpected deregistration failure: {other}")
+            }
+            PluginRegistrationCleanupOutcome::Removed
+            | PluginRegistrationCleanupOutcome::RemovedWithError(_) => {
+                panic!("expected deregistration to fail")
+            }
         }
     }
 
@@ -2031,6 +2392,41 @@ fn test_initialize_plugins_replaces_previous_configuration_on_success() {
     assert_eq!(active_plugin_report().unwrap().diagnostics.len(), 1);
     assert_eq!(REPLACEMENT_REGISTRATIONS.load(Ordering::SeqCst), 1);
 
+    reset_global();
+}
+
+#[test]
+fn test_initialize_plugins_preserves_resolution_diagnostics() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(RecordingPlugin)).unwrap();
+
+    let diagnostic = ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: "plugin.component_reenabled".to_string(),
+        component: Some("recording.plugin".to_string()),
+        field: Some("enabled".to_string()),
+        message: "programmatic configuration re-enabled the component".to_string(),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let report = runtime
+        .block_on(initialize_plugins_with_diagnostics(
+            PluginConfig {
+                components: vec![PluginComponentSpec::new("recording.plugin")],
+                ..PluginConfig::default()
+            },
+            vec![diagnostic.clone()],
+        ))
+        .unwrap();
+
+    assert_eq!(report.diagnostics, vec![diagnostic.clone()]);
+    assert_eq!(
+        active_plugin_report().unwrap().diagnostics,
+        vec![diagnostic]
+    );
     reset_global();
 }
 
@@ -2077,41 +2473,57 @@ fn test_initialize_plugins_reports_failed_restore_when_previous_configuration_ca
 fn test_load_plugin_config_files_merges_files_by_precedence() {
     let dir = tempfile::tempdir().unwrap();
     let lower = dir.path().join("lower.toml");
-    let higher = dir.path().join("higher.toml");
+    let project = dir.path().join("project.toml");
+    let system = dir.path().join("system.toml");
     std::fs::write(
         &lower,
         "version = 1\n\
          [[components]]\n\
          kind = \"observability\"\n\
-         enabled = false\n\
+         enabled = true\n\
          [components.config]\n\
          output_directory = \"/var/log\"\n\
-         mode = \"append\"\n",
+         mode = \"append\"\n\
+         values = [\"lower\"]\n",
     )
     .unwrap();
     std::fs::write(
-        &higher,
+        &project,
         "[[components]]\n\
          kind = \"observability\"\n\
          [components.config]\n\
-         mode = \"overwrite\"\n\
+         mode = \"project\"\n\
+         values = [\"project\"]\n\
          [[components]]\n\
          kind = \"adaptive\"\n",
     )
     .unwrap();
+    std::fs::write(
+        &system,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n\
+         [components.config]\n\
+         mode = \"system\"\n\
+         values = [\"system\"]\n\
+         [[components]]\n\
+         kind = \"system_only\"\n",
+    )
+    .unwrap();
 
-    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
-        .unwrap()
-        .expect("a file exists");
-    assert_eq!(sources, vec![lower, higher]);
+    let (merged, sources) =
+        load_plugin_config_files([lower.clone(), project.clone(), system.clone()])
+            .unwrap()
+            .expect("a file exists");
+    assert_eq!(sources, vec![lower, project, system]);
 
     let components = merged["components"].as_array().unwrap();
     let observability = &components[0];
     assert_eq!(observability["kind"], json!("observability"));
     assert_eq!(
         observability["enabled"],
-        json!(false),
-        "lower-file enabled is inherited (higher omits it)"
+        json!(true),
+        "a disabled system component does not override lower layers"
     );
     assert_eq!(
         observability["config"]["output_directory"],
@@ -2120,31 +2532,191 @@ fn test_load_plugin_config_files_merges_files_by_precedence() {
     );
     assert_eq!(
         observability["config"]["mode"],
-        json!("overwrite"),
-        "higher file overrides the shared config key"
+        json!("project"),
+        "a disabled system component does not contribute configuration"
+    );
+    assert_eq!(
+        observability["config"]["values"],
+        json!(["project", "lower"]),
+        "a disabled system component does not contribute list entries"
     );
     assert_eq!(
         components[1]["kind"],
         json!("adaptive"),
-        "higher-only component kind is appended"
+        "a project-only component kind is preserved"
+    );
+    assert_eq!(
+        components[2]["kind"],
+        json!("system_only"),
+        "a system-only component kind is appended"
     );
 }
 
 #[test]
-fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
-    // The code-vs-file path `initialize_plugins` takes: a typed `PluginConfig` is layered
-    // over the discovered file base. Its serde defaults (`version`/`policy`/`enabled`)
-    // override the file, the free-form `config` body merges, and an undeclared component
-    // kind is inherited from the file.
+fn test_load_plugin_config_files_omits_components_disabled_in_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let lower = dir.path().join("lower.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &lower,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &higher,
+        "[[components]]\n\
+         kind = \"observability\"\n\
+         enabled = false\n",
+    )
+    .unwrap();
+
+    let (merged, sources) = load_plugin_config_files([lower.clone(), higher.clone()])
+        .unwrap()
+        .expect("the files exist");
+
+    assert_eq!(sources, vec![lower, higher]);
+    assert_eq!(merged["components"], json!([]));
+}
+
+#[test]
+fn test_load_plugin_config_files_rejects_version_before_layering() {
+    let dir = tempfile::tempdir().unwrap();
+    let invalid = dir.path().join("invalid.toml");
+    let higher = dir.path().join("higher.toml");
+    std::fs::write(
+        &invalid,
+        "version = 2\n\
+         [[components]]\n\
+         kind = \"observability\"\n",
+    )
+    .unwrap();
+    std::fs::write(&higher, "version = 1\n").unwrap();
+
+    let error = load_plugin_config_files([invalid.clone(), higher])
+        .expect_err("a higher-precedence version must not mask an invalid source version");
+
+    match error {
+        PluginError::InvalidConfig(message) => {
+            assert!(message.contains("plugin config version 2"), "{message}");
+            assert!(
+                message.contains(&invalid.display().to_string()),
+                "{message}"
+            );
+            assert!(message.contains("expected 1"), "{message}");
+        }
+        other => panic!("unexpected plugin config version error: {other}"),
+    }
+}
+
+#[test]
+fn test_plugin_config_loading_reports_read_parse_and_version_type_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let unreadable = dir.path().join("directory.toml");
+    std::fs::create_dir(&unreadable).unwrap();
+    assert!(
+        load_plugin_config_files([unreadable])
+            .unwrap_err()
+            .to_string()
+            .contains("failed to read")
+    );
+
+    let malformed = dir.path().join("malformed.toml");
+    std::fs::write(&malformed, "version = [").unwrap();
+    assert!(
+        load_plugin_config_files([malformed])
+            .unwrap_err()
+            .to_string()
+            .contains("invalid plugin TOML")
+    );
+
+    assert!(
+        merge_plugin_config_documents([
+            (dir.path().join("typed.toml"), json!({"version": "one"}),)
+        ])
+        .unwrap_err()
+        .to_string()
+        .contains("invalid plugin config version")
+    );
+}
+
+#[test]
+fn test_default_plugin_config_paths_order_user_system() {
+    let dir = tempfile::tempdir().unwrap();
+    let user = dir.path().join("user");
+
+    assert_eq!(
+        default_plugin_config_paths(Some(user.clone())),
+        vec![
+            user.join("plugins.toml"),
+            system_config_dir().join("plugins.toml"),
+        ]
+    );
+}
+
+#[test]
+fn test_system_config_dir_matches_platform_convention() {
+    #[cfg(windows)]
+    {
+        let expected_base = std::env::var_os("ProgramData")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"));
+        assert_eq!(system_config_dir(), expected_base.join("nemo-relay"));
+    }
+    #[cfg(not(windows))]
+    assert_eq!(system_config_dir(), PathBuf::from("/etc/nemo-relay"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_load_plugin_config_files_deduplicates_aliases_at_highest_precedence() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let physical = dir.path().join("system.toml");
+    let alias = dir.path().join("explicit.toml");
+    std::fs::write(
+        &physical,
+        "version = 1\n\
+         [[components]]\n\
+         kind = \"pricing\"\n\
+         [[components.config.sources]]\n\
+         type = \"file\"\n\
+         path = \"/etc/nemo-relay/pricing.json\"\n",
+    )
+    .unwrap();
+    symlink(&physical, &alias).unwrap();
+
+    let (merged, sources) = load_plugin_config_files([alias, physical.clone()])
+        .unwrap()
+        .expect("the physical file exists");
+
+    assert_eq!(sources, vec![physical]);
+    assert_eq!(
+        merged["components"][0]["config"]["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "the aliased file must not duplicate list entries"
+    );
+}
+
+#[test]
+fn test_plugin_config_overlay_enables_programmatically_declared_components() {
+    // After each file's schema version is validated, a typed `PluginConfig` is layered over
+    // the discovered file base. Default-valued policy fields inherit the file, a declared
+    // component applies its enabled value, and the free-form `config` body merges.
     let file_base = json!({
-        "version": 2,
+        "version": 1,
         "components": [
             {
                 "kind": "observability",
                 "enabled": false,
                 "config": { "output_directory": "/var/log", "mode": "append" }
             },
-            { "kind": "adaptive", "config": { "ttl": 60 } }
+            { "kind": "adaptive", "enabled": false, "config": { "ttl": 60 } }
         ],
         "policy": {
             "unknown_component": "error",
@@ -2161,21 +2733,21 @@ fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
     };
 
     let mut merged = file_base;
-    layer_config(&mut merged, serde_json::to_value(code).unwrap());
+    layer_config(&mut merged, plugin_config_overlay_value(&code).unwrap());
     let typed: PluginConfig = serde_json::from_value(merged).unwrap();
 
-    // Typed defaults override the file base.
-    assert_eq!(typed.version, 1, "typed default version overrides the file");
+    // Typed policy defaults do not mask the file base.
+    assert_eq!(typed.version, 1);
     assert_eq!(
         typed.policy.unknown_component,
-        UnsupportedBehavior::Warn,
-        "typed default policy overrides the file"
+        UnsupportedBehavior::Error,
+        "typed default policy inherits the file value"
     );
     let observability = &typed.components[0];
     assert_eq!(observability.kind, "observability");
     assert!(
         observability.enabled,
-        "typed default enabled=true overrides the file's false"
+        "a declared component is enabled by code"
     );
     // The component config body merges: code's `mode` wins, the file's `output_directory`
     // is inherited.
@@ -2183,4 +2755,172 @@ fn test_layer_config_applies_typed_overlay_defaults_over_file_base() {
     assert_eq!(observability.config["output_directory"], json!("/var/log"));
     // A kind the code config does not declare is inherited from the file.
     assert_eq!(typed.components[1].kind, "adaptive");
+    assert!(!typed.components[1].enabled);
+}
+
+#[test]
+fn test_programmatic_observability_destinations_concatenate_with_discovered_files_and_warn() {
+    let lower = PathBuf::from("lower/plugins.toml");
+    let higher = PathBuf::from("higher/plugins.toml");
+    let discovered = resolve_discovered_plugin_config(vec![
+        (
+            lower.clone(),
+            observability_destination_document("lower-secret-destination"),
+        ),
+        (
+            higher.clone(),
+            observability_destination_document("higher-secret-destination"),
+        ),
+    ])
+    .unwrap();
+    let programmatic = programmatic_observability_config(json!({
+        "atof": {"enabled": true, "sinks": ["programmatic"]},
+        "opentelemetry": {"enabled": true, "endpoints": ["programmatic"]},
+        "atif": {"enabled": true, "storage": ["programmatic"]}
+    }));
+
+    let resolved = resolve_programmatic_plugin_config(discovered, programmatic).unwrap();
+    let config = &resolved.config.components[0].config;
+    for (section, field) in [
+        ("atof", "sinks"),
+        ("opentelemetry", "endpoints"),
+        ("atif", "storage"),
+    ] {
+        assert_eq!(
+            config[section][field],
+            json!([
+                "programmatic",
+                "higher-secret-destination",
+                "lower-secret-destination"
+            ])
+        );
+    }
+    assert_eq!(resolved.diagnostics.len(), 2);
+    for (diagnostic, source) in resolved.diagnostics.iter().zip([lower, higher]) {
+        assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+        assert_eq!(diagnostic.code, "plugin.configuration_inherited");
+        assert!(diagnostic.component.is_none());
+        assert!(diagnostic.field.is_none());
+        assert!(diagnostic.message.contains(&source.display().to_string()));
+        assert!(!diagnostic.message.contains("secret-destination"));
+    }
+}
+
+#[test]
+fn test_no_inherited_configuration_warning_without_discovered_files() {
+    let discovered = resolve_discovered_plugin_config(Vec::new()).unwrap();
+    let resolved = resolve_programmatic_plugin_config(discovered, PluginConfig::default()).unwrap();
+    assert!(resolved.diagnostics.is_empty());
+}
+
+#[test]
+fn test_programmatic_enable_override_diagnostic_matches_positionally_and_names_source() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let discovered = json!({
+        "components": [
+            { "kind": "observability", "enabled": true },
+            { "kind": "observability", "enabled": false }
+        ]
+    });
+    let enabled_sources = HashMap::from([(
+        "observability".to_string(),
+        ComponentEnabledSource {
+            enabled: false,
+            path: source.clone(),
+        },
+    )]);
+    let programmatic = PluginConfig {
+        components: vec![
+            PluginComponentSpec::new("observability"),
+            PluginComponentSpec::new("observability"),
+        ],
+        ..PluginConfig::default()
+    };
+
+    let diagnostics =
+        programmatic_enable_override_diagnostics(&discovered, &enabled_sources, &programmatic);
+
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+    assert_eq!(diagnostic.code, "plugin.component_reenabled");
+    assert_eq!(diagnostic.component.as_deref(), Some("observability"));
+    assert_eq!(diagnostic.field.as_deref(), Some("enabled"));
+    assert!(
+        diagnostic.message.contains(&source.display().to_string()),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
+fn test_programmatic_reenable_diagnostic_survives_disabled_component_normalization() {
+    let source = PathBuf::from("/etc/nemo-relay/plugins.toml");
+    let documents = vec![(
+        source.clone(),
+        json!({
+            "components": [{ "kind": "observability", "enabled": false }]
+        }),
+    )];
+    let enabled_sources = component_enabled_sources(&documents);
+    let (discovered, _) = merge_plugin_config_documents(documents)
+        .unwrap()
+        .expect("the file-backed configuration exists");
+    assert_eq!(discovered["components"], json!([]));
+
+    let diagnostics = programmatic_enable_override_diagnostics(
+        &discovered,
+        &enabled_sources,
+        &PluginConfig {
+            components: vec![PluginComponentSpec::new("observability")],
+            ..PluginConfig::default()
+        },
+    );
+
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "plugin.component_reenabled");
+    assert!(
+        diagnostics[0]
+            .message
+            .contains(&source.display().to_string())
+    );
+}
+
+#[test]
+fn test_plugin_config_overlay_applies_non_default_values() {
+    let mut file_base = json!({
+        "version": 1,
+        "components": [{ "kind": "observability", "enabled": true }],
+        "policy": {
+            "unknown_component": "error",
+            "unknown_field": "warn",
+            "unsupported_value": "error"
+        }
+    });
+    let code = PluginConfig {
+        components: vec![PluginComponentSpec {
+            enabled: false,
+            ..PluginComponentSpec::new("observability")
+        }],
+        policy: ConfigPolicy {
+            unknown_field: UnsupportedBehavior::Ignore,
+            ..ConfigPolicy::default()
+        },
+        ..PluginConfig::default()
+    };
+
+    layer_config(&mut file_base, plugin_config_overlay_value(&code).unwrap());
+    let typed: PluginConfig = serde_json::from_value(file_base).unwrap();
+
+    assert!(!typed.components[0].enabled);
+    assert_eq!(
+        typed.policy.unknown_component,
+        UnsupportedBehavior::Error,
+        "a default-valued field inherits the file"
+    );
+    assert_eq!(
+        typed.policy.unknown_field,
+        UnsupportedBehavior::Ignore,
+        "a non-default field overrides the file"
+    );
 }

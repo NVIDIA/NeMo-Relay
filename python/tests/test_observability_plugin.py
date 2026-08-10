@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from nemo_relay import ScopeType, plugin, scope
+from nemo_relay import ScopeType, plugin, scope, subscribers
 from nemo_relay.observability import (
     OBSERVABILITY_PLUGIN_KIND,
     AtifConfig,
@@ -84,6 +84,31 @@ class _AtofCapture:
 
 
 class TestObservabilityConfigHelpers:
+    def test_opentelemetry_endpoint_preserves_existing_positional_arguments(self):
+        endpoint = OpenTelemetryEndpointConfig(
+            "full",
+            "http://localhost:4318/v1/traces",
+            "event",
+            ["custom.mark"],
+            [{"key": "source", "alias": "destination"}],
+            "grpc",
+            "relay-service",
+            "relay-namespace",
+            "1.2.3",
+            "relay-instrumentation",
+            1234,
+            {"x-test": "header"},
+            {"authorization": "OTEL_AUTHORIZATION"},
+            {"deployment.environment": "test"},
+        )
+
+        assert endpoint.headers == {"x-test": "header"}
+        assert endpoint.header_env == {"authorization": "OTEL_AUTHORIZATION"}
+        assert endpoint.resource_attributes == {"deployment.environment": "test"}
+        assert endpoint.max_queue_size is None
+        assert endpoint.max_export_batch_size is None
+        assert endpoint.scheduled_delay_millis is None
+
     def test_defaults_and_component_wrapper(self):
         assert AtofConfig().to_dict() == {"enabled": False}
         assert AtifConfig().to_dict() == {
@@ -100,6 +125,9 @@ class TestObservabilityConfigHelpers:
             "gen_ai",
             "http://localhost:4318/v1/traces",
             header_env={"authorization": "OTEL_AUTHORIZATION"},
+            max_queue_size=4096,
+            max_export_batch_size=256,
+            scheduled_delay_millis=750,
         ).to_dict() == {
             "type": "gen_ai",
             "endpoint": "http://localhost:4318/v1/traces",
@@ -110,6 +138,9 @@ class TestObservabilityConfigHelpers:
             "service_name": "unknown_service",
             "instrumentation_scope": "opentelemetry",
             "timeout_millis": 3000,
+            "max_queue_size": 4096,
+            "max_export_batch_size": 256,
+            "scheduled_delay_millis": 750,
             "headers": {},
             "header_env": {"authorization": "OTEL_AUTHORIZATION"},
             "resource_attributes": {},
@@ -121,6 +152,10 @@ class TestObservabilityConfigHelpers:
         wrapped_config = wrapped["config"]
         assert isinstance(wrapped_config, dict)
         assert wrapped_config["version"] == 3
+        assert wrapped_config["enable_full_payloads"] is False
+
+        full_payload_config = ObservabilityConfig(enable_full_payloads=True).to_dict()
+        assert full_payload_config["enable_full_payloads"] is True
 
     def test_validation_rejects_bad_values(self):
         report = plugin.validate(
@@ -223,7 +258,7 @@ class TestObservabilityConfigHelpers:
                 with scope.scope("python-header-env-agent", ScopeType.Agent) as handle:
                     scope.event("python-header-env-mark", handle=handle, data={"step": 1})
             finally:
-                plugin.clear()
+                await plugin.clear_async()
             requests = capture.wait_for_requests(3)
 
         assert len(requests) == 3
@@ -295,7 +330,7 @@ class TestObservabilityConfigHelpers:
             try:
                 handle = _inner()
             finally:
-                plugin.clear()
+                await plugin.clear_async()
 
         lines = (tmp_path / "events.jsonl").read_text().strip().splitlines()
         assert len(lines) == 3
@@ -400,7 +435,7 @@ class TestObservabilityConfigHelpers:
             response_thread.start()
             teardown_started.set()
             started_at = time.monotonic()
-            plugin.clear()
+            await plugin.clear_async()
             cleared = True
             assert time.monotonic() - started_at < 2
             response_thread.join(timeout=2)
@@ -419,7 +454,7 @@ class TestObservabilityConfigHelpers:
         finally:
             allow_response.set()
             if not cleared:
-                plugin.clear()
+                await plugin.clear_async()
             server.shutdown()
             server_thread.join(timeout=5)
             server.server_close()
@@ -434,10 +469,55 @@ class TestObservabilityConfigHelpers:
         )
         handle = scope.push("python-open-agent", ScopeType.Agent)
         try:
-            plugin.clear()
+            await plugin.clear_async()
             assert (tmp_path / f"nemo-relay-atif-{handle.uuid}.json").exists()
         finally:
             scope.pop(handle)
+
+    async def test_atif_non_string_metadata_is_reported_and_failed_clear_is_drainable(self, tmp_path):
+        await plugin.initialize(
+            plugin.PluginConfig(
+                components=[
+                    ComponentSpec(
+                        ObservabilityConfig(
+                            atif=AtifConfig(
+                                enabled=True,
+                                output_directory=str(tmp_path),
+                                filename_template="{metadata.atif_prefix:-unassigned}/trajectory-{session_id}.json",
+                            )
+                        )
+                    )
+                ]
+            )
+        )
+
+        try:
+            with scope.scope("python-invalid-metadata-agent", ScopeType.Agent, metadata={"atif_prefix": 123}):
+                pass
+            await subscribers.flush_async()
+
+            report = plugin.report()
+            assert report is not None
+            assert any(
+                diagnostic["code"] == "atif.destination_render_failed" and "non-string" in diagnostic["message"]
+                for diagnostic in report["runtime_diagnostics"]
+            )
+            assert not (tmp_path / "unassigned").exists()
+
+            with pytest.raises(RuntimeError, match=r"atif\.destination_render_failed") as teardown:
+                await plugin.clear_async()
+            assert "could not be removed" not in str(teardown.value)
+            retained = plugin.report()
+            assert retained is not None
+            assert any(
+                diagnostic["code"] == "atif.destination_render_failed" for diagnostic in retained["runtime_diagnostics"]
+            )
+        finally:
+            try:
+                await plugin.clear_async()
+            except RuntimeError:
+                await plugin.clear_async()
+        assert plugin.report() is None
 
     async def test_atif_splits_multiple_top_level_agent_scopes(self, tmp_path):
         await plugin.initialize(
@@ -464,7 +544,7 @@ class TestObservabilityConfigHelpers:
             with scope.scope("python-second-agent", ScopeType.Agent) as second:
                 scope.event("python-second-mark", handle=second, data={"agent": "second"})
         finally:
-            plugin.clear()
+            await plugin.clear_async()
 
         files = sorted(tmp_path.glob("trajectory-*.json"))
         assert len(files) == 2

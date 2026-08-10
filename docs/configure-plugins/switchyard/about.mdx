@@ -1,7 +1,7 @@
 ---
-title: "Switchyard (Experimental)"
-sidebar-title: "Switchyard (Experimental)"
-description: "Set up and validate the experimental Switchyard Decision API integration for NeMo Relay 0.6.0."
+title: "Switchyard (Deprecated)"
+sidebar-title: "Switchyard (Deprecated)"
+description: "Set up and validate the deprecated Switchyard Decision API integration for NeMo Relay 0.6.0 and 0.7.0."
 position: 5
 ---
 import { MermaidStyles } from "@/components/MermaidStyles";
@@ -9,13 +9,21 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+<Warning title="Deprecated">
+The experimental `nemo-relay-switchyard` plugin will be removed in NeMo Relay
+0.8 and replaced by a Switchyard-owned native plugin. Continue using this page
+for the existing integration. The NeMo Relay 0.8 documentation will include an
+updated configuration guide and migration plan when the replacement is
+available.
+</Warning>
+
 > **Experimental:** The Switchyard integration is an early-access feature. It
 > is not enabled in default Relay builds, its configuration and contracts can
 > change, and the current deployment requires a separately running Switchyard
 > Decision API service.
 
-> **NeMo Relay 0.6.0 architecture:** This release uses the external Switchyard
-> Decision API from the
+> **NeMo Relay 0.6.0 and 0.7.0 architecture:** These releases use the external
+> Switchyard Decision API from the
 > [`topic/nemo-relay-integration`](https://github.com/NVIDIA-NeMo/Switchyard/tree/topic/nemo-relay-integration)
 > branch.
 
@@ -27,7 +35,7 @@ and a complex prompt to a more capable model.
 
 ## Architecture
 
-The following diagram shows the NeMo Relay 0.6.0 service boundary:
+The following diagram shows the NeMo Relay 0.6.0 and 0.7.0 service boundary:
 
 <MermaidStyles />
 
@@ -65,7 +73,7 @@ Install the following prerequisites before you start:
 
 | Requirement | Version or Value |
 | --- | --- |
-| NeMo Relay | Tag `0.6.0` |
+| NeMo Relay | Tags `0.6.0` and `0.7.0` |
 | Rust | `1.96.1` |
 | Switchyard branch | `topic/nemo-relay-integration` |
 | Switchyard commit | `8f9db9a6a47f848cdff1d262276ba25a8ae9cbc8` |

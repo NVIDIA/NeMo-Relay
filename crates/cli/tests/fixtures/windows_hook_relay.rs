@@ -16,6 +16,7 @@ fn main() {
         generation,
         OsString::from("--generation-token"),
         OsString::from("test-generation"),
+        OsString::from("--fail-closed"),
     ];
     let actual = std::env::args_os().skip(1).collect::<Vec<_>>();
     if actual != expected {

@@ -245,7 +245,37 @@ fn validate_backend_config_fields_only_flags_known_backend_extras() {
 }
 
 #[test]
+fn response_cache_backend_validation_uses_the_default_backend_kind() {
+    let config = json!({
+        "version": 1,
+        "response_cache": {
+            "backend": {
+                "config": {
+                    "max_byte": 1024
+                }
+            }
+        },
+        "policy": {
+            "unknown_field": "warn"
+        }
+    });
+
+    let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "adaptive.unknown_field"
+            && diagnostic.component.as_deref() == Some("response_cache.backend.in_memory")
+            && diagnostic.field.as_deref() == Some("max_byte")
+            && diagnostic.level == DiagnosticLevel::Warning
+    }));
+}
+
+#[test]
 fn adaptive_to_plugin_error_maps_all_non_redis_variants() {
+    assert_adaptive_config_and_lookup_errors();
+    assert_adaptive_internal_and_serialization_errors();
+}
+
+fn assert_adaptive_config_and_lookup_errors() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::InvalidConfig("bad".into())),
         nemo_relay::plugin::PluginError::InvalidConfig(message) if message == "bad"
@@ -258,6 +288,9 @@ fn adaptive_to_plugin_error_maps_all_non_redis_variants() {
         adaptive_to_plugin_error(AdaptiveError::Storage("store".into())),
         nemo_relay::plugin::PluginError::Internal(message) if message == "store"
     ));
+}
+
+fn assert_adaptive_internal_and_serialization_errors() {
     assert!(matches!(
         adaptive_to_plugin_error(AdaptiveError::Internal("internal".into())),
         nemo_relay::plugin::PluginError::Internal(message) if message == "internal"
@@ -320,6 +353,9 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
         "tool_parallelism": {
             "mode": "observe_only"
         },
+        "response_cache": {
+            "skip_keys": ["params"]
+        },
         "policy": {
             "unknown_field": "warn"
         }
@@ -335,6 +371,11 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
         diag.code == "adaptive.unknown_field"
             && diag.component.as_deref() == Some("adaptive_hints")
             && diag.field.as_deref() == Some("extra")
+    }));
+    assert!(diagnostics.iter().any(|diag| {
+        diag.code == "adaptive.unknown_field"
+            && diag.component.as_deref() == Some("response_cache")
+            && diag.field.as_deref() == Some("skip_keys")
     }));
 }
 
@@ -364,6 +405,7 @@ async fn adaptive_plugin_registers_runtime_and_rolls_back_registration() {
             content: json!({}),
         },
     )
+    .await
     .unwrap();
     assert!(request.request.headers.is_empty());
 

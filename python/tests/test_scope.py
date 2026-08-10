@@ -3,6 +3,8 @@
 
 """Tests for NeMo Relay scope operations."""
 
+import asyncio
+
 import pytest
 
 from nemo_relay import (
@@ -10,6 +12,7 @@ from nemo_relay import (
     ScopeHandle,
     ScopeType,
     scope,
+    subscribers,
 )
 
 
@@ -99,6 +102,44 @@ class TestScope:
             assert scope.get_handle().name == "test_scope"
 
         assert scope.get_handle().name == "root"
+
+    @pytest.mark.parametrize(
+        ("cancel_message", "expected_status_description"),
+        [
+            (None, "cancelled"),
+            ("shutdown", "shutdown"),
+        ],
+    )
+    async def test_scope_ctx_mgr_cancelled_task_sets_error_status(
+        self,
+        subscribed_events,
+        cancel_message,
+        expected_status_description,
+    ):
+        async def cancel_within_scope() -> None:
+            with scope.scope("cancelled_scope", ScopeType.Agent):
+                task = asyncio.current_task()
+                assert task is not None
+                if cancel_message is None:
+                    task.cancel()
+                else:
+                    task.cancel(cancel_message)
+                await asyncio.sleep(0)
+
+        with pytest.raises(asyncio.CancelledError):
+            await cancel_within_scope()
+
+        await subscribers.flush_async()
+        assert len(subscribed_events) == 2
+        end = subscribed_events[-1]
+        assert end.name == "cancelled_scope"
+        assert end.kind == "scope"
+        assert end.category == "agent"
+        assert end.scope_category == "end"
+        assert end.metadata == {
+            "otel.status_code": "ERROR",
+            "otel.status_description": expected_status_description,
+        }
 
 
 class TestAllScopeTypes:

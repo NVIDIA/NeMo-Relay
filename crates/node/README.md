@@ -61,7 +61,7 @@ The Node.js package provides the following capabilities:
 Install the npm package in a Node.js 24 or newer project:
 
 ```bash
-npm install nemo-relay-node@0.7.0
+npm install nemo-relay-node@0.8.0
 ```
 
 ## Getting Started
@@ -88,8 +88,7 @@ async function main() {
     event("initialized", handle, { binding: "node" }, null);
   });
 
-  flushSubscribers();
-  await new Promise((resolve) => setImmediate(resolve));
+  await flushSubscribers();
   deregisterSubscriber("printer");
 }
 
@@ -99,9 +98,14 @@ main().catch((error) => {
 });
 ```
 
-Native subscriber delivery is asynchronous. `flushSubscribers()` drains the
-native dispatcher. The extra event-loop turn lets queued JavaScript callback
-side effects complete before deregistration or exit.
+Native subscriber delivery is asynchronous. Awaiting `flushSubscribers()` drains
+the native dispatcher and waits for managed terminal publications registered
+before the call and the JavaScript subscriber callbacks they queue, without
+blocking the Node.js event loop. Native events emitted by a JavaScript subscriber
+are separate publications; flush again if those events must also be observed.
+Subscribers can return `Promise` objects. A synchronous throw or a rejected `Promise` from a subscriber is isolated:
+it does not terminate the host or reject `flushSubscribers()`, and Relay reports the
+failure to `stderr` and through `getLastCallbackError()`.
 
 The main runtime API is exported from `nemo-relay-node`. Additional entry points
 are available at `nemo-relay-node/typed`, `nemo-relay-node/plugin`,

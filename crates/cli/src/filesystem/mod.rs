@@ -7,7 +7,6 @@ mod atomic;
 pub(crate) mod bounded;
 mod locks;
 mod snapshots;
-pub(crate) mod temp;
 
 #[cfg(test)]
 pub(crate) use atomic::fail_next_atomic_write;

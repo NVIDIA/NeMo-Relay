@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use nemo_relay::api::runtime::{
     PropagationContext, ScopeStack, TASK_SCOPE_STACK, create_scope_stack,
-    create_scope_stack_from_propagation, current_scope_stack, propagate_scope_to_thread,
-    scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack, task_scope_push,
-    task_scope_remove, task_scope_top,
+    create_scope_stack_from_propagation, current_scope_stack, fork_scope_stack,
+    propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
+    task_scope_push, task_scope_remove, task_scope_top, with_scope_stack,
 };
 use nemo_relay::api::scope::{
     PopScopeParams, PushScopeParams, ScopeHandle, ScopeType, pop_scope, push_scope,
@@ -220,6 +220,75 @@ async fn test_tokio_tasks_isolated() {
     let (result_a, result_b) = tokio::join!(handle_a, handle_b);
     assert_eq!(result_a.unwrap(), "task_a_scope");
     assert_eq!(result_b.unwrap(), "task_b_scope");
+}
+
+#[tokio::test]
+async fn test_fork_scope_stack_isolates_child_tasks_and_preserves_parentage() {
+    let parent_stack = create_scope_stack();
+    TASK_SCOPE_STACK
+        .scope(parent_stack, async {
+            let parent = ScopeHandle::builder()
+                .name("fork-parent")
+                .scope_type(ScopeType::Agent)
+                .build();
+            task_scope_push(parent.clone());
+
+            let first_stack = fork_scope_stack().unwrap();
+            let second_stack = fork_scope_stack().unwrap();
+            assert!(!Arc::ptr_eq(&first_stack, &second_stack));
+            assert_eq!(first_stack.read().unwrap().top().uuid, parent.uuid);
+            assert_eq!(second_stack.read().unwrap().top().uuid, parent.uuid);
+            let parent_uuid = parent.uuid;
+            let (second_pushed_tx, second_pushed_rx) = tokio::sync::oneshot::channel();
+            let (first_popped_tx, first_popped_rx) = tokio::sync::oneshot::channel();
+
+            let first = tokio::spawn(TASK_SCOPE_STACK.scope(first_stack, async move {
+                let child = ScopeHandle::builder()
+                    .name("first-child")
+                    .scope_type(ScopeType::Function)
+                    .parent_uuid(parent_uuid)
+                    .build();
+                task_scope_push(child.clone());
+                second_pushed_rx.await.unwrap();
+                task_scope_remove(&child.uuid).unwrap();
+                first_popped_tx.send(()).unwrap();
+                child
+            }));
+            let second = tokio::spawn(TASK_SCOPE_STACK.scope(second_stack, async move {
+                let child = ScopeHandle::builder()
+                    .name("second-child")
+                    .scope_type(ScopeType::Function)
+                    .parent_uuid(parent_uuid)
+                    .build();
+                task_scope_push(child.clone());
+                second_pushed_tx.send(()).unwrap();
+                first_popped_rx.await.unwrap();
+                task_scope_remove(&child.uuid).unwrap();
+                child
+            }));
+
+            let (first, second) = tokio::join!(first, second);
+            assert_eq!(first.unwrap().parent_uuid, Some(parent_uuid));
+            assert_eq!(second.unwrap().parent_uuid, Some(parent_uuid));
+            assert_eq!(task_scope_top().uuid, parent.uuid);
+        })
+        .await;
+}
+
+#[test]
+fn test_fork_scope_stack_uses_current_thread_parent() {
+    let stack = create_scope_stack();
+    with_scope_stack(stack.clone(), || {
+        let parent = ScopeHandle::builder()
+            .name("thread-parent")
+            .scope_type(ScopeType::Agent)
+            .build();
+        task_scope_push(parent.clone());
+
+        let fork = fork_scope_stack().unwrap();
+        assert_eq!(fork.read().unwrap().top().uuid, parent.uuid);
+        assert!(!Arc::ptr_eq(&fork, &stack));
+    });
 }
 
 /// Thread-local fallback creates independent stacks per thread.

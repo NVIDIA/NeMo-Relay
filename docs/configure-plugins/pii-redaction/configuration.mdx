@@ -94,8 +94,8 @@ higher-precedence profiles placed before lower-precedence profiles.
 
 For a gateway that routes requests to more than one supported provider, omit
 `codec`. Relay selects the active codec for each managed call, so the same
-policy safely applies to OpenAI Chat, OpenAI Responses, and Anthropic Messages
-traffic:
+policy safely applies to OpenAI Chat, OpenAI Responses, Anthropic Messages, and
+Gemini `generateContent` traffic:
 
 ```toml
 [[components]]
@@ -134,7 +134,7 @@ The following table compares the available PII redaction backends:
 | Managed `tool_input` | Supported | Not implemented |
 | Managed `tool_output` | Supported | Not implemented |
 | Built-in actions | `remove`, `redact`, `regex_replace`, `hash`, `mask` | N/A |
-| Codec support | `openai_chat`, `openai_responses`, `anthropic_messages` | Runtime-specific future implementation |
+| Codec support | `openai_chat`, `openai_responses`, `anthropic_messages`, `gemini_generate_content` | Runtime-specific future implementation |
 | Runtime availability | Any runtime that includes the `nemo-relay-pii-redaction` plugin crate | Runtimes that install a local backend provider |
 
 ## Built-in Mode

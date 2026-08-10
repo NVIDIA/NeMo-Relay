@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use nemo_relay::api::runtime::SubscriberDelivery;
 use serde_json::Value;
 
 use crate::agents::shared::alignment::{
@@ -55,7 +56,7 @@ pub(super) async fn apply_event_to_session(
     event_kind: AgentKind,
     config: SessionConfig,
     is_agent_started: bool,
-) -> Result<bool, CliError> {
+) -> Result<(bool, Option<SubscriberDelivery>), CliError> {
     let session = sessions
         .entry(session_id.to_string())
         .or_insert_with(|| Session::new(session_id.to_string(), event_kind, config));
@@ -65,8 +66,8 @@ pub(super) async fn apply_event_to_session(
     {
         session.agent_kind = event_kind;
     }
-    session.apply(event).await?;
-    Ok(session.is_empty())
+    let subscriber_delivery = session.apply(event).await?;
+    Ok((session.is_empty(), subscriber_delivery))
 }
 
 pub(super) async fn promote_pending_subagents_for_parent(
@@ -109,7 +110,7 @@ pub(super) async fn promote_pending_subagent(
             Session::new(parent_session_id.clone(), pending.event.agent_kind, config)
         });
     if !parent_session.session_started && parent_session.agent_scope.is_none() {
-        parent_session
+        let _ = parent_session
             .apply(NormalizedEvent::AgentStarted(SessionEvent {
                 session_id: parent_session_id,
                 agent_kind: pending.event.agent_kind,
@@ -119,7 +120,7 @@ pub(super) async fn promote_pending_subagent(
             }))
             .await?;
     }
-    parent_session
+    let _ = parent_session
         .apply(NormalizedEvent::SubagentStarted(
             pending.subagent_start_event(),
         ))
@@ -134,43 +135,12 @@ pub(super) fn route_event_for_session(
     sessions: &mut HashMap<String, Session>,
     alignment_state: &mut SessionAlignmentState,
 ) -> Option<(NormalizedEvent, String, bool)> {
-    let mut event = alignment_state.route_event(event);
-    let explicit_subagent_alias = alignment::explicit_subagent_alias(&mut event);
+    let event = alignment_state.route_event(event);
     let session_id = event.session_id().to_string();
     let is_agent_started = matches!(&event, NormalizedEvent::AgentStarted(_));
 
     if event.is_terminal() && !sessions.contains_key(&session_id) {
         return None;
     }
-    if !apply_explicit_subagent_alias(
-        &mut event,
-        sessions,
-        alignment_state,
-        explicit_subagent_alias,
-    ) {
-        return None;
-    }
     Some((event, session_id, is_agent_started))
-}
-
-fn apply_explicit_subagent_alias(
-    event: &mut NormalizedEvent,
-    sessions: &mut HashMap<String, Session>,
-    alignment_state: &mut SessionAlignmentState,
-    explicit_subagent_alias: Option<(String, SessionAlias)>,
-) -> bool {
-    let Some((child_session_id, alias)) = explicit_subagent_alias else {
-        alignment_state.align_explicit_subagent_end(event);
-        return true;
-    };
-    if sessions
-        .get(&child_session_id)
-        .is_some_and(|session| !session.can_reparent_as_subagent_alias())
-    {
-        return false;
-    }
-    sessions.remove(&child_session_id);
-    alignment_state.insert_alias(child_session_id, alias);
-    alignment_state.align_explicit_subagent_end(event);
-    true
 }

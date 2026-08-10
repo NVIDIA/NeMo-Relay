@@ -27,10 +27,13 @@ use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
+#[cfg(feature = "switchyard")]
+use nemo_relay_adaptive::{AdaptiveConfig, plugin_component::ADAPTIVE_PLUGIN_KIND};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 #[cfg(feature = "switchyard")]
 use nemo_relay_switchyard::{
-    register_switchyard_component, validate_switchyard_atof_configuration,
+    SWITCHYARD_PLUGIN_KIND, SwitchyardConfig, register_switchyard_component,
+    validate_switchyard_atof_configuration,
 };
 use reqwest::Client;
 use serde_json::Value;
@@ -38,7 +41,7 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-use crate::agents::shared::adapters::{claude_code, codex, hermes};
+use crate::agents::shared::adapters::{claude_code, codex};
 use crate::configuration::{
     BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey, GatewayConfig, ManagedBootstrapIdentity,
 };
@@ -409,68 +412,10 @@ async fn finish_server_shutdown(
             error_kind = "io";
             "Gateway server failed"
         );
-        if let Err(close_error) = close_result {
-            log::error!(
-                target: "nemo_relay.server",
-                event = "server_teardown_failed",
-                instance_id,
-                component = "sessions",
-                error_kind = close_error.log_kind();
-                "Gateway server teardown failed"
-            );
-        }
-        if let Err(flush_error) = flush_result {
-            log::error!(
-                target: "nemo_relay.server",
-                event = "server_teardown_failed",
-                instance_id,
-                component = "subscribers",
-                error_kind = flush_error.log_kind();
-                "Gateway server teardown failed"
-            );
-        }
-        if let Err(clear_error) = clear_result {
-            log::error!(
-                target: "nemo_relay.server",
-                event = "server_teardown_failed",
-                instance_id,
-                component = "plugins",
-                error_kind = clear_error.log_kind();
-                "Gateway server teardown failed"
-            );
-        }
+        log_server_teardown_results(&close_result, &flush_result, &clear_result, instance_id);
         return Err(serve_error.into());
     }
-    if let Err(error) = &close_result {
-        log::error!(
-            target: "nemo_relay.server",
-            event = "server_teardown_failed",
-            instance_id,
-            component = "sessions",
-            error_kind = error.log_kind();
-            "Gateway server teardown failed"
-        );
-    }
-    if let Err(error) = &flush_result {
-        log::error!(
-            target: "nemo_relay.server",
-            event = "server_teardown_failed",
-            instance_id,
-            component = "subscribers",
-            error_kind = error.log_kind();
-            "Gateway server teardown failed"
-        );
-    }
-    if let Err(error) = &clear_result {
-        log::error!(
-            target: "nemo_relay.server",
-            event = "server_teardown_failed",
-            instance_id,
-            component = "plugins",
-            error_kind = error.log_kind();
-            "Gateway server teardown failed"
-        );
-    }
+    log_server_teardown_results(&close_result, &flush_result, &clear_result, instance_id);
     close_result?;
     flush_result?;
     clear_result?;
@@ -481,6 +426,31 @@ async fn finish_server_shutdown(
         "Gateway server stopped"
     );
     Ok(())
+}
+
+fn log_server_teardown_results(
+    close_result: &Result<(), CliError>,
+    flush_result: &Result<(), CliError>,
+    clear_result: &Result<(), CliError>,
+    instance_id: &str,
+) {
+    for (component, result) in [
+        ("sessions", close_result),
+        ("subscribers", flush_result),
+        ("plugins", clear_result),
+    ] {
+        let Err(error) = result else {
+            continue;
+        };
+        log::error!(
+            target: "nemo_relay.server",
+            event = "server_teardown_failed",
+            instance_id,
+            component,
+            error_kind = error.log_kind();
+            "Gateway server teardown failed"
+        );
+    }
 }
 
 async fn shutdown_signal() {
@@ -616,7 +586,6 @@ fn router_with_state(state: AppState) -> Router {
         .route("/bootstrap/shutdown", post(shutdown_bootstrap_sidecar))
         .route("/hooks/codex", post(codex_hook))
         .route("/hooks/claude-code", post(claude_code_hook))
-        .route("/hooks/hermes", post(hermes_hook))
         .route("/responses", post(gateway::passthrough))
         .route("/chat/completions", post(gateway::passthrough))
         .route("/models", get(gateway::models))
@@ -896,6 +865,8 @@ pub(crate) enum PluginComponentSetupError {
     Switchyard(String),
     #[cfg(feature = "switchyard")]
     SwitchyardAtof(String),
+    #[cfg(feature = "switchyard")]
+    SwitchyardResponseCache(String),
 }
 
 impl PluginComponentSetupError {
@@ -907,6 +878,8 @@ impl PluginComponentSetupError {
             Self::Switchyard(_) => "Switchyard plugin",
             #[cfg(feature = "switchyard")]
             Self::SwitchyardAtof(_) => "Switchyard ATOF",
+            #[cfg(feature = "switchyard")]
+            Self::SwitchyardResponseCache(_) => "Switchyard response cache",
         }
     }
 
@@ -919,6 +892,8 @@ impl PluginComponentSetupError {
             Self::Switchyard(error) => format!("registration failed: {error}"),
             #[cfg(feature = "switchyard")]
             Self::SwitchyardAtof(error) => error.clone(),
+            #[cfg(feature = "switchyard")]
+            Self::SwitchyardResponseCache(error) => error.clone(),
         }
     }
 }
@@ -943,6 +918,13 @@ impl std::fmt::Display for PluginComponentSetupError {
             Self::SwitchyardAtof(error) => {
                 write!(formatter, "Switchyard ATOF validation failed: {error}")
             }
+            #[cfg(feature = "switchyard")]
+            Self::SwitchyardResponseCache(error) => {
+                write!(
+                    formatter,
+                    "Switchyard response-cache validation failed: {error}"
+                )
+            }
         }
     }
 }
@@ -965,7 +947,47 @@ pub(crate) fn register_and_validate_plugin_components(
     if let Err(error) = validate_switchyard_atof_configuration(_plugin_config) {
         errors.push(PluginComponentSetupError::SwitchyardAtof(error));
     }
+    #[cfg(feature = "switchyard")]
+    if let Err(error) = validate_switchyard_response_cache_order(_plugin_config) {
+        errors.push(PluginComponentSetupError::SwitchyardResponseCache(error));
+    }
     errors
+}
+
+#[cfg(feature = "switchyard")]
+fn validate_switchyard_response_cache_order(config: &PluginConfig) -> Result<(), String> {
+    let Some(switchyard_component) = config
+        .components
+        .iter()
+        .find(|component| component.enabled && component.kind == SWITCHYARD_PLUGIN_KIND)
+    else {
+        return Ok(());
+    };
+    let Some(adaptive_component) = config
+        .components
+        .iter()
+        .find(|component| component.enabled && component.kind == ADAPTIVE_PLUGIN_KIND)
+    else {
+        return Ok(());
+    };
+
+    let switchyard: SwitchyardConfig =
+        serde_json::from_value(Value::Object(switchyard_component.config.clone()))
+            .map_err(|error| format!("invalid Switchyard plugin config: {error}"))?;
+    let adaptive: AdaptiveConfig =
+        serde_json::from_value(Value::Object(adaptive_component.config.clone()))
+            .map_err(|error| format!("invalid adaptive plugin config: {error}"))?;
+    let Some(response_cache) = adaptive.response_cache else {
+        return Ok(());
+    };
+    if switchyard.priority >= response_cache.priority {
+        return Err(format!(
+            "Switchyard priority {} must be lower than response_cache priority {} so backend \
+             selection happens before cache key derivation",
+            switchyard.priority, response_cache.priority
+        ));
+    }
+    Ok(())
 }
 
 async fn initialize_plugin_host(
@@ -1178,23 +1200,6 @@ async fn claude_code_hook(
     state.touch();
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = claude_code::adapt(payload, &headers);
-    state
-        .sessions
-        .apply_events(&headers, outcome.events)
-        .await?;
-    Ok(Json(outcome.response))
-}
-
-// Handles Hermes hook payloads from persistent shell integration. The adapter returns a minimal
-// body because hook-forward owns the fail-open/fail-closed behavior for Hermes command execution.
-async fn hermes_hook(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    payload: Result<Json<Value>, JsonRejection>,
-) -> Result<Json<Value>, CliError> {
-    state.touch();
-    let Json(payload) = payload.map_err(hook_payload_rejection)?;
-    let outcome = hermes::adapt(payload, &headers);
     state
         .sessions
         .apply_events(&headers, outcome.events)

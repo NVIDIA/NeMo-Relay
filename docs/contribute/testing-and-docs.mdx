@@ -27,6 +27,20 @@ just test-node
 just test-openclaw
 ```
 
+The Rust, Python, and Go recipes build the native and worker dynamic-plugin test
+fixtures once before starting their test runners. Before a focused raw test that
+uses those fixtures, prepare them explicitly:
+
+```bash
+just build-test-plugin-fixtures
+```
+
+Keep normal hermetic test cases below five seconds. Do not compile packages or
+fixtures inside a test case, keep real-time synchronization guards at five
+seconds or less, and use virtual time when validating timer behavior. Package
+builds and opt-in live end-to-end checks remain separate validation steps with
+their own runtime budgets.
+
 Use the matching build recipes when you need explicit build-only passes:
 
 ```bash
@@ -46,6 +60,7 @@ Run the Rust validation loop when a change touches the core runtime or
 Rust-facing API surface.
 
 ```bash
+just build-test-plugin-fixtures
 cargo test --workspace
 ```
 
@@ -56,6 +71,7 @@ or docs tooling.
 
 ```bash
 uv sync
+just build-test-plugin-fixtures
 uv run pytest
 ```
 

@@ -15,6 +15,8 @@ type ObservabilityConfig struct {
 	Atif          *ObservabilityAtifConfig          `json:"atif,omitempty"`
 	OpenTelemetry *ObservabilityOpenTelemetryConfig `json:"opentelemetry,omitempty"`
 	Policy        *ConfigPolicy                     `json:"policy,omitempty"`
+	// EnableFullPayloads retains complete sanitized request data on every LLM start event.
+	EnableFullPayloads bool `json:"enable_full_payloads,omitempty"`
 }
 
 // ObservabilityOpenTelemetryConfig configures multiple typed OTLP endpoints.
@@ -39,6 +41,9 @@ type ObservabilityOpenTelemetryEndpointConfig struct {
 	ServiceVersion       string                 `json:"service_version,omitempty"`
 	InstrumentationScope string                 `json:"instrumentation_scope,omitempty"`
 	TimeoutMillis        uint64                 `json:"timeout_millis,omitempty"`
+	MaxQueueSize         *uint64                `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize   *uint64                `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis *uint64                `json:"scheduled_delay_millis,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.

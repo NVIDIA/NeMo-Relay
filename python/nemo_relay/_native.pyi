@@ -32,25 +32,36 @@ _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 
+def _shutdown_default_logging() -> None: ...
+
 class _EventSanitizeFields(TypedDict):
     data: _Json | None
     category_profile: _JsonObject | None
     metadata: _Json | None
 
-_ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json]
-_ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str]]
-_LlmSanitizeRequestGuardrail: TypeAlias = Callable[["LLMRequest", "LlmSanitizeRequestContext"], Optional["LLMRequest"]]
-_LlmSanitizeResponseGuardrail: TypeAlias = Callable[[_Json, "LlmSanitizeResponseContext"], Optional[_Json]]
-_EventSanitizeGuardrail: TypeAlias = Callable[[ScopeEvent | MarkEvent, _EventSanitizeFields], _EventSanitizeFields]
-_LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str]]
-_ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json]
+_ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
+_ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str] | Awaitable[Optional[str]]]
+_LlmSanitizeRequestGuardrail: TypeAlias = Callable[
+    ["LLMRequest", "LlmSanitizeRequestContext"],
+    Optional["LLMRequest"] | Awaitable[Optional["LLMRequest"]],
+]
+_LlmSanitizeResponseGuardrail: TypeAlias = Callable[
+    [_Json, "LlmSanitizeResponseContext"],
+    Optional[_Json] | Awaitable[Optional[_Json]],
+]
+_EventSanitizeGuardrail: TypeAlias = Callable[
+    [ScopeEvent | MarkEvent, _EventSanitizeFields],
+    _EventSanitizeFields | Awaitable[_EventSanitizeFields],
+]
+_LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str] | Awaitable[Optional[str]]]
+_ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolExecutionIntercept: TypeAlias = Callable[
     [str, _Json, Callable[[_Json], Awaitable[_Json]]],
     "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
     [str, "LLMRequest", "AnnotatedLLMRequest | None"],
-    "LLMRequestInterceptOutcome",
+    "LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]",
 ]
 _LlmExecutionIntercept: TypeAlias = Callable[
     [str, "LLMRequest", Callable[["LLMRequest"], Awaitable[_Json]]],
@@ -943,21 +954,19 @@ class AtofExporter:
     def force_flush(self) -> None:
         """Flush the exporter.
 
-        Outside a native subscriber callback, wait for queued subscriber
-        delivery, then flush the file sink or ask the stream sink to drain up
-        to its timeout. A re-entrant call does not establish the delivery
-        barrier. A stream timeout is logged and does not by itself return an
-        error.
+        Outside subscriber and middleware callbacks, wait for queued
+        subscriber delivery, then flush the file sink or ask the stream sink
+        to drain up to its timeout. A stream timeout is logged and does not by
+        itself return an error.
         """
         ...
     def shutdown(self) -> None:
         """Flush the exporter and shut it down.
 
-        Outside a native subscriber callback, wait for queued subscriber
-        delivery, then flush the file sink or ask the stream sink to drain and
-        close up to its timeout. A re-entrant call does not establish the
-        delivery barrier. A stream timeout is logged and does not by itself
-        return an error.
+        Outside subscriber and middleware callbacks, wait for queued
+        subscriber delivery, then flush the file sink or ask the stream sink
+        to drain and close up to its timeout. A stream timeout is logged and
+        does not by itself return an error.
         """
         ...
 
@@ -1166,6 +1175,26 @@ class OCIGenAIChatCodec:
         ...
     def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
         """Decode an OCI GenAI chat response into a normalized response view."""
+        ...
+
+class GeminiGenerateContentCodec:
+    """Built-in codec for Gemini generateContent requests and responses.
+
+    Summary:
+        Native codec bridge for Gemini generateContent payloads.
+    """
+
+    def __init__(self) -> None:
+        """Create a Gemini generateContent codec."""
+        ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode a Gemini generateContent request into a normalized request view."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode a normalized request back into Gemini generateContent shape."""
+        ...
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
+        """Decode a Gemini response into a normalized response view."""
         ...
 
 class AdaptiveRuntime:
@@ -1635,7 +1664,7 @@ def llm_stream_call_execute(
     """
     ...
 
-def tool_request_intercepts(name: str, args: _Json) -> _Json:
+def tool_request_intercepts(name: str, args: _Json) -> _Json | Awaitable[_Json]:
     """Run the registered tool request-intercept chain.
 
     Args:
@@ -1643,14 +1672,15 @@ def tool_request_intercepts(name: str, args: _Json) -> _Json:
         args: Current JSON-compatible tool arguments.
 
     Returns:
-        Transformed tool arguments after all applicable request intercepts.
+        Transformed tool arguments directly outside an event loop, or an
+        awaitable resolving to them from an async caller.
 
     Exceptional flow:
         Callback exceptions and native middleware errors propagate unchanged.
     """
     ...
 
-def tool_conditional_execution(name: str, args: _Json) -> None:
+def tool_conditional_execution(name: str, args: _Json) -> None | Awaitable[None]:
     """Run tool conditional-execution guardrails.
 
     Args:
@@ -1658,7 +1688,8 @@ def tool_conditional_execution(name: str, args: _Json) -> None:
         args: Current JSON-compatible tool arguments.
 
     Returns:
-        ``None`` when all guardrails allow execution.
+        ``None`` when all guardrails allow execution, directly outside an event
+        loop or through an awaitable from an async caller.
 
     Exceptional flow:
         Raises a native rejection error when a guardrail returns a rejection
@@ -1666,7 +1697,9 @@ def tool_conditional_execution(name: str, args: _Json) -> None:
     """
     ...
 
-def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequestInterceptOutcome:
+def llm_request_intercepts(
+    name: str, request: LLMRequest
+) -> LLMRequestInterceptOutcome | Awaitable[LLMRequestInterceptOutcome]:
     """Run the registered LLM request-intercept chain.
 
     Args:
@@ -1674,21 +1707,23 @@ def llm_request_intercepts(name: str, request: LLMRequest) -> LLMRequestIntercep
         request: Current LLM request.
 
     Returns:
-        Transformed request after all applicable request intercepts.
+        Transformed request directly outside an event loop, or an awaitable
+        resolving to it from an async caller.
 
     Exceptional flow:
         Callback exceptions and native middleware errors propagate unchanged.
     """
     ...
 
-def llm_conditional_execution(request: LLMRequest) -> None:
+def llm_conditional_execution(request: LLMRequest) -> None | Awaitable[None]:
     """Run LLM conditional-execution guardrails.
 
     Args:
         request: LLM request to evaluate.
 
     Returns:
-        ``None`` when all guardrails allow execution.
+        ``None`` when all guardrails allow execution, directly outside an event
+        loop or through an awaitable from an async caller.
 
     Exceptional flow:
         Raises a native rejection error when a guardrail returns a rejection
@@ -1983,11 +2018,24 @@ def deregister_subscriber(name: str) -> bool:
     ...
 
 def flush_subscribers() -> None:
-    """Wait for subscriber callbacks queued by native event emission.
+    """Wait for queued callbacks and registered managed terminal publications.
 
-    Call this function outside subscriber callbacks. A re-entrant call returns
-    without waiting, so callbacks later in the same dispatch snapshot can run.
+    Call this function outside subscribers, event sanitizers, conditional
+    guardrails, and request or execution intercepts. The public Python wrapper
+    handles the limited queued tool/LLM observability-sanitizer exception.
     """
+    ...
+
+def subscriber_dispatcher_before_fork() -> None:
+    """Lock subscriber dispatcher resources before a process forks."""
+    ...
+
+def subscriber_dispatcher_after_fork_parent() -> None:
+    """Unlock subscriber dispatcher resources in the parent after a fork."""
+    ...
+
+def subscriber_dispatcher_after_fork_child() -> None:
+    """Reset and unlock inherited subscriber dispatcher resources in a child."""
     ...
 
 def scope_register_tool_sanitize_request_guardrail(
@@ -2379,12 +2427,23 @@ def clear_plugin_configuration() -> None:
     """
     ...
 
-def active_plugin_report() -> Optional[_JsonObject]:
-    """Return the active plugin report.
+def clear_plugin_configuration_async() -> Awaitable[None]:
+    """Clear active plugin configuration without blocking the Python event loop.
 
     Returns:
-        Report JSON object for the last active configuration, or ``None`` if no
-        plugin configuration is active.
+        Awaitable resolving when native teardown completes.
+
+    Exceptional flow:
+        Native cleanup and teardown worker errors propagate through the awaitable.
+    """
+    ...
+
+def active_plugin_report() -> Optional[_JsonObject]:
+    """Return the active plugin report or a failed-teardown diagnostic report.
+
+    Returns:
+        Report JSON object for the active configuration or a failed teardown
+        with runtime diagnostics, or ``None`` if neither exists.
     """
     ...
 

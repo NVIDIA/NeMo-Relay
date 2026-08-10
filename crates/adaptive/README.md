@@ -18,7 +18,8 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-adaptive` is the Rust companion crate for adaptive NeMo Relay
 runtime behavior. Use it with `nemo-relay` when an agent runtime should learn
-from observed executions, inject runtime hints, or persist adaptive state.
+from observed executions, inject runtime hints, persist adaptive state, or
+cache repeated LLM responses.
 
 Adaptive behavior is installed through the same plugin system used by the core
 runtime, so applications can enable it without changing their orchestration
@@ -41,9 +42,11 @@ framework.
 - **`AdaptiveConfig`**: A canonical config contract for the top-level
   `adaptive` plugin component.
 - **Built-in component settings**: Typed config helpers for telemetry,
-  adaptive hints, tool parallelism, and the Adaptive Cache Governor.
-- **State backends**: In-memory state by default and Redis-backed state behind
-  the `redis-backend` feature.
+  adaptive hints, tool parallelism, the Adaptive Cache Governor, and response
+  caching.
+- **Storage backends**: In-memory backends for adaptive state and opt-in
+  response caching, with Redis-backed storage behind the `redis-backend`
+  feature.
 - **Learning primitives**: Runtime helpers and learners built on NeMo Relay
   events.
 - **Adaptive Cache Governor (ACG) module surface**: The canonical
@@ -58,7 +61,8 @@ Install the published crate alongside the core runtime:
 cargo add nemo-relay nemo-relay-adaptive
 ```
 
-Enable Redis-backed state only when the application needs shared persistence:
+Enable Redis-backed storage when adaptive state or the response cache needs
+shared persistence:
 
 ```bash
 cargo add nemo-relay-adaptive --features redis-backend

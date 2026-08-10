@@ -87,6 +87,14 @@ fn layered_acg_request() -> LlmRequest {
 }
 
 fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResult {
+    let request = layered_acg_request();
+    let annotated_request = nemo_relay::codec::resolve::request_codec(
+        nemo_relay::codec::resolve::ProviderSurface::AnthropicMessages,
+    )
+    .decode(&request)
+    .expect("fixture request should decode");
+    let prompt_ir = crate::acg::ir_builder::build_prompt_ir(&annotated_request)
+        .expect("fixture request should build prompt ir");
     StabilityAnalysisResult {
         scores: vec![
             BlockStabilityScore {
@@ -112,6 +120,11 @@ fn layered_acg_stability_result(observation_count: u32) -> StabilityAnalysisResu
             },
         ],
         stable_prefix_length: 3,
+        stable_prefix_fingerprint: crate::acg::stability::profile_prefix_fingerprint(
+            &prompt_ir,
+            3,
+            &crate::acg_profile::derive_acg_learning_key("agent-acg", &annotated_request),
+        ),
         total_observations: observation_count,
     }
 }
@@ -139,9 +152,11 @@ fn assert_llm_request_intercept_registered(name: &str) {
             i32::MAX,
             false,
             Arc::new(|_name, request, annotated| {
-                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                    request, annotated,
-                ))
+                Box::pin(async move {
+                    Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                        request, annotated,
+                    ))
+                })
             }),
         ),
         name,
@@ -154,9 +169,11 @@ fn assert_llm_request_intercept_absent(name: &str) {
         i32::MAX,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                request, annotated,
-            ))
+            Box::pin(async move {
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
+            })
         }),
     )
     .unwrap();
@@ -565,6 +582,7 @@ async fn adaptive_hints_feature_registers_request_intercept() {
             content: json!({}),
         },
     )
+    .await
     .unwrap();
     assert!(request.request.headers.contains_key(AGENT_HINTS_HEADER_KEY));
 
@@ -730,9 +748,11 @@ async fn registration_context_registers_all_supported_callback_types() {
         5,
         false,
         Arc::new(|_name, request, annotated| {
-            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                request, annotated,
-            ))
+            Box::pin(async move {
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
+            })
         }),
     )
     .unwrap();
@@ -955,6 +975,38 @@ async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_
     assert!(runtime.registrations.is_empty());
     assert_subscriber_absent("existing_feature");
     assert_subscriber_absent("partial_feature");
+}
+
+#[cfg(feature = "redis-backend")]
+#[tokio::test(flavor = "current_thread")]
+async fn response_cache_store_initialization_failure_fails_open() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut response_cache = ResponseCacheConfig {
+        namespace: "fail-open-test".into(),
+        ..ResponseCacheConfig::default()
+    };
+    response_cache.backend.kind = "redis".into();
+    response_cache
+        .backend
+        .config
+        .insert("url".into(), json!("redis://127.0.0.1:0/"));
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+        response_cache: Some(response_cache),
+        ..AdaptiveConfig::default()
+    })
+    .await
+    .unwrap();
+
+    runtime.register().await.unwrap();
+
+    assert!(runtime.registered);
+    assert!(
+        runtime.registrations.is_empty(),
+        "an unavailable optional cache must not install intercepts"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

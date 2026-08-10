@@ -272,14 +272,21 @@ fn maps_native_nested_map_and_raw_controls() {
             "union": {"oneOf": [{"type": "string"}, {"type": "number"}]}
         }
     }));
-    let field = |key: &str| {
-        loaded
-            .fields()
-            .iter()
-            .find(|field| field.key == key)
-            .unwrap()
-    };
+    assert_native_raw_and_scalar_fields(&loaded);
+    assert_native_choice_and_nested_fields(&loaded);
+    assert!(loaded.editor().title.is_none());
+}
 
+fn native_config_field<'a>(schema: &'a PluginConfigSchema, key: &str) -> &'a DynamicConfigField {
+    schema
+        .fields()
+        .iter()
+        .find(|field| field.key == key)
+        .unwrap_or_else(|| panic!("missing native config field {key:?}"))
+}
+
+fn assert_native_raw_and_scalar_fields(schema: &PluginConfigSchema) {
+    let field = |key| native_config_field(schema, key);
     assert!(matches!(
         field("array").kind,
         DynamicConfigFieldKind::RawJson
@@ -307,6 +314,10 @@ fn maps_native_nested_map_and_raw_controls() {
     assert_eq!(field("enabled").title, "Enabled");
     assert_eq!(field("enabled").default, Some(json!(true)));
     assert!(field("enabled").required);
+}
+
+fn assert_native_choice_and_nested_fields(schema: &PluginConfigSchema) {
+    let field = |key| native_config_field(schema, key);
     assert!(matches!(
         field("choice").kind,
         DynamicConfigFieldKind::StringEnum { ref options, secret: false }
@@ -320,7 +331,6 @@ fn maps_native_nested_map_and_raw_controls() {
                 && fields[0].description.as_deref() == Some("Weight")
                 && matches!(fields[0].kind, DynamicConfigFieldKind::Number)
     ));
-    assert!(loaded.editor().title.is_none());
 }
 
 #[test]

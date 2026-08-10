@@ -40,12 +40,16 @@ pub struct ScopeStack {
 ///
 /// Applications are responsible for serializing, transporting, authenticating,
 /// and trusting this value. It intentionally contains only Relay identifiers;
-/// OpenTelemetry `traceparent` and `tracestate` remain transport sidecars.
+/// OpenTelemetry `traceparent` and `tracestate` remain transport sidecars. A
+/// context without a `root_uuid` preserves Relay event parentage when imported.
+/// The first local OpenTelemetry span created after import starts a new trace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PropagationContext {
     /// Wire-format version. Version 1 is the only currently supported value.
     pub version: u16,
-    /// Stable session root when the sending application knows one.
+    /// Stable session root when the sending application knows one. When this
+    /// root is omitted, the first local OpenTelemetry span after import starts
+    /// a new trace.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub root_uuid: Option<Uuid>,
     /// Immediate Relay event or scope that caused the boundary crossing.
@@ -96,6 +100,15 @@ impl PropagationContext {
 }
 
 impl ScopeStack {
+    fn snapshot(&self) -> Self {
+        Self {
+            stack: self.stack.clone(),
+            scope_registries: self.scope_registries.clone(),
+            fresh_agents: self.fresh_agents.clone(),
+            propagated_parent_uuid: self.propagated_parent_uuid,
+        }
+    }
+
     /// Create a new scope stack containing only the implicit root scope.
     ///
     /// # Returns
@@ -406,6 +419,16 @@ pub fn create_scope_stack() -> ScopeStackHandle {
     Arc::new(RwLock::new(ScopeStack::new()))
 }
 
+/// Clone a scope stack into an isolated emission-time snapshot.
+#[doc(hidden)]
+pub(crate) fn snapshot_scope_stack(handle: &ScopeStackHandle) -> Result<ScopeStackHandle> {
+    let stack = handle
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .snapshot();
+    Ok(Arc::new(RwLock::new(stack)))
+}
+
 /// Create an isolated scope stack rooted below a supplied propagation context.
 ///
 /// The imported handles are synthetic bookkeeping only; Relay never emits their
@@ -418,7 +441,38 @@ pub fn create_scope_stack_from_propagation(
     )?)))
 }
 
+/// Create an isolated scope stack below the current causal parent.
+///
+/// Capture the parent before spawning concurrent work, then install the
+/// returned stack with `TASK_SCOPE_STACK.scope(...)`. The fork preserves event
+/// parentage but does not transfer scope-local registrations. Because the fork
+/// does not assert a root UUID, its first local OpenTelemetry span starts a new
+/// trace.
+///
+/// # Examples
+///
+/// ```no_run
+/// # async fn example() -> nemo_relay::error::Result<()> {
+/// use nemo_relay::api::runtime::{TASK_SCOPE_STACK, fork_scope_stack};
+///
+/// let stack = fork_scope_stack()?;
+/// tokio::spawn(TASK_SCOPE_STACK.scope(stack, async {
+///     // Relay work in an isolated child task.
+/// }));
+/// # Ok(())
+/// # }
+/// ```
+pub fn fork_scope_stack() -> Result<ScopeStackHandle> {
+    let context = capture_propagation_context()?;
+    create_scope_stack_from_propagation(&context)
+}
+
 /// Capture the current causal parent without asserting a session root.
+///
+/// Importing the returned context preserves Relay event parentage but starts a
+/// new local OpenTelemetry trace. Use [`capture_propagation_context_with_root`]
+/// when the receiver should participate in a Relay-derived trace rooted at a
+/// stable application UUID.
 pub fn capture_propagation_context() -> Result<PropagationContext> {
     capture_propagation_context_with_root(None)
 }
@@ -450,6 +504,10 @@ pub async fn with_active_event_uuid<T>(uuid: Uuid, future: impl Future<Output = 
     ACTIVE_EVENT_UUID.scope(uuid, future).await
 }
 
+pub(crate) fn active_event_uuid() -> Option<Uuid> {
+    ACTIVE_EVENT_UUID.try_with(|uuid| *uuid).ok()
+}
+
 thread_local! {
     /// Synchronous override used by native plugin callbacks that need to run a
     /// bounded block with an isolated stack even inside a task-local context.
@@ -478,6 +536,18 @@ pub fn current_scope_stack() -> ScopeStackHandle {
     TASK_SCOPE_STACK
         .try_with(|stack| stack.clone())
         .unwrap_or_else(|_| THREAD_SCOPE_STACK.with(|stack| stack.borrow().clone()))
+}
+
+/// Return a scope stack explicitly bound to the current task or override.
+///
+/// Unlike [`current_scope_stack`], this does not fall back to ambient
+/// thread-local state. Continuation adapters use it to distinguish an
+/// intentional per-call scope selection from an unrelated runtime-worker
+/// thread binding.
+pub(crate) fn current_context_scope_stack() -> Option<ScopeStackHandle> {
+    SCOPE_STACK_OVERRIDE
+        .with(|stack| stack.borrow().clone())
+        .or_else(|| TASK_SCOPE_STACK.try_with(Clone::clone).ok())
 }
 
 /// Run a synchronous callback with `handle` as the visible scope stack.

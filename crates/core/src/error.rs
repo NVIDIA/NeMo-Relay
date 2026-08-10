@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Stable classification for an upstream provider failure captured by retry-aware dispatch.
+/// Stable classification for a failure from an upstream provider attempt.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamFailureClass {
@@ -34,7 +34,7 @@ pub enum UpstreamFailureClass {
     Other,
 }
 
-/// Structured provider failure surfaced only for explicitly retry-aware dispatches.
+/// Structured failure returned by one upstream provider attempt.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct UpstreamFailure {
     /// HTTP status when a provider response was received.
@@ -129,10 +129,56 @@ pub enum FlowError {
     /// An internal runtime error (e.g., lock poisoning).
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// An exception raised by a language-binding callback.
+    #[error("internal error: {message}")]
+    CallbackException {
+        /// Original binding-rendered exception message.
+        message: String,
+        /// Original language exception class name.
+        exception_type: String,
+    },
 }
 
 /// A specialized [`Result`](std::result::Result) type for NeMo Relay operations.
 pub type Result<T> = std::result::Result<T, FlowError>;
+
+impl FlowError {
+    /// Returns a low-cardinality classification suitable for OpenTelemetry's
+    /// `error.type` attribute.
+    ///
+    /// Relay-owned failures use stable `snake_case` codes. Internal failures
+    /// collapse to `internal_error` because Relay cannot reliably infer an
+    /// application exception type from an error message.
+    pub(crate) fn otel_error_type(&self) -> &str {
+        match self {
+            Self::AlreadyExists(_) => "already_exists",
+            Self::NotFound(_) => "not_found",
+            Self::InvalidArgument(_) => "invalid_argument",
+            Self::ScopeStackEmpty => "scope_stack_empty",
+            Self::GuardrailRejected(_) => "guardrail_rejected",
+            Self::Upstream(failure) => match failure.class {
+                UpstreamFailureClass::Connection => "connection_error",
+                UpstreamFailureClass::Timeout => "timeout",
+                UpstreamFailureClass::RetryableStatus => "retryable_status",
+                UpstreamFailureClass::ContextWindow => "context_window",
+                UpstreamFailureClass::ModelUnavailable => "model_unavailable",
+                UpstreamFailureClass::Authentication => "authentication",
+                UpstreamFailureClass::InvalidRequest => "invalid_request",
+                UpstreamFailureClass::Other => "upstream_error",
+            },
+            Self::Internal(_) | Self::CallbackException { .. } => "internal_error",
+        }
+    }
+
+    /// Returns the originating language exception class, when available.
+    pub(crate) fn exception_type(&self) -> Option<&str> {
+        match self {
+            Self::CallbackException { exception_type, .. } => Some(exception_type),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 #[path = "../tests/coverage/error_tests.rs"]

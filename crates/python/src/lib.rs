@@ -39,6 +39,7 @@ mod py_storage;
 #[doc(hidden)]
 pub mod py_types;
 #[cfg(test)]
+#[path = "../tests/support/mod.rs"]
 mod test_support;
 
 /// The `_native` PyO3 module entry point. Registers all types and functions.
@@ -47,6 +48,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_shared_runtime_binding("python").map_err(|e| {
         pyo3::exceptions::PyRuntimeError::new_err(format!(
             "failed to initialize NeMo Relay runtime ownership: {e}"
+        ))
+    })?;
+    nemo_relay::logging::initialize_default_logging().map_err(|e| {
+        pyo3::exceptions::PyRuntimeError::new_err(format!(
+            "failed to initialize NeMo Relay operational logging: {e}"
         ))
     })?;
     register_adaptive_component().map_err(|e| {

@@ -14,7 +14,7 @@ LANG="${1:-}"
 case "${LANG}" in
   rust)
     if ! command -v cargo-about >/dev/null 2>&1; then
-      echo "error: cargo-about not found. Install with: cargo install cargo-about --locked" >&2
+      echo "error: cargo-about not found. Install with: cargo install cargo-about --version 0.9.1 --locked --features cli" >&2
       exit 1
     fi
     uv run --no-sync python "${ROOT}/scripts/licensing/attributions_lockfile_md.py" rust

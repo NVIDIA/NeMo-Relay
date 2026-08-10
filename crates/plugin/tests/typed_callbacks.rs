@@ -16,21 +16,54 @@ use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
     Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonStream, LlmNext,
     LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeEventSanitizeCb,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
-    NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb, NemoRelayNativeLlmExecutionCb,
-    NemoRelayNativeLlmRequestCodec, NemoRelayNativeLlmRequestInterceptCb,
-    NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
-    NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
-    NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolNext,
+    NemoRelayNativeHostApiV3, NemoRelayNativeLlmCodecKind, NemoRelayNativeLlmConditionalCb,
+    NemoRelayNativeLlmExecutionCb, NemoRelayNativeLlmRequestCodec,
+    NemoRelayNativeLlmRequestInterceptCb, NemoRelayNativeLlmResponseCodec,
+    NemoRelayNativeLlmSanitizeRequestCb, NemoRelayNativeLlmSanitizeRequestContext,
+    NemoRelayNativeLlmSanitizeResponseCb, NemoRelayNativeLlmSanitizeResponseContext,
+    NemoRelayNativeLlmStreamExecutionCb, NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
 };
 use serde_json::{Map, json};
+
+#[test]
+fn async_abi_discriminants_reject_unknown_values() {
+    use NemoRelayNativeAsyncMiddlewareKind as Kind;
+
+    let middleware_kinds = [
+        Kind::ToolSanitizeRequest,
+        Kind::ToolSanitizeResponse,
+        Kind::ToolConditionalExecution,
+        Kind::ToolRequestIntercept,
+        Kind::ToolExecutionIntercept,
+        Kind::LlmSanitizeRequest,
+        Kind::LlmSanitizeResponse,
+        Kind::LlmConditionalExecution,
+        Kind::LlmRequestIntercept,
+        Kind::LlmExecutionIntercept,
+        Kind::LlmStreamExecutionIntercept,
+        Kind::MarkSanitize,
+        Kind::ScopeSanitizeStart,
+        Kind::ScopeSanitizeEnd,
+    ];
+    for (discriminant, kind) in middleware_kinds.into_iter().enumerate() {
+        assert_eq!(kind as u32, discriminant as u32);
+        assert_eq!(Kind::try_from(discriminant as u32), Ok(kind));
+    }
+    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(14).is_err());
+    assert_eq!(
+        NemoRelayNativeAsyncCallbackState::try_from(1),
+        Ok(NemoRelayNativeAsyncCallbackState::Pending)
+    );
+    assert!(NemoRelayNativeAsyncCallbackState::try_from(2).is_err());
+}
 
 struct TestString(Vec<u8>);
 
@@ -300,8 +333,8 @@ static LLM_REQUEST_INTERCEPT_REGISTRATION: Mutex<Option<RegisteredLlmRequestInte
     Mutex::new(None);
 
 #[test]
-fn native_abi_v2_struct_sizes_are_self_describing() {
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 2);
+fn native_abi_v3_struct_sizes_are_self_describing() {
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 3);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -328,6 +361,14 @@ fn native_abi_v2_struct_sizes_are_self_describing() {
                 280, 288, 296, 304, 312,
             ]
         );
+        assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 440);
+        assert_eq!(
+            host_api_v3_offsets(),
+            [
+                0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
+            ]
+        );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
         assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
@@ -348,6 +389,14 @@ fn native_abi_v2_struct_sizes_are_self_describing() {
                 152, 156,
             ]
         );
+        assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 216);
+        assert_eq!(
+            host_api_v3_offsets(),
+            [
+                0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
+            ]
+        );
         assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
         assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
         assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
@@ -355,6 +404,33 @@ fn native_abi_v2_struct_sizes_are_self_describing() {
         assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
         assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
     }
+}
+
+fn host_api_v3_offsets() -> [usize; 16] {
+    [
+        offset_of!(NemoRelayNativeHostApiV3, v1),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_resolve_json),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_reject),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_is_cancelled),
+        offset_of!(NemoRelayNativeHostApiV3, async_completion_release),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_invoke),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_release),
+        offset_of!(
+            NemoRelayNativeHostApiV3,
+            plugin_context_register_async_middleware
+        ),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_push_json),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_finish),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_reject),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_is_cancelled),
+        offset_of!(NemoRelayNativeHostApiV3, async_stream_release),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_invoke_stream),
+        offset_of!(
+            NemoRelayNativeHostApiV3,
+            plugin_context_register_async_stream_middleware
+        ),
+        offset_of!(NemoRelayNativeHostApiV3, async_next_invoke_result),
+    ]
 }
 
 fn host_api_offsets() -> [usize; 40] {
@@ -1811,6 +1887,15 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
     drop(stack);
 
     let calls = RUNTIME_CALLS.lock().unwrap().clone();
+    assert_scope_runtime_calls(&calls);
+    assert_stack_runtime_calls(&calls);
+    assert_eq!(SCOPE_HANDLE_FREES.load(Ordering::SeqCst), 2);
+    assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
+    assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
+    assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
+}
+
+fn assert_scope_runtime_calls(calls: &[String]) {
     assert!(calls.iter().any(|call| call == "current_scope"));
     assert!(calls.iter().any(|call| {
         call.starts_with("push:work:Tool:0:parent=false")
@@ -1828,15 +1913,14 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
             && call.contains(r#""output":true"#)
             && call.contains(r#""closed":true"#)
     }));
+}
+
+fn assert_stack_runtime_calls(calls: &[String]) {
     assert!(calls.iter().any(|call| call == "stack_create"));
     assert!(calls.iter().any(|call| call == "stack_with_current"));
     assert!(calls.iter().any(|call| call == "stack_capture"));
     assert!(calls.iter().any(|call| call == "stack_set_thread"));
     assert!(calls.iter().any(|call| call == "stack_restore"));
-    assert_eq!(SCOPE_HANDLE_FREES.load(Ordering::SeqCst), 2);
-    assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
-    assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
-    assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -2674,7 +2758,7 @@ fn typed_callback_free_catches_drop_panics() {
 }
 
 #[test]
-fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
+fn typed_event_and_tool_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
     let _guard = begin_test();
     let host = test_host();
 
@@ -2877,6 +2961,14 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
         drop(Box::from_raw(next_state));
         registration.free();
     }
+}
+
+#[test]
+fn typed_llm_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut out = ptr::null_mut();
+    let mut reason = ptr::null_mut();
 
     let mut ctx = test_context(&host);
     ctx.register_llm_sanitize_request_guardrail("llm-request", 0, |request, _context| {
@@ -3104,7 +3196,7 @@ fn typed_callbacks_reject_null_abi_pointers_before_decoding_inputs() {
 }
 
 #[test]
-fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
+fn typed_subscriber_event_and_tool_sanitize_callbacks_report_invalid_json() {
     let _guard = begin_test();
     let host = test_host();
 
@@ -3201,6 +3293,12 @@ fn typed_callbacks_report_invalid_json_for_each_decoder_family() {
         (host.string_free)(payload);
         registration.free();
     }
+}
+
+#[test]
+fn typed_conditional_execution_and_llm_callbacks_report_invalid_json() {
+    let _guard = begin_test();
+    let host = test_host();
 
     let mut ctx = test_context(&host);
     ctx.register_tool_conditional_execution_guardrail("tool-conditional", 0, |_name, _value| {
@@ -4625,14 +4723,8 @@ fn typed_llm_stream_execution_wraps_next_chunks() {
         "llm-stream",
         31,
         |_name, request, next: LlmStreamNext<'_>| {
-            let stream = next.call(request)?;
-            let stream: LlmJsonStream = Box::new(stream.map(|chunk| {
-                chunk.map(|mut chunk| {
-                    chunk["wrapped"] = json!(true);
-                    chunk
-                })
-            }));
-            Ok(stream)
+            let stream: LlmJsonStream = Box::new(next.call(request)?);
+            Ok(wrap_stream_chunks(stream))
         },
     )
     .unwrap();
@@ -4672,20 +4764,7 @@ fn typed_llm_stream_execution_wraps_next_chunks() {
         NemoRelayStatus::NullPointer
     );
 
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::Ok);
-    assert_eq!(chunk.unwrap()["wrapped"], json!(true));
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::Ok);
-    let chunk = chunk.unwrap();
-    assert_eq!(chunk["chunk"], json!(2));
-    assert_eq!(chunk["wrapped"], json!(true));
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::StreamEnd);
-    assert!(chunk.is_none());
-    let (status, chunk) = poll_stream_chunk(&host, &stream);
-    assert_eq!(status, NemoRelayStatus::StreamEnd);
-    assert!(chunk.is_none());
+    assert_wrapped_stream_chunks(&host, &stream);
     assert_eq!(
         unsafe { stream.cancel.unwrap()(stream.user_data) },
         NemoRelayStatus::Ok
@@ -4704,6 +4783,36 @@ fn typed_llm_stream_execution_wraps_next_chunks() {
     }
     assert_eq!(cancelled.load(Ordering::SeqCst), 0);
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
+}
+
+fn wrap_stream_chunks(stream: LlmJsonStream) -> LlmJsonStream {
+    Box::new(stream.map(|chunk| {
+        chunk.map(|mut chunk| {
+            chunk["wrapped"] = json!(true);
+            chunk
+        })
+    }))
+}
+
+fn assert_wrapped_stream_chunks(
+    host: &NemoRelayNativeHostApiV1,
+    stream: &NemoRelayNativeLlmStreamV1,
+) {
+    let (status, chunk) = poll_stream_chunk(host, stream);
+    assert_eq!(status, NemoRelayStatus::Ok);
+    assert_eq!(chunk.unwrap()["wrapped"], json!(true));
+
+    let (status, chunk) = poll_stream_chunk(host, stream);
+    assert_eq!(status, NemoRelayStatus::Ok);
+    let chunk = chunk.unwrap();
+    assert_eq!(chunk["chunk"], json!(2));
+    assert_eq!(chunk["wrapped"], json!(true));
+
+    for _ in 0..2 {
+        let (status, chunk) = poll_stream_chunk(host, stream);
+        assert_eq!(status, NemoRelayStatus::StreamEnd);
+        assert!(chunk.is_none());
+    }
 }
 
 #[test]

@@ -298,3 +298,49 @@ fn build_prompt_ir_covers_extended_request_messages_and_content_parts() {
         "web_search_preview"
     );
 }
+
+#[test]
+fn build_prompt_ir_canonicalizes_structured_output_before_user_content() {
+    let mut request = AnnotatedLlmRequest {
+        messages: vec![Message::User {
+            content: MessageContent::Text("variable task".to_string()),
+            name: None,
+        }],
+        model: Some("gpt-4o".to_string()),
+        ..AnnotatedLlmRequest::default()
+    };
+    request.extra.insert(
+        "response_format".to_string(),
+        serde_json::json!({"type":"json_schema","json_schema":{"required":["answer"],"type":"object"}}),
+    );
+
+    let first = build_prompt_ir(&request).unwrap();
+    request.extra.insert(
+        "response_format".to_string(),
+        serde_json::json!({"json_schema":{"type":"object","required":["answer"]},"type":"json_schema"}),
+    );
+    let reordered = build_prompt_ir(&request).unwrap();
+
+    assert_eq!(
+        first.structured_output_schema_id,
+        reordered.structured_output_schema_id
+    );
+    assert!(first.structured_output_schema_id.is_some());
+    assert_eq!(
+        first.blocks[0].content_type,
+        BlockContentType::StructuredOutput
+    );
+    assert_eq!(first.blocks[1].role, PromptRole::User);
+
+    request
+        .extra
+        .insert("response_format".to_string(), serde_json::Value::Null);
+    let null_contract = build_prompt_ir(&request).unwrap();
+    assert!(null_contract.structured_output_schema_id.is_none());
+    assert!(
+        null_contract
+            .blocks
+            .iter()
+            .all(|block| block.content_type != BlockContentType::StructuredOutput)
+    );
+}

@@ -79,6 +79,16 @@ fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
         .collect()
 }
 
+fn finished_span_named<'a>(
+    spans: &'a [opentelemetry_sdk::trace::SpanData],
+    name: &str,
+) -> &'a opentelemetry_sdk::trace::SpanData {
+    spans
+        .iter()
+        .find(|span| span.name.as_ref() == name)
+        .unwrap_or_else(|| panic!("missing span {name}"))
+}
+
 fn assert_attr(attributes: &HashMap<String, String>, key: &str, value: &str) {
     assert_eq!(attributes.get(key).map(String::as_str), Some(value));
 }
@@ -918,22 +928,17 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
     subscriber.force_flush().unwrap();
 
     let spans = exporter.get_finished_spans().unwrap();
-    let root = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "identity-root")
-        .unwrap();
-    let child = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "identity-child")
-        .unwrap();
-    let second_root = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "identity-second-root")
-        .unwrap();
-    let orphan_mark = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "mark:session.start")
-        .unwrap();
+    assert_session_root_and_child_identity(&spans, &instance_id);
+    assert_session_mark_identity(&spans);
+}
+
+fn assert_session_root_and_child_identity(
+    spans: &[opentelemetry_sdk::trace::SpanData],
+    instance_id: &str,
+) {
+    let root = finished_span_named(spans, "identity-root");
+    let child = finished_span_named(spans, "identity-child");
+    let second_root = finished_span_named(spans, "identity-second-root");
 
     let root_attributes = attr_map(&root.attributes);
     assert_eq!(root_attributes["session.id"], "logical-session");
@@ -971,7 +976,12 @@ fn session_identity_is_projected_on_trace_roots_and_marks_only() {
         root.span_context.trace_id(),
         second_root.span_context.trace_id()
     );
+}
 
+fn assert_session_mark_identity(spans: &[opentelemetry_sdk::trace::SpanData]) {
+    let root = finished_span_named(spans, "identity-root");
+    let orphan_mark = finished_span_named(spans, "mark:session.start");
+    let root_attributes = attr_map(&root.attributes);
     let mark_attributes = attr_map(&root.events.events[0].attributes);
     assert_eq!(mark_attributes["session.id"], "logical-session");
     assert_eq!(mark_attributes["user.id"], "alice");
@@ -1083,12 +1093,18 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
 
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
+    assert_registered_scope_span(&spans[0]);
+}
 
-    let span = &spans[0];
+fn assert_registered_scope_span(span: &opentelemetry_sdk::trace::SpanData) {
     assert_eq!(span.name.as_ref(), "otel_scope");
     assert_eq!(span.events.events.len(), 1);
     assert_eq!(span.events.events[0].name.as_ref(), "otel_mark");
+    assert_registered_scope_attributes(span);
+    assert_registered_scope_event_attributes(span);
+}
 
+fn assert_registered_scope_attributes(span: &opentelemetry_sdk::trace::SpanData) {
     let attributes = attr_map(&span.attributes);
     assert_eq!(
         attributes.get("openinference.span.kind"),
@@ -1116,7 +1132,9 @@ fn registered_subscriber_emits_spans_for_scope_push_pop_and_marks() {
         attributes.get("metadata"),
         Some(&"{\"phase\":\"start\"}".to_string())
     );
+}
 
+fn assert_registered_scope_event_attributes(span: &opentelemetry_sdk::trace::SpanData) {
     let event_attributes = attr_map(&span.events.events[0].attributes);
     assert_eq!(
         event_attributes.get("nemo_relay.mark.data.step"),
@@ -2846,18 +2864,15 @@ fn tool_projection_emits_generic_mark_as_parented_openinference_tool_span() {
 
     let spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 2);
-    let parent = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "agent-turn")
-        .unwrap();
-    let projected = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "mark:plugin.output_compacted")
-        .unwrap();
+    let parent = finished_span_named(&spans, "agent-turn");
+    let projected = finished_span_named(&spans, "mark:plugin.output_compacted");
     assert!(parent.events.events.is_empty());
     assert_eq!(projected.parent_span_id, parent.span_context.span_id());
     assert_eq!(projected.start_time, projected.end_time);
+    assert_tool_projection_attributes(projected);
+}
 
+fn assert_tool_projection_attributes(projected: &opentelemetry_sdk::trace::SpanData) {
     let attributes = attr_map(&projected.attributes);
     assert_eq!(
         attributes.get("openinference.span.kind"),
@@ -3513,6 +3528,13 @@ fn pre_epoch_timestamps_round_trip_through_system_time() {
 
 #[test]
 fn helper_functions_cover_additional_openinference_branches() {
+    assert_openinference_scope_type_branches();
+    assert_openinference_llm_common_attribute_branches();
+    assert_openinference_tool_and_mark_attribute_branches();
+    assert_openinference_input_usage_and_time_branches();
+}
+
+fn assert_openinference_scope_type_branches() {
     let function_end = make_end_event(Uuid::now_v7(), None, "fn-scope", ScopeType::Function, None);
     assert_eq!(span_name(&function_end), "fn-scope");
     assert_eq!(
@@ -3548,7 +3570,9 @@ fn helper_functions_cover_additional_openinference_branches() {
     assert_eq!(openinference_span_kind(Some(ScopeType::Custom)), "CHAIN");
     assert_eq!(openinference_span_kind(Some(ScopeType::Unknown)), "CHAIN");
     assert_eq!(openinference_span_kind(None), "CHAIN");
+}
 
+fn assert_openinference_llm_common_attribute_branches() {
     let llm_end = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("chat")
@@ -3615,7 +3639,9 @@ fn helper_functions_cover_additional_openinference_branches() {
         llm_attributes.get("metadata"),
         Some(&"{\"phase\":\"done\"}".to_string())
     );
+}
 
+fn assert_openinference_tool_and_mark_attribute_branches() {
     let tool_start = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("lookup")
@@ -3689,7 +3715,9 @@ fn helper_functions_cover_additional_openinference_branches() {
         mark_attributes.get("nemo_relay.mark.metadata.source"),
         Some(&"unit".to_string())
     );
+}
 
+fn assert_openinference_input_usage_and_time_branches() {
     let llm_with_scalar_input = make_start_event(
         Uuid::now_v7(),
         None,

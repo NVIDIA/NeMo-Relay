@@ -21,7 +21,6 @@ pub(crate) enum AgentArg {
     #[value(name = "claude", alias = "claude-code")]
     Claude,
     Codex,
-    Hermes,
 }
 
 impl From<AgentArg> for CodingAgent {
@@ -29,7 +28,6 @@ impl From<AgentArg> for CodingAgent {
         match value {
             AgentArg::Claude => Self::ClaudeCode,
             AgentArg::Codex => Self::Codex,
-            AgentArg::Hermes => Self::Hermes,
         }
     }
 }
@@ -54,7 +52,7 @@ pub(crate) enum Command {
         long_about = "Run Anthropic's `claude` CLI under an ephemeral NeMo Relay gateway. \
                       Observability (ATIF + OpenInference) is wired in transparently via \
                       ANTHROPIC_BASE_URL. First-time use launches the setup wizard so the \
-                      `[agents.claude]` block lands in `.nemo-relay/config.toml` and observation \
+                      `[agents.claude]` block lands in the XDG user `config.toml` and observation \
                       starts on the next invocation without prompts.",
         after_help = "Examples:\n  \
                       nemo-relay claude\n  \
@@ -76,18 +74,6 @@ pub(crate) enum Command {
                       nemo-relay --openai-base-url https://inference-api.nvidia.com codex"
     )]
     Codex(EasyPathCommand),
-    /// Run Hermes with observability (setup on first use)
-    #[command(
-        long_about = "Run Hermes Agent under an ephemeral NeMo Relay gateway. The wrapper uses a \
-                      process-private HERMES_HOME overlay for dynamic hooks, without rewriting \
-                      the user's Hermes configuration. Use `nemo-relay install hermes` when bare \
-                      Hermes processes should load the shared native Relay gateway on \
-                      127.0.0.1:47632 through MCP.",
-        after_help = "Examples:\n  \
-                      nemo-relay hermes\n  \
-                      nemo-relay hermes -- chat --provider custom"
-    )]
-    Hermes(EasyPathCommand),
     /// Keep a shared Relay gateway ready for an MCP client.
     #[command(
         long_about = "Start or reuse a shared native NeMo Relay gateway for an MCP stdio \
@@ -102,7 +88,7 @@ pub(crate) enum Command {
                       nemo-relay --bind 127.0.0.1:4041 mcp  # explicit standalone/test bind"
     )]
     Mcp,
-    /// Run the interactive setup (writes `.nemo-relay/config.toml`)
+    /// Run the interactive setup (writes the XDG user `config.toml`)
     Config(ConfigCommand),
     /// Create or edit plugin configuration (writes `plugins.toml`)
     Plugins(PluginsCommand),
@@ -112,7 +98,7 @@ pub(crate) enum Command {
     Uninstall(UninstallCommand),
     /// Validate and configure model pricing catalogs.
     ModelPricing(PricingCommand),
-    /// Diagnose env, agents, config, observability (optionally scoped to one agent)
+    /// Diagnose env, agents, config, observability (use --offline to skip live network probes)
     Doctor(DoctorCommand),
     /// List supported and locally-detected agents (use `--json` for machine output)
     Agents(AgentsCommand),
@@ -130,7 +116,6 @@ impl Command {
         match self {
             Self::Claude(_) => "claude",
             Self::Codex(_) => "codex",
-            Self::Hermes(_) => "hermes",
             Self::Mcp => "mcp",
             Self::Config(_) => "config",
             Self::Plugins(_) => "plugins",

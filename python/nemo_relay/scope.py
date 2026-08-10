@@ -16,6 +16,7 @@ Example::
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Iterator
@@ -164,11 +165,12 @@ def event(
             event. When omitted, the current runtime time is used.
 
     Returns:
-        None: This function returns after the event has been emitted.
+        None: This function returns after the event has been queued for
+        sanitization and publication.
 
     Notes:
         A scope stack is created automatically when needed before the event is
-        emitted through the native runtime. ``timestamp`` must be a
+        queued through the native runtime. ``timestamp`` must be a
         timezone-aware ``datetime``; strings and naive datetimes are rejected.
     """
     _ensure_scope_stack()
@@ -248,6 +250,10 @@ def scope(
         )
         yield pushed_handle
         status_code = "OK"
+    except asyncio.CancelledError as e:
+        status_code = "ERROR"
+        status_message = str(e) or "cancelled"
+        raise
     except Exception as e:
         status_code = "ERROR"
         status_message = str(e)

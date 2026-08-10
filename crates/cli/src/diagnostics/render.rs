@@ -16,7 +16,11 @@ pub(crate) fn exit_code(report: &DoctorReport) -> u8 {
             .iter()
             .any(|agent| matches!(agent.status, Status::Fail))
         || report.host_plugins.iter().any(|plugin| !plugin.ok())
-        || matches!(report.configuration.workspace.status, Status::Fail)
+        || report
+            .configuration
+            .explicit
+            .as_ref()
+            .is_some_and(|layer| matches!(layer.status, Status::Fail))
         || matches!(report.configuration.global.status, Status::Fail)
         || matches!(report.configuration.system.status, Status::Fail)
         || matches!(report.configuration.plugin_resolution.status, Status::Fail)
@@ -38,7 +42,16 @@ pub(super) fn report_has_warn(report: &DoctorReport) -> bool {
             .iter()
             .any(|agent| matches!(agent.status, Status::Warn))
         || report.host_plugins.iter().any(|plugin| !plugin.ok())
-        || matches!(report.configuration.workspace.status, Status::Warn)
+        || report
+            .configuration
+            .explicit
+            .as_ref()
+            .is_some_and(|layer| matches!(layer.status, Status::Warn))
+        || report
+            .configuration
+            .unsupported_project_files
+            .iter()
+            .any(|layer| matches!(layer.status, Status::Warn))
         || matches!(report.configuration.global.status, Status::Warn)
         || matches!(report.configuration.system.status, Status::Warn)
         || matches!(report.configuration.plugin_resolution.status, Status::Warn)
@@ -86,15 +99,9 @@ pub(super) fn format_human_environment(out: &mut String, report: &DoctorReport) 
 
 pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport) {
     out.push_str("  Configuration\n");
-    let workspace_label = if report.configuration.explicit_config {
-        "Explicit"
-    } else {
-        "Workspace"
-    };
-    out.push_str(&format!(
-        "    {workspace_label:<11}{}\n",
-        format_layer(&report.configuration.workspace)
-    ));
+    if let Some(explicit) = &report.configuration.explicit {
+        out.push_str(&format!("    Explicit   {}\n", format_layer(explicit)));
+    }
     out.push_str(&format!(
         "    Global     {}\n",
         format_layer(&report.configuration.global)
@@ -102,6 +109,20 @@ pub(super) fn format_human_configuration(out: &mut String, report: &DoctorReport
     out.push_str(&format!(
         "    System     {}\n",
         format_layer(&report.configuration.system)
+    ));
+    for (index, layer) in report
+        .configuration
+        .unsupported_project_files
+        .iter()
+        .enumerate()
+    {
+        let label = if index == 0 { "Unsupported" } else { "" };
+        out.push_str(&format!("    {label:<11}{}\n", format_layer(layer)));
+    }
+    out.push_str(&format!(
+        "    Upstream   openai={} anthropic={}\n",
+        report.configuration.upstream_auth.openai.as_str(),
+        report.configuration.upstream_auth.anthropic.as_str()
     ));
     if !matches!(report.configuration.resolution.status, Status::Pass) {
         out.push_str(&format!(

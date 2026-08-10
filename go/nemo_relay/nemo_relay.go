@@ -46,6 +46,8 @@ typedef struct NemoRelayLlmSanitizeResponseContext { uint32_t codec_kind; const 
 typedef void (*NemoRelayFreeFn)(void* user_data);
 
 // Core API
+extern int32_t nemo_relay_initialize_default_logging(void);
+extern int32_t nemo_relay_shutdown_default_logging(void);
 extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
 extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
@@ -114,6 +116,7 @@ extern int32_t nemo_relay_llm_stream_call_execute(
 extern FfiCodecHandle* nemo_relay_openai_chat_codec_new(void);
 extern FfiCodecHandle* nemo_relay_openai_responses_codec_new(void);
 extern FfiCodecHandle* nemo_relay_anthropic_messages_codec_new(void);
+extern FfiCodecHandle* nemo_relay_gemini_generate_content_codec_new(void);
 extern void nemo_relay_codec_free(FfiCodecHandle* handle);
 
 extern void nemo_relay_set_last_error_message(const char* msg);
@@ -297,6 +300,18 @@ import (
 )
 
 const defaultServiceName = "nemo-relay"
+
+func init() {
+	if err := checkStatus(C.nemo_relay_initialize_default_logging()); err != nil {
+		panic(fmt.Sprintf("failed to initialize NeMo Relay operational logging: %v", err))
+	}
+}
+
+// ShutdownLogging drains pending operational log records and releases the default logging runtime.
+// Callers that configure file sinks should defer ShutdownLogging from main.
+func ShutdownLogging() error {
+	return checkStatus(C.nemo_relay_shutdown_default_logging())
+}
 
 func checkedValue[T any](status int32, value T) (T, error) {
 	if err := checkStatus(C.int32_t(status)); err != nil {
@@ -908,9 +923,9 @@ func WithLLMCodec(codec CodecFunc) LLMCallOption {
 
 // CodecHandle wraps an opaque FFI codec handle that carries both request
 // codec (decode/encode) and response codec (decode_response) implementations.
-// Create via [NewOpenAIChatCodec], [NewOpenAIResponsesCodec], or
-// [NewAnthropicMessagesCodec]. The handle is automatically freed when
-// garbage collected.
+// Create via [NewOpenAIChatCodec], [NewOpenAIResponsesCodec],
+// [NewAnthropicMessagesCodec], or [NewGeminiGenerateContentCodec]. The handle is
+// automatically freed when garbage collected.
 type CodecHandle struct {
 	ptr *C.FfiCodecHandle
 }
@@ -963,9 +978,25 @@ func NewAnthropicMessagesCodec() *CodecHandle {
 	return h
 }
 
+// NewGeminiGenerateContentCodec creates a codec for the Gemini generateContent API.
+//
+// The returned handle can be passed to [WithLLMCodec] or
+// [WithLLMResponseCodec] to enable structured request and response handling for
+// Gemini generateContent payloads.
+func NewGeminiGenerateContentCodec() *CodecHandle {
+	h := &CodecHandle{ptr: C.nemo_relay_gemini_generate_content_codec_new()}
+	runtime.SetFinalizer(h, func(h *CodecHandle) {
+		if h.ptr != nil {
+			C.nemo_relay_codec_free(h.ptr)
+			h.ptr = nil
+		}
+	})
+	return h
+}
+
 // WithLLMResponseCodec sets the response codec for this LLM call.
-// Pass a CodecHandle created by [NewOpenAIChatCodec],
-// [NewOpenAIResponsesCodec], or [NewAnthropicMessagesCodec].
+// Pass a CodecHandle created by [NewOpenAIChatCodec], [NewOpenAIResponsesCodec],
+// [NewAnthropicMessagesCodec], or [NewGeminiGenerateContentCodec].
 // The codec handle is kept alive for the duration of the FFI call via
 // runtime.KeepAlive, so it is safe to pass an inline-constructed handle.
 func WithLLMResponseCodec(codec *CodecHandle) LLMCallOption {
@@ -1542,12 +1573,12 @@ func DeregisterSubscriber(name string) error {
 	return checkStatus(C.nemo_relay_deregister_subscriber(cName))
 }
 
-// FlushSubscribers waits for subscriber callbacks queued before this call to
-// finish. Native event-producing APIs enqueue subscriber work and return
-// without waiting for observer callbacks. Call this function outside native
-// subscriber callbacks. A re-entrant call returns without waiting to avoid
-// blocking the dispatcher, so callbacks later in the same dispatch snapshot
-// can still run.
+// FlushSubscribers waits for subscriber callbacks queued before this call and
+// events emitted transitively by those callbacks to finish. Native
+// event-producing APIs enqueue subscriber work and return without waiting for
+// observer callbacks. Call this function outside native subscriber callbacks.
+// A re-entrant call returns without waiting to avoid blocking the dispatcher,
+// so callbacks later in the same dispatch snapshot can still run.
 func FlushSubscribers() error {
 	return checkStatus(C.nemo_relay_flush_subscribers())
 }
@@ -2010,16 +2041,15 @@ type OpenTelemetrySubscriber struct {
 	ptr unsafe.Pointer
 }
 
-// NewOpenTelemetrySubscriber creates a new OpenTelemetry subscriber from config.
-func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubscriber, error) {
+func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConfig, error) {
 	if config.Transport == "" {
 		config.Transport = OpenTelemetryTransportHTTPBinary
 	}
 	if config.Type == "" {
-		return nil, fmt.Errorf("type is required")
+		return config, fmt.Errorf("type is required")
 	}
 	if config.Endpoint == "" {
-		return nil, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf("endpoint is required")
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2045,17 +2075,30 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	if config.AttributeMappings == nil {
 		config.AttributeMappings = []OtlpAttributeMapping{}
 	}
+	return config, nil
+}
+
+func optionalCString(value string) *C.char {
+	if value == "" {
+		return nil
+	}
+	return C.CString(value)
+}
+
+// NewOpenTelemetrySubscriber creates a new OpenTelemetry subscriber from config.
+func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubscriber, error) {
+	config, err := normalizeOpenTelemetryConfig(config)
+	if err != nil {
+		return nil, err
+	}
 
 	cTransport := C.CString(string(config.Transport))
 	defer C.free(unsafe.Pointer(cTransport))
 	cType := C.CString(string(config.Type))
 	defer C.free(unsafe.Pointer(cType))
 
-	var cEndpoint *C.char
-	if config.Endpoint != "" {
-		cEndpoint = C.CString(config.Endpoint)
-		defer C.free(unsafe.Pointer(cEndpoint))
-	}
+	cEndpoint := C.CString(config.Endpoint)
+	defer C.free(unsafe.Pointer(cEndpoint))
 
 	headersJSON, err := jsonMarshal(config.Headers)
 	if err != nil {
@@ -2074,17 +2117,11 @@ func NewOpenTelemetrySubscriber(config OpenTelemetryConfig) (*OpenTelemetrySubsc
 	cServiceName := C.CString(config.ServiceName)
 	defer C.free(unsafe.Pointer(cServiceName))
 
-	var cServiceNamespace *C.char
-	if config.ServiceNamespace != "" {
-		cServiceNamespace = C.CString(config.ServiceNamespace)
-		defer C.free(unsafe.Pointer(cServiceNamespace))
-	}
+	cServiceNamespace := optionalCString(config.ServiceNamespace)
+	defer C.free(unsafe.Pointer(cServiceNamespace))
 
-	var cServiceVersion *C.char
-	if config.ServiceVersion != "" {
-		cServiceVersion = C.CString(config.ServiceVersion)
-		defer C.free(unsafe.Pointer(cServiceVersion))
-	}
+	cServiceVersion := optionalCString(config.ServiceVersion)
+	defer C.free(unsafe.Pointer(cServiceVersion))
 
 	cInstrumentationScope := C.CString(config.InstrumentationScope)
 	defer C.free(unsafe.Pointer(cInstrumentationScope))

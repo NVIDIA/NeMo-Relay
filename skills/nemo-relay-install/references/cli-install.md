@@ -22,8 +22,8 @@ Confirm these prerequisites before selecting an installation command:
 - Confirm the operating system and architecture have a published CLI asset.
 - Use Cargo when the user prefers a source build or needs an unsupported
   platform.
-- For a transparent run, confirm the selected `codex`, `claude`, or `hermes`
-  command is already on `PATH`.
+- For a transparent run, confirm that the selected agent command is already on
+  `PATH`. Common examples are `codex` and `claude`.
 
 ## Install
 
@@ -86,7 +86,7 @@ nemo-relay run --agent <agent> --dry-run --print
 
 After installation, hand a generic trial to `nemo-relay-get-started`. Its
 default path launches the selected coding agent with `nemo-relay codex`,
-`nemo-relay claude`, `nemo-relay hermes`, or `nemo-relay run -- <command>`.
+`nemo-relay claude` or `nemo-relay run -- <command>`.
 The wrapper is temporary for that process.
 
 Use persistent host-plugin installation only when the user explicitly wants

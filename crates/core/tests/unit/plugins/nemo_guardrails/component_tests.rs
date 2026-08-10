@@ -403,7 +403,8 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
             "openai_chat",
             "openai_responses",
             "anthropic_messages",
-            "oci_genai"
+            "oci_genai",
+            "gemini_generate_content"
         ]
     ));
     assert!(schema_property_has_default(
@@ -504,7 +505,15 @@ fn invalid_shapes_and_values_are_reported() {
         .lock()
         .unwrap_or_else(|err| err.into_inner());
     reset_runtime();
+    assert_invalid_shape_and_mode();
+    assert_invalid_local_config();
+    assert_invalid_remote_identity_and_codec();
+    assert_remote_tool_surface_validation();
+    assert_empty_and_mixed_config_values();
+    assert_request_defaults_validation();
+}
 
+fn assert_invalid_shape_and_mode() {
     let invalid_shape = validate_plugin_config(&plugin_config(json!({
         "version": "one",
     })));
@@ -539,7 +548,9 @@ fn invalid_shapes_and_values_are_reported() {
             .any(|diag| diag.field.as_deref() == Some("mode")
                 && diag.message.contains("mode must be 'remote' or 'local'"))
     );
+}
 
+fn assert_invalid_local_config() {
     let local_missing_source = validate_plugin_config(&plugin_config(json!({
         "mode": "local",
         "codec": "openai_chat",
@@ -581,7 +592,9 @@ fn invalid_shapes_and_values_are_reported() {
             .any(|diag| diag.field.as_deref() == Some("remote")
                 && diag.message.contains("cannot be used when mode is 'local'"))
     );
+}
 
+fn assert_invalid_remote_identity_and_codec() {
     let remote_missing_identity = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
@@ -633,9 +646,16 @@ fn invalid_shapes_and_values_are_reported() {
     })));
     assert!(bad_codec.has_errors());
     assert!(bad_codec.diagnostics.iter().any(|diag| {
-        diag.message.contains(
-            "codec must be 'openai_chat', 'openai_responses', 'anthropic_messages', or 'oci_genai'",
-        )
+        diag.message.contains("codec must be one of:")
+            && [
+                "openai_chat",
+                "openai_responses",
+                "anthropic_messages",
+                "oci_genai",
+                "gemini_generate_content",
+            ]
+            .iter()
+            .all(|name| diag.message.contains(name))
     }));
 
     let unsupported_remote_codec = validate_plugin_config(&plugin_config(json!({
@@ -685,6 +705,27 @@ fn invalid_shapes_and_values_are_reported() {
             .contains("remote mode currently supports only codec = 'openai_chat'")
     }));
 
+    let unsupported_remote_gemini_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "gemini_generate_content",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(unsupported_remote_gemini_codec.has_errors());
+    assert!(
+        unsupported_remote_gemini_codec
+            .diagnostics
+            .iter()
+            .any(|diag| {
+                diag.message
+                    .contains("remote mode currently supports only codec = 'openai_chat'")
+            })
+    );
+}
+
+fn assert_remote_tool_surface_validation() {
     let unsupported_remote_tool_input = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
@@ -717,7 +758,9 @@ fn invalid_shapes_and_values_are_reported() {
         }
     })));
     assert!(!supported_remote_tool_output.has_errors());
+}
 
+fn assert_empty_and_mixed_config_values() {
     let remote_empty_fields = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",
         "codec": "openai_chat",
@@ -830,7 +873,9 @@ fn invalid_shapes_and_values_are_reported() {
             .iter()
             .any(|diag| diag.field.as_deref() == Some("local.python_path"))
     );
+}
 
+fn assert_request_defaults_validation() {
     let local_request_defaults = validate_plugin_config(&plugin_config(json!({
         "mode": "local",
         "codec": "openai_chat",

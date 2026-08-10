@@ -40,6 +40,12 @@ This workflow assumes `upstream` is the NVIDIA repository remote
    branch.
 6. Run `just set-version <next-version>` to bump all release-versioned package
    surfaces on `main`.
+   Regenerate the dynamic worker-plugin fixture lockfile so its path
+   dependencies use the new workspace version:
+
+   ```bash
+   cargo generate-lockfile --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml
+   ```
 7. Search documentation source for references to the old version and update
    current-version install commands, package examples, and configuration
    examples to `<next-version>` where appropriate:
@@ -56,6 +62,8 @@ This workflow assumes `upstream` is the NVIDIA repository remote
    ```bash
    ruby -e 'require "yaml"; YAML.load_file(".github/nightly-alpha-branches.yaml"); YAML.load_file(".github/workflows/nightly-alpha-tag.yaml")'
    just set-version <next-version>
+   cargo generate-lockfile --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml
+   cargo build --locked --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml
    rg -n '<old-version>' README.md docs fern --glob '!docs/_build/**' || true
    git diff --check
    ```

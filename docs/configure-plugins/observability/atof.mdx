@@ -149,8 +149,10 @@ events delivered after the exporter closes. A timeout is logged and does not by
 itself cause `shutdown()` to return an error.
 
 During graceful shutdown, `plugin.clear()` or `clear_plugin_configuration()`
-uses that same terminal stream-sink operation. It does not guarantee that a
-worker which timed out drained or closed.
+uses that same terminal stream-sink operation. From a Python `asyncio` task,
+await `plugin.clear_async()` so queued sanitizers can finish on the running
+event loop. Teardown does not guarantee that a worker which timed out drained
+or closed.
 
 ## Migrate From Version 1
 
@@ -196,6 +198,8 @@ codec annotation, the emitted event input uses the same projection. If that
 event-only encoding fails, Relay retains the complete event input and
 annotation. The request used for provider execution remains unchanged. Refer to
 [Events](/about-nemo-relay/concepts/events) for the complete freshness contract.
+Set top-level `enable_full_payloads = true` to retain complete sanitized LLM
+request payloads on every start event.
 
 Register the plugin before instrumented work starts. Clear it during shutdown
 so every sink flushes pending events and stream connections close cleanly.
@@ -260,7 +264,7 @@ async def main():
         # Run instrumented application work here.
         pass
     finally:
-        plugin.clear()
+        await plugin.clear_async()
 
 asyncio.run(main())
 ```

@@ -200,6 +200,66 @@ describe('core plugins', () => {
       plugin.deregister(pluginKind);
     }
   });
+
+  it('snapshotted plugin execution intercepts survive configuration teardown', async () => {
+    const pluginKind = `node.test.execution-snapshot.${Date.now()}`;
+    let blockerEntered;
+    const entered = new Promise((resolve) => {
+      blockerEntered = resolve;
+    });
+    let releaseBlocker;
+    const release = new Promise((resolve) => {
+      releaseBlocker = resolve;
+    });
+
+    plugin.register(pluginKind, {
+      register(_config, context) {
+        context.registerToolExecutionIntercept('target', 100, async (args, next) => ({
+          result: {
+            ...(await next(args)),
+            snapshotted: true,
+          },
+        }));
+        context.registerToolExecutionIntercept('blocker', -100, async (args, next) => {
+          blockerEntered();
+          await release;
+          return { result: await next(args) };
+        });
+      },
+    });
+
+    try {
+      await plugin.initialize({
+        version: 1,
+        components: [
+          plugin.ComponentSpec('observability', {
+            version: 3,
+            atof: { enabled: false },
+          }),
+          adaptive.ComponentSpec({
+            version: 1,
+            state: { backend: adaptive.inMemoryBackend() },
+            adaptive_hints: adaptive.adaptiveHintsConfig(),
+          }),
+          plugin.ComponentSpec(pluginKind, {}),
+        ],
+      });
+      const execution = lib.toolCallExecute('plugin_snapshot_tool', {}, () => ({
+        downstream: true,
+      }));
+      await entered;
+      plugin.clear();
+      releaseBlocker();
+      assert.deepEqual(await execution, {
+        downstream: true,
+        snapshotted: true,
+      });
+    } finally {
+      releaseBlocker();
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
 });
 
 describe('adaptive helpers', () => {
@@ -242,5 +302,44 @@ describe('adaptive helpers', () => {
         },
       },
     );
+  });
+
+  it('keeps response-cache helpers camelCase and serializes plugin config', () => {
+    const responseCache = adaptive.responseCacheConfig();
+    assert.deepEqual(responseCache, {
+      ttlSeconds: 3600,
+      namespace: '',
+      priority: 50,
+      bypassRate: 0,
+      cacheNondeterministic: false,
+      keyStrategy: 'exact_request',
+      headerAllowlist: [],
+      backend: adaptive.inMemoryBackend(),
+    });
+    assert.deepEqual(adaptive.ComponentSpec({ version: 1, responseCache }).config, {
+      version: 1,
+      response_cache: {
+        ttl_seconds: 3600,
+        namespace: '',
+        priority: 50,
+        bypass_rate: 0,
+        cache_nondeterministic: false,
+        key_strategy: 'exact_request',
+        header_allowlist: [],
+        backend: adaptive.inMemoryBackend(),
+      },
+    });
+  });
+
+  it('serializes response-cache config at both native boundaries', () => {
+    const unscoped = adaptive.validateConfig({ version: 1, responseCache: {} });
+    assert.ok(unscoped.diagnostics.some(({ code }) => code === 'response_cache.missing_namespace'));
+
+    const config = {
+      version: 1,
+      responseCache: { ttlSeconds: 0, namespace: 'node-test' },
+    };
+    assert.equal(adaptive.validateConfig(config).diagnostics[0].code, 'response_cache.invalid_ttl');
+    assert.throws(() => new adaptive.AdaptiveRuntime(config), /ttl_seconds must be greater than 0/);
   });
 });

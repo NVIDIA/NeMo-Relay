@@ -333,7 +333,10 @@ def register_tool_execution(scope_handle, name, priority, fn):
 
     Notes:
         Execution intercepts wrap only calls emitted while the owning scope
-        remains active.
+        remains active. ``next_call`` may be awaited repeatedly or concurrently
+        while ``fn`` is running. Each call gets an isolated snapshot of the
+        scope stack visible when it begins. Unfinished or new calls are rejected
+        after ``fn`` returns or raises.
     """
     return _register_tool_execution(scope_handle.uuid, name, priority, fn)
 
@@ -542,7 +545,10 @@ def register_llm_execution(scope_handle, name, priority, fn):
 
     Notes:
         Execution intercepts wrap only calls emitted while the owning scope
-        remains active.
+        remains active. ``next_call`` may be awaited repeatedly or concurrently
+        while ``fn`` is running. Each call gets an isolated snapshot of the
+        scope stack visible when it begins. Unfinished or new calls are rejected
+        after ``fn`` returns or raises.
     """
     return _register_llm_execution(scope_handle.uuid, name, priority, fn)
 
@@ -583,7 +589,12 @@ def register_llm_stream_execution(scope_handle, name, priority, fn):
 
     Notes:
         Streaming execution intercepts wrap chunk production only. They do not
-        replace the collector or finalizer callbacks.
+        replace the collector or finalizer callbacks. ``next_call`` may be
+        awaited repeatedly or concurrently, and each call gets an isolated
+        snapshot of its visible scope stack. The returned interceptor stream
+        keeps ``next_call`` active until it closes; unfinished or later calls
+        are then rejected. A stream returned successfully by ``next_call``
+        keeps its normal streaming lifetime.
     """
     return _register_llm_stream_execution(scope_handle.uuid, name, priority, fn)
 

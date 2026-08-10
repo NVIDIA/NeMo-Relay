@@ -85,7 +85,7 @@ async def main() -> None:
         print("Activation report:", active_report)
         # Run instrumented application work here.
     finally:
-        nemo_relay.plugin.clear()
+        await nemo_relay.plugin.clear_async()
 
 
 if __name__ == "__main__":
@@ -216,7 +216,7 @@ async def main() -> None:
         print("Activation report:", active_report)
         # Run managed tool or LLM work here to log lifecycle events.
     finally:
-        nemo_relay.plugin.clear()
+        await nemo_relay.plugin.clear_async()
 
 
 if __name__ == "__main__":
@@ -335,7 +335,7 @@ async def main() -> None:
         await nemo_relay.plugin.initialize(config)
         # Run managed tool or LLM work here.
     finally:
-        nemo_relay.plugin.clear()
+        await nemo_relay.plugin.clear_async()
 
 
 if __name__ == "__main__":

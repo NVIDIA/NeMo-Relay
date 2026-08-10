@@ -14,8 +14,8 @@ use tokio_stream::StreamExt;
 use super::{
     CreateLlmHandleParams, LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmHandle,
     LlmRequest, LlmStreamCallExecuteParams, create_llm_handle, emit_llm_start,
-    emit_optimization_marks_with, llm_call, llm_call_end, llm_call_execute,
-    llm_stream_call_execute, project_llm_request_to_current_user_turn,
+    emit_optimization_marks_with, enqueue_optimization_marks, llm_call, llm_call_end,
+    llm_call_execute, llm_stream_call_execute, project_llm_request_to_current_user_turn,
     sanitize_context_for_request_codec, sanitize_context_for_response_codec,
 };
 use crate::api::event::{Event, ScopeCategory};
@@ -146,7 +146,7 @@ impl LlmResponseCodec for RuntimeIdentityCodec {
 }
 
 #[test]
-fn sanitizer_context_preserves_all_codec_identity_states() {
+fn request_sanitizer_context_preserves_all_codec_identity_states() {
     let identity_only_request = crate::api::runtime::LlmSanitizeRequestContext::with_identity(
         LlmCodecIdentity::Runtime("identity-only.request.v1".into()),
     );
@@ -155,15 +155,7 @@ fn sanitizer_context_preserves_all_codec_identity_states() {
         &LlmCodecIdentity::Runtime("identity-only.request.v1".into())
     );
     assert!(identity_only_request.resolve_codec().is_none());
-
-    let identity_only_response = crate::api::runtime::LlmSanitizeResponseContext::with_identity(
-        LlmCodecIdentity::Runtime("identity-only.response.v1".into()),
-    );
-    assert_eq!(
-        identity_only_response.codec(),
-        &LlmCodecIdentity::Runtime("identity-only.response.v1".into())
-    );
-    assert!(identity_only_response.resolve_codec().is_none());
+    assert!(format!("{identity_only_request:?}").contains("identity-only.request.v1"));
 
     assert_eq!(
         sanitize_context_for_request_codec(None).codec(),
@@ -192,6 +184,20 @@ fn sanitizer_context_preserves_all_codec_identity_states() {
         .codec(),
         &LlmCodecIdentity::Opaque
     );
+}
+
+#[test]
+fn response_sanitizer_context_preserves_all_codec_identity_states() {
+    let identity_only_response = crate::api::runtime::LlmSanitizeResponseContext::with_identity(
+        LlmCodecIdentity::Runtime("identity-only.response.v1".into()),
+    );
+    assert_eq!(
+        identity_only_response.codec(),
+        &LlmCodecIdentity::Runtime("identity-only.response.v1".into())
+    );
+    assert!(identity_only_response.resolve_codec().is_none());
+    assert!(format!("{identity_only_response:?}").contains("identity-only.response.v1"));
+
     assert_eq!(
         sanitize_context_for_response_codec(Some(&OpenAIChatCodec as &dyn LlmResponseCodec))
             .codec(),
@@ -295,7 +301,7 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
         1,
         Arc::new(move |request, _context| {
             sanitizer_capture.lock().unwrap().push(request.clone());
-            Some(request)
+            Box::pin(async move { Ok(Some(request)) })
         }),
     )
     .unwrap();
@@ -431,13 +437,13 @@ fn sanitization_invalidates_manual_annotations_without_a_codec() {
     register_llm_sanitize_request_guardrail(
         "manual-annotation-invalidation-request",
         1,
-        Arc::new(|_request, _context| Some(redacted_request())),
+        Arc::new(|_request, _context| Box::pin(async { Ok(Some(redacted_request())) })),
     )
     .unwrap();
     register_llm_sanitize_response_guardrail(
         "manual-annotation-invalidation-response",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
 
@@ -500,13 +506,13 @@ fn no_op_sanitizers_keep_manual_annotations() {
     register_llm_sanitize_request_guardrail(
         "manual-annotation-noop-request",
         1,
-        Arc::new(|request, _context| Some(request)),
+        Arc::new(|request, _context| Box::pin(async move { Ok(Some(request)) })),
     )
     .unwrap();
     register_llm_sanitize_response_guardrail(
         "manual-annotation-noop-response",
         1,
-        Arc::new(|response, _context| Some(response)),
+        Arc::new(|response, _context| Box::pin(async move { Ok(Some(response)) })),
     )
     .unwrap();
 
@@ -558,13 +564,13 @@ fn sanitization_regenerates_annotations_with_active_codecs() {
     register_llm_sanitize_request_guardrail(
         "active-codec-annotation-regeneration-request",
         1,
-        Arc::new(|_request, _context| Some(redacted_request())),
+        Arc::new(|_request, _context| Box::pin(async { Ok(Some(redacted_request())) })),
     )
     .unwrap();
     register_llm_sanitize_response_guardrail(
         "active-codec-annotation-regeneration-response",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
 
@@ -647,7 +653,7 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
         1,
         Arc::new(move |response, _context| {
             sanitizer_inputs.lock().unwrap().push(response);
-            Some(Json::Null)
+            Box::pin(async { Ok(Some(Json::Null)) })
         }),
     )
     .unwrap();
@@ -676,7 +682,7 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     register_llm_sanitize_response_guardrail(
         "buffered-null-fallback-redacted",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
     let handle = create_llm_handle(
@@ -713,10 +719,25 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     )
     .unwrap();
 
+    let handle = create_llm_handle(
+        CreateLlmHandleParams::builder()
+            .name("buffered-explicit-null-fallback")
+            .build(),
+    )
+    .unwrap();
+    llm_call_end(
+        LlmCallEndParams::builder()
+            .handle(&handle)
+            .response(Json::Null)
+            .data(Json::Null)
+            .build(),
+    )
+    .unwrap();
+
     flush_subscribers().unwrap();
     let captured = events.lock().unwrap();
     assert_eq!(*seen.lock().unwrap(), vec![fallback]);
-    assert_eq!(captured.len(), 3);
+    assert_eq!(captured.len(), 4);
     assert_eq!(captured[0].output(), Some(&Json::Null));
     assert!(captured[0].annotated_response().is_none());
     assert_eq!(captured[1].output(), Some(&redacted_response()));
@@ -726,6 +747,8 @@ fn buffered_null_fallback_is_sanitized_before_emission() {
     );
     assert!(captured[2].output().is_none());
     assert!(captured[2].annotated_response().is_none());
+    assert_eq!(captured[3].output(), Some(&Json::Null));
+    assert!(captured[3].annotated_response().is_none());
     assert!(
         captured
             .iter()
@@ -760,7 +783,7 @@ fn streaming_null_fallback_is_sanitized_before_emission() {
         1,
         Arc::new(move |response, _context| {
             sanitizer_inputs.lock().unwrap().push(response);
-            Some(Json::Null)
+            Box::pin(async { Ok(Some(Json::Null)) })
         }),
     )
     .unwrap();
@@ -791,7 +814,7 @@ fn streaming_null_fallback_is_sanitized_before_emission() {
     register_llm_sanitize_response_guardrail(
         "streaming-null-fallback-redacted",
         1,
-        Arc::new(|_response, _context| Some(redacted_response())),
+        Arc::new(|_response, _context| Box::pin(async { Ok(Some(redacted_response())) })),
     )
     .unwrap();
     runtime.block_on(async {
@@ -917,6 +940,79 @@ fn freshness_culls_annotations_and_repeated_compactions_are_idempotent() {
     assert_eq!(starts[2].1.len(), 4);
     assert_eq!(starts[3].0, "post-compaction-stale");
     assert_eq!(starts[3].1.len(), 2);
+}
+
+#[test]
+fn full_payload_policy_preserves_complete_repeated_request_history() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+    global_context()
+        .write()
+        .unwrap()
+        .observability_full_payloads_enabled = true;
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "full-payloads",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let request = multi_turn_request();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        for name in ["full-payload-first", "full-payload-repeated"] {
+            llm_call_execute(
+                LlmCallExecuteParams::builder()
+                    .name(name)
+                    .request(request.clone())
+                    .func(Arc::new(|_| Box::pin(async { Ok(json!({"done": true})) })))
+                    .codec(Arc::new(OpenAIChatCodec))
+                    .build(),
+            )
+            .await
+            .unwrap();
+        }
+    });
+    llm_call(
+        LlmCallParams::builder()
+            .name("full-payload-manual")
+            .request(&request)
+            .annotated_request(multi_turn_annotation())
+            .build(),
+    )
+    .unwrap();
+
+    flush_subscribers().unwrap();
+    assert!(deregister_subscriber("full-payloads").unwrap());
+    global_context()
+        .write()
+        .unwrap()
+        .observability_full_payloads_enabled = false;
+
+    let events = events.lock().unwrap();
+    for name in [
+        "full-payload-first",
+        "full-payload-repeated",
+        "full-payload-manual",
+    ] {
+        let start = events
+            .iter()
+            .find(|event| {
+                event.name() == name && event.scope_category() == Some(ScopeCategory::Start)
+            })
+            .unwrap_or_else(|| panic!("missing LLM start event {name}"));
+        assert_eq!(
+            start.input().unwrap()["content"]["messages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert_eq!(start.annotated_request().unwrap().messages.len(), 4);
+    }
 }
 
 #[test]
@@ -1460,6 +1556,41 @@ fn unavailable_mark_sanitizer_does_not_acknowledge_the_delivery_cursor() {
 }
 
 #[test]
+fn manual_optimization_mark_snapshot_failure_publishes_fail_open() {
+    let _guard = lock_global_runtime();
+    reset_global();
+    let scope_stack = create_scope_stack();
+    set_thread_scope_stack(scope_stack.clone());
+    let handle = LlmHandle::builder().name("poisoned-mark-snapshot").build();
+    assert!(
+        handle
+            .optimization_recorder
+            .record(LlmOptimizationContribution::new(
+                "test",
+                "snapshot_fail_open"
+            ))
+    );
+    std::thread::spawn(move || {
+        let _guard = scope_stack.write().unwrap();
+        panic!("poison the captured scope stack");
+    })
+    .join()
+    .unwrap_err();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    let subscribers = vec![Arc::new(move |event: &Event| {
+        captured.lock().unwrap().push(event.clone());
+    }) as crate::api::runtime::EventSubscriberFn];
+    enqueue_optimization_marks(&handle, &subscribers);
+    flush_subscribers().unwrap();
+
+    assert_eq!(events.lock().unwrap().len(), 1);
+    assert!(handle.optimization_recorder.unemitted().is_empty());
+    set_thread_scope_stack(create_scope_stack());
+}
+
+#[test]
 fn close_boundary_freezes_identical_mark_and_summary_contributions() {
     let _guard = lock_global_runtime();
     reset_global();
@@ -1525,11 +1656,12 @@ fn failed_managed_calls_sanitize_fallback_end_data() {
         "failed-managed-call-sanitization",
         1,
         Arc::new(move |response, context| {
-            sanitizer_inputs
-                .lock()
-                .unwrap()
-                .push((response, context.codec().clone()));
-            Some(redacted_response())
+            let codec = context.codec().clone();
+            let sanitizer_inputs = Arc::clone(&sanitizer_inputs);
+            Box::pin(async move {
+                sanitizer_inputs.lock().unwrap().push((response, codec));
+                Ok(Some(redacted_response()))
+            })
         }),
     )
     .unwrap();
@@ -1665,6 +1797,7 @@ fn llm_call_execute_adds_otel_status_metadata_to_end_events() {
     let error_metadata = metadata_for("llm-error");
     assert_eq!(error_metadata["caller"], json!("llm-error"));
     assert_eq!(error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(error_metadata["error.type"], json!("internal_error"));
     assert!(
         error_metadata["otel.status_description"]
             .as_str()
@@ -1822,6 +1955,10 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
         json!("llm-stream-upstream-error")
     );
     assert_eq!(upstream_error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(
+        upstream_error_metadata["error.type"],
+        json!("internal_error")
+    );
     assert!(
         upstream_error_metadata["otel.status_description"]
             .as_str()
@@ -1835,6 +1972,10 @@ fn llm_stream_call_execute_adds_otel_error_metadata_to_failed_end_events() {
         json!("llm-stream-collector-error")
     );
     assert_eq!(collector_error_metadata["otel.status_code"], json!("ERROR"));
+    assert_eq!(
+        collector_error_metadata["error.type"],
+        json!("internal_error")
+    );
     assert!(
         collector_error_metadata["otel.status_description"]
             .as_str()

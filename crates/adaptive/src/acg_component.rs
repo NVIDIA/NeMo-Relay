@@ -107,6 +107,26 @@ fn build_semantic_request_view(request: &LlmRequest) -> Result<SemanticRequestVi
     })
 }
 
+/// Build the provider cache-intent bundle for a request, or decline to build one.
+///
+/// Reuse is gated: the learned profile must carry a stable prefix fingerprint,
+/// the live request must produce one, and the two must agree. Any missing or
+/// divergent fingerprint fails closed and emits a `build_intent_bundle_skipped`
+/// debug event rather than emitting hints derived from a different prompt shape.
+///
+/// # Parameters
+/// - `agent_id`: Agent the request belongs to.
+/// - `provider`: Provider name used for debug attribution.
+/// - `plugin`: Provider plugin that translates intents into provider hints.
+/// - `request_surface`: Decoded request surface the hints will be applied to.
+/// - `annotated_request`: Normalized request used to derive the learning key.
+/// - `prompt_ir`: Normalized IR of the live request.
+/// - `stability`: Learned stability record for this profile.
+/// - `observation_count`: Observations backing `stability`.
+///
+/// # Returns
+/// The intent bundle, or [`None`] when the request has too few observations or
+/// fails the stable prefix fingerprint gate.
 #[allow(clippy::too_many_arguments)]
 fn build_intent_bundle(
     agent_id: &str,
@@ -129,6 +149,34 @@ fn build_intent_bundle(
                 "minimum_observations": MIN_ACG_OBSERVATIONS,
                 "stable_prefix_length": stability.stable_prefix_length,
             }),
+        );
+        return None;
+    }
+
+    let learning_key = derive_acg_learning_key(agent_id, annotated_request);
+    let live_fingerprint = crate::acg::stability::profile_prefix_fingerprint(
+        prompt_ir,
+        stability.stable_prefix_length,
+        &learning_key,
+    );
+    let Some(stored_fingerprint) = stability.stable_prefix_fingerprint.as_ref() else {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_missing"}),
+        );
+        return None;
+    };
+    let Some(live_fingerprint) = live_fingerprint.as_ref() else {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_unavailable"}),
+        );
+        return None;
+    };
+    if stored_fingerprint != live_fingerprint {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_mismatch"}),
         );
         return None;
     }
@@ -582,26 +630,32 @@ pub(crate) fn create_acg_llm_request_intercept(
     provider: String,
     plugin: Arc<dyn ProviderPlugin>,
 ) -> LlmRequestInterceptFn {
-    Arc::new(move |_name: &str, request: LlmRequest, annotated| {
-        let input_content = request.content.clone();
-        let translated =
-            translate_request(&request, &agent_id, &provider, plugin.as_ref(), &hot_cache)
-                .unwrap_or(request);
-        if annotated.is_some() && translated.content != input_content {
-            let translated_annotated = build_semantic_request_view(&translated)
-                .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))?
-                .annotated_request;
-            return Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-                LlmRequest {
-                    headers: translated.headers,
-                    content: input_content,
-                },
-                Some(translated_annotated),
-            ));
-        }
-        Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
-            translated, annotated,
-        ))
+    Arc::new(move |_name: String, request: LlmRequest, annotated| {
+        let hot_cache = hot_cache.clone();
+        let agent_id = agent_id.clone();
+        let provider = provider.clone();
+        let plugin = plugin.clone();
+        Box::pin(async move {
+            let input_content = request.content.clone();
+            let translated =
+                translate_request(&request, &agent_id, &provider, plugin.as_ref(), &hot_cache)
+                    .unwrap_or(request);
+            if annotated.is_some() && translated.content != input_content {
+                let translated_annotated = build_semantic_request_view(&translated)
+                    .map_err(|error| nemo_relay::error::FlowError::Internal(error.to_string()))?
+                    .annotated_request;
+                return Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    LlmRequest {
+                        headers: translated.headers,
+                        content: input_content,
+                    },
+                    Some(translated_annotated),
+                ));
+            }
+            Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                translated, annotated,
+            ))
+        })
     })
 }
 
