@@ -473,4 +473,8 @@ fn host_string(host: &NemoRelayNativeHostApiV1, value: &str) -> Option<*mut Nemo
     (status == NemoRelayStatus::Ok && !output.is_null()).then_some(output)
 }
 
+#[cfg(test)]
+#[path = "../tests/unit/lib_tests.rs"]
+mod tests;
+
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_register_plugin, || RampartNativePlugin);
