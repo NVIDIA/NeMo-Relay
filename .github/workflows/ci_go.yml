@@ -43,6 +43,13 @@ jobs:
             runner: windows-11-arm
 
     steps:
+      - name: Remove untrusted Homebrew tap
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          if [ -d "$(brew --repository aws/tap)" ]; then
+            brew untap aws/tap
+          fi
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
