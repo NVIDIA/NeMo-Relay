@@ -1511,3 +1511,59 @@ fn oci_streaming_codec_does_not_double_cohere_text_on_full_terminal_event() {
     );
     assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
 }
+
+#[test]
+fn oci_streaming_codec_finalizes_cohere_v2_root_message() {
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "apiFormat": "COHEREV2",
+        "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "Checking "}]}
+    }))
+    .unwrap();
+    collector(json!({
+        "message": {"content": [{"type": "TEXT", "text": "the weather."}]}
+    }))
+    .unwrap();
+    collector(json!({
+        "message": {
+            "content": [],
+            "toolCalls": [{
+                "id": "call-1",
+                "type": "FUNCTION",
+                "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}
+            }]
+        },
+        "finishReason": "TOOL_CALL",
+        "usage": {"promptTokens": 20, "completionTokens": 9, "totalTokens": 29}
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    let chat_response = &assembled["chatResponse"];
+    assert!(
+        chat_response.get("message").is_some() && chat_response.get("choices").is_none(),
+        "COHEREV2 streams must finalize to the root-message shape, got {chat_response}"
+    );
+
+    let annotated = OCIGenAIChatCodec.decode_response(&assembled).unwrap();
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Checking the weather.".into()))
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    let tool_calls = annotated.tool_calls.as_ref().unwrap();
+    assert_eq!(tool_calls[0].id, "call-1");
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "Paris"}));
+    assert_eq!(annotated.usage.as_ref().unwrap().total_tokens, Some(29));
+    assert_eq!(
+        annotated.api_specific,
+        Some(ApiSpecificResponse::OCIGenAI {
+            api_format: Some("COHEREV2".into()),
+            model_version: None,
+        })
+    );
+}

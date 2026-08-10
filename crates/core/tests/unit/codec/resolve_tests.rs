@@ -23,9 +23,9 @@ fn builtin_provider_surface_registry_keeps_request_priority() {
     assert_eq!(
         surfaces,
         vec![
-            ProviderSurface::OCIGenAI,
             ProviderSurface::OpenAIResponses,
             ProviderSurface::AnthropicMessages,
+            ProviderSurface::OCIGenAI,
             ProviderSurface::OpenAIChat,
             ProviderSurface::GeminiGenerateContent,
         ]
@@ -511,9 +511,9 @@ fn supported_codec_names_track_the_builtin_registry() {
     assert_eq!(
         supported_codec_names(),
         vec![
-            "oci_genai",
             "openai_responses",
             "anthropic_messages",
+            "oci_genai",
             "openai_chat",
             "gemini_generate_content"
         ]

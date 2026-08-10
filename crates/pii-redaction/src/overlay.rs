@@ -387,6 +387,13 @@ fn overlay_oci_cohere_tool_calls(
         chat_response.remove("toolCalls");
         return;
     };
+    // The COHERE wire documents `parameters` as an object; a sanitizer that
+    // produced any other shape cannot be overlaid faithfully, so drop the
+    // calls rather than emit an invalid wire shape.
+    if tool_calls.iter().any(|call| !call.arguments.is_object()) {
+        chat_response.remove("toolCalls");
+        return;
+    }
 
     raw_calls.truncate(tool_calls.len());
 

@@ -1644,6 +1644,16 @@ impl OCIGenAIStreamingState {
             if let Some(reason) = self.cohere_finish_reason {
                 chat_response.insert("finishReason".to_string(), Json::String(reason));
             }
+        } else if api_format == "COHEREV2" {
+            // The COHEREV2 response decoder reads a single root-level
+            // `message` (nested-function tool calls, root finishReason)
+            // rather than a `choices` array.
+            let choice = self.choices.into_values().next().unwrap_or_default();
+            let finish_reason = choice.finish_reason.clone();
+            chat_response.insert("message".to_string(), choice.finalize_v2_message());
+            if let Some(reason) = finish_reason {
+                chat_response.insert("finishReason".to_string(), Json::String(reason));
+            }
         } else {
             let choices: Vec<Json> = self
                 .choices
@@ -1688,12 +1698,45 @@ impl OCIChoiceState {
         if let Some(type_) = tool_call.get("type").and_then(Json::as_str) {
             state.type_ = Some(type_.to_string());
         }
-        if let Some(name) = tool_call.get("name").and_then(Json::as_str) {
+        // COHEREV2 fragments nest name/arguments under a `function` object;
+        // GENERIC fragments are flat.
+        let body = tool_call
+            .get("function")
+            .and_then(Json::as_object)
+            .unwrap_or(tool_call);
+        if let Some(name) = body.get("name").and_then(Json::as_str) {
             state.name = Some(name.to_string());
         }
-        if let Some(arguments) = tool_call.get("arguments").and_then(Json::as_str) {
+        if let Some(arguments) = body.get("arguments").and_then(Json::as_str) {
             state.arguments.push_str(arguments);
         }
+    }
+
+    /// Assemble the accumulated choice as a COHEREV2 root `message`
+    /// (typed content parts, nested-function tool calls).
+    fn finalize_v2_message(self) -> Json {
+        let mut message = serde_json::Map::new();
+        message.insert(
+            "role".to_string(),
+            Json::String(self.role.unwrap_or_else(|| "ASSISTANT".to_string())),
+        );
+        message.insert(
+            "content".to_string(),
+            if self.text.is_empty() {
+                Json::Array(Vec::new())
+            } else {
+                serde_json::json!([{"type": "TEXT", "text": self.text}])
+            },
+        );
+        if !self.tool_calls.is_empty() {
+            let tool_calls: Vec<Json> = self
+                .tool_calls
+                .into_iter()
+                .map(OCIToolCallState::finalize_v2)
+                .collect();
+            message.insert("toolCalls".to_string(), Json::Array(tool_calls));
+        }
+        Json::Object(message)
     }
 
     fn finalize(self, index: u64) -> Json {
@@ -1732,6 +1775,26 @@ impl OCIChoiceState {
 }
 
 impl OCIToolCallState {
+    /// Assemble the call in the COHEREV2 nested-function wire shape.
+    fn finalize_v2(self) -> Json {
+        let mut function = serde_json::Map::new();
+        function.insert(
+            "name".to_string(),
+            Json::String(self.name.unwrap_or_default()),
+        );
+        function.insert("arguments".to_string(), Json::String(self.arguments));
+        let mut call = serde_json::Map::new();
+        if let Some(id) = self.id {
+            call.insert("id".to_string(), Json::String(id));
+        }
+        call.insert(
+            "type".to_string(),
+            Json::String(self.type_.unwrap_or_else(|| "FUNCTION".to_string())),
+        );
+        call.insert("function".to_string(), Json::Object(function));
+        Json::Object(call)
+    }
+
     fn finalize(self) -> Json {
         let mut call = serde_json::Map::new();
         if let Some(id) = self.id {

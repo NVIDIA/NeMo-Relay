@@ -685,3 +685,28 @@ fn oci_genai_overlay_sanitizes_generic_string_content() {
         json!("[REDACTED]")
     );
 }
+
+#[test]
+fn oci_genai_overlay_drops_cohere_tool_calls_with_non_object_arguments() {
+    for arguments in [json!("scalar"), json!([1, 2]), json!(null)] {
+        let payload = json!({
+            "chatResponse": {
+                "apiFormat": "COHERE",
+                "text": "ok",
+                "toolCalls": [{"name": "one", "parameters": {"secret": "raw-1"}}]
+            }
+        });
+        let annotated = AnnotatedLlmResponse {
+            tool_calls: Some(vec![tool_call("call_0", "one", arguments.clone())]),
+            ..AnnotatedLlmResponse::default()
+        };
+
+        let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+        assert!(
+            overlaid["chatResponse"].get("toolCalls").is_none(),
+            "non-object sanitized arguments ({arguments}) must drop toolCalls, got {}",
+            overlaid["chatResponse"]
+        );
+    }
+}

@@ -68,11 +68,12 @@ pub(crate) struct ProviderSurfaceDescriptor {
 /// surface it could shadow. Response detection requires exactly one match
 /// before decoding.
 pub(crate) static BUILTIN_PROVIDER_SURFACES: &[ProviderSurfaceDescriptor] = &[
-    // OCI GenAI goes first: its ChatDetails envelope and apiFormat markers are
-    // the strongest signal and never appear in the other surfaces' shapes.
-    oci_genai::PROVIDER_SURFACE,
     openai_responses::PROVIDER_SURFACE,
     anthropic::PROVIDER_SURFACE,
+    // OCI GenAI must precede OpenAI Chat: a bare OCI GENERIC chatRequest body
+    // carries `messages`, which the looser OpenAI Chat detector would claim
+    // under first-match-wins. It has no overlap with the surfaces above.
+    oci_genai::PROVIDER_SURFACE,
     openai_chat::PROVIDER_SURFACE,
     gemini_generate_content::PROVIDER_SURFACE,
 ];
