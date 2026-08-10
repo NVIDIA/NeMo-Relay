@@ -1616,3 +1616,53 @@ fn oci_streaming_codec_preserves_non_text_cohere_v2_parts_in_order() {
     ));
     assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
 }
+
+#[test]
+fn oci_streaming_codec_preserves_non_text_generic_parts_in_order() {
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({
+        "apiFormat": "GENERIC",
+        "index": 0,
+        "message": {"role": "ASSISTANT", "content": [
+            {"type": "THINKING", "thinking": "internal reasoning"}
+        ]}
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": [{"type": "TEXT", "text": "The answer "}]}
+    }))
+    .unwrap();
+    collector(json!({
+        "index": 0,
+        "message": {"content": [{"type": "TEXT", "text": "is 42."}]},
+        "finishReason": "stop"
+    }))
+    .unwrap();
+
+    let assembled = finalizer();
+    assert_eq!(
+        assembled["chatResponse"]["choices"][0]["message"]["content"],
+        json!([
+            {"type": "THINKING", "thinking": "internal reasoning"},
+            {"type": "TEXT", "text": "The answer is 42."}
+        ])
+    );
+
+    let annotated = OCIGenAIChatCodec.decode_response(&assembled).unwrap();
+    let Some(MessageContent::Parts(parts)) = &annotated.message else {
+        panic!("expected typed parts, got {:?}", annotated.message);
+    };
+    assert!(matches!(
+        &parts[0],
+        ContentPart::ProviderNative { kind, .. } if kind == "THINKING"
+    ));
+    assert!(matches!(
+        &parts[1],
+        ContentPart::Text { text, .. } if text == "The answer is 42."
+    ));
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+}
