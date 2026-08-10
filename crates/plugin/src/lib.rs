@@ -1075,9 +1075,9 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
     /// Pushes one JSON chunk to an incremental native stream without blocking.
     ///
-    /// A full bounded host queue returns [`NemoRelayStatus::Internal`] and
-    /// records a backpressure message in the host's last-error slot. The
-    /// producer may retry the logical chunk after the consumer advances.
+    /// A full bounded host queue returns [`NemoRelayStatus::Internal`]. Check
+    /// [`NemoRelayNativeHostApiV4::async_stream_is_backpressured`] before
+    /// retrying the logical chunk after the consumer advances.
     pub async_stream_push_json: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         chunk_json: *const NemoRelayNativeString,
@@ -1087,8 +1087,9 @@ pub struct NemoRelayNativeHostApiV3 {
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus,
     /// Rejects an incremental native stream without blocking.
     ///
-    /// A full bounded queue returns [`NemoRelayStatus::Internal`]; the caller
-    /// may retry the rejection after the consumer advances.
+    /// A full bounded queue returns [`NemoRelayStatus::Internal`]. Check
+    /// [`NemoRelayNativeHostApiV4::async_stream_is_backpressured`] before
+    /// retrying the rejection after the consumer advances.
     pub async_stream_reject: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         message: *const NemoRelayNativeString,
@@ -2285,11 +2286,11 @@ impl<'a> PluginContext<'a> {
     /// `free_fn`; this call consumes `user_data` even when it rejects the host
     /// ABI. Callback-owned `next` and `stream` handles must each be
     /// released exactly once. Stream pushes and rejection are nonblocking:
-    /// `Internal` with a host last-error containing `backpressured` means the
-    /// bounded queue is full and the operation may be retried. The output
-    /// stream owns the callback lifetime. `next` may be invoked repeatedly or
-    /// concurrently until that stream settles; Relay then rejects or cancels
-    /// unfinished and later calls.
+    /// For `Internal`, use [`NemoRelayNativeHostApiV4::async_stream_is_backpressured`]
+    /// to determine whether the bounded queue is full and may be retried. The
+    /// output stream owns the callback lifetime. `next` may be invoked
+    /// repeatedly or concurrently until that stream settles; Relay then
+    /// rejects or cancels unfinished and later calls.
     pub unsafe fn register_async_stream_middleware_raw(
         &mut self,
         name: &str,
