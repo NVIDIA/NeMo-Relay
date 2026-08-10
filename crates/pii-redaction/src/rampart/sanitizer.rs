@@ -468,14 +468,10 @@ impl RampartSanitizer {
                     ));
                 } else if pending_keys.contains(&key) {
                     texts.push(SelectedText::Pending { key, text: None });
-                } else if pending_keys.len() >= MAX_TEXTS_PER_PAYLOAD {
-                    *rejected_fields += 1;
-                    texts.push(SelectedText::Resolved(
-                        FailClosedReason::PayloadLimit.placeholder().to_string(),
-                    ));
-                } else if total_bytes
-                    .checked_add(text.len())
-                    .is_none_or(|next_total| next_total > MAX_PAYLOAD_TEXT_BYTES)
+                } else if pending_keys.len() >= MAX_TEXTS_PER_PAYLOAD
+                    || total_bytes
+                        .checked_add(text.len())
+                        .is_none_or(|next_total| next_total > MAX_PAYLOAD_TEXT_BYTES)
                 {
                     *rejected_fields += 1;
                     texts.push(SelectedText::Resolved(
