@@ -1638,10 +1638,11 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
     };
+    let observability_request = intercepted_request.clone();
     inject_traceparent(&mut intercepted_request, handle.uuid)?;
     queue_llm_start_with_subscribers(
         &handle,
-        &intercepted_request,
+        &observability_request,
         annotated_request.clone(),
         request_codec.clone(),
         &lifecycle_subscribers,
@@ -1848,10 +1849,11 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
     };
+    let observability_request = intercepted_request.clone();
     inject_traceparent(&mut intercepted_request, handle.uuid)?;
     queue_llm_start_with_subscribers(
         &handle,
-        &intercepted_request,
+        &observability_request,
         annotated_request,
         request_codec.clone(),
         &lifecycle_subscribers,
