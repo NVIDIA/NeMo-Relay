@@ -9,6 +9,7 @@ use crate::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use crate::api::llm::LlmRequest;
 use crate::api::registry::Guardrail;
 use crate::api::runtime::global_context;
+use crate::api::runtime::scope_stack::traceparent_for_llm;
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
@@ -25,6 +26,8 @@ use crate::shared_runtime::ensure_process_runtime_owner;
 pub const DYNAMO_SESSION_ID_HEADER_KEY: &str = "x-dynamo-session-id";
 /// Header carrying the parent Dynamo agent session ID.
 pub const DYNAMO_PARENT_SESSION_ID_HEADER_KEY: &str = "x-dynamo-parent-session-id";
+/// Header carrying the W3C trace context for an outbound provider request.
+pub const TRACEPARENT_HEADER_KEY: &str = "traceparent";
 
 pub(crate) fn resolve_parent_uuid(parent: Option<&ScopeHandle>) -> Option<Uuid> {
     Some(
@@ -180,6 +183,21 @@ pub(crate) fn inject_dynamo_session_ids(request: &mut LlmRequest) {
             request.headers.remove(DYNAMO_PARENT_SESSION_ID_HEADER_KEY);
         }
     }
+}
+
+pub(crate) fn inject_traceparent_value(request: &mut LlmRequest, value: String) {
+    request
+        .headers
+        .retain(|key, _| !key.eq_ignore_ascii_case(TRACEPARENT_HEADER_KEY));
+    request
+        .headers
+        .insert(TRACEPARENT_HEADER_KEY.to_string(), Json::String(value));
+}
+
+pub(crate) fn inject_traceparent(request: &mut LlmRequest, parent_uuid: Uuid) -> Result<()> {
+    let value = traceparent_for_llm(parent_uuid)?;
+    inject_traceparent_value(request, value);
+    Ok(())
 }
 
 pub(crate) fn metadata_with_otel_status(

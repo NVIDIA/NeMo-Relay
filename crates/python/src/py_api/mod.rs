@@ -26,6 +26,7 @@ use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_thread_scope_stack as capture_thread_scope_stack_handle,
+    capture_traceparent as capture_traceparent_handle,
     create_scope_stack as create_scope_stack_handle,
     create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
     current_scope_stack as current_scope_stack_handle,
@@ -383,6 +384,12 @@ pub fn capture_propagation_context_with_root(
     capture_propagation_context_with_root_handle(root_uuid)
         .map(|inner| PyPropagationContext { inner })
         .map_err(to_py_err)
+}
+
+/// Capture the current Relay context as a W3C ``traceparent`` value.
+#[pyfunction]
+pub fn capture_traceparent() -> PyResult<String> {
+    capture_traceparent_handle().map_err(to_py_err)
 }
 
 /// Create an isolated scope stack seeded from a received propagation context.
@@ -2101,6 +2108,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context_with_root, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_traceparent, m)?)?;
     m.add_function(wrap_pyfunction!(create_scope_stack_from_propagation, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_thread_scope_stack, m)?)?;

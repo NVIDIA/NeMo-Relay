@@ -3095,6 +3095,77 @@ fn test_ffi_scope_stack_propagation_and_thread_binding_entry_points() {
         );
         assert!(nemo_relay_scope_stack_active());
 
+        let mut traceparent = ptr::null_mut();
+        assert_status!(
+            nemo_relay_capture_traceparent(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_capture_traceparent(&mut traceparent),
+            NemoRelayStatus::InvalidArg
+        );
+
+        let scope_name = cstring("ffi_traceparent_scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Agent,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_capture_traceparent(&mut traceparent),
+            NemoRelayStatus::Ok
+        );
+        let traceparent_value = take_string(traceparent).expect("traceparent must be allocated");
+        assert!(traceparent_value.starts_with("00-"));
+        assert!(traceparent_value.ends_with("-01"));
+        assert_eq!(traceparent_value.len(), 55);
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+
+        let rooted_context = cstring(
+            r#"{"version":1,"root_uuid":"018f13f0-7c1a-7a80-8000-000000000701","parent_uuid":"018f13f0-7c1a-7a80-8000-000000000702"}"#,
+        );
+        let rootless_context =
+            cstring(r#"{"version":1,"parent_uuid":"018f13f0-7c1a-7a80-8000-000000000702"}"#);
+        assert_status!(
+            nemo_relay_propagation_context_to_traceparent(rooted_context.as_ptr(), ptr::null_mut(),),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_propagation_context_to_traceparent(ptr::null(), &mut traceparent),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_propagation_context_to_traceparent(
+                rootless_context.as_ptr(),
+                &mut traceparent,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_status!(
+            nemo_relay_propagation_context_to_traceparent(
+                rooted_context.as_ptr(),
+                &mut traceparent,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(
+            take_string(traceparent),
+            Some("00-018f13f07c1a7a808000000000000701-8000000000000702-01".into())
+        );
+
         let mut binding = ptr::null_mut();
         assert_status!(
             nemo_relay_scope_stack_capture_thread(ptr::null_mut()),

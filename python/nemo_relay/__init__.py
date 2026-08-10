@@ -129,6 +129,7 @@ from nemo_relay._native import (
     capture_propagation_context_with_root as _capture_propagation_context_with_root,
 )
 from nemo_relay._native import capture_thread_scope_stack as _capture_thread_scope_stack
+from nemo_relay._native import capture_traceparent as _capture_traceparent
 from nemo_relay._native import create_scope_stack as _create_scope_stack
 from nemo_relay._native import (
     create_scope_stack_from_propagation as _create_scope_stack_from_propagation,
@@ -253,6 +254,10 @@ from nemo_relay import (  # noqa: E402
 _scope_stack_var: contextvars.ContextVar[ScopeStack] = contextvars.ContextVar("scope_stack")
 _propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "propagation_parent",
+    default=None,
+)
+_propagation_root_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_root",
     default=None,
 )
 
@@ -429,7 +434,7 @@ def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport."""
     get_scope_stack()
     if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid)
+        return PropagationContext(parent_uuid, _propagation_root_var.get())
     return _capture_propagation_context()
 
 
@@ -439,6 +444,15 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
     if parent_uuid := _propagation_parent_var.get():
         return PropagationContext(parent_uuid, root_uuid)
     return _capture_propagation_context_with_root(root_uuid)
+
+
+def capture_traceparent() -> str:
+    """Capture the current Relay context as a W3C ``traceparent`` value."""
+    get_scope_stack()
+    parent_uuid = _propagation_parent_var.get()
+    if parent_uuid:
+        return PropagationContext(parent_uuid, _propagation_root_var.get() or parent_uuid).to_traceparent()
+    return _capture_traceparent()
 
 
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack:
@@ -500,8 +514,14 @@ def use_scope_stack(stack: ScopeStack):
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)
     try:
+        root_uuid = _capture_traceparent().split("-")[1]
+    except RuntimeError:
+        root_uuid = None
+    root_token = _propagation_root_var.set(root_uuid)
+    try:
         yield stack
     finally:
+        _propagation_root_var.reset(root_token)
         _scope_stack_var.reset(token)
         _restore_thread_scope_stack(previous_native_stack)
 
@@ -578,6 +598,7 @@ __all__ = [
     "create_scope_stack",
     "capture_propagation_context",
     "capture_propagation_context_with_root",
+    "capture_traceparent",
     "create_scope_stack_from_propagation",
     "fork_asyncio_context",
     "get_scope_stack",

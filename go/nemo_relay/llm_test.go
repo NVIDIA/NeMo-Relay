@@ -445,6 +445,9 @@ func TestLlmSanitizersResolveDirectionalCodecs(t *testing.T) {
 	if err != nil {
 		t.Fatalf(llmCallExecuteFailed, err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(llmFlushSubscribersFailed, err)
+	}
 	assertResolvedCodecsExpire(t, callbackState.snapshot(), response)
 }
 

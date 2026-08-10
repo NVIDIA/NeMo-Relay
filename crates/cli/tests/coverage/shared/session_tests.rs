@@ -1022,6 +1022,97 @@ async fn turn_end_metadata_comes_only_from_the_real_turn_boundary() {
 }
 
 #[tokio::test]
+async fn terminal_subscriber_wait_releases_session_manager_locks() {
+    let subscriber_name = "cli-terminal-delivery-lock-release-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let started_tx = Arc::new(StdMutex::new(Some(started_tx)));
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(StdMutex::new(release_rx));
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.scope_category() == Some(ScopeCategory::End)
+                && event.name() == "codex-turn"
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("session_id"))
+                    .and_then(Value::as_str)
+                    == Some("blocked-terminal-session")
+            {
+                if let Some(started) = started_tx.lock().unwrap().take() {
+                    let _ = started.send(());
+                }
+                let _ = release_rx.lock().unwrap().recv();
+            }
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    for session_id in ["blocked-terminal-session", "parallel-session"] {
+        manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![
+                    NormalizedEvent::AgentStarted(codex_session_event(
+                        session_id,
+                        "SessionStart",
+                        json!({ "session_id": session_id }),
+                    )),
+                    NormalizedEvent::PromptSubmitted(codex_session_event(
+                        session_id,
+                        "UserPromptSubmit",
+                        json!({ "session_id": session_id }),
+                    )),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+    flush_subscribers().unwrap();
+
+    let terminal_manager = manager.clone();
+    let terminal = tokio::spawn(async move {
+        terminal_manager
+            .apply_events(
+                &HeaderMap::new(),
+                vec![NormalizedEvent::TurnEnded(codex_session_event(
+                    "blocked-terminal-session",
+                    "Stop",
+                    json!({ "session_id": "blocked-terminal-session" }),
+                ))],
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started_rx)
+        .await
+        .expect("terminal subscriber should start")
+        .unwrap();
+
+    let parallel_result = tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        manager.apply_events(
+            &HeaderMap::new(),
+            vec![NormalizedEvent::Notification(codex_session_event(
+                "parallel-session",
+                "notification",
+                json!({ "session_id": "parallel-session" }),
+            ))],
+        ),
+    )
+    .await;
+    release_tx.send(()).unwrap();
+    terminal.await.unwrap().unwrap();
+    flush_subscribers().unwrap();
+    deregister_subscriber(subscriber_name).unwrap();
+
+    parallel_result
+        .expect("another session must remain writable while terminal subscribers are active")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn new_subagent_claims_first_unhinted_llm_when_siblings_active() {
     let manager = SessionManager::new(session_test_config());
     manager

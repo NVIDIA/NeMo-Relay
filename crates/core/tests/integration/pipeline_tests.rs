@@ -499,7 +499,16 @@ async fn anthropic_issue_501_round_trips_and_applies_annotated_edits() {
     )
     .await
     .unwrap();
-    assert_eq!(unchanged_capture.lock().unwrap().as_ref(), Some(&original));
+    let mut unchanged = unchanged_capture.lock().unwrap().clone().unwrap();
+    let unchanged_traceparent = unchanged
+        .headers
+        .remove("traceparent")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("managed LLM requests must include traceparent");
+    assert!(unchanged_traceparent.starts_with("00-"));
+    assert!(unchanged_traceparent.ends_with("-01"));
+    assert_eq!(unchanged_traceparent.len(), 55);
+    assert_eq!(unchanged, original);
 
     register_llm_request_intercept(
         "issue_501_annotated_edit",
@@ -543,7 +552,15 @@ async fn anthropic_issue_501_round_trips_and_applies_annotated_edits() {
     .await
     .unwrap();
 
-    let edited = edited_capture.lock().unwrap().clone().unwrap();
+    let mut edited = edited_capture.lock().unwrap().clone().unwrap();
+    let edited_traceparent = edited
+        .headers
+        .remove("traceparent")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("managed LLM requests must include traceparent");
+    assert!(edited_traceparent.starts_with("00-"));
+    assert!(edited_traceparent.ends_with("-01"));
+    assert_eq!(edited_traceparent.len(), 55);
     let mut expected = original;
     expected.content["system"][0]["text"] = json!("Edited without dropping cache metadata.");
     expected

@@ -89,6 +89,7 @@ fn sample_stability(agent_id: &str) -> StabilityAnalysisResult {
             observation_count: 3,
         }],
         stable_prefix_length: 1,
+        stable_prefix_fingerprint: None,
         total_observations: 3,
     }
 }

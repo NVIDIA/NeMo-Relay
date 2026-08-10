@@ -258,6 +258,13 @@ impl PyPropagationContext {
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
     }
 
+    /// Convert this rooted context to a W3C ``traceparent`` value.
+    fn to_traceparent(&self) -> PyResult<String> {
+        self.inner
+            .to_traceparent()
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))
+    }
+
     /// Deserialize and validate a context from the Relay JSON wire format.
     #[staticmethod]
     fn from_json(value: &str) -> PyResult<Self> {

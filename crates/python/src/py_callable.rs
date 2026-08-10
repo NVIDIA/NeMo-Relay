@@ -33,7 +33,8 @@ use nemo_relay::api::runtime::{
     LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
     LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, LlmStreamInner,
     MiddlewareContinuationContext, ScopeStackHandle, ToolConditionalFn, ToolExecutionNextFn,
-    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, current_scope_stack,
+    ToolInterceptFn, ToolSanitizeFn, capture_propagation_context, capture_traceparent,
+    current_scope_stack,
 };
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::exceptions::PyRuntimeError;
@@ -485,11 +486,24 @@ fn copy_middleware_invocation<'py>(
             .import("nemo_relay")
             .and_then(|module| module.getattr("_propagation_parent_var"));
         if let Ok(parent_var) = parent_var {
-            let propagation_parent_uuid = capture_propagation_context()
-                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?
-                .parent_uuid
-                .to_string();
+            let propagation_context = capture_propagation_context()
+                .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            let propagation_parent_uuid = propagation_context.parent_uuid.to_string();
             context.call_method1("run", (parent_var.getattr("set")?, propagation_parent_uuid))?;
+            let root_var = py
+                .import("nemo_relay")
+                .and_then(|module| module.getattr("_propagation_root_var"))?;
+            let root_uuid = context.call_method1("run", (root_var.getattr("get")?,))?;
+            if root_uuid.is_none()
+                && let Ok(traceparent) = capture_traceparent()
+            {
+                let propagation_root_uuid = traceparent
+                    .get(3..35)
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                    .ok_or_else(|| PyRuntimeError::new_err("invalid Relay traceparent"))?
+                    .to_string();
+                context.call_method1("run", (root_var.getattr("set")?, propagation_root_uuid))?;
+            }
         }
     }
     Ok((invocation_context, task_locals))
