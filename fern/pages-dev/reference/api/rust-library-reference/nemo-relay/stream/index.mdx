@@ -18,11 +18,11 @@ This module provides [`LlmStreamWrapper`](/reference/api/rust-library-reference/
 ```rust
 raw chunk (Json) -> collector(chunk) -> Ok(()) -> yield chunk
                                      -> Err(e) -> terminate stream with error
-upstream error -> terminate stream with error -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
-stream ends -> finalizer() -> Json -> SanitizeResponseGuardrails -> END event
+upstream error -> terminate stream with error -> finalizer() -> queue END sanitization
+stream ends -> finalizer() -> queue END sanitization
 ```
 
-The **collector** receives each chunk (Json) and can accumulate state (e.g., concatenating tokens). If the collector returns `Err`, the stream terminates immediately with that error. Upstream stream errors also terminate the stream immediately. The **finalizer** is called once when the stream terminates and returns the aggregated response as [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json). That aggregated response then flows through sanitize response guardrails before being included in the END event.
+The **collector** receives each chunk (Json) and can accumulate state (e.g., concatenating tokens). If the collector returns `Err`, the stream terminates immediately with that error. Upstream stream errors also terminate the stream immediately. The **finalizer** is called once when the stream terminates and returns the aggregated response as [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json). That aggregated response is queued for sanitize response guardrails before being included in the END event. Stream termination does not await that queued observability work.
 
 ## Structs
 

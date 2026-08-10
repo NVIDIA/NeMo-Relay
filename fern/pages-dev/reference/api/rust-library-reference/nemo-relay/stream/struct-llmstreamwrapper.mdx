@@ -16,7 +16,7 @@ pub struct LlmStreamWrapper { /* private fields */ }
 Wraps an inner `Stream<Item = Result<Json>>` of raw chunks and:
 
 1. Passes each chunk to the user-supplied **collector** closure. If the collector returns `Err`, the stream terminates with that error.
-2. On stream exhaustion or explicit close, calls the **finalizer** to produce an aggregated [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json) response, runs sanitize response guardrails on it, then emits the LLM END event. Explicit close marks the end event as interrupted and waits for producer cleanup.
+2. On stream exhaustion or explicit close, calls the **finalizer** to produce an aggregated [`Json`](/reference/api/rust-library-reference/nemo-relay/json/type-json) response, then queues sanitize response guardrails and LLM END event publication. Explicit close marks the end event as interrupted and waits for producer cleanup.
 
 This type is returned by [`crate::api::llm::llm_stream_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/llm/fn-llm-stream-call-execute) and is usually consumed as an ordinary async stream. Consumers that stop early should call [`LlmJsonStream::close`](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/struct-llmjsonstream) to perform deterministic cleanup. The wrapper preserves the originating scope stack so end-of-stream bookkeeping still uses the correct scope-local middleware and subscribers even when polling happens elsewhere.
 
