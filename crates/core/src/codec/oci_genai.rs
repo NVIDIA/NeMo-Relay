@@ -1557,10 +1557,19 @@ impl OCIGenAIStreamingState {
         }
 
         if self.api_format.as_deref() == Some("COHERE") {
+            let finish_reason = obj.get("finishReason").and_then(Json::as_str);
             if let Some(text) = obj.get("text").and_then(Json::as_str) {
-                self.cohere_text.push_str(text);
+                if finish_reason.is_some() && !text.is_empty() {
+                    // The live service's terminal COHERE event repeats the
+                    // complete response text (alongside chatHistory and
+                    // finishReason); take it as authoritative rather than
+                    // appending, which would double the assembled text.
+                    self.cohere_text = text.to_string();
+                } else {
+                    self.cohere_text.push_str(text);
+                }
             }
-            if let Some(reason) = obj.get("finishReason").and_then(Json::as_str) {
+            if let Some(reason) = finish_reason {
                 self.cohere_finish_reason = Some(reason.to_string());
             }
             return;

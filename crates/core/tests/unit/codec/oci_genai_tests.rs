@@ -1481,3 +1481,33 @@ fn test_cohere_v2_request_edit_patches_stop_sequences() {
     );
     assert_eq!(chat_request["citationOptions"], json!({"mode": "OFF"}));
 }
+
+#[test]
+fn oci_streaming_codec_does_not_double_cohere_text_on_full_terminal_event() {
+    // Live-captured shape: the service's terminal COHERE event repeats the
+    // complete response text alongside chatHistory and finishReason.
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    for fragment in ["Rome", " is", " the", " capital", " of", " Italy", "."] {
+        collector(json!({"apiFormat": "COHERE", "text": fragment})).unwrap();
+    }
+    collector(json!({
+        "apiFormat": "COHERE",
+        "text": "Rome is the capital of Italy.",
+        "chatHistory": [
+            {"role": "USER", "message": "What is the capital of Italy?"},
+            {"role": "CHATBOT", "message": "Rome is the capital of Italy."}
+        ],
+        "finishReason": "COMPLETE"
+    }))
+    .unwrap();
+
+    let annotated = OCIGenAIChatCodec.decode_response(&finalizer()).unwrap();
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("Rome is the capital of Italy.".into()))
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+}
