@@ -74,6 +74,7 @@ fn request_with_credential_headers() -> LlmRequest {
         ("API-KEY", "api-key-secret"),
         ("Anthropic-Api-Key", "anthropic-api-key-secret"),
         ("X-GoOg-Api-Key", "x-goog-api-key-secret"),
+        ("TraceParent", "user-provided-traceparent"),
     ] {
         headers.insert(name.to_string(), json!(value));
     }
@@ -85,10 +86,14 @@ fn request_with_credential_headers() -> LlmRequest {
 }
 
 fn assert_observable_credential_headers_are_removed(request: &LlmRequest) {
-    assert_eq!(request.headers.len(), 1);
+    assert_eq!(request.headers.len(), 2);
     assert_eq!(
         request.headers.get("x-request-id"),
         Some(&json!("safe-request-id"))
+    );
+    assert_eq!(
+        request.headers.get("TraceParent"),
+        Some(&json!("user-provided-traceparent"))
     );
 }
 
@@ -407,11 +412,17 @@ fn credential_headers_are_removed_before_request_sanitizers_and_event_emission()
             provider.headers.get("x-request-id"),
             request.headers.get("x-request-id")
         );
-        let traceparent = provider
+        let traceparent_headers = provider
             .headers
-            .get("traceparent")
-            .and_then(Json::as_str)
-            .expect("managed LLM providers must receive traceparent");
+            .iter()
+            .filter(|(key, _)| key.eq_ignore_ascii_case("traceparent"))
+            .collect::<Vec<_>>();
+        assert_eq!(traceparent_headers.len(), 1);
+        assert_eq!(traceparent_headers[0].0, "traceparent");
+        let traceparent = traceparent_headers[0]
+            .1
+            .as_str()
+            .expect("managed LLM traceparent must be a string");
         assert!(traceparent.starts_with("00-"));
         assert!(traceparent.ends_with("-01"));
         assert_eq!(traceparent.len(), 55);
