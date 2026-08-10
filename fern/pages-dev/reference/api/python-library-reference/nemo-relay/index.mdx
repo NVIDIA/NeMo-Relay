@@ -69,6 +69,14 @@ def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationC
 
 Capture the current parent with an optional stable application session root.
 
+### `capture_traceparent`
+
+```python
+def capture_traceparent() -> str
+```
+
+Capture the current Relay context as a W3C `traceparent` value.
+
 ### `create_scope_stack_from_propagation`
 
 ```python

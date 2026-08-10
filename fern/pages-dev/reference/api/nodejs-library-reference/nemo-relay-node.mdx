@@ -533,12 +533,28 @@ Capture the current parent with an optional stable application session root.
 export declare function capturePropagationContextWithRoot(rootUuid?: string | undefined | null): PropagationContext
 ```
 
+### `captureTraceparent`
+
+Capture the current Relay context as a W3C `traceparent` value.
+
+```ts
+export declare function captureTraceparent(): string
+```
+
 ### `propagationContextToJson`
 
 Serialize a Relay causal context to the JSON wire format.
 
 ```ts
 export declare function propagationContextToJson(context: PropagationContext): string
+```
+
+### `propagationContextToTraceparent`
+
+Convert a rooted Relay propagation context to a W3C `traceparent` value.
+
+```ts
+export declare function propagationContextToTraceparent(context: PropagationContext): string
 ```
 
 ### `propagationContextFromJson`
