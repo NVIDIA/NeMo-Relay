@@ -4440,6 +4440,8 @@ async fn test_managed_llm_payload_sanitizers_are_queued_off_execution_path() {
                 Box::pin(async move {
                     request_started.notify_one();
                     request_release.notified().await;
+                    let mut request = request;
+                    request.content["sanitized"] = json!(true);
                     Ok(Some(request))
                 })
             }
@@ -4460,13 +4462,23 @@ async fn test_managed_llm_payload_sanitizers_are_queued_off_execution_path() {
                 Box::pin(async move {
                     response_started.notify_one();
                     response_release.notified().await;
+                    let mut response = response;
+                    response["sanitized"] = json!(true);
                     Ok(Some(response))
                 })
             }
         }),
     )
     .unwrap();
-    register_subscriber("managed_queued_llm_observer", Arc::new(|_| {})).unwrap();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    register_subscriber(
+        "managed_queued_llm_observer",
+        Arc::new({
+            let events = Arc::clone(&events);
+            move |event| events.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
 
     let call = tokio::spawn(async {
         llm_call_execute(
@@ -4494,6 +4506,7 @@ async fn test_managed_llm_payload_sanitizers_are_queued_off_execution_path() {
         .expect("request sanitizer blocked managed provider execution")
         .expect("managed call task should join")
         .expect("managed call should succeed");
+    let completed_at = Utc::now();
     assert_eq!(result, json!({"response": "done"}));
 
     request_release.notify_one();
@@ -4504,6 +4517,25 @@ async fn test_managed_llm_payload_sanitizers_are_queued_off_execution_path() {
     .await
     .expect("managed response sanitizer did not start");
     assert_flush_waits_for_pending_completion(|| response_release.notify_one());
+    let events = events.lock().unwrap();
+    let start = events
+        .iter()
+        .find(|event| {
+            event.name() == "managed-queued-llm"
+                && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .expect("managed LLM START event should be published after flush");
+    assert_eq!(start.input().unwrap()["content"]["sanitized"], true);
+    let end = events
+        .iter()
+        .find(|event| {
+            event.name() == "managed-queued-llm"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .expect("managed LLM END event should be published after flush");
+    assert_eq!(end.data().unwrap()["sanitized"], true);
+    assert!(*end.timestamp() <= completed_at);
+    drop(events);
     deregister_llm_sanitize_request_guardrail("managed_queued_llm_request").unwrap();
     deregister_llm_sanitize_response_guardrail("managed_queued_llm_response").unwrap();
     deregister_subscriber("managed_queued_llm_observer").unwrap();

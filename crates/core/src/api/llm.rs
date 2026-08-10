@@ -500,20 +500,30 @@ fn queue_llm_start_with_subscribers(
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = handle.captured_scope_stack().clone();
-    let (entries, agent_is_fresh, full_payloads_enabled) = {
-        let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_sanitize_request_guardrails
-        });
+    let scope_locals = {
+        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+        scope_guard
+            .collect_scope_local_registries(|registries| {
+                &registries.llm_sanitize_request_guardrails
+            })
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let (entries, full_payloads_enabled) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.llm_sanitize_request_entries(&scope_locals);
-        let full_payloads_enabled = state.observability_full_payloads_enabled;
-        drop(state);
-        let agent_is_fresh = scope_guard.take_agent_freshness(handle.parent_uuid);
-        (entries, agent_is_fresh, full_payloads_enabled)
+        (
+            state.llm_sanitize_request_entries(&scope_local_refs),
+            state.observability_full_payloads_enabled,
+        )
+    };
+    let agent_is_fresh = {
+        let mut scope_guard = scope_stack.write().expect("scope stack lock poisoned");
+        scope_guard.take_agent_freshness(handle.parent_uuid)
     };
     let observable_request = remove_observability_credential_headers(request.clone());
     let queued_handle = handle.clone();
@@ -1153,6 +1163,7 @@ async fn llm_call_end_with_behavior(
         response_codec,
         timestamp,
     } = params;
+    let timestamp = timestamp.unwrap_or_else(Utc::now);
     ensure_runtime_owner()?;
     let (entries, subscribers) = {
         let scope_stack = handle.captured_scope_stack();
@@ -1186,7 +1197,7 @@ async fn llm_call_end_with_behavior(
                 .handle(handle)
                 .data(Json::Null)
                 .metadata_opt(end_metadata)
-                .timestamp_opt(timestamp)
+                .timestamp(timestamp)
                 .build(),
         )
     };
@@ -1223,7 +1234,7 @@ async fn llm_call_end_with_behavior(
                         .data_opt(payload.data)
                         .metadata_opt(end_metadata)
                         .annotated_response_opt(payload.annotated_response)
-                        .timestamp_opt(timestamp)
+                        .timestamp(timestamp)
                         .build(),
                 )
             })
@@ -1281,6 +1292,7 @@ async fn emit_llm_end_without_output(
     lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
+    let timestamp = Utc::now();
     let (entries, subscribers) = {
         let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
@@ -1313,6 +1325,7 @@ async fn emit_llm_end_without_output(
                 .handle(handle)
                 .data(Json::Null)
                 .metadata_opt(metadata.clone())
+                .timestamp(timestamp)
                 .build(),
         )
     };
@@ -1355,7 +1368,15 @@ async fn emit_llm_end_without_output(
                 global_context()
                     .read()
                     .map(|state| {
-                        state.end_llm_handle(&queued_handle, data, metadata, annotated_response)
+                        state.build_llm_end_event(
+                            EndLlmHandleParams::builder()
+                                .handle(&queued_handle)
+                                .data_opt(data)
+                                .metadata_opt(metadata)
+                                .annotated_response_opt(annotated_response)
+                                .timestamp(timestamp)
+                                .build(),
+                        )
                     })
                     .unwrap_or(event)
             })

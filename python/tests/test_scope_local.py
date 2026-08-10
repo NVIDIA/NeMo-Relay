@@ -471,10 +471,12 @@ class TestScopeLocalIsolation:
         with scope.scope("persist_scope_1", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_persist_local", 2, lambda n, a: a)
             await tools.execute("persist_tool_1", {}, my_tool)
+            await subscribers.flush_async()
 
         # Global should still work after the scope-local scope ends
         execution_order.clear()
         await tools.execute("persist_tool_2", {}, my_tool)
+        await subscribers.flush_async()
 
         guardrails.deregister_tool_sanitize_request("sl_persist_global")
 

@@ -86,7 +86,6 @@ pub struct LlmStreamWrapper {
     chunk_index: u64,
     ended: bool,
     close_result: Option<Result<()>>,
-    finalization: Option<tokio::task::JoinHandle<()>>,
     terminal_result: Option<Result<Json>>,
 }
 
@@ -180,7 +179,6 @@ impl LlmStreamWrapper {
             chunk_index: 0,
             ended: false,
             close_result: None,
-            finalization: None,
             terminal_result: None,
         }
     }
@@ -197,7 +195,7 @@ impl LlmStreamWrapper {
         &self.scope_stack
     }
 
-    fn finish(&mut self, background_thread: bool) {
+    fn finish(&mut self) {
         if self.ended {
             return;
         }
@@ -213,8 +211,7 @@ impl LlmStreamWrapper {
         self.handle
             .optimization_recorder
             .close_for_finalization(None);
-        self.finalization =
-            self.emit_end_event(metadata, StreamTermination::Dropped, background_thread);
+        self.emit_end_event(metadata, StreamTermination::Dropped);
     }
 
     fn finish_cleanly(&mut self) {
@@ -223,8 +220,11 @@ impl LlmStreamWrapper {
         }
         self.ended = true;
         self.inner.terminalize();
+        self.handle
+            .optimization_recorder
+            .close_for_finalization(None);
         let metadata = metadata_with_otel_status(self.metadata.clone(), "OK", None);
-        self.finalization = self.emit_end_event(metadata, StreamTermination::Complete, false);
+        self.emit_end_event(metadata, StreamTermination::Complete);
     }
 
     fn finish_with_error(&mut self, error: &FlowError) {
@@ -233,20 +233,17 @@ impl LlmStreamWrapper {
         }
         self.ended = true;
         self.inner.terminalize();
+        self.handle
+            .optimization_recorder
+            .close_for_finalization(None);
         let metadata = metadata_with_otel_error(self.metadata.clone(), error);
-        self.finalization = self.emit_end_event(metadata, StreamTermination::Failed, false);
+        self.emit_end_event(metadata, StreamTermination::Failed);
     }
 
     /// Emit the LLM END event with aggregated response data.
     ///
-    /// Calls the finalizer to produce the aggregated response, runs sanitize
-    /// response guardrails, and emits the END event.
-    fn emit_end_event(
-        &mut self,
-        metadata: Option<Json>,
-        termination: StreamTermination,
-        _background_thread: bool,
-    ) -> Option<tokio::task::JoinHandle<()>> {
+    /// Calls the finalizer and queues response sanitization and END publication.
+    fn emit_end_event(&mut self, metadata: Option<Json>, termination: StreamTermination) {
         // The finalizer below runs on the caller's Tokio runtime. Register a
         // dispatcher barrier before spawning it so a synchronous subscriber
         // flush after this stream is dropped cannot overtake the END event.
@@ -370,7 +367,6 @@ impl LlmStreamWrapper {
         // or event sanitizers. The registered barrier keeps subscriber flushes
         // ordered behind this END event.
         let _ = subscriber_dispatcher::spawn_background_publication(finalize);
-        None
     }
 
     /// Emit a compact per-chunk receipt mark before collector processing.
@@ -438,27 +434,6 @@ impl Stream for LlmStreamWrapper {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.as_mut().get_mut();
 
-        // Retain support for an already-scheduled finalization task while the
-        // stream is being polled.
-        if let Some(finalization) = this.finalization.as_mut() {
-            return match Pin::new(finalization).poll(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(Ok(())) => {
-                    this.finalization = None;
-                    match this.terminal_result.take() {
-                        Some(result) => Poll::Ready(Some(result)),
-                        None => Poll::Ready(None),
-                    }
-                }
-                Poll::Ready(Err(error)) => {
-                    this.finalization = None;
-                    Poll::Ready(Some(Err(FlowError::Internal(format!(
-                        "stream finalization task failed: {error}"
-                    )))))
-                }
-            };
-        }
-
         if this.ended {
             return match this.terminal_result.take() {
                 Some(result) => Poll::Ready(Some(result)),
@@ -504,12 +479,7 @@ impl LlmStreamInner for LlmStreamWrapper {
                 return result.clone();
             }
             let result = this.inner.close().await;
-            this.finish(false);
-            if let Some(finalization) = this.finalization.take() {
-                finalization.await.map_err(|error| {
-                    FlowError::Internal(format!("stream finalization task failed: {error}"))
-                })?;
-            }
+            this.finish();
             this.close_result = Some(result.clone());
             this.close_result
                 .as_ref()
@@ -787,7 +757,7 @@ fn non_empty_object(object: Map<String, Json>) -> Option<Json> {
 
 impl Drop for LlmStreamWrapper {
     fn drop(&mut self) {
-        self.finish(true);
+        self.finish();
     }
 }
 

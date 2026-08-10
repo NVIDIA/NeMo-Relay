@@ -335,8 +335,8 @@ async fn tool_call_with_subscriber_snapshot(
 ) -> Result<(ToolHandle, Vec<EventSubscriberFn>)> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
+    let scope_stack = current_scope_stack();
     let (entries, subscribers) = {
-        let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_sanitize_request_guardrails
@@ -389,7 +389,6 @@ async fn tool_call_with_subscriber_snapshot(
             .collect::<Vec<_>>();
         (handle, event, marks)
     };
-    let scope_stack = current_scope_stack();
     let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     let tool_name = handle.name.clone();
     dispatch_transformed_event(
@@ -518,8 +517,8 @@ async fn tool_call_end_with_pending_marks(
     lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
     let (entries, subscribers) = {
-        let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_sanitize_response_guardrails
@@ -570,7 +569,6 @@ async fn tool_call_end_with_pending_marks(
             ))
         })
         .collect::<Vec<_>>();
-    let scope_stack = current_scope_stack();
     let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     let tool_name = params.handle.name.clone();
     let result = params.result;
