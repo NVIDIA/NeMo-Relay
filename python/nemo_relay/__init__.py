@@ -256,6 +256,10 @@ _propagation_parent_var: contextvars.ContextVar[str | None] = contextvars.Contex
     "propagation_parent",
     default=None,
 )
+_propagation_root_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "propagation_root",
+    default=None,
+)
 
 
 def get_scope_stack() -> ScopeStack:
@@ -430,7 +434,7 @@ def capture_propagation_context() -> PropagationContext:
     """Capture the current Relay causal parent for application-managed transport."""
     get_scope_stack()
     if parent_uuid := _propagation_parent_var.get():
-        return PropagationContext(parent_uuid)
+        return PropagationContext(parent_uuid, _propagation_root_var.get())
     return _capture_propagation_context()
 
 
@@ -447,7 +451,7 @@ def capture_traceparent() -> str:
     get_scope_stack()
     parent_uuid = _propagation_parent_var.get()
     if parent_uuid:
-        return PropagationContext(parent_uuid, parent_uuid).to_traceparent()
+        return PropagationContext(parent_uuid, _propagation_root_var.get() or parent_uuid).to_traceparent()
     return _capture_traceparent()
 
 
@@ -509,9 +513,16 @@ def use_scope_stack(stack: ScopeStack):
     previous_native_stack = _capture_thread_scope_stack()
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)
+    root_token = None
+    try:
+        root_token = _propagation_root_var.set(_capture_traceparent().split("-")[1])
+    except ValueError:
+        pass
     try:
         yield stack
     finally:
+        if root_token is not None:
+            _propagation_root_var.reset(root_token)
         _scope_stack_var.reset(token)
         _restore_thread_scope_stack(previous_native_stack)
 

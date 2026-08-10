@@ -18,15 +18,18 @@ from nemo_relay import (
     LLMRequest,
     LLMRequestInterceptOutcome,
     PendingMarkSpec,
+    PropagationContext,
     ScopeEvent,
     ScopeType,
     capture_propagation_context,
     capture_traceparent,
+    create_scope_stack_from_propagation,
     guardrails,
     intercepts,
     llm,
     scope,
     subscribers,
+    use_scope_stack,
 )
 from nemo_relay.codecs import OpenAIChatCodec
 
@@ -630,6 +633,34 @@ class TestLLMInterceptsAsync:
         finally:
             intercepts.deregister_llm_execution("py_llm_capture_traceparent")
             subscribers.deregister("py_llm_capture_traceparent")
+
+    async def test_execution_callback_capture_traceparent_preserves_imported_root(self):
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000701"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000702"
+        stack = create_scope_stack_from_propagation(PropagationContext(parent_uuid, root_uuid))
+        events = []
+        observed = []
+        subscribers.register("py_llm_capture_propagated_trace_root", events.append)
+
+        async def execution_intercept(_name, request, next_handler):
+            observed.append(capture_traceparent())
+            return await next_handler(request)
+
+        async def provider(_request):
+            observed.append(capture_traceparent())
+            return {"ok": True}
+
+        try:
+            intercepts.register_llm_execution("py_llm_capture_propagated_trace_root", 10, execution_intercept)
+            with use_scope_stack(stack):
+                assert await llm.execute("py_llm_propagated_trace_root", make_request(), provider) == {"ok": True}
+            await subscribers.flush_async()
+            start = _llm_event(events, "py_llm_propagated_trace_root", "start")
+            expected = f"00-{root_uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [expected, expected]
+        finally:
+            intercepts.deregister_llm_execution("py_llm_capture_propagated_trace_root")
+            subscribers.deregister("py_llm_capture_propagated_trace_root")
 
     async def test_cancelling_execute_cancels_pending_execution_intercept(self):
         started = asyncio.Event()

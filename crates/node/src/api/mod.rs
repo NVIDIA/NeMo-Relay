@@ -1729,9 +1729,18 @@ pub fn capture_traceparent(env: Env) -> napi::Result<String> {
     if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
         let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
             .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        let root_uuid = with_effective_scope_stack(&env, capture_traceparent_handle)
+            .ok()
+            .and_then(|result| result.ok())
+            .and_then(|traceparent| {
+                traceparent
+                    .get(3..35)
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            })
+            .unwrap_or(parent_uuid);
         return nemo_relay::api::runtime::PropagationContext {
             version: nemo_relay::api::runtime::PropagationContext::VERSION,
-            root_uuid: Some(parent_uuid),
+            root_uuid: Some(root_uuid),
             parent_uuid,
         }
         .to_traceparent()
