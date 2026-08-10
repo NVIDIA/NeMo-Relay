@@ -513,16 +513,15 @@ def use_scope_stack(stack: ScopeStack):
     previous_native_stack = _capture_thread_scope_stack()
     token = _scope_stack_var.set(stack)
     _sync_thread_scope_stack(stack)
-    root_token = None
     try:
-        root_token = _propagation_root_var.set(_capture_traceparent().split("-")[1])
-    except ValueError:
-        pass
+        root_uuid = _capture_traceparent().split("-")[1]
+    except RuntimeError:
+        root_uuid = None
+    root_token = _propagation_root_var.set(root_uuid)
     try:
         yield stack
     finally:
-        if root_token is not None:
-            _propagation_root_var.reset(root_token)
+        _propagation_root_var.reset(root_token)
         _scope_stack_var.reset(token)
         _restore_thread_scope_stack(previous_native_stack)
 

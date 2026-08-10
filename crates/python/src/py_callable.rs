@@ -494,9 +494,9 @@ fn copy_middleware_invocation<'py>(
                 .import("nemo_relay")
                 .and_then(|module| module.getattr("_propagation_root_var"))?;
             let root_uuid = context.call_method1("run", (root_var.getattr("get")?,))?;
-            if root_uuid.is_none() {
-                let traceparent = capture_traceparent()
-                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+            if root_uuid.is_none()
+                && let Ok(traceparent) = capture_traceparent()
+            {
                 let propagation_root_uuid = traceparent
                     .get(3..35)
                     .and_then(|value| uuid::Uuid::parse_str(value).ok())
