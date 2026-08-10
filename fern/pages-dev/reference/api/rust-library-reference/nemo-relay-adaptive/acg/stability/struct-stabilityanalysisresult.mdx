@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct StabilityAnalysisResult &#123;\n    pub scores: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../profile/struct-blockstabilityscore\">BlockStabilityScore</a>&gt;,\n    pub stable_prefix_length: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub total_observations: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct StabilityAnalysisResult &#123;\n    pub scores: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"../profile/struct-blockstabilityscore\">BlockStabilityScore</a>&gt;,\n    pub stable_prefix_length: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    pub stable_prefix_fingerprint: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    pub total_observations: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.u32.html\">u32</a>,\n&#125;"}} /></pre>
 
 Result of analyzing prompt stability across a set of observations.
 
@@ -22,6 +22,10 @@ Stability score for each distinct prompt span.
 ### `stable_prefix_length: usize`
 
 Number of leading blocks that were classified as stable.
+
+### `stable_prefix_fingerprint: Option<String>`
+
+Fingerprint of the dominant stable prefix. Generic analysis hashes the prompt IR; ACG profile persistence additionally binds it to the learning key and, beyond the leading scaffold, the full source request.
 
 ### `total_observations: u32`
 
