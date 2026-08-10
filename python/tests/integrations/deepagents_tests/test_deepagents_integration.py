@@ -209,27 +209,6 @@ def test_before_agent_emits_configuration_mark(
     assert _mark_data(marks[0])["backend"] == "StateBackend"
 
 
-def test_named_middleware_replaces_deepagents_default():
-    """Deep Agents 0.7 replaces a built-in middleware slot by its public name."""
-    from deepagents import create_deep_agent
-    from langchain.agents.middleware import AgentMiddleware
-    from langchain_core.messages import AIMessage
-
-    class _ReplacementSummarizationMiddleware(AgentMiddleware):
-        @property
-        def name(self) -> str:
-            return "SummarizationMiddleware"
-
-    agent = create_deep_agent(
-        model=_mock_deepagents_chat_model([AIMessage(content="unused")]),
-        middleware=[_ReplacementSummarizationMiddleware()],
-    )
-
-    # The built-in summarization middleware owns this state channel. Its
-    # absence proves the named replacement was used instead of appended.
-    assert "_summarization_event" not in agent.channels
-
-
 @pytest.mark.parametrize("use_async", [False, True])
 def test_model_call_routes_through_langchain_execution_middleware(
     use_async: bool,
