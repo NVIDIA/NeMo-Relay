@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -300,6 +301,32 @@ func TestPropagationContextCaptureAndValidation(t *testing.T) {
 		assertCapturedPropagationContexts(t)
 	})
 	assertInvalidPropagationContexts(t)
+}
+
+func TestCaptureTraceparentUsesCurrentScope(t *testing.T) {
+	stack, err := NewScopeStack()
+	if err != nil {
+		t.Fatalf(newScopeStackFailed, err)
+	}
+	defer stack.Close()
+
+	stack.Run(func() {
+		handle, err := PushScope("traceparent", ScopeTypeAgent)
+		if err != nil {
+			t.Fatalf("PushScope failed: %v", err)
+		}
+		defer PopScope(handle)
+
+		traceparent, err := CaptureTraceparent()
+		if err != nil {
+			t.Fatalf("CaptureTraceparent failed: %v", err)
+		}
+		parentHex := strings.ReplaceAll(handle.UUID(), "-", "")
+		expected := fmt.Sprintf("00-%s-%s-01", parentHex, parentHex[len(parentHex)-16:])
+		if traceparent != expected {
+			t.Fatalf("expected traceparent %s, got %s", expected, traceparent)
+		}
+	})
 }
 
 func assertCapturedPropagationContexts(t *testing.T) {

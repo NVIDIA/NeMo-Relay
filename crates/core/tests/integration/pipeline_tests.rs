@@ -499,16 +499,16 @@ async fn anthropic_issue_501_round_trips_and_applies_annotated_edits() {
     )
     .await
     .unwrap();
-    let unchanged = unchanged_capture.lock().unwrap().clone().unwrap();
-    assert_eq!(unchanged.content, original.content);
+    let mut unchanged = unchanged_capture.lock().unwrap().clone().unwrap();
     let unchanged_traceparent = unchanged
         .headers
-        .get("traceparent")
-        .and_then(Json::as_str)
+        .remove("traceparent")
+        .and_then(|value| value.as_str().map(str::to_owned))
         .expect("managed LLM requests must include traceparent");
     assert!(unchanged_traceparent.starts_with("00-"));
     assert!(unchanged_traceparent.ends_with("-01"));
     assert_eq!(unchanged_traceparent.len(), 55);
+    assert_eq!(unchanged, original);
 
     register_llm_request_intercept(
         "issue_501_annotated_edit",

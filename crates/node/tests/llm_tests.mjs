@@ -827,8 +827,9 @@ describe('LLM guardrails', () => {
         null,
         null,
       );
-      assert.equal(result.model, 'test-model');
-      assert.match(result.headers.traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+      const { traceparent, ...headers } = result.headers;
+      assert.deepEqual({ ...result, headers }, { model: 'test-model', headers: {} });
+      assert.match(traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
     } finally {
       deregisterLlmSanitizeRequestGuardrail('node_llm_san_req_bad');
     }
@@ -1087,9 +1088,9 @@ describe('LLM intercepts', () => {
     const observed = [];
     registerSubscriber('node_llm_exec_propagation_parent', (event) => events.push(event));
     registerLlmExecutionIntercept('node_llm_exec_propagation_parent', 10, async (request, next) => {
-      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid]);
+      observed.push(['intercept-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
       await new Promise((resolve) => setImmediate(resolve));
-      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid]);
+      observed.push(['intercept-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
       return next(request);
     });
     try {
@@ -1097,9 +1098,9 @@ describe('LLM intercepts', () => {
         'propagation_parent_llm',
         makeNative(),
         async () => {
-          observed.push(['provider-before', lib.capturePropagationContext().parentUuid]);
+          observed.push(['provider-before', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
           await new Promise((resolve) => setImmediate(resolve));
-          observed.push(['provider-after', lib.capturePropagationContext().parentUuid]);
+          observed.push(['provider-after', lib.capturePropagationContext().parentUuid, lib.captureTraceparent()]);
           return { ok: true };
         },
         null,
@@ -1115,11 +1116,12 @@ describe('LLM intercepts', () => {
           event.name === 'propagation_parent_llm' && event.kind === 'scope' && event.scope_category === 'start',
       );
       assert.ok(start, 'expected managed LLM start event');
+      const traceparent = `00-${start.uuid.replaceAll('-', '')}-${start.uuid.replaceAll('-', '').slice(-16)}-01`;
       assert.deepEqual(observed, [
-        ['intercept-before', start.uuid],
-        ['intercept-after', start.uuid],
-        ['provider-before', start.uuid],
-        ['provider-after', start.uuid],
+        ['intercept-before', start.uuid, traceparent],
+        ['intercept-after', start.uuid, traceparent],
+        ['provider-before', start.uuid, traceparent],
+        ['provider-after', start.uuid, traceparent],
       ]);
     } finally {
       deregisterLlmExecutionIntercept('node_llm_exec_propagation_parent');

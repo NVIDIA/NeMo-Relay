@@ -447,7 +447,7 @@ def capture_traceparent() -> str:
     get_scope_stack()
     parent_uuid = _propagation_parent_var.get()
     if parent_uuid:
-        return PropagationContext(parent_uuid).to_traceparent()
+        return PropagationContext(parent_uuid, parent_uuid).to_traceparent()
     return _capture_traceparent()
 
 

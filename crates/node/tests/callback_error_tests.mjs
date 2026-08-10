@@ -51,8 +51,9 @@ describe('callback error helpers', () => {
         null,
       );
 
-      assert.equal(result.model, 'test-model');
-      assert.match(result.headers.traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+      const { traceparent, ...headers } = result.headers;
+      assert.deepEqual({ ...result, headers }, { model: 'test-model', headers: {} });
+      assert.match(traceparent, /^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
       assert.match(
         getLastCallbackError() ?? '',
         /JS LLM sanitize request callback failed: failed to deserialize LlmRequest/i,

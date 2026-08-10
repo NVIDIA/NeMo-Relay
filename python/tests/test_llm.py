@@ -21,6 +21,7 @@ from nemo_relay import (
     ScopeEvent,
     ScopeType,
     capture_propagation_context,
+    capture_traceparent,
     guardrails,
     intercepts,
     llm,
@@ -606,6 +607,30 @@ class TestLLMIntercepts:
 
 
 class TestLLMInterceptsAsync:
+    async def test_execution_callback_capture_traceparent_matches_llm_scope(self):
+        events = []
+        observed = []
+        subscribers.register("py_llm_capture_traceparent", events.append)
+
+        async def execution_intercept(_name, request, next_handler):
+            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            return await next_handler(request)
+
+        async def provider(_request):
+            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            return {"ok": True}
+
+        try:
+            intercepts.register_llm_execution("py_llm_capture_traceparent", 10, execution_intercept)
+            assert await llm.execute("py_llm_capture_traceparent", make_request(), provider) == {"ok": True}
+            await subscribers.flush_async()
+            start = _llm_event(events, "py_llm_capture_traceparent", "start")
+            expected = f"00-{start.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [(start.uuid, expected), (start.uuid, expected)]
+        finally:
+            intercepts.deregister_llm_execution("py_llm_capture_traceparent")
+            subscribers.deregister("py_llm_capture_traceparent")
+
     async def test_cancelling_execute_cancels_pending_execution_intercept(self):
         started = asyncio.Event()
         release = asyncio.Event()

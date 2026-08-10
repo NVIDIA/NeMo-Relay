@@ -1726,6 +1726,17 @@ pub fn capture_propagation_context_with_root(
 /// Capture the current Relay context as a W3C `traceparent` value.
 #[napi]
 pub fn capture_traceparent(env: Env) -> napi::Result<String> {
+    if let Some(parent_uuid) = callback_factory::callback_propagation_parent_uuid(&env)? {
+        let parent_uuid = uuid::Uuid::parse_str(&parent_uuid)
+            .map_err(|error| napi::Error::from_reason(format!("invalid parent UUID: {error}")))?;
+        return nemo_relay::api::runtime::PropagationContext {
+            version: nemo_relay::api::runtime::PropagationContext::VERSION,
+            root_uuid: Some(parent_uuid),
+            parent_uuid,
+        }
+        .to_traceparent()
+        .map_err(|error| napi::Error::from_reason(error.to_string()));
+    }
     with_effective_scope_stack(&env, capture_traceparent_handle)
         .map_err(|error| napi::Error::from_reason(error.to_string()))?
         .map_err(|error| napi::Error::from_reason(error.to_string()))
