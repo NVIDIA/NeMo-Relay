@@ -1514,7 +1514,10 @@ struct OCIGenAIStreamingState {
 #[derive(Debug, Default)]
 struct OCIChoiceState {
     role: Option<String>,
-    text: String,
+    /// Typed content parts in arrival order; consecutive TEXT fragments merge
+    /// into one part, non-TEXT typed parts (THINKING, IMAGE_URL, DOCUMENT,
+    /// future kinds) are preserved verbatim.
+    parts: Vec<Json>,
     /// Tool-call accumulators in first-seen order. Fragments that carry an
     /// `id` are matched to the accumulator with that id (OCI provides no
     /// per-call `index`, and parallel calls can each arrive at event-local
@@ -1616,14 +1619,7 @@ impl OCIGenAIStreamingState {
         }
         if let Some(parts) = message.get("content").and_then(Json::as_array) {
             for part in parts {
-                let Some(part) = part.as_object() else {
-                    continue;
-                };
-                if part.get("type").and_then(Json::as_str) == Some("TEXT")
-                    && let Some(text) = part.get("text").and_then(Json::as_str)
-                {
-                    entry.text.push_str(text);
-                }
+                entry.observe_content_part(part);
             }
         }
         if let Some(tool_calls) = message.get("toolCalls").and_then(Json::as_array) {
@@ -1675,6 +1671,47 @@ impl OCIGenAIStreamingState {
 }
 
 impl OCIChoiceState {
+    fn observe_content_part(&mut self, part: &Json) {
+        if part.get("type").and_then(Json::as_str) == Some("TEXT") {
+            let Some(text) = part.get("text").and_then(Json::as_str) else {
+                return;
+            };
+            if let Some(Json::Object(last)) = self.parts.last_mut()
+                && last.get("type").and_then(Json::as_str) == Some("TEXT")
+            {
+                let merged = format!(
+                    "{}{}",
+                    last.get("text").and_then(Json::as_str).unwrap_or_default(),
+                    text
+                );
+                last.insert("text".to_string(), Json::String(merged));
+                return;
+            }
+            self.parts
+                .push(serde_json::json!({"type": "TEXT", "text": text}));
+            return;
+        }
+        if part.is_object() {
+            self.parts.push(part.clone());
+        }
+    }
+
+    /// The accumulated parts with empty TEXT placeholders removed; an
+    /// all-empty stream yields `[]` so the response decode reports no
+    /// assistant message, matching the non-streaming path.
+    fn content_parts(parts: Vec<Json>) -> Vec<Json> {
+        parts
+            .into_iter()
+            .filter(|part| {
+                part.get("type").and_then(Json::as_str) != Some("TEXT")
+                    || part
+                        .get("text")
+                        .and_then(Json::as_str)
+                        .is_some_and(|text| !text.is_empty())
+            })
+            .collect()
+    }
+
     fn observe_tool_call(&mut self, position: usize, tool_call: &serde_json::Map<String, Json>) {
         let slot = match tool_call.get("id").and_then(Json::as_str) {
             Some(id) => self
@@ -1722,11 +1759,7 @@ impl OCIChoiceState {
         );
         message.insert(
             "content".to_string(),
-            if self.text.is_empty() {
-                Json::Array(Vec::new())
-            } else {
-                serde_json::json!([{"type": "TEXT", "text": self.text}])
-            },
+            Json::Array(Self::content_parts(self.parts)),
         );
         if !self.tool_calls.is_empty() {
             let tool_calls: Vec<Json> = self
@@ -1745,16 +1778,9 @@ impl OCIChoiceState {
             "role".to_string(),
             Json::String(self.role.unwrap_or_else(|| "ASSISTANT".to_string())),
         );
-        // A tool-call-only stream accumulates no text; emit `[]` so the
-        // response decode yields no assistant message, matching how the
-        // non-streaming path treats an empty part list.
         message.insert(
             "content".to_string(),
-            if self.text.is_empty() {
-                Json::Array(Vec::new())
-            } else {
-                serde_json::json!([{"type": "TEXT", "text": self.text}])
-            },
+            Json::Array(Self::content_parts(self.parts)),
         );
         if !self.tool_calls.is_empty() {
             let tool_calls: Vec<Json> = self
