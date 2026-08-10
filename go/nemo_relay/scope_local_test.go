@@ -90,6 +90,9 @@ func assertScopeLocalCallbackDeregisters(
 	if err := runBefore(); err != nil {
 		t.Fatalf("%s before deregister failed: %v", label, err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(scopeLocalFlushSubscribersFailed, err)
+	}
 	if *calls != 1 {
 		t.Fatalf("expected %s callback once, got %d", label, *calls)
 	}
@@ -98,6 +101,9 @@ func assertScopeLocalCallbackDeregisters(
 	}
 	if err := runAfter(); err != nil {
 		t.Fatalf("%s after deregister failed: %v", label, err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 	}
 	if *calls != 1 {
 		t.Fatalf("%s callback still fired after deregister: %d", label, *calls)
@@ -513,6 +519,9 @@ func TestPriorityMergeGlobalAndScopeLocal(t *testing.T) {
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if len(order) != 2 {
@@ -563,6 +572,9 @@ func TestPriorityMergeGlobalBeforeScopeLocal(t *testing.T) {
 		_, err = ToolCallExecute("order_tool", json.RawMessage(`{}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 		}
 		mu.Lock()
 		defer mu.Unlock()

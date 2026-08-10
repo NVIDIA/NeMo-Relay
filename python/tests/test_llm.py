@@ -306,6 +306,7 @@ class TestLLMGuardrails:
                 codec=codec,
                 response_codec=codec,
             )
+            await subscribers.flush_async()
         finally:
             guardrails.deregister_llm_sanitize_request("py_llm_builtin_context_request")
             guardrails.deregister_llm_sanitize_response("py_llm_builtin_context_response")

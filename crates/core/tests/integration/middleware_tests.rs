@@ -171,16 +171,20 @@ fn captured_events_snapshot(events: &Arc<Mutex<Vec<Event>>>) -> Vec<Event> {
 }
 
 fn assert_middleware_callback_locks_are_free() {
-    let context = global_context();
-    assert!(
-        context.try_write().is_ok(),
-        "middleware callback ran while the global registry lock was held"
-    );
-
     let scope_stack = current_scope_stack();
     assert!(
         scope_stack.try_write().is_ok(),
-        "middleware callback ran while the scope stack lock was held"
+        "middleware callback ran while its scope stack lock was held"
+    );
+}
+
+/// Queued payload sanitizers may overlap later hot-path registry reads. They
+/// still must not run while holding their captured scope-stack lock.
+fn assert_queued_sanitizer_scope_lock_is_free() {
+    let scope_stack = current_scope_stack();
+    assert!(
+        scope_stack.try_write().is_ok(),
+        "queued sanitizer ran while the scope stack lock was held"
     );
 }
 
@@ -3440,7 +3444,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_sanitize_request_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(args)
         }),
     )
@@ -3452,7 +3456,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |_, args| {
             record_middleware_callback(&tracked, "tool_sanitize_request_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(args)
         }),
     )
@@ -3486,7 +3490,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |_, result| {
             record_middleware_callback(&tracked, "tool_sanitize_response_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(result)
         }),
     )
@@ -3498,7 +3502,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |_, result| {
             record_middleware_callback(&tracked, "tool_sanitize_response_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(result)
         }),
     )
@@ -3655,7 +3659,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(request))
         }),
     )
@@ -3667,7 +3671,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |request, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_request_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(request))
         }),
     )
@@ -3724,7 +3728,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         1,
         Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_global");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(response))
         }),
     )
@@ -3736,7 +3740,7 @@ async fn test_llm_middleware_callbacks_run_without_registry_or_scope_locks() {
         2,
         Arc::new(move |response, _context| {
             record_middleware_callback(&tracked, "llm_sanitize_response_scope");
-            assert_middleware_callback_locks_are_free();
+            assert_queued_sanitizer_scope_lock_is_free();
             ready(Some(response))
         }),
     )

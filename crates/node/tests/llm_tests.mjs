@@ -400,9 +400,9 @@ describe('LLM guardrails', () => {
     try {
       const result = await llmCallExecute('contextual_sanitize_llm', makeNative(), () => ({ ok: true }));
       assert.deepEqual(result, { ok: true });
+      await flushSubscribers();
       assert.equal(requestContextChecked, true);
       assert.equal(responseContextChecked, true);
-      await flushSubscribers();
       const start = events.find(
         (event) => event.name === 'contextual_sanitize_llm' && event.scope_category === 'start',
       );
@@ -505,6 +505,7 @@ describe('LLM guardrails', () => {
         ({ annotated, original }) => codec.encode(annotated, original),
         codec.decodeResponse.bind(codec),
       );
+      await flushSubscribers();
       assert.deepEqual(result, response);
       assert.equal(requestDecoded, true);
       assert.equal(responseDecoded, true);
@@ -615,6 +616,7 @@ describe('LLM guardrails', () => {
       const stream = await execution;
       assert.deepEqual(await stream.next(), { token: 'done' });
       assert.equal(await stream.next(), null);
+      await flushSubscribers();
       assert.deepEqual(observed, [invocationScope.uuid, invocationScope.uuid]);
     } finally {
       lib.withScopeStack(invocationStack, () => lib.popScope(invocationScope));

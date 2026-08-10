@@ -226,6 +226,7 @@ class TestScopeLocalPriorityOrdering:
         with scope.scope("priority_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_local_guard", 5, scope_local_sanitizer)
             await tools.execute("priority_tool", {"test": True}, my_tool)
+            await subscribers.flush_async()
 
         guardrails.deregister_tool_sanitize_request("sl_global_guard")
 
@@ -253,6 +254,7 @@ class TestScopeLocalPriorityOrdering:
         with scope.scope("priority_scope2", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_local_guard2", 20, scope_local_sanitizer)
             await tools.execute("priority_tool2", {}, my_tool)
+            await subscribers.flush_async()
 
         guardrails.deregister_tool_sanitize_request("sl_global_guard2")
 

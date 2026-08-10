@@ -1286,8 +1286,8 @@ fn projection_encode_failures_do_not_block_managed_or_streaming_calls() {
         }
     });
 
-    assert_eq!(projection_attempts.load(Ordering::Relaxed), 2);
     flush_subscribers().unwrap();
+    assert_eq!(projection_attempts.load(Ordering::Relaxed), 2);
     assert!(deregister_subscriber("projection-encode-failure").unwrap());
     let events = events.lock().unwrap();
     for name in [
