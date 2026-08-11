@@ -1666,3 +1666,119 @@ fn oci_streaming_codec_preserves_non_text_generic_parts_in_order() {
     ));
     assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
 }
+
+#[test]
+fn test_non_oci_api_specific_is_rejected() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(generic_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.api_specific = Some(ApiSpecificRequest::Custom {
+        api_name: "not-oci".into(),
+        data: Json::Null,
+    });
+
+    let err = codec.encode(&annotated, &original).unwrap_err();
+    assert!(
+        matches!(&err, FlowError::InvalidArgument(message)
+            if message.contains("does not match OCI GenAI")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn test_envelope_edit_on_bare_chat_request_is_rejected() {
+    let codec = OCIGenAIChatCodec;
+    let bare = generic_chat_details().get("chatRequest").cloned().unwrap();
+    let original = make_request(bare);
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let Some(ApiSpecificRequest::OCIGenAI { compartment_id, .. }) = &mut annotated.api_specific
+    else {
+        panic!("expected an OCI api_specific annotation");
+    };
+    *compartment_id = Some("ocid1.compartment.oc1..edited".into());
+
+    let err = codec.encode(&annotated, &original).unwrap_err();
+    assert!(
+        matches!(&err, FlowError::InvalidArgument(message)
+            if message.contains("require a ChatDetails envelope")),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn test_cohere_v2_assistant_edit_reencodes_nested_tool_calls() {
+    use super::super::request::{FunctionCall, ToolCall};
+
+    let codec = OCIGenAIChatCodec;
+    let mut payload = cohere_v2_chat_details();
+    payload["chatRequest"]["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "role": "ASSISTANT",
+            "content": [],
+            "toolCalls": [{
+                "id": "call-1",
+                "type": "FUNCTION",
+                "function": {"name": "get_weather", "arguments": "{\"city\": \"NYC\"}"}
+            }]
+        }));
+    let original = make_request(payload);
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let last = annotated.messages.len() - 1;
+    annotated.messages[last] = Message::Assistant {
+        content: None,
+        tool_calls: Some(vec![ToolCall {
+            id: "call-1".into(),
+            call_type: "function".into(),
+            function: FunctionCall {
+                name: "get_weather".into(),
+                arguments: "{\"city\": \"[REDACTED]\"}".into(),
+            },
+        }]),
+        name: None,
+    };
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let tool_call = &encoded.content["chatRequest"]["messages"][1]["toolCalls"][0];
+    assert_eq!(
+        tool_call["function"],
+        json!({"name": "get_weather", "arguments": "{\"city\": \"[REDACTED]\"}"}),
+        "COHEREV2 edits must re-encode nested-function tool calls, got {tool_call}"
+    );
+    assert!(
+        tool_call.get("name").is_none() && tool_call.get("arguments").is_none(),
+        "flat GENERIC keys must not appear on a COHEREV2 tool call, got {tool_call}"
+    );
+}
+
+#[test]
+fn test_non_string_text_part_survives_as_provider_native() {
+    let codec = OCIGenAIChatCodec;
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["messages"][1]["content"] = json!([
+        {"type": "TEXT", "text": {"unexpected": "object"}}
+    ]);
+    let original = make_request(payload.clone());
+    let annotated = codec.decode(&original).unwrap();
+
+    let Some(Message::User {
+        content: MessageContent::Parts(parts),
+        ..
+    }) = annotated.messages.get(1)
+    else {
+        panic!("expected a user message with typed parts");
+    };
+    assert!(
+        matches!(&parts[0], ContentPart::ProviderNative { .. }),
+        "non-string TEXT value must survive as provider-native, got {:?}",
+        parts[0]
+    );
+
+    // Identity: the raw value re-encodes untouched.
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded.content, payload);
+}

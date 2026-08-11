@@ -710,3 +710,39 @@ fn oci_genai_overlay_drops_cohere_tool_calls_with_non_object_arguments() {
         );
     }
 }
+
+#[test]
+fn oci_genai_overlay_removes_unsanitized_additional_choices() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "raw secret"}]}
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "second raw secret"}]}
+                }
+            ]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let choices = overlaid["chatResponse"]["choices"].as_array().unwrap();
+    assert_eq!(
+        choices.len(),
+        1,
+        "additional raw choices have no sanitized counterpart and must be removed"
+    );
+    assert_eq!(
+        choices[0]["message"]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+}

@@ -300,7 +300,10 @@ fn decode_generic_content_part(value: &Json) -> Result<ContentPart> {
         ));
     };
     match obj.get("type").and_then(Json::as_str) {
-        Some("TEXT") => Ok(ContentPart::Text {
+        // A TEXT part whose `text` is not a string falls through to the
+        // provider-native branch so the raw value survives the round trip
+        // instead of collapsing to an empty string.
+        Some("TEXT") if obj.get("text").is_none_or(Json::is_string) => Ok(ContentPart::Text {
             text: obj
                 .get("text")
                 .and_then(Json::as_str)
@@ -384,6 +387,23 @@ fn decode_oci_tool_call(value: &Json) -> Result<ToolCall> {
             },
         },
     })
+}
+
+/// Convert a normalized [`ToolCall`] into the COHEREV2 nested-function shape.
+fn encode_oci_tool_call_nested(tool_call: &ToolCall) -> Json {
+    let mut function = serde_json::Map::new();
+    function.insert("name".into(), Json::String(tool_call.function.name.clone()));
+    function.insert(
+        "arguments".into(),
+        Json::String(tool_call.function.arguments.clone()),
+    );
+    let mut obj = serde_json::Map::new();
+    if !tool_call.id.is_empty() {
+        obj.insert("id".into(), Json::String(tool_call.id.clone()));
+    }
+    obj.insert("type".into(), Json::String("FUNCTION".into()));
+    obj.insert("function".into(), Json::Object(function));
+    Json::Object(obj)
 }
 
 /// Convert a normalized nested [`ToolCall`] back into the flat OCI shape.
@@ -475,7 +495,7 @@ fn provider_native_message(kind: &str, value: &Json) -> Message {
     }
 }
 
-fn encode_generic_message(message: &Message) -> Result<Json> {
+fn encode_generic_message(message: &Message, api_format: &str) -> Result<Json> {
     let mut obj = serde_json::Map::new();
     match message {
         Message::System { content, .. } => {
@@ -503,9 +523,15 @@ fn encode_generic_message(message: &Message) -> Result<Json> {
                 },
             );
             if let Some(tool_calls) = tool_calls {
+                // COHEREV2 nests name/arguments under `function`; GENERIC is flat.
+                let encode = if api_format == "COHEREV2" {
+                    encode_oci_tool_call_nested
+                } else {
+                    encode_oci_tool_call
+                };
                 obj.insert(
                     "toolCalls".into(),
-                    Json::Array(tool_calls.iter().map(encode_oci_tool_call).collect()),
+                    Json::Array(tool_calls.iter().map(encode).collect()),
                 );
             }
         }
@@ -537,6 +563,7 @@ fn patch_generic_messages(
     chat_request: &mut serde_json::Map<String, Json>,
     edited: &[Message],
     baseline: &[Message],
+    api_format: &str,
 ) -> Result<()> {
     let raw_messages: Vec<Json> = chat_request
         .get("messages")
@@ -550,7 +577,7 @@ fn patch_generic_messages(
             let unchanged = baseline.get(index) == Some(message);
             match raw_messages.get(index) {
                 Some(raw) if unchanged => Ok(raw.clone()),
-                _ => encode_generic_message(message),
+                _ => encode_generic_message(message, api_format),
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1093,7 +1120,12 @@ impl LlmCodec for OCIGenAIChatCodec {
             if api_format == "COHERE" {
                 encode_cohere_messages(&mut chat_request, &annotated.messages)?;
             } else {
-                patch_generic_messages(&mut chat_request, &annotated.messages, &baseline.messages)?;
+                patch_generic_messages(
+                    &mut chat_request,
+                    &annotated.messages,
+                    &baseline.messages,
+                    &api_format,
+                )?;
             }
         }
 

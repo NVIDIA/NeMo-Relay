@@ -313,9 +313,7 @@ class TestBuiltinCodecDecodeResponse:
                 "servingMode": {"servingType": "ON_DEMAND", "modelId": "meta.llama-3.3-70b-instruct"},
                 "chatRequest": {
                     "apiFormat": "GENERIC",
-                    "messages": [
-                        {"role": "USER", "content": [{"type": "TEXT", "text": "My SSN is 111-22-3333."}]}
-                    ],
+                    "messages": [{"role": "USER", "content": [{"type": "TEXT", "text": "My SSN is 111-22-3333."}]}],
                     "maxTokens": 600,
                 },
             },

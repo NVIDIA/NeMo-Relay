@@ -329,12 +329,16 @@ fn overlay_oci_chat_response(
         return;
     }
 
-    let Some(choice) = chat_response
+    let Some(choices) = chat_response
         .get_mut("choices")
         .and_then(Json::as_array_mut)
-        .and_then(|choices| choices.first_mut())
-        .and_then(Json::as_object_mut)
     else {
+        return;
+    };
+    // The normalized annotation models a single choice; any additional raw
+    // choices have no sanitized counterpart and would leak unredacted data.
+    choices.truncate(1);
+    let Some(choice) = choices.first_mut().and_then(Json::as_object_mut) else {
         return;
     };
     set_optional_string_field(
