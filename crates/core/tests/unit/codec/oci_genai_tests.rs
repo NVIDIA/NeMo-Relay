@@ -1782,3 +1782,207 @@ fn test_non_string_text_part_survives_as_provider_native() {
     let encoded = codec.encode(&annotated, &original).unwrap();
     assert_eq!(encoded.content, payload);
 }
+
+// ===================================================================
+// Coverage: edit paths and error paths not exercised elsewhere
+// ===================================================================
+
+#[test]
+fn test_tools_and_tool_choice_edits_reencode() {
+    use super::super::request::{FunctionDefinition, ProviderNativeComponent, ToolDefinition};
+
+    let codec = OCIGenAIChatCodec;
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["tools"] = json!([
+        {"type": "FUNCTION", "name": "old_tool", "parameters": {"type": "object"}}
+    ]);
+    payload["chatRequest"]["toolChoice"] = json!({"type": "AUTO"});
+    let original = make_request(payload);
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.tools = Some(vec![ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: "get_weather".into(),
+            description: Some("Get weather".into()),
+            parameters: Some(json!({"type": "object", "properties": {}})),
+            strict: None,
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    }]);
+    annotated.tool_choice = Some(ToolChoice::ProviderNative(ProviderNativeComponent {
+        provider: "oci_genai".into(),
+        kind: "tool_choice".into(),
+        value: json!({"type": "REQUIRED"}),
+    }));
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = &encoded.content["chatRequest"];
+    assert_eq!(
+        chat_request["tools"],
+        json!([{
+            "type": "FUNCTION",
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {}}
+        }])
+    );
+    assert_eq!(chat_request["toolChoice"], json!({"type": "REQUIRED"}));
+}
+
+#[test]
+fn test_dropping_tools_removes_the_wire_key() {
+    let codec = OCIGenAIChatCodec;
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["tools"] = json!([
+        {"type": "FUNCTION", "name": "old_tool", "parameters": {"type": "object"}}
+    ]);
+    let original = make_request(payload);
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.tools = None;
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert!(
+        encoded.content["chatRequest"].get("tools").is_none(),
+        "dropping the tools annotation must remove the wire key"
+    );
+}
+
+#[test]
+fn test_non_native_tool_choice_edit_is_rejected() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(generic_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.tool_choice = Some(ToolChoice::Auto);
+
+    let err = codec.encode(&annotated, &original).unwrap_err();
+    assert!(matches!(err, FlowError::InvalidArgument(_)), "{err:?}");
+}
+
+#[test]
+fn test_parts_content_edit_reencodes_typed_parts() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(generic_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.messages[1] = Message::User {
+        content: MessageContent::Parts(vec![
+            ContentPart::Text {
+                text: "look at this".into(),
+                extra: Default::default(),
+            },
+            ContentPart::ProviderNative {
+                provider: "oci_genai".into(),
+                kind: "IMAGE".into(),
+                value: json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,AA"}}),
+            },
+        ]),
+        name: None,
+    };
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(
+        encoded.content["chatRequest"]["messages"][1]["content"],
+        json!([
+            {"type": "TEXT", "text": "look at this"},
+            {"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,AA"}}
+        ])
+    );
+}
+
+#[test]
+fn test_top_p_edit_patches_only_top_p() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(generic_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let params = annotated.params.as_mut().unwrap();
+    params.top_p = Some(0.5);
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = &encoded.content["chatRequest"];
+    assert_eq!(chat_request["topP"], json!(0.5));
+    assert_eq!(chat_request["temperature"], json!(0.0));
+    assert_eq!(chat_request["maxTokens"], json!(600));
+}
+
+#[test]
+fn test_decode_error_paths() {
+    let codec = OCIGenAIChatCodec;
+
+    // Request content that is not an object.
+    assert!(codec.decode(&make_request(json!("nope"))).is_err());
+
+    // A stop list that is not a string array.
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["stop"] = json!("HALT");
+    assert!(codec.decode(&make_request(payload)).is_err());
+
+    // A toolCalls entry that is not an object.
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["messages"] = json!([
+        {"role": "ASSISTANT", "content": [], "toolCalls": ["nope"]}
+    ]);
+    assert!(codec.decode(&make_request(payload)).is_err());
+
+    // A GENERIC message that is not an object.
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["messages"] = json!(["nope"]);
+    assert!(codec.decode(&make_request(payload)).is_err());
+
+    // A COHERE chatHistory turn that is not an object.
+    let mut payload = cohere_chat_details();
+    payload["chatRequest"]["chatHistory"] = json!(["nope"]);
+    assert!(codec.decode(&make_request(payload)).is_err());
+}
+
+#[test]
+fn test_unknown_generic_role_survives_as_provider_native() {
+    let codec = OCIGenAIChatCodec;
+    let mut payload = generic_chat_details();
+    payload["chatRequest"]["messages"] = json!([
+        {"role": "MODERATOR", "content": [{"type": "TEXT", "text": "hi"}]}
+    ]);
+    let original = make_request(payload.clone());
+    let annotated = codec.decode(&original).unwrap();
+
+    assert!(matches!(
+        &annotated.messages[0],
+        Message::ProviderNative { provider, .. } if provider == "oci_genai"
+    ));
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded.content, payload);
+}
+
+#[test]
+fn oci_streaming_codec_infers_api_format_from_event_shape() {
+    // GENERIC inferred from a bare choice delta with no apiFormat anywhere.
+    let codec = OCIGenAIStreamingCodec::default();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+    collector(json!({
+        "index": 0,
+        "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "hi"}]},
+        "finishReason": "stop"
+    }))
+    .unwrap();
+    let annotated = OCIGenAIChatCodec.decode_response(&finalizer()).unwrap();
+    assert_eq!(annotated.message, Some(MessageContent::Text("hi".into())));
+
+    // COHERE inferred from a bare text fragment with no apiFormat anywhere.
+    let codec = OCIGenAIStreamingCodec::new();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+    collector(json!({"text": "hello"})).unwrap();
+    collector(json!({"text": "!"})).unwrap();
+    // The live terminal event repeats the complete text.
+    collector(json!({"text": "hello!", "finishReason": "COMPLETE"})).unwrap();
+    let annotated = OCIGenAIChatCodec.decode_response(&finalizer()).unwrap();
+    assert_eq!(
+        annotated.message,
+        Some(MessageContent::Text("hello!".into()))
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::Complete));
+}
