@@ -101,6 +101,26 @@ Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. The SDK creates
 two Tokio worker threads by default. Override `NativePlugin::executor_config`
 with a nonzero `NativeExecutorConfig::worker_threads` value when needed. Do not
 block those workers; use async I/O or `tokio::task::spawn_blocking`.
+
+`worker_threads` is a Rust SDK setting, not a `relay-plugin.toml` or
+`plugins.toml` field. Configure it in the plugin implementation:
+
+```rust
+use nemo_relay_plugin::{NativeExecutorConfig, NativePlugin};
+
+impl NativePlugin for ExamplePlugin {
+    fn plugin_kind(&self) -> &str {
+        "acme.example"
+    }
+
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 4 }
+    }
+
+    // ... register and other trait methods ...
+}
+```
+
 During plugin teardown, the SDK stops accepting new callbacks and drains
 already accepted typed middleware before the plugin library unloads.
 

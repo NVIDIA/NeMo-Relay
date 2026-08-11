@@ -173,10 +173,29 @@ the last such call returns.
 The Rust SDK registers typed middleware through these completion APIs and runs
 the returned futures on one SDK-owned multi-thread Tokio runtime per plugin.
 The default is two workers; override `NativePlugin::executor_config` to use a
-different nonzero count. Do not block executor workers. Relay scope context is
-installed around each root-future poll, but child tasks created with
-`tokio::spawn` do not automatically inherit it. Typed subscribers remain
-synchronous and continue to run on Relay's subscriber dispatcher.
+different nonzero count. This is an SDK implementation setting, not a
+`relay-plugin.toml` or `plugins.toml` field:
+
+```rust
+use nemo_relay_plugin::{NativeExecutorConfig, NativePlugin};
+
+impl NativePlugin for NativePolicy {
+    fn plugin_kind(&self) -> &str {
+        "acme.native_policy"
+    }
+
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 4 }
+    }
+
+    // ... register and other trait methods ...
+}
+```
+
+Do not block executor workers. Relay scope context is installed around each
+root-future poll, but child tasks created with `tokio::spawn` do not
+automatically inherit it. Typed subscribers remain synchronous and continue to
+run on Relay's subscriber dispatcher.
 
 Event sanitizers registered through this extension still run on Relay's serial
 publication dispatcher. Scope and mark emission remain synchronous and their
