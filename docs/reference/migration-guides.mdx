@@ -32,6 +32,14 @@ configurations.
 
 ### Upgrade Native Rust Plugins to NeMo Relay 0.8
 
+<Warning title="Breaking Change">
+NeMo Relay 0.8 is not source-compatible with typed native Rust plugins built
+against NeMo Relay 0.7. Update every typed guardrail, sanitizer, and intercept
+callback to the asynchronous contract, rebuild the plugin with
+`nemo-relay-plugin` 0.8.0, and update its Relay compatibility range before
+deployment.
+</Warning>
+
 NeMo Relay 0.8 changes every typed native Rust guardrail, sanitizer, and
 intercept callback to return a future. This is a source-breaking SDK change.
 Subscribers, validation, registration, scope and mark helpers, raw synchronous
