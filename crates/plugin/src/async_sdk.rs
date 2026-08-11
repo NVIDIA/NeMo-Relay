@@ -18,14 +18,12 @@ use futures::{FutureExt, Stream};
 use serde::Deserialize;
 use serde_json::Value as Json;
 use tokio::runtime::{Handle, Runtime};
-use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::*;
 
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const CANCELLATION_POLL_MAX_INTERVAL: Duration = Duration::from_millis(160);
-const EXECUTOR_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Configuration for the executor owned by one exported native plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,7 +43,6 @@ pub(crate) struct NativeExecutor {
     thread_name: String,
     runtime: Mutex<Option<Runtime>>,
     tracker: TaskTracker,
-    cancellation: CancellationToken,
     accepting: AtomicBool,
 }
 
@@ -56,7 +53,6 @@ impl NativeExecutor {
             thread_name: format!("nemo-relay-plugin-{plugin_kind}"),
             runtime: Mutex::new(None),
             tracker: TaskTracker::new(),
-            cancellation: CancellationToken::new(),
             accepting: AtomicBool::new(true),
         })
     }
@@ -96,18 +92,16 @@ impl Drop for NativeExecutor {
     fn drop(&mut self) {
         self.accepting.store(false, Ordering::Release);
         self.tracker.close();
-        self.cancellation.cancel();
         let runtime = self
             .runtime
             .get_mut()
             .unwrap_or_else(|error| error.into_inner())
             .take();
         if let Some(runtime) = runtime {
-            // `Runtime::block_on` and dropping a runtime both panic when the
-            // final executor reference is released from a Tokio worker. The
-            // cancellation token asks tracked tasks to finish; Tokio performs
-            // the bounded, runtime-context-safe shutdown afterwards.
-            runtime.shutdown_timeout(EXECUTOR_SHUTDOWN_TIMEOUT);
+            // The host removes callbacks before dropping the plugin descriptor,
+            // so this is not called by an SDK worker. Drain accepted middleware
+            // before the descriptor can unload its dynamic library.
+            runtime.block_on(self.tracker.wait());
         }
     }
 }
@@ -542,17 +536,11 @@ unsafe extern "C" fn unary_trampoline(
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
     let task = match future {
-        Ok(future) => drive_unary(
-            future,
-            binding,
-            completion,
-            state.executor.cancellation.clone(),
-        ),
+        Ok(future) => drive_unary(future, binding, completion),
         Err(_) => drive_unary(
             Box::pin(async move { Err("typed native middleware callback panicked".into()) }),
             binding,
             completion,
-            state.executor.cancellation.clone(),
         ),
     };
     if let Err(error) = state.executor.spawn(async move {
@@ -569,7 +557,6 @@ fn drive_unary(
     future: UnaryFuture,
     binding: Result<ScopePollBinding>,
     completion: Completion,
-    executor_cancellation: CancellationToken,
 ) -> Pin<Box<dyn Future<Output = ()> + Send>> {
     Box::pin(async move {
         let future: UnaryFuture = match binding {
@@ -584,7 +571,6 @@ fn drive_unary(
                 result.unwrap_or_else(|_| Err("typed native middleware future panicked".into()))
             }
             () = wait_for_completion_cancellation(&completion) => return,
-            () = executor_cancellation.cancelled() => return,
         };
         match result {
             Ok(value) => {
@@ -916,8 +902,6 @@ unsafe extern "C" fn stream_trampoline(
         set_last_error(&state.host.0.v3.v1, &error);
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
-    let executor_cancellation = state.executor.cancellation.clone();
-    let task_cancellation = executor_cancellation.clone();
     let task = async move {
         let (future_binding, stream_binding) = match bindings {
             Ok(bindings) => bindings,
@@ -945,7 +929,6 @@ unsafe extern "C" fn stream_trampoline(
             let item = tokio::select! {
                 item = futures::StreamExt::next(&mut stream) => item,
                 () = wait_for_stream_cancellation(&output) => return,
-                () = task_cancellation.cancelled() => return,
             };
             let Some(item) = item else {
                 break;
@@ -969,12 +952,7 @@ unsafe extern "C" fn stream_trampoline(
             let _ = output.finish();
         }
     };
-    if let Err(error) = state.executor.spawn(async move {
-        tokio::select! {
-            () = task => {}
-            () = executor_cancellation.cancelled() => {}
-        }
-    }) {
+    if let Err(error) = state.executor.spawn(task) {
         set_last_error(&state.host.0.v3.v1, &error);
     }
     NemoRelayNativeAsyncCallbackState::Pending as u32

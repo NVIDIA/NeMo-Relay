@@ -3617,6 +3617,58 @@ fn typed_async_cancellation_while_awaiting_reclaims_future() {
 }
 
 #[test]
+fn typed_async_executor_drop_drains_accepted_tasks() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    let (started_tx, started_rx) = std::sync::mpsc::sync_channel(1);
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+    let finish_rx = Arc::new(Mutex::new(Some(finish_rx)));
+    ctx.register_tool_request_intercept("drain", 0, false, {
+        let finish_rx = Arc::clone(&finish_rx);
+        move |_name, _value| {
+            let finish_rx = Arc::clone(&finish_rx);
+            let started_tx = started_tx.clone();
+            async move {
+                started_tx.send(()).unwrap();
+                let finish_rx = finish_rx.lock().unwrap().take().unwrap();
+                finish_rx.await.unwrap();
+                Ok(json!({"drained": true}))
+            }
+        }
+    })
+    .unwrap();
+    let registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept);
+    let completion = MockAsyncCompletion::new();
+    let invocation = json_host_string(&host.v3.v1, json!({ "name": "tool", "value": {} }));
+    unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            ptr::null(),
+            completion.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    unsafe { registration.free() };
+
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        finish_tx.send(()).unwrap();
+    });
+    let drop_started = Instant::now();
+    drop(ctx);
+    assert!(
+        drop_started.elapsed() >= Duration::from_millis(50),
+        "executor shutdown returned before the accepted task completed"
+    );
+    releaser.join().unwrap();
+    assert_eq!(completion.wait(), Ok(json!({"drained": true})));
+}
+
+#[test]
 fn typed_async_stream_cancellation_while_polling_releases_output() {
     let _guard = begin_test();
     let host = test_host_v4();

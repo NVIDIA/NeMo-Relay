@@ -101,6 +101,8 @@ Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. The SDK creates
 two Tokio worker threads by default. Override `NativePlugin::executor_config`
 with a nonzero `NativeExecutorConfig::worker_threads` value when needed. Do not
 block those workers; use async I/O or `tokio::task::spawn_blocking`.
+During plugin teardown, the SDK stops accepting new callbacks and drains
+already accepted typed middleware before the plugin library unloads.
 
 Relay scope context is restored around every poll of a registered middleware
 future. Child tasks created with `tokio::spawn` do not automatically inherit
