@@ -107,6 +107,26 @@ fn build_semantic_request_view(request: &LlmRequest) -> Result<SemanticRequestVi
     })
 }
 
+/// Build the provider cache-intent bundle for a request, or decline to build one.
+///
+/// Reuse is gated: the learned profile must carry a stable prefix fingerprint,
+/// the live request must produce one, and the two must agree. Any missing or
+/// divergent fingerprint fails closed and emits a `build_intent_bundle_skipped`
+/// debug event rather than emitting hints derived from a different prompt shape.
+///
+/// # Parameters
+/// - `agent_id`: Agent the request belongs to.
+/// - `provider`: Provider name used for debug attribution.
+/// - `plugin`: Provider plugin that translates intents into provider hints.
+/// - `request_surface`: Decoded request surface the hints will be applied to.
+/// - `annotated_request`: Normalized request used to derive the learning key.
+/// - `prompt_ir`: Normalized IR of the live request.
+/// - `stability`: Learned stability record for this profile.
+/// - `observation_count`: Observations backing `stability`.
+///
+/// # Returns
+/// The intent bundle, or [`None`] when the request has too few observations or
+/// fails the stable prefix fingerprint gate.
 #[allow(clippy::too_many_arguments)]
 fn build_intent_bundle(
     agent_id: &str,
@@ -129,6 +149,34 @@ fn build_intent_bundle(
                 "minimum_observations": MIN_ACG_OBSERVATIONS,
                 "stable_prefix_length": stability.stable_prefix_length,
             }),
+        );
+        return None;
+    }
+
+    let learning_key = derive_acg_learning_key(agent_id, annotated_request);
+    let live_fingerprint = crate::acg::stability::profile_prefix_fingerprint(
+        prompt_ir,
+        stability.stable_prefix_length,
+        &learning_key,
+    );
+    let Some(stored_fingerprint) = stability.stable_prefix_fingerprint.as_ref() else {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_missing"}),
+        );
+        return None;
+    };
+    let Some(live_fingerprint) = live_fingerprint.as_ref() else {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_unavailable"}),
+        );
+        return None;
+    };
+    if stored_fingerprint != live_fingerprint {
+        acg_debug::emit(
+            "build_intent_bundle_skipped",
+            json!({"reason": "stable_prefix_fingerprint_mismatch"}),
         );
         return None;
     }

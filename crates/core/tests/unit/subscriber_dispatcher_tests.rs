@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::native::{
     DispatcherLoopState, DispatcherMessage, PendingFlush, PublicationLineage, PublicationPermit,
-    dispatcher_sender, enqueue_dispatch_message, flush_queued_subscribers, flush_subscribers,
-    prepare_for_fork, register_async_publication, register_pending_publication,
-    resume_after_fork_parent, sanitize_event_snapshot, set_sanitizer_runtime_failure_for_test,
-    spawn_background_publication,
+    dispatch_sanitized_event_with_delivery, dispatcher_sender, enqueue_dispatch_message,
+    flush_queued_subscribers, flush_subscribers, prepare_for_fork, register_async_publication,
+    register_pending_publication, resume_after_fork_parent, sanitize_event_snapshot,
+    set_sanitizer_runtime_failure_for_test, spawn_background_publication,
 };
 use super::{EventSubscriberFn, publication_context};
 use crate::api::registry::RegistryRecord;
@@ -59,6 +59,7 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
             scope_stack: current_scope_stack(),
             publication_context: None,
             lineage: None,
+            completion: None,
         })
         .unwrap();
     let (flush_tx, flush_rx) = mpsc::channel();
@@ -94,6 +95,7 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
             scope_stack: current_scope_stack(),
             publication_context: None,
             lineage: None,
+            completion: None,
         }])
         .unwrap();
     flush_rx
@@ -135,6 +137,7 @@ fn pending_publication_defers_flush_without_blocking_unrelated_delivery() {
         scope_stack: current_scope_stack(),
         publication_context: None,
         lineage: None,
+        completion: None,
     });
     delivered_rx
         .recv_timeout(std::time::Duration::from_secs(1))
@@ -202,6 +205,7 @@ fn flush_does_not_wait_for_later_delivery() {
             scope_stack: current_scope_stack(),
             publication_context: None,
             lineage: None,
+            completion: None,
         })
         .unwrap();
     barrier.sender.send(Vec::new()).unwrap();
@@ -213,6 +217,128 @@ fn flush_does_not_wait_for_later_delivery() {
         flush_result.is_ok(),
         "a delivery queued after a flush must not delay that flush"
     );
+}
+
+#[test]
+fn subscriber_delivery_receipt_waits_for_its_event() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let subscriber: EventSubscriberFn = Arc::new(move |_event| {
+        started_tx.send(()).unwrap();
+        release_rx
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .recv()
+            .unwrap();
+    });
+    let event = serde_json::from_value(serde_json::json!({
+        "kind": "mark",
+        "atof_version": "0.1",
+        "uuid": "019c1df6-4a57-7000-8000-000000000017",
+        "timestamp": "2026-07-28T00:00:00Z",
+        "name": "tracked-delivery"
+    }))
+    .expect("valid event");
+    let delivery = dispatch_sanitized_event_with_delivery(
+        event,
+        Vec::new(),
+        &[subscriber],
+        current_scope_stack(),
+    )
+    .unwrap();
+    started_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("tracked subscriber should start");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let mut wait = Box::pin(delivery.wait());
+    assert!(
+        runtime
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_millis(50), wait.as_mut()).await
+            })
+            .is_err(),
+        "delivery receipt must remain pending while its subscriber is active"
+    );
+    release_tx.send(()).unwrap();
+    runtime
+        .block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(1), wait.as_mut()).await
+        })
+        .expect("delivery receipt should complete after subscriber delivery")
+        .unwrap();
+    flush_subscribers().unwrap();
+}
+
+#[test]
+fn subscriber_delivery_receipt_does_not_capture_later_events() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    flush_subscribers().unwrap();
+    let event = |uuid: &str, name: &str| {
+        serde_json::from_value(serde_json::json!({
+            "kind": "mark",
+            "atof_version": "0.1",
+            "uuid": uuid,
+            "timestamp": "2026-07-28T00:00:00Z",
+            "name": name
+        }))
+        .expect("valid event")
+    };
+    let delivery = dispatch_sanitized_event_with_delivery(
+        event("019c1df6-4a57-7000-8000-000000000018", "tracked"),
+        Vec::new(),
+        &[Arc::new(|_event| {})],
+        current_scope_stack(),
+    )
+    .unwrap();
+
+    let (later_started_tx, later_started_rx) = mpsc::channel();
+    let (release_later_tx, release_later_rx) = mpsc::channel();
+    enqueue_dispatch_message(DispatcherMessage::Deliver {
+        event: Box::new(event(
+            "019c1df6-4a57-7000-8000-000000000019",
+            "later-blocked",
+        )),
+        transform: Some(Box::new(move |event| {
+            Box::pin(async move {
+                later_started_tx.send(()).unwrap();
+                release_later_rx.recv().unwrap();
+                event
+            })
+        })),
+        sanitizers: Vec::new(),
+        subscribers: Vec::new(),
+        scope_stack: current_scope_stack(),
+        publication_context: None,
+        lineage: None,
+        completion: None,
+    });
+    later_started_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("later delivery should block the dispatcher");
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let result = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_millis(100), delivery.wait()).await
+    });
+    release_later_tx.send(()).unwrap();
+    flush_subscribers().unwrap();
+    result
+        .expect("tracked delivery must not wait for a later queued event")
+        .unwrap();
 }
 
 #[test]
@@ -311,6 +437,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
                         scope_stack: nested_scope_stack.clone(),
                         publication_context: None,
                         lineage: None,
+                        completion: None,
                     }));
                     let publication =
                         register_async_publication().expect("nested publication barrier");
@@ -333,6 +460,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
                             scope_stack: nested_scope_stack,
                             publication_context: None,
                             lineage: None,
+                            completion: None,
                         }])
                         .unwrap();
                     event
@@ -343,6 +471,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
             scope_stack: current_scope_stack(),
             publication_context: None,
             lineage: None,
+            completion: None,
         })
         .unwrap();
     started_rx
@@ -357,6 +486,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
             scope_stack: current_scope_stack(),
             publication_context: None,
             lineage: None,
+            completion: None,
         })
         .unwrap();
     release_tx.send(()).unwrap();
@@ -423,6 +553,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
                 scope_stack: current_scope_stack(),
                 publication_context: None,
                 lineage: None,
+                completion: None,
             }));
         })
     };
@@ -460,6 +591,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
                 scope_stack: current_scope_stack(),
                 publication_context: None,
                 lineage: None,
+                completion: None,
             }));
         })
     };
@@ -482,6 +614,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             scope_stack: current_scope_stack(),
             publication_context: None,
             lineage: None,
+            completion: None,
         })
         .unwrap();
     outer_started_rx
@@ -496,6 +629,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
             scope_stack: current_scope_stack(),
             publication_context: None,
             lineage: None,
+            completion: None,
         })
         .unwrap();
     release_outer_tx

@@ -25,9 +25,10 @@ All middleware families are asynchronous in the Rust runtime. Rust callbacks
 return a future, and Node callbacks may return a value or a Promise. Python
 registrations accept callbacks that return a value or an awaitable when invoked
 through an asynchronous Relay API or queued event publication. Worker and
-native-plugin middleware can also complete asynchronously. Relay awaits entries
-sequentially in priority order, so later callbacks observe earlier middleware
-output.
+native-plugin middleware can also complete asynchronously. Within each
+middleware chain, Relay awaits entries sequentially in priority order so later
+callbacks observe earlier middleware output. Payload and event sanitizer chains
+run on the queued publication path and do not delay managed execution.
 
 The experimental raw C FFI and Go binding retain synchronous middleware
 callbacks. Relay invokes each callback on a native thread and waits for it to
@@ -39,12 +40,13 @@ Synchronous standalone Python calls cannot drive an awaitable callback. Call
 the same standalone helper from a running event loop and await the returned
 value instead.
 
-Managed execution is asynchronous because its result depends on middleware
-completion. Python standalone conditional and request-intercept helpers return
-a direct value outside an event loop and an awaitable inside one. Manual lifecycle
-APIs (`tool_call`, `tool_call_end`, `llm_call`, and `llm_call_end`) remain
-synchronous: they create or close their handle immediately and queue observability
-work rather than awaiting it.
+Managed execution is asynchronous because its result depends on conditional
+guardrails and intercept completion. Python standalone conditional and
+request-intercept helpers return a direct value outside an event loop and an
+awaitable inside one. Managed and manual lifecycle APIs queue observability
+sanitization and publication rather than awaiting it. Manual lifecycle APIs
+(`tool_call`, `tool_call_end`, `llm_call`, and `llm_call_end`) remain
+synchronous and create or close their handle immediately.
 
 <Warning>
 Event sanitizers, conditional-execution guardrails, request intercepts,
@@ -217,11 +219,12 @@ arguments passed to the callback or the real value returned to the caller.
 
 ## Queued Event Publication
 
-Scope operations, marks, and manual tool/LLM lifecycle calls never become
-awaitable because an event sanitizer is asynchronous. At emission time Relay
-snapshots the event, visible sanitizer chain, and subscribers, then places the
-work on a serial dispatcher. The dispatcher awaits sanitizers and publishes the
-event later in FIFO order.
+Scope operations, marks, and manual or managed tool/LLM lifecycle calls do not
+await observability sanitizers. At emission time Relay snapshots the event-only
+payload, visible sanitizer chains, and subscribers, then places the work on a
+serial dispatcher. The dispatcher awaits the specialized tool or LLM payload
+sanitizers, then the event sanitizers, and publishes the event later in FIFO
+order.
 
 Subscriber and exporter delivery is therefore delayed, while start/end/mark
 order is preserved. Closing a scope or deregistering middleware after emission
@@ -240,9 +243,8 @@ flowchart LR
     subgraph RequestPhase[Request Phase]
         Conditional[Conditional Guardrails]
         RequestIntercepts[Request Intercepts]
-        RequestSanitizers[Request Sanitizers]
-        StartEvent[Scope-Start Sanitizers and Start Event]
-        Conditional --> RequestIntercepts --> RequestSanitizers --> StartEvent
+        QueueStart[Enqueue Start Event Snapshot]
+        Conditional --> RequestIntercepts --> QueueStart
     end
 
     subgraph ExecutionPhase[Execution Phase]
@@ -252,28 +254,42 @@ flowchart LR
     end
 
     subgraph ResponsePhase[Response Phase]
-        ResponseSanitizers[Response Sanitizers]
-        EndEvent[Scope-End Sanitizers and End Event]
-        ResponseSanitizers --> EndEvent
+        QueueEnd[Enqueue End Event Snapshot]
+        Return[Return Real Result]
+        QueueEnd --> Return
     end
 
-    StartEvent --> ExecutionIntercepts
-    Callback --> ResponseSanitizers
+    QueueStart --> ExecutionIntercepts
+    Callback --> QueueEnd
+
+    subgraph PublicationPath[Serial Publication Path]
+        RequestSanitizers[Request Sanitizers]
+        StartEvent[Scope-Start Sanitizers and Deliver Start]
+        ResponseSanitizers[Response Sanitizers]
+        EndEvent[Scope-End Sanitizers and Deliver End]
+        RequestSanitizers --> StartEvent --> ResponseSanitizers --> EndEvent
+    end
+
+    QueueStart -.-> RequestSanitizers
+    QueueEnd -.-> ResponseSanitizers
 ```
 
 The phases run as follows:
 
 1. **Request phase:** Conditional-execution guardrails allow the call, request
-   intercepts rewrite the real request, request sanitizers rewrite the
-   observability copy, and scope-start sanitizers run before Relay enqueues the
-   start event.
+   intercepts rewrite the real request, and Relay snapshots and enqueues the
+   start event's observability copy.
 2. **Execution phase:** Execution intercepts wrap or replace the real callback.
-3. **Response phase:** Response sanitizers rewrite the observability copy, and
-   scope-end sanitizers run before Relay enqueues the end event.
+3. **Response phase:** Relay snapshots and enqueues the end event's
+   observability copy, then returns the real result.
+4. **Publication path:** The serial dispatcher runs request or response
+   sanitizers, then the matching scope-event sanitizers, and finally delivers
+   the event to subscribers and exporters.
 
-The start event is enqueued before execution begins. The async subscriber
-dispatcher delivers start and end snapshots later in FIFO order; managed
-execution does not wait for subscriber or exporter callbacks.
+The start event is submitted before execution begins, but its sanitizers run
+later on the publication path and may overlap application execution. The serial
+dispatcher preserves start/end delivery order, and `flush_subscribers()` waits
+for queued sanitization and delivery when a caller needs that barrier.
 
 This ordering preserves the distinction between the families:
 

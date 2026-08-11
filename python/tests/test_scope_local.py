@@ -226,6 +226,7 @@ class TestScopeLocalPriorityOrdering:
         with scope.scope("priority_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_local_guard", 5, scope_local_sanitizer)
             await tools.execute("priority_tool", {"test": True}, my_tool)
+            await subscribers.flush_async()
 
         guardrails.deregister_tool_sanitize_request("sl_global_guard")
 
@@ -253,6 +254,7 @@ class TestScopeLocalPriorityOrdering:
         with scope.scope("priority_scope2", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_local_guard2", 20, scope_local_sanitizer)
             await tools.execute("priority_tool2", {}, my_tool)
+            await subscribers.flush_async()
 
         guardrails.deregister_tool_sanitize_request("sl_global_guard2")
 
@@ -469,10 +471,12 @@ class TestScopeLocalIsolation:
         with scope.scope("persist_scope_1", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_persist_local", 2, lambda n, a: a)
             await tools.execute("persist_tool_1", {}, my_tool)
+            await subscribers.flush_async()
 
         # Global should still work after the scope-local scope ends
         execution_order.clear()
         await tools.execute("persist_tool_2", {}, my_tool)
+        await subscribers.flush_async()
 
         guardrails.deregister_tool_sanitize_request("sl_persist_global")
 

@@ -67,6 +67,13 @@ jobs:
             runner: windows-11-arm
 
     steps:
+      - name: Remove untrusted Homebrew tap
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          if [ -d "$(brew --repository aws/tap)" ]; then
+            brew untap aws/tap
+          fi
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -194,6 +201,13 @@ jobs:
             container_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
 
     steps:
+      - name: Remove untrusted Homebrew tap
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          if [ -d "$(brew --repository aws/tap)" ]; then
+            brew untap aws/tap
+          fi
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -428,6 +442,13 @@ jobs:
             runner: ubuntu-latest
 
     steps:
+      - name: Remove untrusted Homebrew tap
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          if [ -d "$(brew --repository aws/tap)" ]; then
+            brew untap aws/tap
+          fi
+
       - name: Checkout
         if: ${{ !contains(matrix.platform, 'musl') }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
