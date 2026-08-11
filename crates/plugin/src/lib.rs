@@ -1185,8 +1185,10 @@ pub struct NemoRelayNativeHostApiV4 {
     /// callback's original completion reference.
     pub async_completion_retain:
         unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion) -> NemoRelayStatus,
-    /// Returns true only when the preceding stream operation reported retryable
-    /// queue backpressure.
+    /// Returns whether the output queue is currently full.
+    ///
+    /// Use [`NemoRelayStatus::Backpressured`] from the individual push or
+    /// rejection operation to decide whether that operation must be retried.
     pub async_stream_is_backpressured:
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool,
 }
@@ -2284,9 +2286,8 @@ impl<'a> PluginContext<'a> {
     /// `free_fn`; this call consumes `user_data` even when it rejects the host
     /// ABI. Callback-owned `next` and `stream` handles must each be
     /// released exactly once. Stream pushes and rejection are nonblocking:
-    /// For `Internal`, use [`NemoRelayNativeHostApiV4::async_stream_is_backpressured`]
-    /// to determine whether the bounded queue is full and may be retried. The
-    /// output stream owns the callback lifetime. `next` may be invoked
+    /// Retry only [`NemoRelayStatus::Backpressured`] operations. The output
+    /// stream owns the callback lifetime. `next` may be invoked
     /// repeatedly or concurrently until that stream settles; Relay then
     /// rejects or cancels unfinished and later calls.
     pub unsafe fn register_async_stream_middleware_raw(
