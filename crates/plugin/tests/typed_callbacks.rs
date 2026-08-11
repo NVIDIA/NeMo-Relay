@@ -77,6 +77,39 @@ fn async_abi_discriminants_reject_unknown_values() {
     assert!(NemoRelayNativeAsyncCallbackState::try_from(2).is_err());
 }
 
+struct DefaultNativePlugin;
+
+impl NativePlugin for DefaultNativePlugin {
+    fn plugin_kind(&self) -> &str {
+        "test.default"
+    }
+
+    fn register(
+        &mut self,
+        _plugin_config: &Map<String, Json>,
+        _ctx: &mut PluginContext<'_>,
+    ) -> nemo_relay_plugin::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn native_sdk_defaults_initialize_safe_plugin_contracts() {
+    let descriptor = NemoRelayNativePluginV1::default();
+    assert_eq!(descriptor.struct_size, size_of::<NemoRelayNativePluginV1>());
+    assert!(descriptor.plugin_kind.is_null());
+    assert!(descriptor.allows_multiple_components);
+    assert!(descriptor.user_data.is_null());
+    assert!(descriptor.validate.is_none());
+    assert!(descriptor.register.is_none());
+    assert!(descriptor.drop.is_none());
+
+    let plugin = DefaultNativePlugin;
+    assert!(plugin.allows_multiple_components());
+    assert_eq!(plugin.executor_config(), NativeExecutorConfig::default());
+    assert!(plugin.validate(&Map::new()).is_empty());
+}
+
 struct TestString(Vec<u8>);
 
 struct RegisteredSubscriber {
@@ -734,6 +767,108 @@ unsafe extern "C" fn passthrough_event_sanitize_cb(
     _out_fields_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_tool_conditional_cb(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _args_json: *const NemoRelayNativeString,
+    _out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_tool_execution_cb(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _args_json: *const NemoRelayNativeString,
+    _next_fn: nemo_relay_plugin::NemoRelayNativeToolNextFn,
+    _next_ctx: *mut c_void,
+    _out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_llm_request_cb(
+    _user_data: *mut c_void,
+    _request_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeRequestContext,
+    _out_request_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_llm_response_cb(
+    _user_data: *mut c_void,
+    _response_json: *const NemoRelayNativeString,
+    _context: NemoRelayNativeLlmSanitizeResponseContext,
+    _out_response_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_llm_conditional_cb(
+    _user_data: *mut c_void,
+    _request_json: *const NemoRelayNativeString,
+    _out_reason: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_llm_request_intercept_cb(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _request_json: *const NemoRelayNativeString,
+    _annotated_json: *const NemoRelayNativeString,
+    _out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_llm_execution_cb(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _request_json: *const NemoRelayNativeString,
+    _next_fn: nemo_relay_plugin::NemoRelayNativeLlmNextFn,
+    _next_ctx: *mut c_void,
+    _out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn passthrough_llm_stream_execution_cb(
+    _user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    _request_json: *const NemoRelayNativeString,
+    _next_fn: nemo_relay_plugin::NemoRelayNativeLlmStreamNextFn,
+    _next_ctx: *mut c_void,
+    _out_stream: *mut NemoRelayNativeLlmStreamV1,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn pending_async_middleware_cb(
+    _user_data: *mut c_void,
+    _invocation_json: *const NemoRelayNativeString,
+    _next: *const NemoRelayNativeAsyncNext,
+    _completion: *const NemoRelayNativeAsyncCompletion,
+) -> u32 {
+    NemoRelayNativeAsyncCallbackState::Pending as u32
+}
+
+unsafe extern "C" fn pending_async_stream_middleware_cb(
+    _user_data: *mut c_void,
+    _invocation_json: *const NemoRelayNativeString,
+    _next: *const NemoRelayNativeAsyncNext,
+    _stream: *const NemoRelayNativeAsyncStream,
+) -> u32 {
+    NemoRelayNativeAsyncCallbackState::Pending as u32
+}
+
+static RAW_ASYNC_REJECTIONS: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" fn count_raw_async_rejection(_user_data: *mut c_void) {
+    RAW_ASYNC_REJECTIONS.fetch_add(1, Ordering::SeqCst);
 }
 
 unsafe extern "C" fn capture_tool_conditional(
@@ -1487,6 +1622,51 @@ struct MockPullStream {
 impl MockPullStream {
     fn raw(&self) -> *const NemoRelayNativeLlmAsyncStream {
         ptr::from_ref(self).cast()
+    }
+}
+
+struct MockNativeStream {
+    steps: Mutex<VecDeque<(NemoRelayStatus, Option<Vec<u8>>)>>,
+    cancellations: AtomicUsize,
+    drops: AtomicUsize,
+    cancel_status: NemoRelayStatus,
+}
+
+unsafe extern "C" fn poll_native_stream(
+    user_data: *mut c_void,
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let stream = unsafe { &*user_data.cast::<MockNativeStream>() };
+    let (status, payload) = stream
+        .steps
+        .lock()
+        .unwrap()
+        .pop_front()
+        .unwrap_or((NemoRelayStatus::StreamEnd, None));
+    if let Some(payload) = payload {
+        unsafe { *out = bytes_host_string(&test_host(), &payload) };
+    }
+    status
+}
+
+unsafe extern "C" fn cancel_native_stream(user_data: *mut c_void) -> NemoRelayStatus {
+    let stream = unsafe { &*user_data.cast::<MockNativeStream>() };
+    stream.cancellations.fetch_add(1, Ordering::SeqCst);
+    stream.cancel_status
+}
+
+unsafe extern "C" fn drop_native_stream(user_data: *mut c_void) {
+    let stream = unsafe { &*user_data.cast::<MockNativeStream>() };
+    stream.drops.fetch_add(1, Ordering::SeqCst);
+}
+
+fn native_stream_raw(stream: &MockNativeStream) -> NemoRelayNativeLlmStreamV1 {
+    NemoRelayNativeLlmStreamV1 {
+        struct_size: size_of::<NemoRelayNativeLlmStreamV1>(),
+        user_data: ptr::from_ref(stream).cast_mut().cast(),
+        next: Some(poll_native_stream),
+        cancel: Some(cancel_native_stream),
+        drop: Some(drop_native_stream),
     }
 }
 
@@ -2557,6 +2737,186 @@ fn scope_stack_bindings_restore_or_free_on_drop() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)] // Exercises each independent native stream ownership outcome.
+fn native_llm_stream_validates_callbacks_and_releases_host_resources() {
+    let _guard = begin_test();
+    let host = test_host();
+
+    let default_stream = NemoRelayNativeLlmStreamV1::default();
+    assert_eq!(
+        default_stream.struct_size,
+        size_of::<NemoRelayNativeLlmStreamV1>()
+    );
+    assert!(default_stream.user_data.is_null());
+    assert!(default_stream.next.is_none());
+    assert!(default_stream.cancel.is_none());
+    assert!(default_stream.drop.is_none());
+
+    let invalid_size = MockNativeStream {
+        steps: Mutex::new(VecDeque::new()),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut raw = native_stream_raw(&invalid_size);
+    raw.struct_size -= 1;
+    assert_eq!(
+        expect_string_err(unsafe { LlmStream::from_raw(&host, raw) }),
+        format!(
+            "unsupported LLM stream struct size: {}",
+            size_of::<NemoRelayNativeLlmStreamV1>() - 1
+        )
+    );
+    assert_eq!(invalid_size.drops.load(Ordering::SeqCst), 0);
+
+    let extended_size = MockNativeStream {
+        steps: Mutex::new(VecDeque::new()),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut raw = native_stream_raw(&extended_size);
+    raw.struct_size += 1;
+    assert_eq!(
+        expect_string_err(unsafe { LlmStream::from_raw(&host, raw) }),
+        format!(
+            "unsupported LLM stream struct size: {}",
+            size_of::<NemoRelayNativeLlmStreamV1>() + 1
+        )
+    );
+    assert_eq!(extended_size.drops.load(Ordering::SeqCst), 1);
+
+    let missing_next = MockNativeStream {
+        steps: Mutex::new(VecDeque::new()),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut raw = native_stream_raw(&missing_next);
+    raw.next = None;
+    assert_eq!(
+        expect_string_err(unsafe { LlmStream::from_raw(&host, raw) }),
+        "LLM stream next callback was null"
+    );
+    assert_eq!(missing_next.drops.load(Ordering::SeqCst), 1);
+
+    let stream_state = MockNativeStream {
+        steps: Mutex::new(VecDeque::from([
+            (NemoRelayStatus::Ok, Some(br#"{"chunk":1}"#.to_vec())),
+            (
+                NemoRelayStatus::StreamEnd,
+                Some(br#"{"ignored":true}"#.to_vec()),
+            ),
+        ])),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut stream =
+        unsafe { LlmStream::from_raw(&host, native_stream_raw(&stream_state)) }.unwrap();
+    assert_eq!(stream.next_chunk().unwrap(), Some(json!({ "chunk": 1 })));
+    assert_eq!(stream.next_chunk().unwrap(), None);
+    assert_eq!(stream.next_chunk().unwrap(), None);
+    drop(stream);
+    assert_eq!(stream_state.cancellations.load(Ordering::SeqCst), 0);
+    assert_eq!(stream_state.drops.load(Ordering::SeqCst), 1);
+
+    let invalid_json = MockNativeStream {
+        steps: Mutex::new(VecDeque::from([(NemoRelayStatus::Ok, Some(b"{".to_vec()))])),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut stream =
+        unsafe { LlmStream::from_raw(&host, native_stream_raw(&invalid_json)) }.unwrap();
+    assert!(
+        stream
+            .next_chunk()
+            .unwrap_err()
+            .starts_with("LLM stream returned invalid JSON:")
+    );
+    drop(stream);
+    assert_eq!(invalid_json.cancellations.load(Ordering::SeqCst), 0);
+    assert_eq!(invalid_json.drops.load(Ordering::SeqCst), 1);
+
+    let failure = MockNativeStream {
+        steps: Mutex::new(VecDeque::from([(
+            NemoRelayStatus::Internal,
+            Some(br#"{}"#.to_vec()),
+        )])),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut stream = unsafe { LlmStream::from_raw(&host, native_stream_raw(&failure)) }.unwrap();
+    assert_eq!(
+        stream.next().unwrap().unwrap_err(),
+        "LLM stream failed: Internal"
+    );
+    drop(stream);
+    assert_eq!(failure.cancellations.load(Ordering::SeqCst), 0);
+    assert_eq!(failure.drops.load(Ordering::SeqCst), 1);
+
+    let null_chunk = MockNativeStream {
+        steps: Mutex::new(VecDeque::from([(NemoRelayStatus::Ok, None)])),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut stream = unsafe { LlmStream::from_raw(&host, native_stream_raw(&null_chunk)) }.unwrap();
+    assert_eq!(
+        stream.next().unwrap().unwrap_err(),
+        "LLM stream returned null chunk"
+    );
+    drop(stream);
+    assert_eq!(null_chunk.cancellations.load(Ordering::SeqCst), 0);
+
+    let no_cancel = MockNativeStream {
+        steps: Mutex::new(VecDeque::new()),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut raw = native_stream_raw(&no_cancel);
+    raw.cancel = None;
+    let mut stream = unsafe { LlmStream::from_raw(&host, raw) }.unwrap();
+    stream.cancel().unwrap();
+    drop(stream);
+    assert_eq!(no_cancel.cancellations.load(Ordering::SeqCst), 0);
+    assert_eq!(no_cancel.drops.load(Ordering::SeqCst), 1);
+
+    let cancellable = MockNativeStream {
+        steps: Mutex::new(VecDeque::new()),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Ok,
+    };
+    let mut stream =
+        unsafe { LlmStream::from_raw(&host, native_stream_raw(&cancellable)) }.unwrap();
+    stream.cancel().unwrap();
+    stream.cancel().unwrap();
+    drop(stream);
+    assert_eq!(cancellable.cancellations.load(Ordering::SeqCst), 1);
+    assert_eq!(cancellable.drops.load(Ordering::SeqCst), 1);
+
+    let cancel_failure = MockNativeStream {
+        steps: Mutex::new(VecDeque::new()),
+        cancellations: AtomicUsize::new(0),
+        drops: AtomicUsize::new(0),
+        cancel_status: NemoRelayStatus::Internal,
+    };
+    let mut stream =
+        unsafe { LlmStream::from_raw(&host, native_stream_raw(&cancel_failure)) }.unwrap();
+    assert_eq!(
+        stream.cancel().unwrap_err(),
+        "LLM stream cancel failed: Internal"
+    );
+    drop(stream);
+    assert_eq!(cancel_failure.cancellations.load(Ordering::SeqCst), 2);
+    assert_eq!(cancel_failure.drops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
 fn typed_subscriber_registration_decodes_events() {
     let _guard = begin_test();
     let host = test_host();
@@ -3102,6 +3462,43 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
     assert_eq!(next.calls.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };
+
+    ctx.register_llm_stream_execution_intercept(
+        "stream-open-error",
+        0,
+        |_name, request, next| async move { next.call(request).await },
+    )
+    .unwrap();
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    let output = MockAsyncOutput::new();
+    let next = MockAsyncNext {
+        calls: AtomicUsize::new(0),
+        releases: AtomicUsize::new(0),
+        pull_stream: ptr::null(),
+    };
+    let invocation = json_host_string(
+        &host.v3.v1,
+        json!({ "name": "provider", "request": test_llm_request() }),
+    );
+    unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            next.raw(),
+            output.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        output.wait_terminal(),
+        vec![MockOutputEvent::Rejected(
+            "host returned neither an LLM stream nor an error".into()
+        )]
+    );
+    output.wait_for_release();
+    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(next.releases.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
 }
 
 #[test]
@@ -3268,6 +3665,53 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
 }
 
 #[test]
+fn typed_async_stream_propagates_downstream_pull_errors() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_llm_stream_execution_intercept(
+        "stream-downstream-error",
+        0,
+        |_name, request, next| async move { next.call(request).await },
+    )
+    .unwrap();
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    let output = MockAsyncOutput::new();
+    let pull_stream = MockPullStream {
+        items: Mutex::new(VecDeque::from([Err("downstream pull failed".into())])),
+        cancelled: AtomicBool::new(false),
+        releases: AtomicUsize::new(0),
+    };
+    let next = MockAsyncNext {
+        calls: AtomicUsize::new(0),
+        releases: AtomicUsize::new(0),
+        pull_stream: pull_stream.raw(),
+    };
+    let invocation = json_host_string(
+        &host.v3.v1,
+        json!({ "name": "provider", "request": test_llm_request() }),
+    );
+    unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            next.raw(),
+            output.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        output.wait_terminal(),
+        vec![MockOutputEvent::Rejected("downstream pull failed".into())]
+    );
+    output.wait_for_release();
+    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(pull_stream.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(next.releases.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+}
+
+#[test]
 fn typed_async_stream_rejects_missing_continuation() {
     let _guard = begin_test();
     let host = test_host_v4();
@@ -3394,6 +3838,219 @@ fn raw_event_sanitize_registrations_cover_every_surface() {
         ("raw-scope-end", 3)
     );
     unsafe { registration.free() };
+}
+
+#[test]
+fn raw_callback_registrations_preserve_every_middleware_shape() {
+    let _guard = begin_test();
+    let host = test_host();
+    let mut ctx = test_context(&host);
+
+    unsafe {
+        assert_eq!(
+            ctx.register_tool_sanitize_request_guardrail_raw(
+                "raw-tool-request",
+                1,
+                passthrough_tool_json_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_tool_json_registration().free();
+        assert_eq!(
+            ctx.register_tool_sanitize_response_guardrail_raw(
+                "raw-tool-response",
+                2,
+                passthrough_tool_json_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_tool_json_registration().free();
+        assert_eq!(
+            ctx.register_tool_conditional_execution_guardrail_raw(
+                "raw-tool-conditional",
+                3,
+                passthrough_tool_conditional_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_tool_conditional_registration().free();
+        assert_eq!(
+            ctx.register_tool_request_intercept_raw(
+                "raw-tool-intercept",
+                4,
+                true,
+                passthrough_tool_json_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let tool_intercept = take_tool_json_registration();
+        assert!(tool_intercept.break_chain);
+        tool_intercept.free();
+        assert_eq!(
+            ctx.register_tool_execution_intercept_raw(
+                "raw-tool-execution",
+                5,
+                passthrough_tool_execution_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_tool_execution_registration().free();
+
+        assert_eq!(
+            ctx.register_llm_sanitize_request_guardrail_raw(
+                "raw-llm-request",
+                6,
+                passthrough_llm_request_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_llm_request_registration().free();
+        assert_eq!(
+            ctx.register_llm_sanitize_response_guardrail_raw(
+                "raw-llm-response",
+                7,
+                passthrough_llm_response_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_llm_json_registration().free();
+        assert_eq!(
+            ctx.register_llm_conditional_execution_guardrail_raw(
+                "raw-llm-conditional",
+                8,
+                passthrough_llm_conditional_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_llm_conditional_registration().free();
+        assert_eq!(
+            ctx.register_llm_request_intercept_raw(
+                "raw-llm-intercept",
+                9,
+                true,
+                passthrough_llm_request_intercept_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let llm_intercept = take_llm_request_intercept_registration();
+        assert!(llm_intercept.break_chain);
+        llm_intercept.free();
+        assert_eq!(
+            ctx.register_llm_execution_intercept_raw(
+                "raw-llm-execution",
+                10,
+                passthrough_llm_execution_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_llm_execution_registration().free();
+        assert_eq!(
+            ctx.register_llm_stream_execution_intercept_raw(
+                "raw-llm-stream",
+                11,
+                passthrough_llm_stream_execution_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        take_llm_stream_execution_registration().free();
+    }
+}
+
+#[test]
+fn raw_async_callback_registrations_use_the_v3_extension_tables() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+
+    assert_eq!(
+        unsafe {
+            ctx.register_async_middleware_raw(
+                NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept,
+                "raw-async-tool",
+                1,
+                true,
+                pending_async_middleware_cb,
+                ptr::null_mut(),
+                None,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept);
+    assert_eq!(registration.name, "raw-async-tool");
+    assert!(registration.break_chain);
+    unsafe { registration.free() };
+
+    assert_eq!(
+        unsafe {
+            ctx.register_async_stream_middleware_raw(
+                "raw-async-stream",
+                2,
+                pending_async_stream_middleware_cb,
+                ptr::null_mut(),
+                None,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    assert_eq!(registration.name, "raw-async-stream");
+    assert_eq!(registration.priority, 2);
+    unsafe { registration.free() };
+
+    RAW_ASYNC_REJECTIONS.store(0, Ordering::SeqCst);
+    let legacy_host = test_host();
+    let mut legacy_ctx = test_context(&legacy_host);
+    assert_eq!(
+        unsafe {
+            legacy_ctx.register_async_middleware_raw(
+                NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept,
+                "legacy-async-tool",
+                0,
+                false,
+                pending_async_middleware_cb,
+                ptr::null_mut(),
+                Some(count_raw_async_rejection),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        unsafe {
+            legacy_ctx.register_async_stream_middleware_raw(
+                "legacy-async-stream",
+                0,
+                pending_async_stream_middleware_cb,
+                ptr::null_mut(),
+                Some(count_raw_async_rejection),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(RAW_ASYNC_REJECTIONS.load(Ordering::SeqCst), 2);
 }
 
 struct ConstructorPanicPlugin;
