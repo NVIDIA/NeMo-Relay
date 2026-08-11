@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(
+    deprecated,
+    reason = "compatibility tests cover the built-in Guardrails editor until its scheduled removal"
+)]
+
 use super::*;
 use crate::configuration::{global_plugin_config_path, user_plugin_config_path};
 use crate::plugins::ConfigurationScope;
@@ -470,7 +475,7 @@ fn plugin_menu_builds_ordered_component_actions() {
     assert!(
         plain_labels
             .iter()
-            .any(|label| { label.starts_with("NeMo Guardrails [off] —") })
+            .any(|label| { label.starts_with("NeMo Guardrails (Deprecated) [off] —") })
     );
     assert_eq!(
         plain_labels[components.len()],

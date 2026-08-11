@@ -1025,6 +1025,10 @@ fn register_plugin_with_owner(
 ///
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
+#[allow(
+    deprecated,
+    reason = "the host must register the built-in Guardrails plugin until its scheduled removal"
+)]
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
     let all_registered = {
         let guard = PLUGIN_HANDLERS.read().map_err(|err| {

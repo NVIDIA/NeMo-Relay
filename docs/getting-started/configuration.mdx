@@ -36,8 +36,10 @@ Plugins use a structured plugin configuration with:
 
 Start with [Language Binding Plugins](/build-plugins/language-binding/about) when you need reusable middleware, subscribers, or adaptive behavior.
 
-Use [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration) when
-you want the built-in first-party `nemo_guardrails` component.
+Use [NeMo Guardrails Configuration](/configure-plugins/nemo-guardrails/configuration)
+only to maintain or remove an existing NeMo Relay 0.8 `nemo_guardrails`
+component. The built-in plugin is deprecated and scheduled for removal in NeMo
+Relay 0.9; do not use it for a new deployment.
 
 The `nemo-relay` CLI gateway reads plugin files named `plugins.toml`. Refer to
 [Plugin Configuration Files](/configure-plugins/plugin-configuration-files)

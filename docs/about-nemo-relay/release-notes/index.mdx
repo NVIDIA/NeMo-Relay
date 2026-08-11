@@ -109,9 +109,14 @@ for destination paths and explicit-file alternatives.
   authenticated ATOF HTTP stream sink. It is scheduled for removal in 0.8.
 - OpenClaw has public hook-backed telemetry. Its security and optimization
   coverage is partial because it does not own a managed execution path.
-- The NeMo Guardrails remote backend inherits its configured service's
-  availability, latency, and policy behavior. The local backend requires Python
-  3.11 or later and `nemoguardrails==0.22.0`.
+- The built-in `nemo_guardrails` plugin is deprecated and scheduled for removal
+  in NeMo Relay 0.9. It remains available in 0.8: the remote backend inherits
+  its configured service's availability, latency, and policy behavior, and the
+  local backend requires Python 3.11 or later and `nemoguardrails==0.22.0`. A
+  replacement is not included in 0.8 and will target 0.9 or later. Removal will
+  include the built-in component kind, the public
+  `nemo_relay::plugins::nemo_guardrails` Rust module, its CLI editor entry, and
+  the `guardrails-remote` Cargo feature.
 - The PII redaction plugin currently supports its deterministic local backend;
   local-model backend configuration is reserved for future work.
 - Pricing and optimization estimates depend on model names, token data, pricing

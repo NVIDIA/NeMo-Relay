@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Testable plugin editor state helpers.
+#![allow(
+    deprecated,
+    reason = "the CLI must edit existing Guardrails configuration until the built-in plugin is removed"
+)]
 
 use std::path::Path;
 
@@ -49,7 +53,7 @@ impl EditableComponent {
         match self {
             Self::Observability(_) => "Observability",
             Self::Adaptive(_) => "Adaptive",
-            Self::NemoGuardrails(_) => "NeMo Guardrails",
+            Self::NemoGuardrails(_) => "NeMo Guardrails (Deprecated)",
             Self::PiiRedaction(_) => "PII Redaction",
             #[cfg(feature = "switchyard")]
             Self::Switchyard(_) => "Switchyard Decision API",
