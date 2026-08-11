@@ -3586,7 +3586,7 @@ fn native_async_stream_push_is_bounded_retryable_and_incremental() {
     );
     assert_eq!(
         unsafe { native_async_stream_push_json(stream_ref, second_chunk) },
-        NemoRelayStatus::Internal
+        NemoRelayStatus::Backpressured
     );
     assert_last_error_contains("backpressured");
     let mut receiver = NativeAsyncStreamReceiver {
