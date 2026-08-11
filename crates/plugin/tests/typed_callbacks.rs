@@ -4498,14 +4498,27 @@ fn direct_export_plugin_rejects_zero_executor_workers() {
 
     assert_eq!(
         unsafe { nemo_relay_plugin::export_plugin(&host, &mut plugin, ZeroWorkerPlugin) },
-        NemoRelayStatus::Internal
+        NemoRelayStatus::Ok
     );
-    assert!(plugin.plugin_kind.is_null());
-    assert!(plugin.user_data.is_null());
+    let config = json_host_string(&host, json!({}));
+    assert_eq!(
+        unsafe {
+            plugin.register.unwrap()(
+                plugin.user_data,
+                config,
+                NonNull::<NemoRelayNativePluginContext>::dangling().as_ptr(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
     assert_eq!(
         LAST_ERROR.lock().unwrap().as_deref(),
-        Some("native plugin executor worker_threads must be greater than zero")
+        Some("executor.worker_threads must be greater than zero")
     );
+    unsafe {
+        (host.string_free)(config);
+        drop_exported_plugin(&host, plugin);
+    }
 }
 
 #[test]
@@ -4513,6 +4526,30 @@ fn native_executor_config_defaults_to_two_workers() {
     assert_eq!(
         NativeExecutorConfig::default(),
         NativeExecutorConfig { worker_threads: 2 }
+    );
+}
+
+#[test]
+fn native_executor_config_reads_component_executor_override() {
+    let config = serde_json::from_value(json!({
+        "executor": { "worker_threads": 4 }
+    }))
+    .unwrap();
+    assert_eq!(
+        NativeExecutorConfig::default()
+            .with_component_config(&config)
+            .unwrap(),
+        NativeExecutorConfig { worker_threads: 4 }
+    );
+    let invalid = serde_json::from_value(json!({
+        "executor": { "worker_threads": 0 }
+    }))
+    .unwrap();
+    assert_eq!(
+        NativeExecutorConfig::default()
+            .with_component_config(&invalid)
+            .unwrap_err(),
+        "executor.worker_threads must be greater than zero"
     );
 }
 

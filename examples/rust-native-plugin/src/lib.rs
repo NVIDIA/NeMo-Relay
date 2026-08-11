@@ -139,9 +139,10 @@ impl NativePlugin for ExampleNativePlugin {
         let mut diagnostics = Vec::new();
 
         for key in plugin_config.keys() {
-            if !ConfigField::ALL
-                .iter()
-                .any(|field| field.name() == key.as_str())
+            if key != "executor"
+                && !ConfigField::ALL
+                    .iter()
+                    .any(|field| field.name() == key.as_str())
             {
                 diagnostics.push(diagnostic(
                     DiagnosticLevel::Warning,
@@ -163,6 +164,15 @@ impl NativePlugin for ExampleNativePlugin {
                     ));
                 }
             }
+        }
+
+        if let Err(error) = self.executor_config_for_component(plugin_config) {
+            diagnostics.push(diagnostic(
+                DiagnosticLevel::Error,
+                "examples.rust_native_policy.invalid_executor",
+                Some("executor.worker_threads"),
+                error,
+            ));
         }
 
         diagnostics

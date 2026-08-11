@@ -1826,13 +1826,39 @@ pub trait NativePlugin: Send + 'static {
     }
 
     /// Configures the SDK-owned Tokio executor used by typed middleware.
+    ///
+    /// This supplies the plugin-wide default. Relay applies an optional
+    /// component-local `[plugins.dynamic.config.executor]` override when it
+    /// registers each component.
     fn executor_config(&self) -> NativeExecutorConfig {
         NativeExecutorConfig::default()
     }
 
+    /// Resolves the executor configuration for one component registration.
+    ///
+    /// Override this only when the plugin needs custom component configuration
+    /// rules. The default recognizes `executor.worker_threads` and validates
+    /// that it is a positive integer.
+    fn executor_config_for_component(
+        &self,
+        plugin_config: &Map<String, Json>,
+    ) -> Result<NativeExecutorConfig> {
+        self.executor_config().with_component_config(plugin_config)
+    }
+
     /// Validates one component-local JSON config object.
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![]
+    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        self.executor_config_for_component(plugin_config)
+            .err()
+            .map(|message| ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "native_executor_config.invalid".into(),
+                component: None,
+                field: Some("executor.worker_threads".into()),
+                message,
+            })
+            .into_iter()
+            .collect()
     }
 
     /// Registers runtime behavior through the component-scoped plugin context.
@@ -2523,7 +2549,6 @@ impl OwnedHostApi {
 struct PluginState<P> {
     host: OwnedHostApi,
     plugin: Mutex<P>,
-    executor: Arc<async_sdk::NativeExecutor>,
 }
 
 unsafe extern "C" fn drop_plugin_state<P: NativePlugin>(user_data: *mut c_void) {
@@ -2583,15 +2608,26 @@ unsafe extern "C" fn register_trampoline<P: NativePlugin>(
             Ok(config) => config,
             Err(status) => return status,
         };
-        let mut ctx = unsafe {
-            PluginContext::from_raw_with_executor(host, ctx, Arc::clone(&state.executor))
-        };
         let mut plugin = match state.plugin.lock() {
             Ok(plugin) => plugin,
             Err(_) => {
                 set_last_error(host, "native plugin state lock poisoned");
                 return NemoRelayStatus::Internal;
             }
+        };
+        let executor_config = match plugin.executor_config_for_component(&config) {
+            Ok(config) => config,
+            Err(error) => {
+                set_last_error(host, &error);
+                return NemoRelayStatus::InvalidArg;
+            }
+        };
+        let mut ctx = unsafe {
+            PluginContext::from_raw_with_executor(
+                host,
+                ctx,
+                async_sdk::NativeExecutor::new(executor_config, plugin.plugin_kind()),
+            )
         };
         match plugin.register(&config, &mut ctx) {
             Ok(()) => NemoRelayStatus::Ok,
@@ -2776,21 +2812,12 @@ where
     let plugin = constructor();
     let kind = plugin.plugin_kind().to_owned();
     let allows_multiple_components = plugin.allows_multiple_components();
-    let executor_config = plugin.executor_config();
-    if executor_config.worker_threads == 0 {
-        set_last_error(
-            host_ref,
-            "native plugin executor worker_threads must be greater than zero",
-        );
-        return NemoRelayStatus::Internal;
-    }
     let Some(kind_handle) = HostString::new(host_ref, &kind) else {
         return NemoRelayStatus::Internal;
     };
     let state = Box::new(PluginState {
         host: unsafe { OwnedHostApi::copy_from(host_ref) },
         plugin: Mutex::new(plugin),
-        executor: async_sdk::NativeExecutor::new(executor_config, &kind),
     });
     unsafe {
         *out = NemoRelayNativePluginV1 {

@@ -171,10 +171,13 @@ operation against settlement, cancellation inspection, stream operations, or
 the last such call returns.
 
 The Rust SDK registers typed middleware through these completion APIs and runs
-the returned futures on one SDK-owned multi-thread Tokio runtime per plugin.
-The default is two workers; override `NativePlugin::executor_config` to use a
-different nonzero count. This is an SDK implementation setting, not a
-`relay-plugin.toml` or `plugins.toml` field:
+the returned futures on one SDK-owned multi-thread Tokio runtime per configured
+component. The default is two workers: enough for modest concurrent async I/O
+without broadly oversubscribing the host. Increase the count only when measured
+I/O concurrency leaves callbacks queued; lower it when the host runs many
+components or has a tight CPU budget. Do not block executor workers.
+
+Set a plugin-wide default in Rust:
 
 ```rust
 use nemo_relay_plugin::{NativeExecutorConfig, NativePlugin};
@@ -192,10 +195,23 @@ impl NativePlugin for NativePolicy {
 }
 ```
 
-Do not block executor workers. Relay scope context is installed around each
-root-future poll, but child tasks created with `tokio::spawn` do not
-automatically inherit it. Typed subscribers remain synchronous and continue to
-run on Relay's subscriber dispatcher.
+Then override that default for one configured component in `plugins.toml`:
+
+```toml
+[[plugins.dynamic]]
+manifest = "./acme-plugin/relay-plugin.toml"
+
+[plugins.dynamic.config.executor]
+worker_threads = 4
+```
+
+The default `NativePlugin::executor_config_for_component` reads this positive
+integer override. Override that method only when the plugin needs custom
+configuration rules.
+
+Relay scope context is installed around each root-future poll, but child tasks
+created with `tokio::spawn` do not automatically inherit it. Typed subscribers
+remain synchronous and continue to run on Relay's subscriber dispatcher.
 
 Event sanitizers registered through this extension still run on Relay's serial
 publication dispatcher. Scope and mark emission remain synchronous and their

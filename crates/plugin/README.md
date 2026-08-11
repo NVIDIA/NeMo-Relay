@@ -97,13 +97,16 @@ Build the `cdylib`, describe its entry symbol and compatibility in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. See the
 complete example for platform-specific artifact and manifest setup.
 
-Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. The SDK creates
-two Tokio worker threads by default. Override `NativePlugin::executor_config`
-with a nonzero `NativeExecutorConfig::worker_threads` value when needed. Do not
-block those workers; use async I/O or `tokio::task::spawn_blocking`.
+Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. Relay creates one
+SDK-owned Tokio executor for each configured plugin component. It defaults to
+two workers: enough for modest concurrent async I/O without broadly
+oversubscribing the host. Increase the count only when measured I/O concurrency
+leaves callbacks queued; lower it when the host runs many components or has a
+tight CPU budget. Do not block these workers; use async I/O or
+`tokio::task::spawn_blocking`.
 
-`worker_threads` is a Rust SDK setting, not a `relay-plugin.toml` or
-`plugins.toml` field. Configure it in the plugin implementation:
+Set a plugin-wide default in Rust, then let the component's TOML configuration
+override it:
 
 ```rust
 use nemo_relay_plugin::{NativeExecutorConfig, NativePlugin};
@@ -120,6 +123,18 @@ impl NativePlugin for ExamplePlugin {
     // ... register and other trait methods ...
 }
 ```
+
+```toml
+[[plugins.dynamic]]
+manifest = "./relay-plugin.toml"
+
+[plugins.dynamic.config.executor]
+worker_threads = 4
+```
+
+The SDK validates that `worker_threads` is a positive integer. The default
+`NativePlugin::executor_config_for_component` applies this override; plugins
+can override that method when they need different configuration rules.
 
 During plugin teardown, the SDK stops accepting new callbacks and drains
 already accepted typed middleware before the plugin library unloads.
