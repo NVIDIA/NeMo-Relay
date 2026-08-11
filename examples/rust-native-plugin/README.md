@@ -71,12 +71,17 @@ tag = "demo"
 block_tools = false
 block_llms = false
 emit_isolated_scope = true
+
+[plugins.dynamic.config.executor]
+worker_threads = 4
 ```
 
 The manifest declares the `config_schema` capability and references
 `config.schema.json`. After adding the plugin, use the editor for the same
 configuration target (`--user`, `--project`, or `--global`) to configure the
-fields without loading the native library:
+fields without loading the native library. Schemas with
+`additionalProperties: false` must include the SDK-owned `executor` object and
+its positive `worker_threads` field whenever the plugin uses typed middleware:
 
 ```bash
 nemo-relay plugins edit

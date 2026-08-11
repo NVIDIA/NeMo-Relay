@@ -8,7 +8,8 @@
     "tag",
     "block_tools",
     "block_llms",
-    "emit_isolated_scope"
+    "emit_isolated_scope",
+    "executor"
   ],
   "properties": {
     "tag": {
@@ -34,6 +35,21 @@
       "description": "Emit the example plugin's isolated scope and mark events.",
       "type": "boolean",
       "default": true
+    },
+    "executor": {
+      "title": "Typed middleware executor",
+      "description": "SDK-owned Tokio executor settings for this configured component.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "worker_threads": {
+          "title": "Worker threads",
+          "description": "Positive number of Tokio worker threads. Defaults to 2.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 2
+        }
+      }
     }
   }
 }

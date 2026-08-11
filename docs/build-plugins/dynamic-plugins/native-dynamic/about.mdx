@@ -207,7 +207,9 @@ worker_threads = 4
 
 The default `NativePlugin::executor_config_for_component` reads this positive
 integer override. Override that method only when the plugin needs custom
-configuration rules.
+configuration rules. If the plugin manifest declares `config_schema`, include
+the SDK-owned `executor` object and its positive-integer `worker_threads`
+property in that schema, even when the plugin has no other configuration.
 
 Relay scope context is installed around each root-future poll, but child tasks
 created with `tokio::spawn` do not automatically inherit it. Typed subscribers
