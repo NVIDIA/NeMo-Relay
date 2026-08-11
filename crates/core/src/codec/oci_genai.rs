@@ -770,8 +770,8 @@ fn decode_params(
 
 /// Patch only the generation params an intercept actually changed.
 ///
-/// Setting a param to `None` does not remove the raw key: the raw value keeps
-/// serving as the source of truth for anything the annotation stops modeling.
+/// A param cleared to `None` removes the raw key, matching the set-or-remove
+/// semantics of the other provider codecs.
 fn patch_params(
     chat_request: &mut serde_json::Map<String, Json>,
     edited: Option<&GenerationParams>,
@@ -782,41 +782,28 @@ fn patch_params(
         return;
     }
     let temperature = edited.and_then(|params| params.temperature);
-    if temperature.is_some() && temperature != baseline.and_then(|params| params.temperature) {
-        insert_json(
-            chat_request,
-            "temperature",
-            temperature.map(json_f64).unwrap_or(Json::Null),
-        );
+    if temperature != baseline.and_then(|params| params.temperature) {
+        set_or_remove_json(chat_request, "temperature", temperature.map(json_f64));
     }
     let top_p = edited.and_then(|params| params.top_p);
-    if top_p.is_some() && top_p != baseline.and_then(|params| params.top_p) {
-        insert_json(
-            chat_request,
-            "topP",
-            top_p.map(json_f64).unwrap_or(Json::Null),
-        );
+    if top_p != baseline.and_then(|params| params.top_p) {
+        set_or_remove_json(chat_request, "topP", top_p.map(json_f64));
     }
     let max_tokens = edited.and_then(|params| params.max_tokens);
-    if max_tokens.is_some() && max_tokens != baseline.and_then(|params| params.max_tokens) {
-        insert_json(
-            chat_request,
-            "maxTokens",
-            max_tokens.map(Json::from).unwrap_or(Json::Null),
-        );
+    if max_tokens != baseline.and_then(|params| params.max_tokens) {
+        set_or_remove_json(chat_request, "maxTokens", max_tokens.map(Json::from));
     }
     let stop = edited.and_then(|params| params.stop.as_ref());
-    if stop.is_some() && stop != baseline.and_then(|params| params.stop.as_ref()) {
+    if stop != baseline.and_then(|params| params.stop.as_ref()) {
         let stop_key = if api_format.starts_with("COHERE") {
             "stopSequences"
         } else {
             "stop"
         };
-        insert_json(
+        set_or_remove_json(
             chat_request,
             stop_key,
-            stop.map(|values| serde_json::json!(values))
-                .unwrap_or(Json::Null),
+            stop.map(|values| serde_json::json!(values)),
         );
     }
 }

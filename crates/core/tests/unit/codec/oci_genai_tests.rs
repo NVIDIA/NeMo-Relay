@@ -1909,6 +1909,60 @@ fn test_top_p_edit_patches_only_top_p() {
 }
 
 #[test]
+fn test_clearing_params_removes_provider_fields() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(generic_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    let params = annotated.params.as_mut().unwrap();
+    params.temperature = None;
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = &encoded.content["chatRequest"];
+    assert!(
+        chat_request.get("temperature").is_none(),
+        "clearing temperature must remove the provider field"
+    );
+    // Untouched params keep their raw values.
+    assert_eq!(chat_request["maxTokens"], json!(600));
+}
+
+#[test]
+fn test_clearing_all_params_removes_all_provider_fields() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(generic_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.params = None;
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = &encoded.content["chatRequest"];
+    assert!(chat_request.get("temperature").is_none());
+    assert!(chat_request.get("maxTokens").is_none());
+    // Non-param request fields survive a full params clear.
+    assert_eq!(chat_request["apiFormat"], json!("GENERIC"));
+    assert!(chat_request.get("messages").is_some());
+}
+
+#[test]
+fn test_cohere_v2_clearing_stop_removes_stop_sequences() {
+    let codec = OCIGenAIChatCodec;
+    let original = make_request(cohere_v2_chat_details());
+    let mut annotated = codec.decode(&original).unwrap();
+
+    annotated.params.as_mut().unwrap().stop = None;
+
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    let chat_request = &encoded.content["chatRequest"];
+    assert!(
+        chat_request.get("stopSequences").is_none(),
+        "clearing stop must remove the COHERE stopSequences field"
+    );
+    assert_eq!(chat_request["maxTokens"], json!(100));
+    assert_eq!(chat_request["citationOptions"], json!({"mode": "OFF"}));
+}
+
+#[test]
 fn test_decode_error_paths() {
     let codec = OCIGenAIChatCodec;
 

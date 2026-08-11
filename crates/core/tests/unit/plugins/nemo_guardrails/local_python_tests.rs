@@ -1131,9 +1131,35 @@ fn stream_text_extraction_handles_supported_codecs() {
             LocalGuardrailsCodec::OCIGenAI,
             json!({"index": 0, "message": {"content": [], "toolCalls": [{"arguments": "{"}]}}),
         ),
+        // The terminal COHERE event repeats the full response text alongside
+        // finishReason; forwarding it would double the rail input.
+        (
+            LocalGuardrailsCodec::OCIGenAI,
+            json!({"apiFormat": "COHERE", "text": "hello!", "finishReason": "COMPLETE"}),
+        ),
+        (
+            LocalGuardrailsCodec::OCIGenAI,
+            json!({"chatResponse": {"apiFormat": "COHERE", "text": "hello!", "finishReason": "COMPLETE"}}),
+        ),
     ] {
         assert_eq!(extract_stream_text(codec, &chunk), None);
     }
+}
+
+#[test]
+fn stream_text_extraction_oci_cohere_stream_is_not_doubled() {
+    // Live-shaped COHERE stream: incremental deltas, then a terminal event
+    // repeating the complete text. The rails must see the text exactly once.
+    let stream = [
+        json!({"apiFormat": "COHERE", "text": "hello"}),
+        json!({"apiFormat": "COHERE", "text": "!"}),
+        json!({"apiFormat": "COHERE", "text": "hello!", "finishReason": "COMPLETE"}),
+    ];
+    let forwarded: String = stream
+        .iter()
+        .filter_map(|chunk| extract_stream_text(LocalGuardrailsCodec::OCIGenAI, chunk))
+        .collect();
+    assert_eq!(forwarded, "hello!");
 }
 
 #[test]

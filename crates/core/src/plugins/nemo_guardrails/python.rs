@@ -1324,12 +1324,20 @@ fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<Stri
 /// `chatResponse` envelope, and GENERIC deltas are either a bare choice
 /// (`message` at the top level) or carry a `choices` array of deltas,
 /// mirroring the stream shapes the OCI streaming codec accepts.
+///
+/// The live service's terminal COHERE event (the one carrying `finishReason`)
+/// repeats the complete response text already delivered by earlier deltas.
+/// Forwarding it would double the text the output rails evaluate, so it is
+/// suppressed here, mirroring the deduplication in the OCI streaming codec.
 fn extract_oci_genai_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
     let chunk = chunk
         .get("chatResponse")
         .and_then(Json::as_object)
         .unwrap_or(chunk);
     if let Some(text) = chunk.get("text").and_then(Json::as_str) {
+        if chunk.get("finishReason").and_then(Json::as_str).is_some() {
+            return None;
+        }
         return (!text.is_empty()).then(|| text.to_string());
     }
     fn collect_generic_text(message: &Json, collected: &mut String) {
