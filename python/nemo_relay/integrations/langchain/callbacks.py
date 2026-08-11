@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import datetime
+import enum
 import logging
 import typing
 
@@ -18,6 +20,32 @@ if typing.TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
+# The runtime reports a close that arrived out of LIFO order with this message (see
+# ``pop_scope_inner`` in crates/core/src/api/scope.rs). It is the one pop failure worth
+# retrying, and it is only distinguishable by text because the runtime raises a plain
+# ``RuntimeError`` for every failure. ``test_relay_still_reports_out_of_order_closes``
+# fails if that message ever changes, rather than letting the retry quietly stop working.
+_OUT_OF_ORDER_CLOSE = "not at the top of the stack"
+
+
+class _CloseOutcome(enum.Enum):
+    """What the scope stack did with a close."""
+
+    CLOSED = "closed"
+    # Rejected because scopes opened later are still open; retry once they close.
+    DEFERRED = "deferred"
+    # Rejected for any other reason; retrying cannot help.
+    FAILED = "failed"
+
+
+class _PendingPop(typing.NamedTuple):
+    """A scope close that is waiting for its handle to reach the top of the stack."""
+
+    handle: typing.Any
+    output: dict[str, typing.Any] | None
+    metadata: nemo_relay.Json | None
+    ended_at: datetime.datetime
+
 
 class NemoRelayCallbackHandler(BaseCallbackHandler):
     """Bridge LangChain chain run IDs to NeMo Relay Agent scopes."""
@@ -28,6 +56,7 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
     def __init__(self) -> None:
         super().__init__()
         self._scope_handles: dict[UUID, typing.Any] = {}
+        self._pending_pops: list[_PendingPop] = []
 
     def on_chain_start(
         self,
@@ -105,8 +134,56 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
         if handle is None:
             return
 
+        # A scope stack closes strictly LIFO, but concurrent sibling runs finish in the
+        # order the graph chooses, so this run's scope may not be on top yet. Queue a
+        # rejected close and replay it once the scopes above it have gone, rather than
+        # abandoning a scope that is still live: an abandoned scope stays current for
+        # everything that follows and makes the enclosing scope fail to close. The end
+        # time is captured now so a deferred close still records when the run ended.
+        pending = _PendingPop(
+            handle=handle,
+            output=output,
+            metadata=metadata,
+            ended_at=datetime.datetime.now(datetime.timezone.utc),
+        )
+        outcome = self._close_scope(pending)
+        if outcome is _CloseOutcome.DEFERRED:
+            self._pending_pops.append(pending)
+        elif outcome is _CloseOutcome.CLOSED:
+            # Closing this scope may have exposed one that was queued behind it.
+            self._drain_pending_pops()
+
+    def _drain_pending_pops(self) -> None:
+        """Replay queued closes until none of them can make progress."""
+        progressed = True
+        while progressed and self._pending_pops:
+            progressed = False
+            for index, pending in enumerate(self._pending_pops):
+                outcome = self._close_scope(pending)
+                if outcome is _CloseOutcome.DEFERRED:
+                    continue
+                # Closed, or failed in a way retrying cannot fix: either way it leaves
+                # the queue, so a scope that can never close cannot pin the queue open.
+                del self._pending_pops[index]
+                progressed = True
+                break
+
+    def _close_scope(self, pending: _PendingPop) -> _CloseOutcome:
+        """Close one scope and report what the stack did with it."""
         try:
-            prepared_outputs = _prepare_lc_payloads(output) if output is not None else None
-            nemo_relay.scope.pop(handle, output=prepared_outputs, metadata=metadata)
-        except Exception:
+            prepared_outputs = _prepare_lc_payloads(pending.output) if pending.output is not None else None
+            nemo_relay.scope.pop(
+                pending.handle,
+                output=prepared_outputs,
+                metadata=pending.metadata,
+                timestamp=pending.ended_at,
+            )
+        except Exception as error:
+            if _OUT_OF_ORDER_CLOSE in str(error):
+                # Routine while a scope opened later is still open, so not an error in
+                # its own right; the close is retried as those scopes are popped.
+                _logger.debug("NeMo Relay: scope.pop deferred", exc_info=True)
+                return _CloseOutcome.DEFERRED
             _logger.error("NeMo Relay: scope.pop failed", exc_info=True)
+            return _CloseOutcome.FAILED
+        return _CloseOutcome.CLOSED

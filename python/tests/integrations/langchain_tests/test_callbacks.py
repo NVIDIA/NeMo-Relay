@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import types
 import typing
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -113,6 +113,7 @@ class TestScopeLifecycle:
             handle,
             output={"output": "result"},
             metadata={"otel.status_code": "OK"},
+            timestamp=ANY,
         )
         assert run_id not in handler._scope_handles
 
@@ -134,6 +135,7 @@ class TestScopeLifecycle:
             handle,
             output={"error": "RuntimeError('boom')"},
             metadata={"otel.status_code": "ERROR", "otel.status_description": "boom"},
+            timestamp=ANY,
         )
         assert run_id not in handler._scope_handles
 
@@ -192,6 +194,7 @@ class TestScopeLifecycle:
                 }
             },
             metadata={"otel.status_code": "OK"},
+            timestamp=ANY,
         )
 
     def test_parent_scope_passed_to_push(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):
