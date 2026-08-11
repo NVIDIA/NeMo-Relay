@@ -2157,7 +2157,7 @@ unsafe extern "C" fn native_async_stream_push_json(
             set_native_last_error(
                 "native async stream is backpressured; retry the chunk after the consumer advances",
             );
-            NemoRelayStatus::Internal
+            NemoRelayStatus::Backpressured
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => NemoRelayStatus::InvalidArg,
     }
@@ -2254,7 +2254,7 @@ unsafe extern "C" fn native_async_stream_reject(
             set_native_last_error(
                 "native async stream is backpressured; retry rejection after the consumer advances",
             );
-            NemoRelayStatus::Internal
+            NemoRelayStatus::Backpressured
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => NemoRelayStatus::InvalidArg,
     }
@@ -2497,19 +2497,20 @@ unsafe extern "C" fn native_async_next_invoke_result(
         Err(error) => return status_from_flow_error(error),
     };
     let owner = next.owner.clone();
-    let callback_guard = NativeAsyncResultCallbackGuard {
-        cb,
-        user_data: user_data as usize,
-        _library_guard: next._callback_user_data.clone(),
-        active: true,
-    };
+    let callback_user_data = next._callback_user_data.clone();
+    let user_data = user_data as usize;
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let cleanup_owner = owner.clone();
     let task = next.runtime.spawn(async move {
-        let mut callback_guard = callback_guard;
         if start_rx.await.is_err() {
             return;
         }
+        let mut callback_guard = NativeAsyncResultCallbackGuard {
+            cb,
+            user_data,
+            _library_guard: callback_user_data,
+            active: true,
+        };
         let result = AssertUnwindSafe(continuation_context.run(future))
             .catch_unwind()
             .await
@@ -2710,19 +2711,20 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
     let stream_runtime = runtime.clone();
     let stream_context = context.clone();
     let owner = next.owner.clone();
-    let callback_guard = NativePullOpenCallbackGuard {
-        cb,
-        user_data: user_data as usize,
-        library_guard: next._callback_user_data.clone(),
-        active: true,
-    };
+    let callback_user_data = next._callback_user_data.clone();
+    let user_data = user_data as usize;
     let cleanup_owner = owner.clone();
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let task = runtime.spawn(async move {
-        let mut callback_guard = callback_guard;
         if start_rx.await.is_err() {
             return;
         }
+        let mut callback_guard = NativePullOpenCallbackGuard {
+            cb,
+            user_data,
+            library_guard: callback_user_data,
+            active: true,
+        };
         let result = AssertUnwindSafe(context.run(next_fn(request)))
             .catch_unwind()
             .await;

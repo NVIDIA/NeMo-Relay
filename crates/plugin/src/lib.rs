@@ -132,6 +132,8 @@ pub enum NemoRelayStatus {
     InvalidArg = 9,
     /// A stream reached end-of-stream and has no chunk to return.
     StreamEnd = 10,
+    /// A bounded stream queue is full; retry this operation after it advances.
+    Backpressured = 11,
 }
 
 /// Opaque host-owned UTF-8 string or JSON byte buffer.
@@ -1075,9 +1077,8 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
     /// Pushes one JSON chunk to an incremental native stream without blocking.
     ///
-    /// A full bounded host queue returns [`NemoRelayStatus::Internal`]. Check
-    /// [`NemoRelayNativeHostApiV4::async_stream_is_backpressured`] before
-    /// retrying the logical chunk after the consumer advances.
+    /// A full bounded host queue returns [`NemoRelayStatus::Backpressured`];
+    /// retry this same logical chunk after the consumer advances.
     pub async_stream_push_json: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         chunk_json: *const NemoRelayNativeString,
@@ -1087,9 +1088,8 @@ pub struct NemoRelayNativeHostApiV3 {
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus,
     /// Rejects an incremental native stream without blocking.
     ///
-    /// A full bounded queue returns [`NemoRelayStatus::Internal`]. Check
-    /// [`NemoRelayNativeHostApiV4::async_stream_is_backpressured`] before
-    /// retrying the rejection after the consumer advances.
+    /// A full bounded queue returns [`NemoRelayStatus::Backpressured`]; retry
+    /// this same rejection after the consumer advances.
     pub async_stream_reject: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         message: *const NemoRelayNativeString,

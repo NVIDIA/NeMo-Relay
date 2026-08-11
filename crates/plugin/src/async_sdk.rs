@@ -735,6 +735,34 @@ impl<F: Future> Future for ScopedFuture<F> {
     }
 }
 
+struct ScopedStream<S> {
+    stream: S,
+    binding: ScopePollBinding,
+}
+
+impl<S> ScopedStream<S> {
+    fn new(stream: S, binding: ScopePollBinding) -> Self {
+        Self { stream, binding }
+    }
+}
+
+impl<S: Stream> Stream for ScopedStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // SAFETY: neither field moves while `self` is pinned.
+        let this = unsafe { self.get_unchecked_mut() };
+        let previous = this
+            .binding
+            .enter()
+            .unwrap_or_else(|error| panic!("{error}"));
+        let mut restore = ScopePollRestore::new(&mut this.binding, previous);
+        let result = unsafe { Pin::new_unchecked(&mut this.stream) }.poll_next(cx);
+        restore.restore().unwrap_or_else(|error| panic!("{error}"));
+        result
+    }
+}
+
 #[derive(Deserialize)]
 struct NameValueInvocation {
     name: String,
@@ -804,9 +832,7 @@ impl OutputStream {
                 unsafe { (self.host.0.v3.async_stream_push_json)(self.raw, value.as_ptr()) };
             match status {
                 NemoRelayStatus::Ok => return Ok(()),
-                NemoRelayStatus::Internal
-                    if unsafe { (self.host.0.async_stream_is_backpressured)(self.raw) } =>
-                {
+                NemoRelayStatus::Backpressured => {
                     tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
                 }
                 status => return Err(format!("push native stream chunk failed: {status:?}")),
@@ -830,9 +856,7 @@ impl OutputStream {
                 let status =
                     unsafe { (self.host.0.v3.async_stream_reject)(self.raw, error.as_ptr()) };
                 match status {
-                    NemoRelayStatus::Internal
-                        if unsafe { (self.host.0.async_stream_is_backpressured)(self.raw) } =>
-                    {
+                    NemoRelayStatus::Backpressured => {
                         tokio::time::sleep(CANCELLATION_POLL_INTERVAL).await;
                     }
                     _ => break,
@@ -877,7 +901,9 @@ unsafe extern "C" fn stream_trampoline(
     }));
     let invocation = read_json_value(&state.host.0.v3.v1, invocation_json, "stream invocation")
         .map_err(|status| format!("invalid native stream invocation: {status:?}"));
-    let binding = ScopePollBinding::capture(state.host.0.v3.v1);
+    let bindings = ScopePollBinding::capture(state.host.0.v3.v1).and_then(|future| {
+        ScopePollBinding::capture(state.host.0.v3.v1).map(|stream| (future, stream))
+    });
     let future = catch_unwind(AssertUnwindSafe(|| match invocation {
         Ok(invocation) => (state.adapter)(invocation, next),
         Err(error) => Box::pin(async move { Err(error) }) as StreamFuture,
@@ -890,14 +916,17 @@ unsafe extern "C" fn stream_trampoline(
         set_last_error(&state.host.0.v3.v1, &error);
         return NemoRelayNativeAsyncCallbackState::Pending as u32;
     }
+    let executor_cancellation = state.executor.cancellation.clone();
+    let task_cancellation = executor_cancellation.clone();
     let task = async move {
-        let future: StreamFuture = match binding {
-            Ok(binding) => Box::pin(ScopedFuture::new(future, binding)),
+        let (future_binding, stream_binding) = match bindings {
+            Ok(bindings) => bindings,
             Err(error) => {
                 output.reject(&error).await;
                 return;
             }
         };
+        let future: StreamFuture = Box::pin(ScopedFuture::new(future, future_binding));
         let stream = tokio::select! {
             result = AssertUnwindSafe(future).catch_unwind() => match result {
                 Ok(result) => result,
@@ -906,13 +935,21 @@ unsafe extern "C" fn stream_trampoline(
             () = wait_for_stream_cancellation(&output) => return,
         };
         let mut stream = match stream {
-            Ok(stream) => stream,
+            Ok(stream) => ScopedStream::new(stream, stream_binding),
             Err(error) => {
                 output.reject(&error).await;
                 return;
             }
         };
-        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+        loop {
+            let item = tokio::select! {
+                item = futures::StreamExt::next(&mut stream) => item,
+                () = wait_for_stream_cancellation(&output) => return,
+                () = task_cancellation.cancelled() => return,
+            };
+            let Some(item) = item else {
+                break;
+            };
             match item {
                 Ok(chunk) => {
                     if let Err(error) = output.push(&chunk).await {
@@ -932,7 +969,6 @@ unsafe extern "C" fn stream_trampoline(
             let _ = output.finish();
         }
     };
-    let executor_cancellation = state.executor.cancellation.clone();
     if let Err(error) = state.executor.spawn(async move {
         tokio::select! {
             () = task => {}

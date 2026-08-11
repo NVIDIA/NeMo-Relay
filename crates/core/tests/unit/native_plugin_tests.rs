@@ -177,6 +177,22 @@ unsafe extern "C" fn complete_pull_stream_open(
     let _ = sender.send(result);
 }
 
+unsafe extern "C" fn count_native_result_callback(
+    user_data: *mut c_void,
+    _value_json: *const NemoRelayNativeString,
+    _error: *const NemoRelayNativeString,
+) {
+    unsafe { &*user_data.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn count_native_pull_open_callback(
+    user_data: *mut c_void,
+    _stream: *const NemoRelayNativeLlmAsyncStream,
+    _error: *const NemoRelayNativeString,
+) {
+    unsafe { &*user_data.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
+}
+
 unsafe extern "C" fn complete_pull_stream_item(
     user_data: *mut c_void,
     chunk_json: *const NemoRelayNativeString,
@@ -778,6 +794,73 @@ async fn native_async_result_entrypoint_covers_llm_and_stream_continuations() {
 }
 
 #[test]
+fn rejected_native_next_registration_does_not_invoke_result_or_open_callbacks() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let request = native_string_from_json(
+        &serde_json::to_value(LlmRequest {
+            headers: Map::new(),
+            content: Json::Null,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let callbacks = AtomicUsize::new(0);
+
+    let mut unary_next = NativeAsyncNext::new(
+        NativeAsyncNextInner::Llm(Arc::new(|request| {
+            Box::pin(async move { Ok(request.content) })
+        })),
+        runtime.handle().clone(),
+        None,
+    );
+    unary_next.owner = Some(NativeAsyncNextOwner::Completion(Weak::new()));
+    let unary_next = Arc::into_raw(Arc::new(unary_next)) as *const NemoRelayNativeAsyncNext;
+    assert_eq!(
+        unsafe {
+            native_async_next_invoke_result(
+                unary_next,
+                request,
+                count_native_result_callback,
+                ptr::from_ref(&callbacks).cast_mut().cast(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+
+    let mut stream_next = NativeAsyncNext::new(
+        NativeAsyncNextInner::LlmStream(Arc::new(|_request| {
+            Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })
+        })),
+        runtime.handle().clone(),
+        None,
+    );
+    stream_next.owner = Some(NativeAsyncNextOwner::Stream(Weak::new()));
+    let stream_next = Arc::into_raw(Arc::new(stream_next)) as *const NemoRelayNativeAsyncNext;
+    assert_eq!(
+        unsafe {
+            native_async_next_open_llm_stream(
+                stream_next,
+                request,
+                count_native_pull_open_callback,
+                ptr::from_ref(&callbacks).cast_mut().cast(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+
+    runtime.block_on(tokio::task::yield_now());
+    assert_eq!(callbacks.load(Ordering::SeqCst), 0);
+    unsafe {
+        native_string_free(request);
+        native_async_next_release(unary_next);
+        native_async_next_release(stream_next);
+    }
+}
+
+#[test]
 fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
     let chunk = native_string("null");
 
@@ -821,12 +904,12 @@ fn native_async_stream_entrypoints_cover_closed_full_and_settled_channels() {
     let full_ref = Arc::into_raw(full) as *const NemoRelayNativeAsyncStream;
     assert_eq!(
         unsafe { native_async_stream_push_json(full_ref, chunk) },
-        NemoRelayStatus::Internal
+        NemoRelayStatus::Backpressured
     );
     assert!(unsafe { native_async_stream_is_backpressured(full_ref) });
     assert_eq!(
         unsafe { native_async_stream_reject(full_ref, chunk) },
-        NemoRelayStatus::Internal
+        NemoRelayStatus::Backpressured
     );
     assert!(unsafe { native_async_stream_is_backpressured(full_ref) });
     unsafe { native_async_stream_release(full_ref) };

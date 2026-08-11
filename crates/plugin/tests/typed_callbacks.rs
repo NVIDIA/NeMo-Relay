@@ -16,6 +16,7 @@ use std::sync::{
     Arc, Condvar, Mutex, MutexGuard,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -1801,7 +1802,7 @@ unsafe extern "C" fn capture_async_stream_push(
         })
         .is_ok()
     {
-        return NemoRelayStatus::Internal;
+        return NemoRelayStatus::Backpressured;
     }
     let chunk = serde_json::from_str(&read_host_string(&test_host(), chunk_json).unwrap()).unwrap();
     stream
@@ -3612,6 +3613,101 @@ fn typed_async_cancellation_while_awaiting_reclaims_future() {
     assert!(completion.settled.lock().unwrap().is_none());
     assert_eq!(completion.releases.load(Ordering::SeqCst), 1);
     assert_eq!(future_drops.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+}
+
+#[test]
+fn typed_async_stream_cancellation_while_polling_releases_output() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    let started = Arc::new(AtomicBool::new(false));
+    ctx.register_llm_stream_execution_intercept("cancel-poll", 0, {
+        let started = Arc::clone(&started);
+        move |_name, _request, _next| {
+            let started = Arc::clone(&started);
+            async move {
+                Ok(Box::pin(futures::stream::poll_fn(move |_| {
+                    started.store(true, Ordering::SeqCst);
+                    Poll::Pending
+                })) as LlmJsonAsyncStream)
+            }
+        }
+    })
+    .unwrap();
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    let output = MockAsyncOutput::new();
+    let next = MockAsyncNext {
+        calls: AtomicUsize::new(0),
+        releases: AtomicUsize::new(0),
+        pull_stream: ptr::null(),
+    };
+    let invocation = json_host_string(
+        &host.v3.v1,
+        json!({ "name": "provider", "request": test_llm_request() }),
+    );
+    unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            next.raw(),
+            output.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !started.load(Ordering::SeqCst) {
+        assert!(Instant::now() < deadline, "returned stream was not polled");
+        std::thread::yield_now();
+    }
+    output.cancelled.store(true, Ordering::SeqCst);
+    output.wait_for_release();
+    assert_eq!(next.releases.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+}
+
+#[test]
+fn typed_async_stream_restores_callback_scope_while_polling_returned_stream() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_llm_stream_execution_intercept(
+        "stream-scope",
+        0,
+        |_name, _request, _next| async move {
+            Ok(Box::pin(futures::stream::iter([Ok(json!({ "chunk": 1 }))])) as LlmJsonAsyncStream)
+        },
+    )
+    .unwrap();
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    let output = MockAsyncOutput::new();
+    let next = MockAsyncNext {
+        calls: AtomicUsize::new(0),
+        releases: AtomicUsize::new(0),
+        pull_stream: ptr::null(),
+    };
+    let invocation = json_host_string(
+        &host.v3.v1,
+        json!({ "name": "provider", "request": test_llm_request() }),
+    );
+    unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            next.raw(),
+            output.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        output.wait_terminal(),
+        vec![
+            MockOutputEvent::Chunk(json!({ "chunk": 1 })),
+            MockOutputEvent::Finished,
+        ]
+    );
+    output.wait_for_release();
+    assert!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst) >= 3);
     unsafe { registration.free() };
 }
 
