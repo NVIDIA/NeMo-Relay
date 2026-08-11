@@ -3813,6 +3813,59 @@ fn typed_async_stream_rejects_item_errors_and_releases_output() {
 }
 
 #[test]
+fn typed_async_stream_rejects_poll_panics_and_releases_output() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_llm_stream_execution_intercept(
+        "stream-panic",
+        0,
+        |_name, _request, _next| async move {
+            let mut polled = false;
+            Ok(Box::pin(futures::stream::poll_fn(move |_| {
+                if polled {
+                    panic!("stream poll panic");
+                }
+                polled = true;
+                Poll::Ready(Some(Ok(json!({ "chunk": 1 }))))
+            })) as LlmJsonAsyncStream)
+        },
+    )
+    .unwrap();
+    let registration = ASYNC_STREAM_REGISTRATION.lock().unwrap().take().unwrap();
+    let output = MockAsyncOutput::new();
+    let next = MockAsyncNext {
+        calls: AtomicUsize::new(0),
+        releases: AtomicUsize::new(0),
+        pull_stream: ptr::null(),
+    };
+    let invocation = json_host_string(
+        &host.v3.v1,
+        json!({ "name": "provider", "request": test_llm_request() }),
+    );
+    unsafe {
+        (registration.cb)(
+            registration.user_data as *mut c_void,
+            invocation,
+            next.raw(),
+            output.raw(),
+        )
+    };
+    unsafe { (host.v3.v1.string_free)(invocation) };
+    assert_eq!(
+        output.wait_terminal(),
+        vec![
+            MockOutputEvent::Chunk(json!({ "chunk": 1 })),
+            MockOutputEvent::Rejected("typed native stream panicked while polling".into()),
+        ]
+    );
+    output.wait_for_release();
+    assert_eq!(output.releases.load(Ordering::SeqCst), 1);
+    assert_eq!(next.releases.load(Ordering::SeqCst), 1);
+    unsafe { registration.free() };
+}
+
+#[test]
 fn typed_async_stream_propagates_downstream_pull_errors() {
     let _guard = begin_test();
     let host = test_host_v4();

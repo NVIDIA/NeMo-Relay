@@ -2455,6 +2455,129 @@ impl Drop for NativeAsyncResultCallbackGuard {
     }
 }
 
+trait NativeCallbackGuard {
+    fn suppress(&mut self);
+}
+
+impl NativeCallbackGuard for NativeAsyncResultCallbackGuard {
+    fn suppress(&mut self) {
+        self.active = false;
+    }
+}
+
+enum NativeCallbackHandoffState<G> {
+    Pending(G),
+    Accepted(G),
+    TaskDropped(G),
+    Complete,
+}
+
+struct NativeCallbackRegistration<G> {
+    state: Arc<Mutex<NativeCallbackHandoffState<G>>>,
+}
+
+struct NativeCallbackTaskGuard<G> {
+    state: Arc<Mutex<NativeCallbackHandoffState<G>>>,
+    claimed: bool,
+}
+
+impl<G: NativeCallbackGuard> NativeCallbackRegistration<G> {
+    fn new(guard: G) -> (Self, NativeCallbackTaskGuard<G>) {
+        let state = Arc::new(Mutex::new(NativeCallbackHandoffState::Pending(guard)));
+        (
+            Self {
+                state: Arc::clone(&state),
+            },
+            NativeCallbackTaskGuard {
+                state,
+                claimed: false,
+            },
+        )
+    }
+
+    fn accept(self) {
+        let cancelled = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            match std::mem::replace(&mut *state, NativeCallbackHandoffState::Complete) {
+                NativeCallbackHandoffState::Pending(guard) => {
+                    *state = NativeCallbackHandoffState::Accepted(guard);
+                    None
+                }
+                NativeCallbackHandoffState::TaskDropped(guard) => Some(guard),
+                NativeCallbackHandoffState::Accepted(guard) => {
+                    *state = NativeCallbackHandoffState::Accepted(guard);
+                    None
+                }
+                NativeCallbackHandoffState::Complete => None,
+            }
+        };
+        // Dropping an accepted guard delivers cancellation. Never invoke
+        // plugin code while the handoff mutex is held.
+        drop(cancelled);
+    }
+
+    fn reject(self) {
+        let rejected = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            match std::mem::replace(&mut *state, NativeCallbackHandoffState::Complete) {
+                NativeCallbackHandoffState::Pending(guard)
+                | NativeCallbackHandoffState::TaskDropped(guard) => Some(guard),
+                NativeCallbackHandoffState::Accepted(guard) => {
+                    *state = NativeCallbackHandoffState::Accepted(guard);
+                    None
+                }
+                NativeCallbackHandoffState::Complete => None,
+            }
+        };
+        if let Some(mut guard) = rejected {
+            guard.suppress();
+        }
+    }
+}
+
+impl<G> NativeCallbackTaskGuard<G> {
+    fn claim(mut self) -> G {
+        let guard = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            match std::mem::replace(&mut *state, NativeCallbackHandoffState::Complete) {
+                NativeCallbackHandoffState::Accepted(guard) => guard,
+                other => {
+                    *state = other;
+                    panic!("native callback task started before registration was accepted")
+                }
+            }
+        };
+        self.claimed = true;
+        guard
+    }
+}
+
+impl<G> Drop for NativeCallbackTaskGuard<G> {
+    fn drop(&mut self) {
+        if self.claimed {
+            return;
+        }
+        let cancelled = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            match std::mem::replace(&mut *state, NativeCallbackHandoffState::Complete) {
+                NativeCallbackHandoffState::Pending(guard) => {
+                    *state = NativeCallbackHandoffState::TaskDropped(guard);
+                    None
+                }
+                NativeCallbackHandoffState::Accepted(guard) => Some(guard),
+                NativeCallbackHandoffState::TaskDropped(guard) => {
+                    *state = NativeCallbackHandoffState::TaskDropped(guard);
+                    None
+                }
+                NativeCallbackHandoffState::Complete => None,
+            }
+        };
+        // An accepted registration owes exactly one callback even when its
+        // task is aborted before the first poll.
+        drop(cancelled);
+    }
+}
+
 /// Invokes a unary continuation with an independent per-call result callback.
 unsafe extern "C" fn native_async_next_invoke_result(
     next: *const NemoRelayNativeAsyncNext,
@@ -2501,16 +2624,18 @@ unsafe extern "C" fn native_async_next_invoke_result(
     let user_data = user_data as usize;
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
     let cleanup_owner = owner.clone();
-    let task = next.runtime.spawn(async move {
-        if start_rx.await.is_err() {
-            return;
-        }
-        let mut callback_guard = NativeAsyncResultCallbackGuard {
+    let (callback_registration, callback_task) =
+        NativeCallbackRegistration::new(NativeAsyncResultCallbackGuard {
             cb,
             user_data,
             _library_guard: callback_user_data,
             active: true,
-        };
+        });
+    let task = next.runtime.spawn(async move {
+        if start_rx.await.is_err() {
+            return;
+        }
+        let mut callback_guard = callback_task.claim();
         let result = AssertUnwindSafe(continuation_context.run(future))
             .catch_unwind()
             .await
@@ -2525,9 +2650,11 @@ unsafe extern "C" fn native_async_next_invoke_result(
     });
     let abort = task.abort_handle();
     if !register_native_next_operation(&owner, task.id(), abort.clone()) {
+        callback_registration.reject();
         abort.abort();
         return NemoRelayStatus::InvalidArg;
     }
+    callback_registration.accept();
     let _ = start_tx.send(());
     NemoRelayStatus::Ok
 }
@@ -2662,6 +2789,12 @@ impl Drop for NativePullOpenCallbackGuard {
     }
 }
 
+impl NativeCallbackGuard for NativePullOpenCallbackGuard {
+    fn suppress(&mut self) {
+        self.active = false;
+    }
+}
+
 impl NativePullCallbackGuard {
     fn deliver(&mut self, result: FlowResult<Option<Json>>) {
         if self.active {
@@ -2715,16 +2848,18 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
     let user_data = user_data as usize;
     let cleanup_owner = owner.clone();
     let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-    let task = runtime.spawn(async move {
-        if start_rx.await.is_err() {
-            return;
-        }
-        let mut callback_guard = NativePullOpenCallbackGuard {
+    let (callback_registration, callback_task) =
+        NativeCallbackRegistration::new(NativePullOpenCallbackGuard {
             cb,
             user_data,
             library_guard: callback_user_data,
             active: true,
-        };
+        });
+    let task = runtime.spawn(async move {
+        if start_rx.await.is_err() {
+            return;
+        }
+        let mut callback_guard = callback_task.claim();
         let result = AssertUnwindSafe(context.run(next_fn(request)))
             .catch_unwind()
             .await;
@@ -2756,9 +2891,11 @@ unsafe extern "C" fn native_async_next_open_llm_stream(
     });
     let abort = task.abort_handle();
     if !register_native_next_operation(&owner, task.id(), abort.clone()) {
+        callback_registration.reject();
         abort.abort();
         return NemoRelayStatus::InvalidArg;
     }
+    callback_registration.accept();
     let _ = start_tx.send(());
     NemoRelayStatus::Ok
 }

@@ -959,7 +959,15 @@ unsafe extern "C" fn stream_trampoline(
         };
         loop {
             let item = tokio::select! {
-                item = futures::StreamExt::next(&mut stream) => item,
+                result = AssertUnwindSafe(futures::StreamExt::next(&mut stream)).catch_unwind() => {
+                    match result {
+                        Ok(item) => item,
+                        Err(_) => {
+                            output.reject("typed native stream panicked while polling").await;
+                            return;
+                        }
+                    }
+                },
                 () = wait_for_stream_cancellation(&output) => return,
             };
             let Some(item) = item else {

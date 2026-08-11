@@ -193,6 +193,65 @@ unsafe extern "C" fn count_native_pull_open_callback(
     unsafe { &*user_data.cast::<AtomicUsize>() }.fetch_add(1, Ordering::SeqCst);
 }
 
+struct OwnedCallbackProbe {
+    callbacks: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+    error: Arc<Mutex<Option<String>>>,
+}
+
+struct CallbackProbe {
+    callbacks: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+    error: Arc<Mutex<Option<String>>>,
+}
+
+impl CallbackProbe {
+    fn new() -> (*mut c_void, Self) {
+        let probe = Self {
+            callbacks: Arc::new(AtomicUsize::new(0)),
+            drops: Arc::new(AtomicUsize::new(0)),
+            error: Arc::new(Mutex::new(None)),
+        };
+        let user_data = Box::into_raw(Box::new(OwnedCallbackProbe {
+            callbacks: Arc::clone(&probe.callbacks),
+            drops: Arc::clone(&probe.drops),
+            error: Arc::clone(&probe.error),
+        }))
+        .cast();
+        (user_data, probe)
+    }
+}
+
+impl Drop for OwnedCallbackProbe {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+unsafe extern "C" fn record_owned_result_callback(
+    user_data: *mut c_void,
+    _value_json: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+) {
+    let probe = unsafe { Box::from_raw(user_data.cast::<OwnedCallbackProbe>()) };
+    probe.callbacks.fetch_add(1, Ordering::SeqCst);
+    if !error.is_null() {
+        *probe
+            .error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = read_native_string(error).ok();
+    }
+}
+
+unsafe extern "C" fn record_owned_pull_open_callback(
+    user_data: *mut c_void,
+    stream: *const NemoRelayNativeLlmAsyncStream,
+    error: *const NemoRelayNativeString,
+) {
+    assert!(stream.is_null(), "cancelled open must not return a stream");
+    unsafe { record_owned_result_callback(user_data, ptr::null(), error) };
+}
+
 unsafe extern "C" fn complete_pull_stream_item(
     user_data: *mut c_void,
     chunk_json: *const NemoRelayNativeString,
@@ -857,6 +916,146 @@ fn rejected_native_next_registration_does_not_invoke_result_or_open_callbacks() 
         native_string_free(request);
         native_async_next_release(unary_next);
         native_async_next_release(stream_next);
+    }
+}
+
+#[test]
+fn accepted_native_callbacks_settle_when_cancelled_before_first_poll() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+    let completion = Arc::new(NativeAsyncCompletion {
+        sender: Mutex::new(Some(completion_tx)),
+        cancelled: AtomicBool::new(false),
+        next_invoked: AtomicBool::new(false),
+        next_abort: Mutex::new(None),
+        continuation_aborts: Mutex::new(HashMap::new()),
+        codec: None,
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let wait = NativeAsyncWait {
+        completion: Arc::clone(&completion),
+        receiver: completion_rx,
+        completed: false,
+    };
+    let unary_started = Arc::new(AtomicBool::new(false));
+    let unary_next = Arc::new(NativeAsyncNext::with_completion_owner(
+        NativeAsyncNextInner::Tool({
+            let started = Arc::clone(&unary_started);
+            Arc::new(move |value| {
+                started.store(true, Ordering::SeqCst);
+                Box::pin(async move { Ok(value) })
+            })
+        }),
+        runtime.handle().clone(),
+        None,
+        &completion,
+    ));
+    let unary_next_ref = Arc::into_raw(unary_next) as *const NemoRelayNativeAsyncNext;
+    let unary_invocation = native_string_from_json(&json!({"pending": true})).unwrap();
+    let (unary_user_data, unary_probe) = CallbackProbe::new();
+    assert_eq!(
+        unsafe {
+            native_async_next_invoke_result(
+                unary_next_ref,
+                unary_invocation,
+                record_owned_result_callback,
+                unary_user_data,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    drop(wait);
+
+    let (stream_sender, stream_receiver) = tokio::sync::mpsc::channel(1);
+    let stream_owner = Arc::new(NativeAsyncStream {
+        sender: Mutex::new(Some(stream_sender)),
+        cancelled: AtomicBool::new(false),
+        settled: AtomicBool::new(false),
+        backpressured: AtomicBool::new(false),
+        downstream_aborts: Mutex::new(HashMap::new()),
+        settlement: Mutex::new(()),
+        before_settlement_lock: None,
+        _callback_user_data: None,
+    });
+    let pull_started = Arc::new(AtomicBool::new(false));
+    let pull_next = Arc::new(NativeAsyncNext::with_stream_owner(
+        NativeAsyncNextInner::LlmStream({
+            let started = Arc::clone(&pull_started);
+            Arc::new(move |_request| {
+                started.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) })
+            })
+        }),
+        runtime.handle().clone(),
+        None,
+        &stream_owner,
+    ));
+    let pull_next_ref = Arc::into_raw(pull_next) as *const NemoRelayNativeAsyncNext;
+    let pull_invocation = native_string_from_json(
+        &serde_json::to_value(LlmRequest {
+            headers: Map::new(),
+            content: Json::Null,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let (pull_user_data, pull_probe) = CallbackProbe::new();
+    assert_eq!(
+        unsafe {
+            native_async_next_open_llm_stream(
+                pull_next_ref,
+                pull_invocation,
+                record_owned_pull_open_callback,
+                pull_user_data,
+            )
+        },
+        NemoRelayStatus::Ok
+    );
+    drop(NativeAsyncStreamReceiver {
+        receiver: stream_receiver,
+        stream: Arc::clone(&stream_owner),
+    });
+
+    runtime.block_on(tokio::task::yield_now());
+
+    for probe in [&unary_probe, &pull_probe] {
+        assert_eq!(probe.callbacks.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.drops.load(Ordering::SeqCst), 1);
+        let error = probe
+            .error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .expect("cancelled callback must include an error");
+        assert!(error.contains("cancelled"), "{error}");
+    }
+    assert!(!unary_started.load(Ordering::SeqCst));
+    assert!(!pull_started.load(Ordering::SeqCst));
+    assert!(
+        completion
+            .continuation_aborts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    );
+    assert!(
+        stream_owner
+            .downstream_aborts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()
+    );
+
+    unsafe {
+        native_string_free(unary_invocation);
+        native_string_free(pull_invocation);
+        native_async_next_release(unary_next_ref);
+        native_async_next_release(pull_next_ref);
     }
 }
 
