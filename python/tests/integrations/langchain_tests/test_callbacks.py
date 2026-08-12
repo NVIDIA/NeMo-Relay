@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import types
 import typing
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -17,21 +17,40 @@ if typing.TYPE_CHECKING:
 
 
 def _make_mock_nemo_relay() -> MagicMock:
-    """Build a minimal mock of the ``nemo_relay`` module."""
+    """Build a minimal mock of the ``nemo_relay`` module.
+
+    The mock models the runtime's LIFO scope stack rather than accepting any call in any
+    order. The handler closes whichever scope is on top, so a mock that cannot answer
+    "what is on top?" would report no closes at all.
+    """
     mock_nemo_relay = MagicMock(name="nemo_relay")
     mock_nemo_relay.ScopeType = types.SimpleNamespace(Agent="Agent")
 
-    scope = types.SimpleNamespace()
-    scope.push = MagicMock(
-        side_effect=lambda name, scope_type, **kwargs: types.SimpleNamespace(
+    stack = [types.SimpleNamespace(uuid=str(uuid4()), name="root")]
+
+    def push(name, scope_type, **kwargs):
+        handle = types.SimpleNamespace(
             uuid=str(uuid4()),
             name=name,
             scope_type=scope_type,
             kwargs=kwargs,
         )
-    )
-    scope.pop = MagicMock()
+        stack.append(handle)
+        return handle
+
+    def pop(handle, **kwargs):
+        # Closing anything but the top is what the real stack rejects, so the mock has to
+        # reject it too; otherwise a handler that closed the wrong scope would pass.
+        assert handle is stack[-1], "closed a scope that was not on top"
+        stack.pop()
+
+    scope = types.SimpleNamespace()
+    scope.push = MagicMock(side_effect=push)
+    scope.pop = MagicMock(side_effect=pop)
+    scope.get_handle = MagicMock(side_effect=lambda: stack[-1])
     mock_nemo_relay.scope = scope
+    # A stable object so the handler can tell one stack from another by identity.
+    mock_nemo_relay.get_scope_stack = MagicMock(side_effect=lambda: stack)
     return mock_nemo_relay
 
 
@@ -113,6 +132,7 @@ class TestScopeLifecycle:
             handle,
             output={"output": "result"},
             metadata={"otel.status_code": "OK"},
+            timestamp=ANY,
         )
         assert run_id not in handler._scope_handles
 
@@ -134,6 +154,7 @@ class TestScopeLifecycle:
             handle,
             output={"error": "RuntimeError('boom')"},
             metadata={"otel.status_code": "ERROR", "otel.status_description": "boom"},
+            timestamp=ANY,
         )
         assert run_id not in handler._scope_handles
 
@@ -192,6 +213,7 @@ class TestScopeLifecycle:
                 }
             },
             metadata={"otel.status_code": "OK"},
+            timestamp=ANY,
         )
 
     def test_parent_scope_passed_to_push(self, handler: NemoRelayCallbackHandler, mock_nemo_relay: MagicMock):

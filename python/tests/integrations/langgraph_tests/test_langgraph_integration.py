@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+import operator
+from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -207,3 +208,175 @@ def test_graph_lifecycle_callbacks_emit_marks(
     resume_data = cast(dict[str, Any], resume_event.data)
     assert resume_data["checkpoint_ns"] == ["parent", "child"]
     assert resume_event.metadata == {"integration": "langgraph"}
+
+
+class FanOutState(TypedDict):
+    branches: Annotated[list[str], operator.add]
+
+
+def _build_fan_out_graph() -> CompiledStateGraph:
+    """A graph whose two branches finish in a different order than they started.
+
+    LangGraph runs the branches as concurrent tasks sharing one scope stack, so the
+    slower branch's scope is still open when the faster one closes. That is the ordering
+    Relay's stack rejects, and reproducing it here needs no stubbing at all.
+    """
+    from langgraph.graph import END, START, StateGraph
+
+    async def slow(state: FanOutState) -> FanOutState:
+        await asyncio.sleep(0.05)
+        return {"branches": ["slow"]}
+
+    async def fast(state: FanOutState) -> FanOutState:
+        await asyncio.sleep(0)
+        return {"branches": ["fast"]}
+
+    builder = StateGraph(cast(Any, FanOutState))
+    builder.add_node("slow", slow)
+    builder.add_node("fast", fast)
+    builder.add_edge(START, "slow")
+    builder.add_edge(START, "fast")
+    builder.add_edge("slow", END)
+    builder.add_edge("fast", END)
+    return builder.compile()
+
+
+async def test_parallel_fan_out_leaves_the_enclosing_scope_closable(
+    callback_handler: NemoRelayCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+):
+    """The reported failure, driven by a real graph rather than synthesized callbacks.
+
+    Before the ordering fix, the branch that finished first was abandoned on the stack
+    and the enclosing ``request`` scope raised on exit, turning a graph that ran to
+    completion into a reported failure.
+    """
+
+    graph = _build_fan_out_graph()
+
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        baseline = nemo_relay.scope.get_handle()
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+            result = await graph.ainvoke({"branches": []}, config={"callbacks": [callback_handler]})
+
+        # The graph really did fan out, and the stack is back where it started.
+        assert sorted(result["branches"]) == ["fast", "slow"]
+        assert nemo_relay.scope.get_handle().uuid == baseline.uuid
+
+    # ``on_chain_start`` swallows its exceptions, so a handler that pushed nothing would
+    # satisfy everything above. Pin that both branches actually opened and closed scopes.
+    await nemo_relay.subscribers.flush_async()
+    emitted = _events_to_strings(subscribed_events)
+    for branch in ("slow", "fast"):
+        assert f"scope.start.{branch}" in emitted
+        assert f"scope.end.{branch}" in emitted
+
+
+def _build_nested_fan_out_graph() -> CompiledStateGraph:
+    """Three branches of differing durations, one of which fans out again.
+
+    A two-branch graph only ever has one completion waiting. This leaves several
+    waiting at once, at more than one depth, so a drain has to close a run of them in
+    the right order rather than one scope at a time.
+    """
+    from langgraph.graph import END, START, StateGraph
+
+    async def slowest(state: FanOutState) -> FanOutState:
+        await asyncio.sleep(0.06)
+        return {"branches": ["slowest"]}
+
+    async def middle(state: FanOutState) -> FanOutState:
+        await asyncio.sleep(0.03)
+        return {"branches": ["middle"]}
+
+    async def quickest(state: FanOutState) -> FanOutState:
+        await asyncio.sleep(0)
+        return {"branches": ["quickest"]}
+
+    inner = StateGraph(cast(Any, FanOutState))
+    inner.add_node("middle", middle)
+    inner.add_node("quickest", quickest)
+    inner.add_edge(START, "middle")
+    inner.add_edge(START, "quickest")
+    inner.add_edge("middle", END)
+    inner.add_edge("quickest", END)
+
+    builder = StateGraph(cast(Any, FanOutState))
+    builder.add_node("slowest", slowest)
+    builder.add_node("inner", inner.compile())
+    builder.add_edge(START, "slowest")
+    builder.add_edge(START, "inner")
+    builder.add_edge("slowest", END)
+    builder.add_edge("inner", END)
+    return builder.compile()
+
+
+async def test_nested_fan_out_closes_every_scope(
+    callback_handler: NemoRelayCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+):
+    """Several completions waiting at once, at two depths, must all close in order."""
+
+    graph = _build_nested_fan_out_graph()
+
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        baseline = nemo_relay.scope.get_handle()
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+            result = await graph.ainvoke({"branches": []}, config={"callbacks": [callback_handler]})
+
+        assert sorted(result["branches"]) == ["middle", "quickest", "slowest"]
+        assert nemo_relay.scope.get_handle().uuid == baseline.uuid
+        assert callback_handler._completed == {}
+
+    await nemo_relay.subscribers.flush_async()
+    emitted = _events_to_strings(subscribed_events)
+    for node in ("slowest", "middle", "quickest"):
+        assert f"scope.start.{node}" in emitted
+        assert f"scope.end.{node}" in emitted
+
+
+async def test_a_failing_node_still_closes_its_siblings(
+    callback_handler: NemoRelayCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+):
+    """A node raising mid-fan-out completes through ``on_chain_error``.
+
+    The failed run's scope has to be closed like any other, or it strands its siblings
+    and the enclosing scope underneath it.
+    """
+    from langgraph.graph import END, START, StateGraph
+
+    async def boom(state: FanOutState) -> FanOutState:
+        await asyncio.sleep(0)
+        raise ValueError("node failed")
+
+    async def survivor(state: FanOutState) -> FanOutState:
+        await asyncio.sleep(0.05)
+        return {"branches": ["survivor"]}
+
+    builder = StateGraph(cast(Any, FanOutState))
+    builder.add_node("boom", boom)
+    builder.add_node("survivor", survivor)
+    builder.add_edge(START, "boom")
+    builder.add_edge(START, "survivor")
+    builder.add_edge("boom", END)
+    builder.add_edge("survivor", END)
+    graph = builder.compile()
+
+    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+        baseline = nemo_relay.scope.get_handle()
+        with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+            with pytest.raises(ValueError, match="node failed"):
+                await graph.ainvoke({"branches": []}, config={"callbacks": [callback_handler]})
+
+        # The graph failed, but the telemetry did not leave the stack dirty.
+        assert nemo_relay.scope.get_handle().uuid == baseline.uuid
+        assert callback_handler._completed == {}
+
+    # ``on_chain_start`` swallows its exceptions, so a handler that opened no branch
+    # scopes would satisfy everything above. Pin that both branches ran and closed.
+    await nemo_relay.subscribers.flush_async()
+    emitted = _events_to_strings(subscribed_events)
+    for node in ("boom", "survivor"):
+        assert f"scope.start.{node}" in emitted
+        assert f"scope.end.{node}" in emitted

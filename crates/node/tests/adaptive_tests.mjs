@@ -80,6 +80,48 @@ describe('core plugins', () => {
     }
   });
 
+  it('validates a registered JS plugin during asynchronous initialization', async () => {
+    const pluginKind = `node.test.async_validate.${Date.now()}`;
+    const config = {
+      version: 1,
+      components: [plugin.ComponentSpec(pluginKind, { marker: 'validated' })],
+    };
+    let validateCalls = 0;
+    let registerCalls = 0;
+
+    plugin.register(pluginKind, {
+      validate(pluginConfig) {
+        validateCalls += 1;
+        assert.equal(pluginConfig.marker, 'validated');
+        return [];
+      },
+      register(pluginConfig, context) {
+        registerCalls += 1;
+        context.registerToolRequestIntercept('marker', 1, false, (_name, args) => ({
+          ...args,
+          marker: pluginConfig.marker,
+        }));
+      },
+    });
+
+    try {
+      assert.deepEqual(plugin.validate(config).diagnostics, []);
+      assert.deepEqual((await plugin.initialize(config)).diagnostics, []);
+      assert.equal(validateCalls, 2);
+      assert.equal(registerCalls, 1);
+      assert.deepEqual(await lib.toolCallExecute('validated_plugin_tool', {}, (args) => args), {
+        marker: 'validated',
+      });
+
+      plugin.clear();
+      assert.equal(plugin.deregister(pluginKind), true);
+      assert.deepEqual(await lib.toolCallExecute('cleared_plugin_tool', {}, (args) => args), {});
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
+
   it('treats implicit undefined plugin validation as no diagnostics', () => {
     const pluginKind = `node.test.validate_undefined.${Date.now()}`;
 
@@ -96,6 +138,34 @@ describe('core plugins', () => {
       assert.deepEqual(report.diagnostics, []);
     } finally {
       assert.equal(plugin.deregister(pluginKind), true);
+    }
+  });
+
+  it('reports throwing async plugin validation without terminating Node', async () => {
+    const pluginKind = `node.test.async_validate_throw.${Date.now()}`;
+    plugin.register(pluginKind, {
+      validate() {
+        throw new Error('plugin validation boom');
+      },
+      register() {
+        assert.fail('registration must not run after validation fails');
+      },
+    });
+
+    try {
+      const config = {
+        version: 1,
+        components: [plugin.ComponentSpec(pluginKind, {})],
+      };
+      await assert.rejects(() => plugin.initialize(config), /plugin validation boom/);
+      const report = plugin.validate(config);
+      assert.equal(report.diagnostics.length, 1);
+      assert.equal(report.diagnostics[0].code, 'plugin.validate_failed');
+      assert.match(report.diagnostics[0].message, /plugin validation boom/);
+      assert.deepEqual(await lib.toolCallExecute('validation_error_survives', {}, (args) => args), {});
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
     }
   });
 

@@ -8,9 +8,6 @@ use std::path::Path;
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
-use nemo_relay::plugins::nemo_guardrails::component::{
-    NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig,
-};
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
@@ -21,6 +18,20 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
 use crate::error::CliError;
+
+#[allow(
+    deprecated,
+    reason = "the CLI must edit existing Guardrails configuration until the built-in plugin is removed"
+)]
+mod guardrails_compat {
+    pub(super) type Config = nemo_relay::plugins::nemo_guardrails::component::NeMoGuardrailsConfig;
+    pub(super) const PLUGIN_KIND: &str =
+        nemo_relay::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND;
+}
+
+use guardrails_compat::{
+    Config as NeMoGuardrailsConfig, PLUGIN_KIND as NEMO_GUARDRAILS_PLUGIN_KIND,
+};
 
 pub(super) const POLICY_SECTION: &str = "policy";
 
@@ -49,7 +60,7 @@ impl EditableComponent {
         match self {
             Self::Observability(_) => "Observability",
             Self::Adaptive(_) => "Adaptive",
-            Self::NemoGuardrails(_) => "NeMo Guardrails",
+            Self::NemoGuardrails(_) => "NeMo Guardrails (Deprecated)",
             Self::PiiRedaction(_) => "PII Redaction",
             #[cfg(feature = "switchyard")]
             Self::Switchyard(_) => "Switchyard Decision API",
