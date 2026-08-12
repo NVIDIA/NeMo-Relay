@@ -891,6 +891,7 @@ enum LocalGuardrailsCodec {
     OpenAIChat,
     OpenAIResponses,
     AnthropicMessages,
+    OCIGenAI,
     GeminiGenerateContent,
 }
 
@@ -900,6 +901,7 @@ impl LocalGuardrailsCodec {
             Self::OpenAIChat => ProviderSurface::OpenAIChat,
             Self::OpenAIResponses => ProviderSurface::OpenAIResponses,
             Self::AnthropicMessages => ProviderSurface::AnthropicMessages,
+            Self::OCIGenAI => ProviderSurface::OCIGenAI,
             Self::GeminiGenerateContent => ProviderSurface::GeminiGenerateContent,
         }
     }
@@ -909,6 +911,7 @@ impl LocalGuardrailsCodec {
             ProviderSurface::OpenAIChat => Self::OpenAIChat,
             ProviderSurface::OpenAIResponses => Self::OpenAIResponses,
             ProviderSurface::AnthropicMessages => Self::AnthropicMessages,
+            ProviderSurface::OCIGenAI => Self::OCIGenAI,
             ProviderSurface::GeminiGenerateContent => Self::GeminiGenerateContent,
         }
     }
@@ -1311,8 +1314,60 @@ fn extract_stream_text(codec: LocalGuardrailsCodec, chunk: &Json) -> Option<Stri
         LocalGuardrailsCodec::OpenAIChat => extract_openai_chat_stream_text(chunk),
         LocalGuardrailsCodec::OpenAIResponses => extract_openai_response_stream_text(chunk),
         LocalGuardrailsCodec::AnthropicMessages => extract_anthropic_stream_text(chunk),
+        LocalGuardrailsCodec::OCIGenAI => extract_oci_genai_stream_text(chunk),
         LocalGuardrailsCodec::GeminiGenerateContent => extract_gemini_stream_text(chunk),
     }
+}
+
+/// Collect the concatenated TEXT-part text from OCI GENERIC stream deltas or
+/// the bare `text` fragment of COHERE deltas. Events may arrive wrapped in a
+/// `chatResponse` envelope, and GENERIC deltas are either a bare choice
+/// (`message` at the top level) or carry a `choices` array of deltas,
+/// mirroring the stream shapes the OCI streaming codec accepts.
+///
+/// The live service's terminal COHERE event (the one carrying `finishReason`)
+/// repeats the complete response text already delivered by earlier deltas.
+/// Forwarding it would double the text the output rails evaluate, so it is
+/// suppressed here, mirroring the deduplication in the OCI streaming codec.
+fn extract_oci_genai_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {
+    let chunk = chunk
+        .get("chatResponse")
+        .and_then(Json::as_object)
+        .unwrap_or(chunk);
+    if let Some(text) = chunk.get("text").and_then(Json::as_str) {
+        if chunk.get("finishReason").and_then(Json::as_str).is_some() {
+            return None;
+        }
+        return (!text.is_empty()).then(|| text.to_string());
+    }
+    fn collect_generic_text(message: &Json, collected: &mut String) {
+        let Some(parts) = message.get("content").and_then(Json::as_array) else {
+            return;
+        };
+        for part in parts {
+            if part.get("type").and_then(Json::as_str) == Some("TEXT")
+                && let Some(text) = part.get("text").and_then(Json::as_str)
+            {
+                collected.push_str(text);
+            }
+        }
+    }
+    let mut collected = String::new();
+    match chunk.get("choices").and_then(Json::as_array) {
+        Some(choices) => {
+            for choice in choices {
+                if let Some(message) = choice.get("message") {
+                    collect_generic_text(message, &mut collected);
+                }
+            }
+        }
+        None => {
+            if let Some(message) = chunk.get("message") {
+                collect_generic_text(message, &mut collected);
+            }
+        }
+    }
+    (!collected.is_empty()).then_some(collected)
 }
 
 fn extract_openai_chat_stream_text(chunk: &serde_json::Map<String, Json>) -> Option<String> {

@@ -65,6 +65,9 @@ pub enum BuiltinLlmCodec {
     /// Anthropic Messages.
     #[serde(rename = "anthropic_messages")]
     AnthropicMessages,
+    /// OCI Generative AI chat.
+    #[serde(rename = "oci_genai")]
+    OCIGenAI,
     /// Gemini generateContent.
     #[serde(rename = "gemini_generate_content")]
     GeminiGenerateContent,

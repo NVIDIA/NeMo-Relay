@@ -57,7 +57,7 @@ The following table compares remote and local backend support:
 | Managed `tool_input` | Not supported against the stock Guardrails remote contract | Supported |
 | Managed `tool_output` | Supported | Supported |
 | `request_defaults` pass-through | Supported | Not supported |
-| Codec support | `openai_chat` | `openai_chat`, `openai_responses`, `anthropic_messages`, `gemini_generate_content` |
+| Codec support | `openai_chat` | `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`, `gemini_generate_content` |
 | Runtime availability | Any runtime that includes the remote backend | Runtimes that can start `python3 >= 3.11` with `nemoguardrails==0.22.0` installed |
 
 ## Remote Mode
@@ -340,6 +340,7 @@ The current built-in local mode supports managed LLM execution with:
 - `openai_chat`
 - `openai_responses`
 - `anthropic_messages`
+- `oci_genai`
 - `gemini_generate_content`
 
 ### Managed Tool Boundary

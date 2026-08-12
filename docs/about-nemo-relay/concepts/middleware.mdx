@@ -362,7 +362,8 @@ In-process Rust and the typed native Rust SDK expose enum variants. The raw
 native ABI exposes the same information through `codec_kind` and `codec_id`.
 
 `codec.kind` is `none` for a call with no codec, `builtin` for
-Relay's built-in `openai_chat`, `openai_responses`, `anthropic_messages`, and `gemini_generate_content`
+Relay's built-in `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`, and
+`gemini_generate_content`
 codecs, `runtime` for a named runtime-registered codec, and `opaque` for an
 active codec without a registered identity. `codec.id` is present only for
 `builtin` and `runtime`. Do not infer a provider from an opaque request shape.

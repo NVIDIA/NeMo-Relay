@@ -154,6 +154,8 @@ pub enum BuiltinLlmCodec {
     OpenAiResponses,
     /// Anthropic Messages.
     AnthropicMessages,
+    /// OCI Generative AI chat request and response payloads.
+    OCIGenAI,
     /// Gemini generateContent request and response payloads.
     GeminiGenerateContent,
 }
@@ -2159,6 +2161,7 @@ fn codec_identity_from_proto(
             Some("anthropic_messages") => {
                 LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
             }
+            Some("oci_genai") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI),
             Some("gemini_generate_content") => {
                 LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
             }

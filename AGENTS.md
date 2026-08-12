@@ -215,7 +215,7 @@ with repository expectations.
 - Update `README.md`, `fern/`, package READMEs, and binding-support notes when public behavior, package names, examples, or supported bindings change.
 - Keep release-process details in maintainer docs such as `RELEASING.md`. Do not move release-history policy into user-facing docs or `CHANGELOG.md`.
 - Keep stable public wrappers at the `scripts/` root in docs and examples. Reference namespaced helper paths only when documenting internal maintenance work.
-- Use branch prefixes from the contributor docs: `feat/`, `fix/`, `docs/`, `test/`, or `refactor/`.
+- Use branch prefixes from the contributor docs: `build/`, `chore/`, `ci/`, `feat/`, `fix/`, `enh/`, `perf/`, `refactor/`, `revert/`, `skills/`, `style/`, `docs/`, or `test/`.
 - Use signed-off commits for PR work: `git commit -s`.
 - Before creating, opening, publishing, or editing a pull request, read `.github/pull_request_template.md` and use it as the PR body skeleton. Preserve its visible headings, checklist items, and related-issue guidance; fill the sections instead of replacing them with a generic summary.
 - If repo-local PR guidance such as the `prepare-pr` skill conflicts with generic GitHub connector or plugin guidance, follow the repo-local PR guidance for PR body format and review handoff details.

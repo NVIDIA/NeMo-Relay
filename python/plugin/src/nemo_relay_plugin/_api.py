@@ -185,15 +185,17 @@ def _llm_codec_identity(invocation: pb.LlmInvocation) -> LlmCodecIdentity:
     proto_codec = context.codec if context is not None and context.HasField("codec") else None
     codec_id = proto_codec.id if proto_codec is not None and proto_codec.HasField("id") else None
     codec_kind = proto_codec.kind if proto_codec is not None else pb.LLM_CODEC_KIND_UNSPECIFIED
+    return _codec_identity(codec_kind, codec_id)
+
+
+def _codec_identity(codec_kind: int, codec_id: str | None) -> LlmCodecIdentity:
     if codec_kind == pb.LLM_CODEC_KIND_UNSPECIFIED:
-        identity = LlmCodecIdentity("none")
-    elif codec_kind == pb.LLM_CODEC_KIND_BUILTIN and codec_id:
-        identity = LlmCodecIdentity("builtin", codec_id)
-    elif codec_kind == pb.LLM_CODEC_KIND_RUNTIME and codec_id:
-        identity = LlmCodecIdentity("runtime", codec_id)
-    else:
-        identity = LlmCodecIdentity("opaque")
-    return identity
+        return LlmCodecIdentity("none")
+    if codec_kind == pb.LLM_CODEC_KIND_BUILTIN and codec_id:
+        return LlmCodecIdentity("builtin", codec_id)
+    if codec_kind == pb.LLM_CODEC_KIND_RUNTIME and codec_id:
+        return LlmCodecIdentity("runtime", codec_id)
+    return LlmCodecIdentity("opaque")
 
 
 def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:

@@ -9,7 +9,7 @@ import type { LlmCodec, LlmResponseCodec } from './typed';
 /** Codec identity available while a managed LLM event is sanitized. */
 export type LlmCodecIdentity =
   | { kind: 'none' }
-  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'gemini_generate_content' }
+  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'oci_genai' | 'gemini_generate_content' }
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };
 

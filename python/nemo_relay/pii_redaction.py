@@ -136,9 +136,11 @@ class PiiRedactionConfig:
     tool_output: bool = True
     mark: bool = True
     priority: int = 100
-    codec: Literal["openai_chat", "openai_responses", "anthropic_messages", "gemini_generate_content"] | str | None = (
-        None
-    )
+    codec: (
+        Literal["openai_chat", "openai_responses", "anthropic_messages", "oci_genai", "gemini_generate_content"]
+        | str
+        | None
+    ) = None
     builtin: BuiltinConfig | None = None
     local: LocalModelConfig | None = None
     policy: ConfigPolicy = field(default_factory=ConfigPolicy)

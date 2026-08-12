@@ -134,6 +134,51 @@ fn anthropic_overlay_preserves_full_multiline_text_in_single_text_block() {
     assert_eq!(blocks[0]["text"], json!("line one\nline two"));
 }
 
+#[test]
+fn oci_genai_overlay_rewrites_generic_text_and_tool_calls() {
+    let payload = json!({
+        "modelId": "meta.llama-3.3-70b-instruct",
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [{"type": "TEXT", "text": "raw secret"}],
+                    "toolCalls": [
+                        {"id": "call_1", "type": "FUNCTION", "name": "one", "arguments": "{\"secret\":\"raw-1\"}"},
+                        {"id": "call_2", "type": "FUNCTION", "name": "two", "arguments": "{\"secret\":\"raw-2\"}"}
+                    ]
+                },
+                "finishReason": "tool_calls"
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        model: Some("meta.llama-3.3-70b-instruct".into()),
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        tool_calls: Some(vec![tool_call(
+            "call_1",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let message = &overlaid["chatResponse"]["choices"][0]["message"];
+    assert_eq!(message["content"][0]["text"], json!("[REDACTED]"));
+    let calls = message["toolCalls"].as_array().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["arguments"], json!("{\"secret\":\"[REDACTED]\"}"));
+    assert_eq!(
+        overlaid["chatResponse"]["choices"][0]["finishReason"],
+        json!("tool_calls")
+    );
+}
+
 fn gemini_annotated(
     message: Option<&str>,
     tool_calls: Option<Vec<ResponseToolCall>>,
@@ -411,6 +456,106 @@ fn gemini_overlay_updates_response_id_and_model_version() {
 }
 
 #[test]
+fn oci_genai_overlay_rewrites_cohere_text() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "COHERE",
+            "text": "raw secret",
+            "finishReason": "COMPLETE"
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        finish_reason: Some(FinishReason::Complete),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    assert_eq!(overlaid["chatResponse"]["text"], json!("[REDACTED]"));
+    assert_eq!(overlaid["chatResponse"]["finishReason"], json!("COMPLETE"));
+}
+
+#[test]
+fn oci_genai_overlay_rewrites_each_text_part_and_keeps_non_text_blocks() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [
+                        {"type": "TEXT", "text": "raw one"},
+                        {"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,AAAA"}},
+                        {"type": "TEXT", "text": "raw two"}
+                    ]
+                }
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text(
+            "[REDACTED ONE]\n[REDACTED TWO]\nwith remainder".into(),
+        )),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let content = &overlaid["chatResponse"]["choices"][0]["message"]["content"];
+    assert_eq!(content[0]["text"], json!("[REDACTED ONE]"));
+    assert_eq!(
+        content[1],
+        json!({"type": "IMAGE", "imageUrl": {"url": "data:image/png;base64,AAAA"}})
+    );
+    // The final TEXT part keeps any surplus newline-separated text.
+    assert_eq!(content[2]["text"], json!("[REDACTED TWO]\nwith remainder"));
+}
+
+#[test]
+fn oci_genai_overlay_sanitizes_nested_function_tool_calls() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [],
+                    "toolCalls": [{
+                        "id": "call_1",
+                        "type": "FUNCTION",
+                        "function": {"name": "one", "arguments": "{\"secret\":\"raw-1\"}"}
+                    }]
+                }
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        tool_calls: Some(vec![tool_call(
+            "call_1",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let call = &overlaid["chatResponse"]["choices"][0]["message"]["toolCalls"][0];
+    assert_eq!(
+        call["function"]["arguments"],
+        json!("{\"secret\":\"[REDACTED]\"}")
+    );
+    assert!(
+        call.get("arguments").is_none(),
+        "sanitized arguments must land on the nested function object, got {call}"
+    );
+}
+
+#[test]
 fn gemini_overlay_does_not_overwrite_finish_reason() {
     // A STOP response with a functionCall part: normalized finish_reason is ToolUse,
     // but the raw finishReason in the payload is STOP and must not be overwritten.
@@ -439,4 +584,342 @@ fn gemini_overlay_does_not_overwrite_finish_reason() {
         Some("STOP"),
         "Gemini overlay must not overwrite native finishReason with the derived ToolUse value"
     );
+}
+
+#[test]
+fn oci_genai_overlay_sanitizes_flat_cohere_tool_calls() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "COHERE",
+            "text": "raw secret",
+            "finishReason": "COMPLETE",
+            "toolCalls": [
+                {"name": "one", "parameters": {"secret": "raw-1"}},
+                {"name": "two", "parameters": {"secret": "raw-2"}}
+            ]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        tool_calls: Some(vec![tool_call(
+            "call_0",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::Complete),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let chat_response = &overlaid["chatResponse"];
+    assert_eq!(chat_response["text"], json!("[REDACTED]"));
+    let calls = chat_response["toolCalls"].as_array().unwrap();
+    assert_eq!(calls.len(), 1, "dropped sanitized calls must be truncated");
+    assert_eq!(calls[0]["parameters"], json!({"secret": "[REDACTED]"}));
+    assert!(
+        calls[0].get("id").is_none(),
+        "COHERE wire tool calls carry no id and must not gain one"
+    );
+}
+
+#[test]
+fn oci_genai_overlay_sanitizes_cohere_v2_root_message() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "COHEREV2",
+            "message": {
+                "role": "ASSISTANT",
+                "content": [{"type": "TEXT", "text": "raw secret"}],
+                "toolCalls": [{
+                    "id": "call_1",
+                    "type": "FUNCTION",
+                    "function": {"name": "one", "arguments": "{\"secret\":\"raw-1\"}"}
+                }]
+            },
+            "finishReason": "TOOL_CALL"
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        tool_calls: Some(vec![tool_call(
+            "call_1",
+            "one",
+            json!({"secret": "[REDACTED]"}),
+        )]),
+        finish_reason: Some(FinishReason::ToolUse),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let message = &overlaid["chatResponse"]["message"];
+    assert_eq!(message["content"][0]["text"], json!("[REDACTED]"));
+    assert_eq!(
+        message["toolCalls"][0]["function"]["arguments"],
+        json!("{\"secret\":\"[REDACTED]\"}")
+    );
+    assert_eq!(overlaid["chatResponse"]["finishReason"], json!("TOOL_CALL"));
+}
+
+#[test]
+fn oci_genai_overlay_sanitizes_generic_string_content() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "ASSISTANT", "content": "raw secret"}
+            }]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    assert_eq!(
+        overlaid["chatResponse"]["choices"][0]["message"]["content"],
+        json!("[REDACTED]")
+    );
+}
+
+#[test]
+fn oci_genai_overlay_drops_cohere_tool_calls_with_non_object_arguments() {
+    for arguments in [json!("scalar"), json!([1, 2]), json!(null)] {
+        let payload = json!({
+            "chatResponse": {
+                "apiFormat": "COHERE",
+                "text": "ok",
+                "toolCalls": [{"name": "one", "parameters": {"secret": "raw-1"}}]
+            }
+        });
+        let annotated = AnnotatedLlmResponse {
+            tool_calls: Some(vec![tool_call("call_0", "one", arguments.clone())]),
+            ..AnnotatedLlmResponse::default()
+        };
+
+        let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+        assert!(
+            overlaid["chatResponse"].get("toolCalls").is_none(),
+            "non-object sanitized arguments ({arguments}) must drop toolCalls, got {}",
+            overlaid["chatResponse"]
+        );
+    }
+}
+
+#[test]
+fn oci_genai_overlay_removes_unsanitized_additional_choices() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "raw secret"}]}
+                },
+                {
+                    "index": 1,
+                    "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": "second raw secret"}]}
+                }
+            ]
+        }
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+
+    let choices = overlaid["chatResponse"]["choices"].as_array().unwrap();
+    assert_eq!(
+        choices.len(),
+        1,
+        "additional raw choices have no sanitized counterpart and must be removed"
+    );
+    assert_eq!(
+        choices[0]["message"]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+}
+
+#[test]
+fn oci_genai_overlay_guards_pass_unrecognized_shapes_through() {
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    // Non-object payloads and shapes without the expected structure pass
+    // through unchanged instead of panicking or half-sanitizing.
+    for payload in [
+        json!("not an object"),
+        json!({"chatResponse": {"apiFormat": "GENERIC"}}),
+        json!({"chatResponse": {"apiFormat": "GENERIC", "choices": ["not-an-object"]}}),
+        json!({"chatResponse": {"apiFormat": "GENERIC", "choices": [{"index": 0}]}}),
+        json!({"chatResponse": {"apiFormat": "COHEREV2"}}),
+    ] {
+        let overlaid =
+            BuiltinCodecName::OCIGenAI.overlay_response_payload(payload.clone(), &annotated);
+        assert_eq!(overlaid, payload);
+    }
+}
+
+#[test]
+fn oci_genai_overlay_reaches_bare_chat_response_via_provider_surface() {
+    // Envelope-less payload routed through the provider-surface mapping.
+    let payload = json!({
+        "apiFormat": "COHERE",
+        "text": "raw secret",
+        "finishReason": "COMPLETE"
+    });
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        finish_reason: Some(FinishReason::Complete),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let overlaid = BuiltinCodecName::from_provider_surface(ProviderSurface::OCIGenAI)
+        .overlay_response_payload(payload, &annotated);
+
+    assert_eq!(overlaid["text"], json!("[REDACTED]"));
+}
+
+#[test]
+fn oci_genai_overlay_removes_tool_calls_without_sanitized_counterparts() {
+    // GENERIC: sanitized None removes the key; a non-object raw call also
+    // removes the key rather than leaving unredacted entries behind.
+    for (payload_calls, sanitized) in [
+        (
+            json!([{"id": "call_1", "name": "one", "arguments": "{\"secret\":\"raw\"}"}]),
+            None,
+        ),
+        (
+            json!(["not-an-object"]),
+            Some(vec![tool_call("call_1", "one", json!({}))]),
+        ),
+    ] {
+        let payload = json!({
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "ASSISTANT", "content": [], "toolCalls": payload_calls}
+                }]
+            }
+        });
+        let annotated = AnnotatedLlmResponse {
+            tool_calls: sanitized,
+            ..AnnotatedLlmResponse::default()
+        };
+        let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+        assert!(
+            overlaid["chatResponse"]["choices"][0]["message"]
+                .get("toolCalls")
+                .is_none(),
+            "unsanitizable toolCalls must be removed"
+        );
+    }
+
+    // COHERE: same removal semantics on the flat root-level calls.
+    for (payload_calls, sanitized) in [
+        (
+            json!([{"name": "one", "parameters": {"secret": "raw"}}]),
+            None,
+        ),
+        (
+            json!(["not-an-object"]),
+            Some(vec![tool_call("call_0", "one", json!({}))]),
+        ),
+    ] {
+        let payload = json!({
+            "chatResponse": {"apiFormat": "COHERE", "text": "ok", "toolCalls": payload_calls}
+        });
+        let annotated = AnnotatedLlmResponse {
+            message: Some(MessageContent::Text("ok".into())),
+            tool_calls: sanitized,
+            ..AnnotatedLlmResponse::default()
+        };
+        let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+        assert!(overlaid["chatResponse"].get("toolCalls").is_none());
+    }
+}
+
+#[test]
+fn oci_genai_overlay_multi_part_text_handles_short_and_non_object_blocks() {
+    let payload = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [
+                        {"type": "TEXT", "text": "raw one"},
+                        {"type": "TEXT", "text": "raw two"}
+                    ]
+                }
+            }]
+        }
+    });
+    // A single sanitized line for two TEXT parts: the first block takes the
+    // full text (index-0 fallback), the second has no fragment and is
+    // left untouched.
+    let annotated = AnnotatedLlmResponse {
+        message: Some(MessageContent::Text("[REDACTED]".into())),
+        ..AnnotatedLlmResponse::default()
+    };
+    let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(payload, &annotated);
+    let content = &overlaid["chatResponse"]["choices"][0]["message"]["content"];
+    assert_eq!(content[0]["text"], json!("[REDACTED]"));
+}
+
+#[test]
+fn oci_genai_overlay_maps_every_finish_reason_variant() {
+    for (reason, generic, cohere, v2) in [
+        (FinishReason::Complete, "stop", "COMPLETE", "COMPLETE"),
+        (FinishReason::Length, "length", "MAX_TOKENS", "MAX_TOKENS"),
+        (FinishReason::ToolUse, "tool_calls", "COMPLETE", "TOOL_CALL"),
+        (
+            FinishReason::ContentFilter,
+            "content_filter",
+            "COMPLETE",
+            "COMPLETE",
+        ),
+        (
+            FinishReason::Unknown("mystery".into()),
+            "mystery",
+            "mystery",
+            "mystery",
+        ),
+    ] {
+        let annotated = AnnotatedLlmResponse {
+            finish_reason: Some(reason),
+            ..AnnotatedLlmResponse::default()
+        };
+
+        let generic_payload = json!({"chatResponse": {"apiFormat": "GENERIC",
+            "choices": [{"index": 0, "finishReason": "x", "message": {"role": "ASSISTANT", "content": []}}]}});
+        let overlaid =
+            BuiltinCodecName::OCIGenAI.overlay_response_payload(generic_payload, &annotated);
+        assert_eq!(
+            overlaid["chatResponse"]["choices"][0]["finishReason"],
+            json!(generic)
+        );
+
+        let cohere_payload =
+            json!({"chatResponse": {"apiFormat": "COHERE", "text": "ok", "finishReason": "x"}});
+        let overlaid =
+            BuiltinCodecName::OCIGenAI.overlay_response_payload(cohere_payload, &annotated);
+        assert_eq!(overlaid["chatResponse"]["finishReason"], json!(cohere));
+
+        let v2_payload = json!({"chatResponse": {"apiFormat": "COHEREV2", "finishReason": "x",
+            "message": {"role": "ASSISTANT", "content": []}}});
+        let overlaid = BuiltinCodecName::OCIGenAI.overlay_response_payload(v2_payload, &annotated);
+        assert_eq!(overlaid["chatResponse"]["finishReason"], json!(v2));
+    }
 }

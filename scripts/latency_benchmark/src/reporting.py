@@ -34,39 +34,45 @@ def environment_record(binary: Path) -> dict[str, Any]:
     }
 
 
+def _print_gateway_results(gateway: list[dict[str, Any]]) -> None:
+    print("\nGateway incremental latency (milliseconds; negative values are measurement noise)")
+    headers = ("provider", "mode", "bytes", "c", "comparison", "metric", "p50", "p95", "p99")
+    print("  ".join(f"{header:>12}" for header in headers))
+    for scenario in gateway:
+        for comparison, metrics in scenario["comparisons"].items():
+            if not comparison.endswith("_vs_direct"):
+                continue
+            for metric, summary in metrics.items():
+                values = (
+                    scenario["provider"],
+                    scenario["mode"],
+                    str(scenario["payload_bytes"]),
+                    str(scenario["concurrency"]),
+                    comparison.replace("relay-", "").replace("_vs_direct", ""),
+                    metric,
+                    f"{summary['p50_ms']:.3f}",
+                    f"{summary['p95_ms']:.3f}",
+                    f"{summary['p99_ms']:.3f}",
+                )
+                print("  ".join(f"{value:>12}" for value in values))
+
+
+def _print_absolute_results(title: str, results: dict[str, Any]) -> None:
+    print(title)
+    for name, summary in results["absolute"].items():
+        print(f"  {name:<24} {summary['p50_ms']:>9.3f}")
+
+
 def print_results(results: dict[str, Any]) -> None:
     """Print only the result sections produced by selected test suites."""
     if "gateway" in results:
-        print("\nGateway incremental latency (milliseconds; negative values are measurement noise)")
-        headers = ("provider", "mode", "bytes", "c", "comparison", "metric", "p50", "p95", "p99")
-        print("  ".join(f"{header:>12}" for header in headers))
-        for scenario in results["gateway"]:
-            for comparison, metrics in scenario["comparisons"].items():
-                if not comparison.endswith("_vs_direct"):
-                    continue
-                for metric, summary in metrics.items():
-                    values = (
-                        scenario["provider"],
-                        scenario["mode"],
-                        str(scenario["payload_bytes"]),
-                        str(scenario["concurrency"]),
-                        comparison.replace("relay-", "").replace("_vs_direct", ""),
-                        metric,
-                        f"{summary['p50_ms']:.3f}",
-                        f"{summary['p95_ms']:.3f}",
-                        f"{summary['p99_ms']:.3f}",
-                    )
-                    print("  ".join(f"{value:>12}" for value in values))
+        _print_gateway_results(results["gateway"])
 
     if "hooks" in results:
-        print("\nHook subprocess wall time (p50 milliseconds)")
-        for name, summary in results["hooks"]["absolute"].items():
-            print(f"  {name:<24} {summary['p50_ms']:>9.3f}")
+        _print_absolute_results("\nHook subprocess wall time (p50 milliseconds)", results["hooks"])
 
     if "startup" in results:
-        print("\nCold process/readiness time (p50 milliseconds)")
-        for name, summary in results["startup"]["absolute"].items():
-            print(f"  {name:<24} {summary['p50_ms']:>9.3f}")
+        _print_absolute_results("\nCold process/readiness time (p50 milliseconds)", results["startup"])
 
     if "exporter_delivery" in results:
         delivery = results["exporter_delivery"]
