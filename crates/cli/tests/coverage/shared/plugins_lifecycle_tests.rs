@@ -31,6 +31,40 @@ fn python_venv_launcher_detection_only_preserves_bin_python_links() {
     assert!(!is_python_venv_launcher(Path::new("env/lib/python3.11")));
 }
 
+#[test]
+fn lifecycle_snapshot_budgets_and_runtime_closure_sources_enforce_limits() {
+    let path = Path::new("snapshot/file");
+    let mut budget = SnapshotBudget::default();
+    budget.record(path, 3).unwrap();
+    budget.record_directory(Path::new("snapshot")).unwrap();
+    budget.entries = MAX_SNAPSHOT_FILES;
+    assert!(budget.record_entries(path, 1).is_err());
+
+    let mut byte_budget = SnapshotBudget {
+        bytes: MAX_BOOTSTRAP_IDENTITY_FILE_BYTES,
+        ..SnapshotBudget::default()
+    };
+    assert!(byte_budget.record_bytes(path, 1).is_err());
+
+    let mut sources = RuntimeClosureSources::default();
+    sources
+        .record_bytes(PathBuf::from("runtime/data.json"), b"payload".to_vec())
+        .unwrap();
+    sources
+        .record_bytes(
+            PathBuf::from("runtime/relay-plugin.toml"),
+            b"ignored".to_vec(),
+        )
+        .unwrap();
+    assert_eq!(sources.digest().unwrap().len(), 64);
+
+    let mut limited = RuntimeClosureSources {
+        entries: MAX_SNAPSHOT_FILES,
+        ..RuntimeClosureSources::default()
+    };
+    assert!(limited.record_entry().is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn snapshot_protection_does_not_follow_python_launcher_symlink() {
@@ -103,6 +137,25 @@ fn snapshot_digest_hashes_python_launcher_symlink_without_following_it() {
 
 struct CurrentDirGuard {
     original: PathBuf,
+}
+
+#[test]
+fn lifecycle_prefers_the_explicit_plugin_configuration_path() {
+    let config = PathBuf::from("/managed/config.toml");
+    let plugin_config = PathBuf::from("/managed/override-plugins.toml");
+    let mut overrides = GatewayOverrides {
+        config: Some(config.clone()),
+        ..GatewayOverrides::default()
+    };
+    assert_eq!(
+        lifecycle_plugin_config_path(&overrides),
+        Some(config.parent().unwrap().join("plugins.toml"))
+    );
+    overrides.plugin_config_path = Some(plugin_config.clone());
+    assert_eq!(
+        lifecycle_plugin_config_path(&overrides),
+        Some(plugin_config)
+    );
 }
 
 impl CurrentDirGuard {

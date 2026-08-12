@@ -43,7 +43,10 @@ use crate::codec::response::AnnotatedLlmResponse;
 use crate::error::Result;
 use crate::json::Json;
 
-use super::{estimate_cost_for_response_or_model, manual, merge_usage, model_name_for_llm_event};
+use super::{
+    estimate_cost_for_response_or_model, input_tokens_including_cache, manual, merge_usage,
+    model_name_for_llm_event,
+};
 
 /// The ATIF schema version string embedded in all exported trajectories.
 ///
@@ -723,7 +726,9 @@ fn extract_metrics(
     let fallback_usage = manual::usage_from_manual_llm_output(Some(output));
     let normalized_usage = normalized_response.and_then(|response| response.usage.as_ref());
     let merged_usage = merge_usage(normalized_usage, fallback_usage.as_ref());
-    let prompt = merged_usage.as_ref().and_then(|usage| usage.prompt_tokens);
+    let prompt = merged_usage
+        .as_ref()
+        .and_then(|usage| input_tokens_including_cache(provider, normalized_response, usage));
     let completion = merged_usage
         .as_ref()
         .and_then(|usage| usage.completion_tokens);

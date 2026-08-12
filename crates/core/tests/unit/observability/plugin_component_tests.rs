@@ -498,6 +498,43 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert_endpoint_batch_fields_deserialize();
 }
 
+#[test]
+fn observability_filename_and_destination_helpers_reject_unsafe_values() {
+    assert!(is_valid_atif_metadata_selector("metadata.session"));
+    assert!(!is_valid_atif_metadata_selector("metadata../session"));
+    assert_eq!(
+        parse_atif_metadata_expression("session:-fallback").unwrap(),
+        ("session", Some("fallback"))
+    );
+    assert!(parse_atif_metadata_expression("metadata.session|a|b").is_err());
+    assert!(validate_atif_filename_template("trace-{session_id}.json").is_ok());
+    assert!(validate_atif_filename_template("../escape-{session_id}.json").is_err());
+    assert!(is_safe_atif_metadata_path("session-1"));
+    assert!(!is_safe_atif_metadata_path("../session"));
+
+    assert_eq!(normalize_opentelemetry_path("/v1/traces/"), "/v1/traces");
+    assert_eq!(canonical_opentelemetry_host("localhost."), "<loopback>");
+    assert_eq!(
+        canonicalize_opentelemetry_destination("http://LOCALHOST:4318/v1/traces/").display,
+        "http://<loopback>:4318/v1/traces"
+    );
+    assert_eq!(
+        raw_opentelemetry_destination("collector:4317").display,
+        "collector:4317"
+    );
+    assert_eq!(canonical_opentelemetry_host("127.0.0.1"), "<loopback>");
+    assert_eq!(
+        normalize_opentelemetry_path("//v1///traces//"),
+        "/v1/traces"
+    );
+
+    let endpoints: Vec<OpenTelemetryEndpointConfig> = serde_json::from_value(json!([
+        {"type": "full", "endpoint": "http://localhost:4318/v1/traces", "transport": "http_binary"},
+        {"type": "gen_ai", "endpoint": "http://127.0.0.1:4318/v1/traces/", "transport": "http_binary"}
+    ])).unwrap();
+    assert!(validate_distinct_opentelemetry_destinations(&endpoints).is_err());
+}
+
 fn assert_endpoint_batch_fields_omitted(serialized_endpoint: &Json) {
     for field in [
         "max_queue_size",
@@ -4067,4 +4104,33 @@ fn observability_private_editor_and_validation_helpers_cover_edge_configs() {
         let config = value.as_object().unwrap();
         assert!(!plugin.validate(config).is_empty());
     }
+}
+
+#[test]
+fn atif_filename_helpers_cover_metadata_resolution_and_rejection_paths() {
+    let template = "runs/{metadata.agent.name:-unknown}/{session_id}.json";
+    validate_atif_filename_template(template).unwrap();
+    assert_eq!(
+        render_atif_filename(
+            template,
+            "session-1",
+            Some(&json!({"agent": {"name": "planner"}})),
+        )
+        .unwrap(),
+        "runs/planner/session-1.json"
+    );
+    assert_eq!(
+        render_atif_filename(template, "session-1", None).unwrap(),
+        "runs/unknown/session-1.json"
+    );
+    assert!(validate_atif_filename_template("{metadata.agent/{session_id}").is_err());
+    assert!(validate_atif_filename_template("../{session_id}").is_err());
+    assert!(
+        render_atif_filename(
+            "{metadata.agent.name}/{session_id}",
+            "session-1",
+            Some(&json!({"agent": "not-an-object"})),
+        )
+        .is_err()
+    );
 }

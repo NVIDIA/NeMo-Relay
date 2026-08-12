@@ -48,6 +48,1377 @@ fn test_response_codec_identity_is_gemini_builtin() {
     );
 }
 
+#[test]
+fn test_gemini_private_helpers_reject_ambiguous_provider_shapes() {
+    assert_eq!(map_finish_reason(None, false), None);
+    assert_eq!(map_finish_reason(None, true), Some(FinishReason::ToolUse));
+    assert_eq!(
+        map_finish_reason(Some("STOP"), false),
+        Some(FinishReason::Complete)
+    );
+    assert_eq!(
+        map_finish_reason(Some("MAX_TOKENS"), true),
+        Some(FinishReason::Length)
+    );
+    assert_eq!(
+        map_finish_reason(Some("SAFETY"), true),
+        Some(FinishReason::ContentFilter)
+    );
+    assert_eq!(
+        map_finish_reason(Some("FUTURE_REASON"), false),
+        Some(FinishReason::Unknown("FUTURE_REASON".into()))
+    );
+    assert_eq!(
+        map_prompt_block_reason(Some("IMAGE_SAFETY")),
+        Some(FinishReason::ContentFilter)
+    );
+
+    let object = json!({"tool_call_id": "call-1", "id": "part-1"});
+    let object = object.as_object().unwrap();
+    assert_eq!(extract_tool_call_id(object).unwrap(), "call-1");
+    assert_eq!(
+        parse_optional_id(object, "part").unwrap().as_deref(),
+        Some("part-1")
+    );
+    for value in [
+        json!({}),
+        json!({"tool_call_id": ""}),
+        json!({"tool_call_id": 1}),
+    ] {
+        assert!(extract_tool_call_id(value.as_object().unwrap()).is_err());
+    }
+    for value in [json!({"id": ""}), json!({"id": 1})] {
+        assert!(parse_optional_id(value.as_object().unwrap(), "part").is_err());
+    }
+
+    let ambiguous = json!({"text": "hello", "functionCall": {"name": "tool"}});
+    assert!(
+        validate_single_gemini_part_data_field(ambiguous.as_object().unwrap(), "content").is_err()
+    );
+    assert!(gemini_parts_to_message_content(&[json!("not-an-object")], "content").is_err());
+}
+
+#[test]
+fn test_gemini_response_helpers_cover_prompt_feedback_and_provider_reasons() {
+    for reason in ["", "FINISH_REASON_UNSPECIFIED"] {
+        assert_eq!(
+            map_finish_reason(Some(reason), true),
+            Some(FinishReason::ToolUse)
+        );
+    }
+    assert_eq!(
+        map_finish_reason(Some("TOOL_CODE"), false),
+        Some(FinishReason::ToolUse)
+    );
+    for reason in [
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "LANGUAGE",
+        "IMAGE_SAFETY",
+        "IMAGE_PROHIBITED_CONTENT",
+        "IMAGE_RECITATION",
+        "ESCALATION",
+    ] {
+        assert_eq!(
+            map_finish_reason(Some(reason), false),
+            Some(FinishReason::ContentFilter)
+        );
+    }
+    assert_eq!(map_prompt_block_reason(None), None);
+    assert_eq!(map_prompt_block_reason(Some("")), None);
+    assert_eq!(
+        map_prompt_block_reason(Some("future")),
+        Some(FinishReason::Unknown("future".into()))
+    );
+
+    let response = json!({"candidates": []});
+    assert!(detect_gemini_response(response.as_object().unwrap()));
+    let blocked = json!({"promptFeedback": {"blockReason": "SAFETY"}});
+    assert!(detect_gemini_response(blocked.as_object().unwrap()));
+    let unrelated = json!({"promptFeedback": {"other": true}});
+    assert!(!detect_gemini_response(unrelated.as_object().unwrap()));
+    assert_eq!(
+        prompt_feedback_block_reason(blocked.as_object().unwrap()).unwrap(),
+        Some("SAFETY")
+    );
+    for invalid in [
+        json!({"promptFeedback": 1}),
+        json!({"promptFeedback": {"blockReason": 1}}),
+    ] {
+        assert!(prompt_feedback_block_reason(invalid.as_object().unwrap()).is_err());
+    }
+}
+
+#[test]
+fn test_gemini_part_helpers_distinguish_provider_data_fields() {
+    assert!(is_gemini_part_data_key("text"));
+    assert!(is_gemini_part_data_key("functionResponse"));
+    assert!(!is_gemini_part_data_key("thought"));
+
+    let metadata_only = json!({"thought": true});
+    assert!(gemini_part_data_keys(metadata_only.as_object().unwrap()).is_empty());
+    assert_eq!(
+        validate_single_gemini_part_data_field(metadata_only.as_object().unwrap(), "part").unwrap(),
+        None
+    );
+    let text = json!({"text": "hello", "thought": true});
+    assert_eq!(
+        gemini_part_data_keys(text.as_object().unwrap()),
+        vec!["text"]
+    );
+    assert_eq!(
+        validate_single_gemini_part_data_field(text.as_object().unwrap(), "part").unwrap(),
+        Some("text")
+    );
+}
+
+#[test]
+fn test_gemini_content_and_function_match_helpers_cover_fallbacks() {
+    assert_eq!(extract_content_text(&json!("plain")), "plain");
+    assert_eq!(
+        extract_content_text(&json!([
+            {"type": "text", "text": "first"},
+            {"type": "provider_native", "text": "ignored"},
+            {"text": "second"}
+        ])),
+        "first\nsecond"
+    );
+    assert_eq!(extract_content_text(&json!({"text": "not-content"})), "");
+    assert!(json_f64(f64::NAN, "temperature").is_err());
+
+    let entries = vec![(3, Some("call-1"), "first"), (7, None, "same")];
+    let mut consumed = std::collections::HashSet::new();
+    assert_eq!(
+        matching_function_call_entry(&entries, &consumed, Some("call-1"), "ignored"),
+        Some((3, Some("call-1".into())))
+    );
+    consumed.insert(3);
+    assert_eq!(
+        matching_function_call_entry(&entries, &consumed, None, "same"),
+        Some((7, None))
+    );
+    assert_eq!(
+        matching_function_call_entry(&entries, &consumed, Some("unknown"), "other"),
+        None
+    );
+}
+
+#[test]
+fn test_gemini_streaming_state_rejects_candidate_and_metadata_inconsistencies() {
+    let mut state = GeminiGenerateContentStreamingState::default();
+    assert!(
+        state
+            .observe(&json!({"candidates": [{"index": 1}]}))
+            .is_err()
+    );
+    assert!(
+        state
+            .observe(&json!({"candidates": [{"index": 0}, {"index": 0}]}))
+            .is_err()
+    );
+    assert!(state.observe(&json!({"modelVersion": 1})).is_err());
+    assert!(state.observe(&json!({"responseId": 1})).is_err());
+
+    state
+        .observe(&json!({
+            "candidates": [{"index": 0, "content": {"parts": [{"text": "first"}]}}],
+            "modelVersion": "gemini-test",
+            "responseId": "response-1"
+        }))
+        .unwrap();
+    assert!(
+        state
+            .observe(&json!({"candidates": [{"index": 2}]}))
+            .is_err()
+    );
+}
+
+#[test]
+fn test_gemini_missing_content_run_rebuilds_single_messages_only() {
+    let user = json!({"role": "user", "content": "added"});
+    assert_eq!(
+        patch_gemini_missing_content_run(&[&user], &std::collections::HashMap::new()).unwrap(),
+        Some(json!({"role": "user", "parts": [{"text": "added"}]}))
+    );
+    assert_eq!(
+        patch_gemini_missing_content_run(&[], &std::collections::HashMap::new()).unwrap(),
+        None
+    );
+    assert!(
+        patch_gemini_missing_content_run(
+            &[&user, &json!({"role": "assistant", "content": "second"})],
+            &std::collections::HashMap::new(),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn test_gemini_serialization_and_generation_decoders_handle_edge_values() {
+    let mut object = serde_json::Map::new();
+    insert_serialized(
+        &mut object,
+        "values",
+        &vec![String::from("one"), String::from("two")],
+        "test values",
+    )
+    .unwrap();
+    assert_eq!(object["values"], json!(["one", "two"]));
+
+    let config = json!({"generationConfig": {
+        "temperature": 0.25,
+        "topP": 0.5,
+        "maxOutputTokens": 7,
+        "stopSequences": ["stop"]
+    }});
+    let params = decode_gemini_generation_params(config.as_object().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(params.temperature, Some(0.25));
+    assert_eq!(params.top_p, Some(0.5));
+    assert_eq!(params.max_tokens, Some(7));
+    assert_eq!(params.stop, Some(vec!["stop".into()]));
+    let invalid = json!({"generationConfig": {"topP": "bad"}});
+    assert!(decode_gemini_generation_params(invalid.as_object().unwrap()).is_err());
+}
+
+#[test]
+fn test_gemini_generation_param_patching_preserves_native_fields() {
+    let mut request = json!({"generationConfig": {
+        "temperature": 0.9,
+        "topP": 0.8,
+        "maxOutputTokens": 99,
+        "stopSequences": ["old"],
+        "responseMimeType": "application/json"
+    }})
+    .as_object()
+    .unwrap()
+    .clone();
+    patch_gemini_params(
+        &mut request,
+        Some(&GenerationParams {
+            temperature: Some(0.2),
+            top_p: None,
+            max_tokens: Some(12),
+            stop: Some(vec!["new".into()]),
+        }),
+    )
+    .unwrap();
+    assert_eq!(
+        request["generationConfig"],
+        json!({
+            "temperature": 0.2,
+            "maxOutputTokens": 12,
+            "stopSequences": ["new"],
+            "responseMimeType": "application/json"
+        })
+    );
+    patch_gemini_params(&mut request, None).unwrap();
+    assert_eq!(
+        request["generationConfig"],
+        json!({"responseMimeType": "application/json"})
+    );
+}
+
+#[test]
+fn test_gemini_tool_patching_preserves_native_group_order_and_siblings() {
+    let function = ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: "weather".into(),
+            description: Some("lookup".into()),
+            parameters: None,
+            strict: None,
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    let native = ToolDefinition::ProviderNative {
+        provider: GEMINI_PROVIDER.into(),
+        kind: "googleSearch".into(),
+        value: json!({"googleSearch": {"mode": "dynamic"}}),
+    };
+    let code_execution = ToolDefinition::ProviderNative {
+        provider: GEMINI_PROVIDER.into(),
+        kind: "codeExecution".into(),
+        value: json!({"codeExecution": {}}),
+    };
+    let mut request = json!({"tools": [
+        {"googleSearch": {"mode": "old"}},
+        {"functionDeclarations": [{"name": "old"}], "codeExecution": {}}
+    ]})
+    .as_object()
+    .unwrap()
+    .clone();
+    patch_gemini_tools(&mut request, Some(&vec![function, native, code_execution])).unwrap();
+    assert_eq!(
+        request["tools"],
+        json!([
+            {"googleSearch": {"mode": "dynamic"}},
+            {"functionDeclarations": [{"name": "weather", "description": "lookup"}], "codeExecution": {}}
+        ])
+    );
+
+    let duplicate = json!({"tools": [
+        {"functionDeclarations": []}, {"functionDeclarations": []}
+    ]})
+    .as_object()
+    .unwrap()
+    .clone();
+    assert!(patch_gemini_tools(&mut duplicate.clone(), None).is_err());
+}
+
+#[test]
+fn test_gemini_content_part_conversion_preserves_metadata_and_native_parts() {
+    let parts = vec![
+        json!({"text": "visible", "thoughtSignature": "sig"}),
+        json!({"inlineData": {"mimeType": "text/plain", "data": "aGk="}}),
+        json!({"thought": true, "text": "hidden"}),
+    ];
+    let content = gemini_parts_to_message_content(&parts, "request").unwrap();
+    assert_eq!(
+        content,
+        Some(MessageContent::Parts(vec![
+            ContentPart::Text {
+                text: "visible".into(),
+                extra: serde_json::Map::from_iter([("thoughtSignature".into(), json!("sig"))]),
+            },
+            ContentPart::ProviderNative {
+                provider: GEMINI_PROVIDER.into(),
+                kind: "inlineData".into(),
+                value: json!({"inlineData": {"mimeType": "text/plain", "data": "aGk="}}),
+            },
+        ]))
+    );
+    assert_eq!(
+        gemini_parts_to_message_content(&[json!({"thought": true})], "request").unwrap(),
+        None
+    );
+    assert!(gemini_parts_to_message_content(&[json!({"text": 1})], "request").is_err());
+}
+
+#[test]
+fn test_gemini_normalized_content_conversion_handles_text_native_and_invalid_parts() {
+    let content = json!([
+        {"type": "text", "text": "hello", "thoughtSignature": "sig"},
+        {"type": "provider_native", "provider": "gemini", "kind": "inlineData", "value": {"inlineData": {"mimeType": "text/plain", "data": "aGk="}}}
+    ]);
+    let (parts, is_parts) = gemini_content_parts_from_normalized(&content).unwrap();
+    assert!(is_parts);
+    assert_eq!(
+        parts,
+        vec![
+            json!({"text": "hello", "thoughtSignature": "sig"}),
+            json!({"inlineData": {"mimeType": "text/plain", "data": "aGk="}}),
+        ]
+    );
+    assert_eq!(
+        gemini_content_parts_from_normalized(&Json::Null).unwrap(),
+        (Vec::new(), false)
+    );
+    assert!(gemini_content_parts_from_normalized(&json!([{"type": "text"}])).is_err());
+    assert!(gemini_content_parts_from_normalized(&json!([{"type": "image"}])).is_err());
+    assert!(gemini_content_parts_from_normalized(&json!(42)).is_err());
+}
+
+#[test]
+fn test_gemini_function_response_content_preserves_nested_provider_parts() {
+    let response = json!({
+        "response": {"status": "ok"},
+        "parts": [
+            {"text": "detail"},
+            {"inlineData": {"mimeType": "text/plain", "data": "aGk="}}
+        ]
+    });
+    assert_eq!(
+        gemini_function_response_to_message_content(&response).unwrap(),
+        MessageContent::Parts(vec![
+            ContentPart::Text {
+                text: "{\"status\":\"ok\"}".into(),
+                extra: Default::default(),
+            },
+            ContentPart::ProviderNative {
+                provider: GEMINI_PROVIDER.into(),
+                kind: "text".into(),
+                value: json!({"text": "detail"}),
+            },
+            ContentPart::ProviderNative {
+                provider: GEMINI_PROVIDER.into(),
+                kind: "inlineData".into(),
+                value: json!({"inlineData": {"mimeType": "text/plain", "data": "aGk="}}),
+            },
+        ])
+    );
+    assert!(
+        gemini_function_response_to_message_content(&json!({"response": {}, "parts": {}})).is_err()
+    );
+    assert!(
+        gemini_function_response_to_message_content(
+            &json!({"response": {}, "parts": [{"functionCall": {}}]})
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn test_gemini_response_function_call_extraction_validates_shape_and_id_fallback() {
+    let calls = extract_parts_tool_calls(&[
+        json!({"text": "ignored"}),
+        json!({"functionCall": {"name": "weather", "args": {"city": "Boston"}}}),
+    ])
+    .unwrap()
+    .unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "weather");
+    assert_eq!(calls[0].name, "weather");
+    assert_eq!(calls[0].arguments, json!({"city": "Boston"}));
+
+    for part in [
+        json!({"functionCall": null}),
+        json!({"functionCall": {"name": ""}}),
+        json!({"functionCall": {"name": 1}}),
+        json!({"functionCall": {}}),
+        json!({"functionCall": {"name": "fn", "id": ""}}),
+        json!({"functionCall": {"name": "fn", "args": []}}),
+    ] {
+        assert!(extract_parts_tool_calls(&[part]).is_err());
+    }
+}
+
+#[test]
+fn test_gemini_provider_native_part_validation_and_tool_payload_conversion() {
+    let valid = json!({
+        "type": "provider_native",
+        "provider": "gemini",
+        "kind": "inlineData",
+        "value": {"inlineData": {"mimeType": "text/plain", "data": "aGk="}}
+    });
+    assert_eq!(
+        provider_native_gemini_part_value(valid.as_object().unwrap()).unwrap(),
+        json!({"inlineData": {"mimeType": "text/plain", "data": "aGk="}})
+    );
+    for invalid in [
+        json!({"type": "provider_native", "kind": "x", "value": {}}),
+        json!({"type": "provider_native", "provider": "other", "kind": "x", "value": {}}),
+        json!({"type": "provider_native", "provider": "gemini", "kind": "", "value": {}}),
+        json!({"type": "provider_native", "provider": "gemini", "kind": "x"}),
+        json!({"type": "provider_native", "provider": "gemini", "kind": "x", "value": []}),
+        json!({"type": "provider_native", "provider": "gemini", "kind": "x", "value": {"functionCall": {}}}),
+        json!({"type": "provider_native", "provider": "gemini", "kind": "x", "value": {"text": 1}}),
+    ] {
+        assert!(provider_native_gemini_part_value(invalid.as_object().unwrap()).is_err());
+    }
+
+    let payload = function_response_payload_from_tool_content(&json!([
+        {"type": "text", "text": "first"},
+        {"text": "second"},
+        valid,
+    ]))
+    .unwrap();
+    assert_eq!(payload.response, json!({"output": "first\nsecond"}));
+    assert_eq!(
+        payload.parts.unwrap(),
+        vec![json!({"inlineData": {"mimeType": "text/plain", "data": "aGk="}})]
+    );
+    assert_eq!(
+        function_response_payload_from_tool_content(&json!("not json"))
+            .unwrap()
+            .response,
+        json!({"output": "not json"})
+    );
+    assert!(function_response_payload_from_tool_content(&json!([{"type": "provider_native", "provider": "gemini", "kind": "x", "value": {"functionResponse": {}}}])).is_err());
+}
+
+#[test]
+fn test_gemini_normalized_message_conversion_handles_roles_tools_and_empty_content() {
+    let calls = std::collections::HashMap::from([("call-1".into(), "weather".into())]);
+    assert_eq!(
+        normalized_to_gemini_content(&json!({"role": "system", "content": "rules"}), &calls)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        normalized_to_gemini_content(&json!({"role": "assistant", "content": null}), &calls)
+            .unwrap(),
+        Some(json!({"role": "model", "parts": [{"text": ""}]}))
+    );
+    assert_eq!(
+        normalized_to_gemini_content(
+            &json!({"role": "tool", "tool_call_id": "call-1", "content": "{\"ok\":true}"}),
+            &calls,
+        )
+        .unwrap(),
+        Some(
+            json!({"role": "user", "parts": [{"functionResponse": {"id": "call-1", "name": "weather", "response": {"ok": true}}}]})
+        )
+    );
+    for message in [
+        json!([]),
+        json!({"content": "missing role"}),
+        json!({"role": "developer", "content": "unsupported"}),
+        json!({"role": "tool", "content": "missing call id"}),
+    ] {
+        assert!(normalized_to_gemini_content(&message, &calls).is_err());
+    }
+}
+
+#[test]
+fn test_gemini_system_instruction_patching_preserves_thoughts_and_rejects_uneditable_shapes() {
+    let mut request = json!({"systemInstruction": {
+        "role": "system",
+        "parts": [{"thought": true, "text": "hidden"}, {"text": "old", "thoughtSignature": "sig"}]
+    }})
+    .as_object()
+    .unwrap()
+    .clone();
+    let annotated = json!({"role": "system", "content": "new rules"});
+    patch_gemini_system_instruction(&mut request, &[&annotated], &[]).unwrap();
+    assert_eq!(
+        request["systemInstruction"]["parts"],
+        json!([{ "thought": true, "text": "hidden" }, {"text": "new rules", "thoughtSignature": "sig"}])
+    );
+    patch_gemini_system_instruction(&mut request, &[], &[&annotated]).unwrap();
+    assert!(request.get("systemInstruction").is_none());
+
+    let multiple = vec![json!({"text": "one"}), json!({"text": "two"})];
+    assert!(validate_editable_gemini_system_parts(&multiple).is_err());
+    assert!(validate_editable_gemini_system_parts(&[json!({"inlineData": {}})]).is_err());
+    assert_eq!(
+        rebuild_gemini_system_parts(&[json!({"thought": true, "text": "hidden"})], "new".into()),
+        vec![
+            json!({"thought": true, "text": "hidden"}),
+            json!({"text": "new"})
+        ]
+    );
+}
+
+#[test]
+fn test_gemini_changed_content_patching_preserves_native_parts_and_updates_tool_responses() {
+    let original = json!({
+        "role": "model",
+        "parts": [
+            {"thought": true, "text": "reasoning"},
+            {"text": "old", "thoughtSignature": "sig"},
+            {"functionCall": {"id": "call-1", "name": "weather", "args": {"city": "old"}}}
+        ]
+    });
+    let assistant = json!({
+        "role": "assistant", "content": "new",
+        "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "weather", "arguments": "{\"city\":\"new\"}"}}]
+    });
+    assert_eq!(
+        patch_changed_gemini_content(&original, &[&assistant], &std::collections::HashMap::new())
+            .unwrap(),
+        Some(json!({"role": "model", "parts": [
+            {"thought": true, "text": "reasoning"},
+            {"text": "new", "thoughtSignature": "sig"},
+            {"functionCall": {"id": "call-1", "name": "weather", "args": {"city": "new"}}}
+        ]}))
+    );
+
+    let original_tool = json!({"role": "user", "parts": [
+        {"text": "keep"},
+        {"functionResponse": {"id": "call-1", "name": "weather", "response": {"old": true}}}
+    ]});
+    let tool = json!({"role": "tool", "tool_call_id": "call-1", "content": "{\"new\":true}"});
+    assert_eq!(
+        patch_changed_gemini_content(&original_tool, &[&tool], &std::collections::HashMap::new())
+            .unwrap(),
+        Some(json!({"role": "user", "parts": [
+            {"text": "keep"},
+            {"functionResponse": {"id": "call-1", "name": "weather", "response": {"new": true}}}
+        ]}))
+    );
+}
+
+#[test]
+fn test_gemini_streaming_state_merges_text_and_retains_response_metadata() {
+    let mut state = GeminiGenerateContentStreamingState::default();
+    state
+        .observe(&json!({
+            "candidates": [{
+                "index": 0,
+                "content": {"parts": [{"text": "hello"}]},
+                "safetyRatings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT"}]
+            }],
+            "usageMetadata": {"promptTokenCount": 3},
+            "modelVersion": "gemini-2.0",
+            "responseId": "response-1"
+        }))
+        .unwrap();
+    state
+        .observe(&json!({
+            "candidates": [{"index": 0, "content": {"parts": [{"text": " world"}]}, "finishReason": "STOP"}]
+        }))
+        .unwrap();
+    assert_eq!(
+        state.finalize(),
+        json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "hello world"}]},
+                "finishReason": "STOP",
+                "index": 0,
+                "safetyRatings": [{"category": "HARM_CATEGORY_DANGEROUS_CONTENT"}]
+            }],
+            "usageMetadata": {"promptTokenCount": 3},
+            "modelVersion": "gemini-2.0",
+            "responseId": "response-1"
+        })
+    );
+}
+
+#[test]
+fn test_gemini_function_part_validators_and_tool_call_encoder_cover_invalid_shapes() {
+    validate_gemini_function_call_part(&json!({"functionCall": {"name": "weather", "args": {}}}))
+        .unwrap();
+    validate_gemini_function_response_part(
+        &json!({"functionResponse": {"name": "weather", "response": {}}}),
+    )
+    .unwrap();
+    for part in [
+        json!({"functionCall": null}),
+        json!({"functionCall": {"name": ""}}),
+        json!({"functionCall": {"name": "ok", "args": []}}),
+    ] {
+        assert!(validate_gemini_function_call_part(&part).is_err());
+    }
+    for part in [
+        json!({"functionResponse": null}),
+        json!({"functionResponse": {"name": "", "response": {}}}),
+        json!({"functionResponse": {"name": "ok"}}),
+        json!({"functionResponse": {"name": "ok", "response": []}}),
+        json!({"functionResponse": {"name": "ok", "response": {}, "parts": {}}}),
+    ] {
+        assert!(validate_gemini_function_response_part(&part).is_err());
+    }
+    let valid = json!({"id": "call-1", "function": {"name": "weather", "arguments": "{\"city\":\"Boston\"}"}});
+    assert_eq!(
+        tool_call_to_fc_obj(&valid).unwrap(),
+        serde_json::Map::from_iter([
+            ("name".into(), json!("weather")),
+            ("id".into(), json!("call-1")),
+            ("args".into(), json!({"city": "Boston"}))
+        ])
+    );
+    for call in [
+        json!({"function": {"name": ""}}),
+        json!({"id": "", "function": {"name": "ok"}}),
+        json!({"id": 1, "function": {"name": "ok"}}),
+        json!({"function": {"name": "ok", "arguments": "not-json"}}),
+        json!({"function": {"name": "ok", "arguments": "[]"}}),
+    ] {
+        assert!(tool_call_to_fc_obj(&call).is_err());
+    }
+}
+
+#[test]
+fn test_gemini_function_message_converters_cover_role_mixing_and_plain_messages() {
+    let response_part =
+        json!({"functionResponse": {"id": "call-1", "name": "weather", "response": {"ok": true}}});
+    let call_part = json!({"functionCall": {"id": "call-1", "name": "weather", "args": {}}});
+    validate_gemini_content_roles("user", &[&response_part], &[]).unwrap();
+    validate_gemini_content_roles("model", &[], &[&call_part]).unwrap();
+    assert!(validate_gemini_content_roles("model", &[&response_part], &[]).is_err());
+    assert!(validate_gemini_content_roles("user", &[], &[&call_part]).is_err());
+    let messages =
+        gemini_function_response_messages(std::slice::from_ref(&response_part), &[&response_part])
+            .unwrap();
+    assert!(matches!(&messages[0], Message::Tool { tool_call_id, .. } if tool_call_id == "call-1"));
+    assert!(
+        gemini_function_response_messages(
+            &[json!({"text": "mixed"}), response_part.clone()],
+            &[&response_part]
+        )
+        .is_err()
+    );
+    let messages =
+        gemini_function_call_messages(Some(MessageContent::Text("before".into())), &[&call_part])
+            .unwrap();
+    assert!(
+        matches!(&messages[0], Message::Assistant { tool_calls: Some(calls), .. } if calls[0].id == "call-1")
+    );
+    assert!(matches!(
+        gemini_plain_message("model", None),
+        Message::Assistant { .. }
+    ));
+    assert!(matches!(
+        gemini_plain_message("user", None),
+        Message::User { .. }
+    ));
+}
+
+#[test]
+fn test_gemini_streaming_state_rejects_part_and_finish_reason_failures() {
+    let mut state = GeminiGenerateContentStreamingState::default();
+    for event in [
+        json!({"candidates": [{"index": 0, "content": {"parts": [null]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"text": 1}]}}]}),
+        json!({"candidates": [{"index": 0, "content": {"parts": [{"functionResponse": {}}]}}]}),
+        json!({"candidates": [{"index": 0, "finishReason": 1}]}),
+    ] {
+        assert!(state.observe(&event).is_err());
+    }
+    let mut multi = GeminiGenerateContentStreamingState::default();
+    assert!(multi.observe(&json!({"candidates": [null]})).is_err());
+    let mut first = GeminiGenerateContentStreamingState::default();
+    first.observe(&json!({"candidates": [{"index": 0, "content": {"parts": [{"thought": true, "text": "thought"}, {"functionCall": {"name": "tool", "args": {}}}]}}]})).unwrap();
+    assert_eq!(
+        first.finalize()["candidates"][0]["content"]["parts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn test_gemini_encode_updates_model_and_extra_fields() {
+    let codec = GeminiGenerateContentCodec;
+    let original = make_request(json!({
+        "model": "gemini-old",
+        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+        "safetySettings": [{"threshold": "BLOCK_NONE"}],
+        "cachedContent": "old-cache"
+    }));
+    let mut annotated = codec.decode(&original).unwrap();
+    annotated.model = Some("gemini-new".into());
+    annotated.extra.remove("cachedContent");
+    annotated.extra.insert("newNative".into(), json!(true));
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded.content["model"], json!("gemini-new"));
+    assert!(encoded.content.get("cachedContent").is_none());
+    assert_eq!(encoded.content["newNative"], json!(true));
+
+    annotated.model = None;
+    let encoded = codec.encode(&annotated, &encoded).unwrap();
+    assert!(encoded.content.get("model").is_none());
+}
+
+#[test]
+fn test_gemini_content_to_messages_decodes_roles_and_rejects_mixed_or_invalid_parts() {
+    let messages =
+        gemini_content_to_messages(&json!({"parts": [{"text": "default user"}]})).unwrap();
+    assert!(
+        matches!(&messages[0], Message::User { content: MessageContent::Text(text), .. } if text == "default user")
+    );
+    let messages = gemini_content_to_messages(
+        &json!({"role": "model", "parts": [{"functionCall": {"name": "weather", "args": {}}}]}),
+    )
+    .unwrap();
+    assert!(
+        matches!(&messages[0], Message::Assistant { tool_calls: Some(calls), .. } if calls[0].id == "weather")
+    );
+    for content in [
+        Json::Null,
+        json!({"role": "developer", "parts": []}),
+        json!({"role": 1, "parts": []}),
+        json!({"role": "user", "parts": {}}),
+        json!({"role": "user", "parts": [null]}),
+        json!({"role": "user", "parts": [{"text": 1}]}),
+        json!({"role": "user", "parts": [{"functionCall": {"name": "a"}}, {"functionResponse": {"name": "a", "response": {}}}]}),
+    ] {
+        assert!(gemini_content_to_messages(&content).is_err());
+    }
+}
+
+#[test]
+fn test_gemini_original_part_merging_preserves_thoughts_and_inserts_content() {
+    let original = vec![
+        json!({"thought": true, "text": "hidden"}),
+        json!({"text": "old", "thoughtSignature": "sig"}),
+        json!({"functionCall": {"name": "old"}}),
+    ];
+    let merged = merge_gemini_original_parts(
+        &original,
+        vec![json!({"text": "new"}), json!({"inlineData": {}})],
+        vec![json!({"functionCall": {"name": "new-call"}})],
+        false,
+    );
+    assert_eq!(
+        merged,
+        vec![
+            json!({"thought": true, "text": "hidden"}),
+            json!({"text": "new", "thoughtSignature": "sig"}),
+            json!({"functionCall": {"name": "new-call"}}),
+            json!({"inlineData": {}}),
+        ]
+    );
+    assert_eq!(
+        merge_gemini_original_parts(&[], Vec::new(), Vec::new(), true),
+        vec![json!({"text": ""})]
+    );
+    assert_eq!(
+        replacement_content_part(
+            &json!({"text": "old", "signature": "x"}),
+            json!({"text": "new"}),
+            false
+        ),
+        json!({"text": "new", "signature": "x"})
+    );
+}
+
+#[test]
+fn test_gemini_request_decoders_reject_invalid_system_generation_and_tool_shapes() {
+    let codec = GeminiGenerateContentCodec;
+    for request in [
+        json!({"systemInstruction": {"parts": "not-array"}, "contents": []}),
+        json!({"systemInstruction": {"role": 1, "parts": []}, "contents": []}),
+        json!({"generationConfig": [], "contents": []}),
+        json!({"generationConfig": {"maxOutputTokens": -1}, "contents": []}),
+        json!({"generationConfig": {"stopSequences": [1]}, "contents": []}),
+        json!({"tools": {}, "contents": []}),
+        json!({"tools": [null], "contents": []}),
+        json!({"tools": [{"functionDeclarations": {}}], "contents": []}),
+        json!({"tools": [{"functionDeclarations": [{"description": "missing-name"}]}], "contents": []}),
+    ] {
+        assert!(codec.decode(&make_request(request)).is_err());
+    }
+}
+
+#[test]
+fn test_gemini_system_and_text_only_validators_reject_remaining_invalid_forms() {
+    for value in [
+        Json::Null,
+        json!({}),
+        json!({"parts": [null]}),
+        json!({"parts": [{"inlineData": {}}]}),
+        json!({"parts": [{"text": 1}]}),
+    ] {
+        assert!(validate_system_instruction(&value).is_err());
+    }
+    assert!(reject_non_text_content_parts(&json!([null])).is_err());
+    assert!(reject_non_text_content_parts(&json!([{"type": 1, "text": "x"}])).is_err());
+    assert!(
+        reject_non_text_content_parts(&json!([{"type": "provider_native", "text": "x"}])).is_err()
+    );
+    assert!(reject_non_text_content_parts(&json!([{"type": "text", "text": 1}])).is_err());
+    assert!(reject_non_text_content_parts(&json!([{"type": "text"}])).is_err());
+}
+
+#[test]
+fn test_gemini_tool_response_patching_handles_new_and_duplicate_call_ids() {
+    let existing = vec![
+        json!({"text": "keep"}),
+        json!({"functionResponse": {"name": "legacy", "response": {"old": true}}}),
+    ];
+    let new_tool = json!({"role": "tool", "tool_call_id": "new-id", "content": "{\"ok\":true}"});
+    assert_eq!(
+        patch_gemini_tool_response_content(
+            &existing,
+            &[&new_tool],
+            &std::collections::HashMap::from([("new-id".into(), "new_fn".into())]),
+        )
+        .unwrap(),
+        Some(json!({"role": "user", "parts": [
+            {"text": "keep"},
+            {"functionResponse": {"id": "new-id", "name": "new_fn", "response": {"ok": true}}}
+        ]}))
+    );
+    let duplicate = json!({"role": "tool", "tool_call_id": "new-id", "content": "{}"});
+    assert!(gemini_function_response_updates(&[&new_tool, &duplicate]).is_err());
+    assert_eq!(
+        function_response_call_id(&json!({"name": "fallback"})),
+        Some("fallback")
+    );
+    assert_eq!(function_response_call_id(&json!({})), None);
+}
+
+#[test]
+fn test_gemini_patch_non_system_contents_inserts_new_message_and_rejects_invalid_original() {
+    let base = [json!({"role": "user", "content": "old"})];
+    let annotated = [
+        json!({"role": "user", "content": "old"}),
+        json!({"role": "assistant", "content": "new"}),
+    ];
+    let mut obj = serde_json::Map::from_iter([(
+        "contents".into(),
+        json!([{"role": "user", "parts": [{"text": "old"}]}]),
+    )]);
+    patch_gemini_non_system_contents(
+        &mut obj,
+        &[],
+        &annotated.iter().collect::<Vec<_>>(),
+        &base.iter().collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert_eq!(obj["contents"].as_array().unwrap().len(), 2);
+
+    let changed = json!({"role": "user", "content": "changed"});
+    let mut invalid = serde_json::Map::from_iter([("contents".into(), json!([null]))]);
+    assert!(patch_gemini_non_system_contents(&mut invalid, &[], &[&changed], &[&base[0]]).is_err());
+}
+
+#[test]
+fn test_gemini_function_definition_and_native_tool_decoding_preserve_extra_fields() {
+    let mut definitions = Vec::new();
+    decode_gemini_tool_group(
+        &json!({
+            "functionDeclarations": [{
+                "name": "weather",
+                "description": "lookup",
+                "parameters": {"type": "object"},
+                "responseJsonSchema": {"type": "string"}
+            }],
+            "googleSearch": {"mode": "dynamic"}
+        }),
+        &mut definitions,
+    )
+    .unwrap();
+    assert_eq!(definitions.len(), 2);
+    assert!(
+        matches!(&definitions[0], ToolDefinition::Function { function, .. } if function.extra.contains_key("responseJsonSchema"))
+    );
+    assert!(
+        matches!(&definitions[1], ToolDefinition::ProviderNative { kind, .. } if kind == "googleSearch")
+    );
+    assert_eq!(decode_gemini_tools(&serde_json::Map::new()).unwrap(), None);
+    assert!(decode_gemini_function_definition(&json!(null)).is_err());
+    assert!(decode_gemini_function_definition(&json!({"name": ""})).is_err());
+    assert!(decode_gemini_function_definition(&json!({"name": "ok", "description": 1})).is_err());
+}
+
+#[test]
+fn test_gemini_streaming_default_and_nan_param_patching_cover_remaining_error_paths() {
+    let codec = GeminiGenerateContentStreamingCodec::default();
+    let mut collect = codec.collector();
+    collect(json!({"candidates": [{"index": 0, "content": {"parts": [{"text": "ok"}]}}]})).unwrap();
+    assert_eq!(
+        codec.finalizer()()["candidates"][0]["content"]["parts"],
+        json!([{ "text": "ok" }])
+    );
+    let mut obj = serde_json::Map::new();
+    assert!(
+        patch_gemini_params(
+            &mut obj,
+            Some(&GenerationParams {
+                temperature: Some(f64::NAN),
+                max_tokens: None,
+                top_p: None,
+                stop: None
+            })
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn test_gemini_remaining_content_and_tool_payload_validation_paths() {
+    let content =
+        gemini_parts_to_message_content(&[json!({"metadata": {"source": "cache"}})], "content")
+            .unwrap()
+            .unwrap();
+    assert!(
+        matches!(content, MessageContent::Parts(parts) if matches!(&parts[0], ContentPart::ProviderNative { kind, .. } if kind == "unknown"))
+    );
+
+    for content in [json!([null]), json!([{"type": 1, "text": "x"}])] {
+        assert!(gemini_content_parts_from_normalized(&content).is_err());
+    }
+
+    for content in [
+        json!([null]),
+        json!([{"type": 1}]),
+        json!([{"type": "text", "text": 1}]),
+        json!([{"type": "text"}]),
+        json!([{"type": "image", "url": "https://example.invalid"}]),
+    ] {
+        assert!(function_response_payload_from_tool_content(&content).is_err());
+    }
+}
+
+#[test]
+fn test_gemini_remaining_message_and_generation_parameter_branches() {
+    let calls = std::collections::HashMap::new();
+    assert_eq!(
+        normalized_to_gemini_content(
+            &json!({"role": "assistant", "content": "answer", "tool_calls": []}),
+            &calls,
+        )
+        .unwrap(),
+        Some(json!({"role": "model", "parts": [{"text": "answer"}]}))
+    );
+    assert!(
+        patch_changed_gemini_content(
+            &json!({"role": "user", "parts": [{"text": "old"}]}),
+            &[&json!({"role": "developer", "content": "new"})],
+            &calls,
+        )
+        .is_err()
+    );
+
+    let mut request = serde_json::Map::from_iter([(
+        "generationConfig".into(),
+        json!({"temperature": 0.2, "topP": 0.8, "maxOutputTokens": 10, "stopSequences": ["stop"]}),
+    )]);
+    patch_gemini_params(
+        &mut request,
+        Some(&GenerationParams {
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+        }),
+    )
+    .unwrap();
+    assert!(request.get("generationConfig").is_none());
+}
+
+#[test]
+fn test_gemini_usage_mapping_handles_absent_and_partial_metadata() {
+    assert_eq!(map_usage(None, None), (None, None));
+    let (usage, thoughts) = map_usage(
+        Some(RawUsageMetadata {
+            prompt_token_count: Some(3),
+            candidates_token_count: None,
+            total_token_count: None,
+            cached_content_token_count: Some(2),
+            thoughts_token_count: Some(5),
+        }),
+        None,
+    );
+    let usage = usage.unwrap();
+    assert_eq!(usage.prompt_tokens, Some(3));
+    assert_eq!(usage.completion_tokens, None);
+    assert_eq!(usage.total_tokens, Some(8));
+    assert_eq!(usage.cache_read_tokens, Some(2));
+    assert_eq!(thoughts, Some(5));
+
+    let (usage, thoughts) = map_usage(
+        Some(RawUsageMetadata {
+            prompt_token_count: None,
+            candidates_token_count: Some(4),
+            total_token_count: Some(10),
+            cached_content_token_count: None,
+            thoughts_token_count: None,
+        }),
+        Some("unknown-model"),
+    );
+    let usage = usage.unwrap();
+    assert_eq!(usage.completion_tokens, Some(4));
+    assert_eq!(usage.total_tokens, Some(10));
+    assert_eq!(thoughts, None);
+}
+
+#[test]
+fn test_gemini_system_instruction_helpers_validate_text_only_parts() {
+    let valid = json!({"role": "system", "parts": [{"text": "first"}, {"text": "second"}]});
+    validate_system_instruction(&valid).unwrap();
+    assert_eq!(
+        system_instruction_text(&valid).as_deref(),
+        Some("first\nsecond")
+    );
+    assert_eq!(system_instruction_text(&json!({"parts": []})), None);
+    for invalid in [
+        json!(null),
+        json!({"role": 1, "parts": []}),
+        json!({}),
+        json!({"parts": 1}),
+        json!({"parts": [1]}),
+        json!({"parts": [{"functionCall": {}}]}),
+        json!({"parts": [{"text": 1}]}),
+    ] {
+        assert!(validate_system_instruction(&invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
+fn test_gemini_content_validation_rejects_invalid_roles_and_function_shapes() {
+    let default_role = serde_json::Map::new();
+    assert_eq!(gemini_content_role(&default_role).unwrap(), "user");
+    for role in [json!("system"), json!(1)] {
+        assert!(gemini_content_role(json!({"role": role}).as_object().unwrap()).is_err());
+    }
+    for parts in [
+        vec![json!(1)],
+        vec![json!({"text": 1})],
+        vec![
+            json!({"functionResponse": {"name": "tool", "response": {}}}),
+            json!({"functionCall": {"name": "tool"}}),
+        ],
+    ] {
+        assert!(validate_gemini_content_parts(&parts).is_err());
+    }
+    for part in [
+        json!({"functionResponse": {}}),
+        json!({"functionResponse": {"name": "tool"}}),
+        json!({"functionResponse": {"name": "tool", "response": 1}}),
+        json!({"functionCall": {}}),
+        json!({"functionCall": {"name": "tool", "args": 1}}),
+    ] {
+        assert!(gemini_content_to_messages(&json!({"parts": [part]})).is_err());
+    }
+    assert!(validate_gemini_content_roles("model", &[&json!({})], &[]).is_err());
+    assert!(validate_gemini_content_roles("user", &[], &[&json!({})]).is_err());
+}
+
+#[test]
+fn test_gemini_content_to_messages_maps_default_user_and_model_text() {
+    let messages = gemini_content_to_messages(&json!({"parts": [{"text": "hello"}]})).unwrap();
+    assert!(matches!(messages.as_slice(), [Message::User { .. }]));
+    let messages = gemini_content_to_messages(&json!({
+        "role": "model",
+        "parts": [{"text": "response"}]
+    }))
+    .unwrap();
+    assert!(matches!(messages.as_slice(), [Message::Assistant { .. }]));
+    assert!(gemini_content_to_messages(&json!({"role": "user"})).is_err());
+}
+
+#[test]
+fn test_gemini_function_response_parts_validate_and_preserve_native_content() {
+    assert_eq!(
+        validate_gemini_nested_function_response_part(&json!({"inlineData": {}})).unwrap(),
+        "inlineData"
+    );
+    for part in [
+        json!(1),
+        json!({"functionCall": {}}),
+        json!({"functionResponse": {}}),
+        json!({"text": 1}),
+    ] {
+        assert!(validate_gemini_nested_function_response_part(&part).is_err());
+    }
+    let response =
+        json!({"response": {"ok": true}, "parts": [{"inlineData": {"mimeType": "text/plain"}}]});
+    assert!(matches!(
+        gemini_function_response_to_message_content(&response).unwrap(),
+        MessageContent::Parts(parts) if parts.len() == 2
+    ));
+    assert!(gemini_function_response_to_message_content(&json!({"response": {}})).is_ok());
+    assert!(
+        gemini_function_response_to_message_content(&json!({"response": {}, "parts": 1})).is_err()
+    );
+}
+
+#[test]
+fn test_gemini_request_decoders_cover_generation_tools_and_model_validation() {
+    let request = json!({
+        "generationConfig": {
+            "temperature": 0.5,
+            "topP": 0.9,
+            "maxOutputTokens": 42,
+            "stopSequences": ["stop"]
+        },
+        "model": "gemini-test",
+        "tools": [{
+            "functionDeclarations": [{
+                "name": "weather",
+                "description": "lookup",
+                "parameters": {"type": "object"},
+                "x-extra": true
+            }],
+            "googleSearch": {}
+        }]
+    });
+    let object = request.as_object().unwrap();
+    let params = decode_gemini_generation_params(object).unwrap().unwrap();
+    assert_eq!(params.temperature, Some(0.5));
+    assert_eq!(params.top_p, Some(0.9));
+    assert_eq!(params.max_tokens, Some(42));
+    assert_eq!(params.stop, Some(vec!["stop".into()]));
+    assert_eq!(
+        decode_gemini_model(object).unwrap().as_deref(),
+        Some("gemini-test")
+    );
+    assert_eq!(decode_gemini_tools(object).unwrap().unwrap().len(), 2);
+    assert_eq!(
+        decode_gemini_generation_params(&serde_json::Map::new()).unwrap(),
+        None
+    );
+
+    for request in [
+        json!({"generationConfig": 1}),
+        json!({"generationConfig": {"temperature": "hot"}}),
+        json!({"generationConfig": {"maxOutputTokens": -1}}),
+        json!({"generationConfig": {"stopSequences": [1]}}),
+    ] {
+        assert!(
+            decode_gemini_generation_params(request.as_object().unwrap()).is_err(),
+            "{request}"
+        );
+    }
+    assert!(decode_gemini_model(json!({"model": 1}).as_object().unwrap()).is_err());
+    for request in [
+        json!({"tools": 1}),
+        json!({"tools": [{"functionDeclarations": [{"name": ""}]}]}),
+    ] {
+        assert!(
+            decode_gemini_tools(request.as_object().unwrap()).is_err(),
+            "{request}"
+        );
+    }
+}
+
+#[test]
+fn test_gemini_response_part_extractors_cover_content_and_tool_calls() {
+    let parts = vec![
+        json!({"thought": true, "text": "hidden"}),
+        json!({"text": "visible"}),
+        json!({"functionCall": {"name": "weather", "args": {"city": "NYC"}}}),
+        json!({"functionCall": {"id": "call-2", "name": "time"}}),
+    ];
+    assert!(matches!(
+        extract_parts_message_content(&parts).unwrap(),
+        Some(MessageContent::Text(text)) if text == "visible"
+    ));
+    let calls = extract_parts_tool_calls(&parts).unwrap().unwrap();
+    assert_eq!(calls[0].id, "weather");
+    assert_eq!(calls[1].id, "call-2");
+    assert_eq!(calls[0].arguments, json!({"city": "NYC"}));
+    assert_eq!(calls[1].arguments, json!({}));
+    assert_eq!(
+        extract_parts_tool_calls(&[json!({"text": "only"})]).unwrap(),
+        None
+    );
+    for malformed in [
+        json!({"functionCall": null}),
+        json!({"functionCall": {"name": ""}}),
+        json!({"functionCall": {"name": "tool", "args": 1}}),
+    ] {
+        assert!(extract_parts_tool_calls(&[malformed]).is_err());
+    }
+    assert!(extract_parts_message_content(&[json!({"functionResponse": {}})]).is_err());
+}
+
+#[test]
+fn test_gemini_tool_response_helpers_wrap_and_validate_normalized_content() {
+    assert_eq!(
+        ensure_object_response("{\"ok\":true}".into()),
+        json!({"ok": true})
+    );
+    assert_eq!(ensure_object_response("[1]".into()), json!({"output": [1]}));
+    assert_eq!(
+        ensure_object_response("plain".into()),
+        json!({"output": "plain"})
+    );
+    assert_eq!(extract_content_text(&json!("text")), "text");
+    assert_eq!(
+        extract_content_text(&json!([{"type": "text", "text": "one"}, {"text": "two"}])),
+        "one\ntwo"
+    );
+
+    let native = json!({"provider": "gemini", "kind": "inlineData", "value": {"inlineData": {}}});
+    assert_eq!(
+        provider_native_gemini_part_value(native.as_object().unwrap()).unwrap(),
+        json!({"inlineData": {}})
+    );
+    for part in [
+        json!({}),
+        json!({"provider": "other", "kind": "text", "value": {"text": "x"}}),
+        json!({"provider": "gemini", "kind": "", "value": {"text": "x"}}),
+        json!({"provider": "gemini", "kind": "text", "value": {"functionCall": {}}}),
+    ] {
+        assert!(provider_native_gemini_part_value(part.as_object().unwrap()).is_err());
+    }
+    let payload = function_response_payload_from_tool_content(&json!([
+        {"type": "text", "text": "answer"},
+        {"type": "provider_native", "provider": "gemini", "kind": "inlineData", "value": {"inlineData": {}}}
+    ]))
+    .unwrap();
+    assert_eq!(payload.response, json!({"output": "answer"}));
+    assert_eq!(payload.parts.unwrap().len(), 1);
+    assert!(function_response_payload_from_tool_content(&json!(true)).is_err());
+}
+
+#[test]
+fn test_gemini_serialization_and_native_tool_helpers_handle_edge_cases() {
+    let mut object = serde_json::Map::new();
+    insert_serialized(&mut object, "value", &vec!["one"], "test").unwrap();
+    assert_eq!(object["value"], json!(["one"]));
+    assert_eq!(json_f64(0.5, "temperature").unwrap(), json!(0.5));
+    assert!(json_f64(f64::NAN, "temperature").is_err());
+
+    let group = json!({"functionDeclarations": [], "googleSearch": {}, "codeExecution": {}});
+    let fields = gemini_native_tool_fields(group.as_object().unwrap()).unwrap();
+    assert_eq!(gemini_native_tool_kind(&fields), "codeExecution");
+    assert_eq!(
+        gemini_native_tool_keys(&fields),
+        vec!["codeExecution".to_string(), "googleSearch".to_string()]
+    );
+    assert_eq!(gemini_native_tool_kind(&json!(null)), "unknown");
+    assert_eq!(gemini_native_tool_keys(&json!(null)), Vec::<String>::new());
+    assert_eq!(
+        gemini_native_tool_fields(&serde_json::Map::from_iter([(
+            "functionDeclarations".to_string(),
+            json!([]),
+        )])),
+        None
+    );
+
+    let groups = vec![json!({"googleSearch": {}}), fields.clone()];
+    let mut used = vec![false; groups.len()];
+    assert_eq!(
+        take_matching_native_group(&groups, &mut used, &gemini_native_tool_keys(&fields)),
+        Some(fields)
+    );
+    assert_eq!(
+        take_matching_native_group(&groups, &mut used, &["missing".into()]),
+        None
+    );
+}
+
+#[test]
+fn test_gemini_tool_group_encoders_preserve_supported_native_and_function_tools() {
+    let function = ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: "weather".into(),
+            description: Some("lookup".into()),
+            parameters: Some(json!({"type": "object"})),
+            strict: None,
+            extra: serde_json::Map::from_iter([("x-extra".into(), json!(true))]),
+        },
+        extra: Default::default(),
+    };
+    let native = ToolDefinition::ProviderNative {
+        provider: "gemini".into(),
+        kind: "googleSearch".into(),
+        value: json!({"googleSearch": {}}),
+    };
+    let tools = vec![function.clone(), native.clone()];
+    assert_eq!(gemini_function_declarations(Some(&tools)).unwrap().len(), 1);
+    assert_eq!(
+        gemini_native_tool_groups(Some(&tools)).unwrap(),
+        vec![json!({"googleSearch": {}})]
+    );
+    assert!(validate_gemini_native_tool_group(&json!(null)).is_err());
+    assert!(validate_gemini_native_tool_group(&json!({"functionDeclarations": []})).is_err());
+    let invalid = ToolDefinition::Function {
+        function: FunctionDefinition {
+            name: "".into(),
+            description: None,
+            parameters: None,
+            strict: None,
+            extra: Default::default(),
+        },
+        extra: Default::default(),
+    };
+    assert!(gemini_function_declarations(Some(&vec![invalid])).is_err());
+    let foreign = ToolDefinition::ProviderNative {
+        provider: "other".into(),
+        kind: "x".into(),
+        value: json!({}),
+    };
+    assert!(gemini_function_declarations(Some(&vec![foreign])).is_err());
+}
+
+#[test]
+fn test_gemini_extra_field_patching_removes_replaces_and_adds_values() {
+    let mut target = serde_json::Map::from_iter([
+        ("keep".into(), json!(1)),
+        ("remove".into(), json!(2)),
+        ("unchanged".into(), json!(3)),
+    ]);
+    let baseline = target.clone();
+    let annotated = serde_json::Map::from_iter([
+        ("keep".into(), json!(4)),
+        ("unchanged".into(), json!(3)),
+        ("add".into(), json!(5)),
+    ]);
+    patch_extra_fields(&mut target, &baseline, &annotated);
+    assert_eq!(target, annotated);
+}
+
 // ===================================================================
 // Response decode tests
 // ===================================================================
