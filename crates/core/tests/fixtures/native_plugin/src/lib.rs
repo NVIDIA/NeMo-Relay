@@ -5,9 +5,11 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use futures::StreamExt;
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
-    Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NativePlugin,
+    Json, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, NativeExecutorConfig,
+    NativePlugin,
     NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
@@ -16,6 +18,7 @@ use nemo_relay_plugin::{
     ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct FixtureNativePlugin;
 
@@ -29,6 +32,10 @@ pub extern "C" fn nemo_relay_fixture_async_pending_entered() -> bool {
 impl NativePlugin for FixtureNativePlugin {
     fn plugin_kind(&self) -> &str {
         "fixture_native"
+    }
+
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 3 }
     }
 
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
@@ -58,52 +65,74 @@ impl NativePlugin for FixtureNativePlugin {
             let runtime = runtime.clone();
             move |event| subscriber_mark(&runtime, event)
         })?;
-        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| {
-            mark_event_fields(fields, "native_plugin_mark")
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| async move {
+            Ok(mark_event_fields(fields, "native_plugin_mark"))
         })?;
         ctx.register_scope_sanitize_start_guardrail(
             "fixture_scope_start_sanitize",
             0,
-            |_, fields| mark_event_fields(fields, "native_plugin_scope_start"),
+            |_, fields| async move { Ok(mark_event_fields(fields, "native_plugin_scope_start")) },
         )?;
-        ctx.register_scope_sanitize_end_guardrail("fixture_scope_end_sanitize", 0, |_, fields| {
-            mark_event_fields(fields, "native_plugin_scope_end")
-        })?;
+        ctx.register_scope_sanitize_end_guardrail(
+            "fixture_scope_end_sanitize",
+            0,
+            |_, fields| async move { Ok(mark_event_fields(fields, "native_plugin_scope_end")) },
+        )?;
 
         ctx.register_tool_sanitize_request_guardrail(
             "fixture_tool_sanitize_request",
             0,
-            |_name, args| mark_json(args, "native_plugin_tool_sanitize_request"),
+            |_name, args| async move { Ok(mark_json(args, "native_plugin_tool_sanitize_request")) },
         )?;
         ctx.register_tool_sanitize_response_guardrail(
             "fixture_tool_sanitize_response",
             0,
-            |_name, result| mark_json(result, "native_plugin_tool_sanitize_response"),
+            |_name, result| async move {
+                Ok(mark_json(result, "native_plugin_tool_sanitize_response"))
+            },
         )?;
         ctx.register_tool_conditional_execution_guardrail(
             "fixture_tool_conditional",
             0,
-            |_name, _args| Ok(None),
+            |_name, _args| async move { Ok(None) },
         )?;
         ctx.register_tool_request_intercept("fixture_rewrite_args", 0, false, {
             let runtime = runtime.clone();
             move |_name, args| {
-                emit_runtime_events(&runtime)?;
-                Ok(mark_json(args, "native_plugin"))
+                let runtime = runtime.clone();
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    let (mut writer, mut reader) = tokio::io::duplex(8);
+                    writer
+                        .write_all(b"async")
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let mut readiness = [0_u8; 5];
+                    reader
+                        .read_exact(&mut readiness)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    emit_runtime_events(&runtime)?;
+                    Ok(mark_json(args, "native_plugin"))
+                }
             }
         })?;
         ctx.register_tool_execution_intercept("fixture_tool_execution", 0, {
             let runtime = runtime.clone();
             move |_name, args, next| {
-                let args = mark_json(args, "native_plugin_tool_execution_request");
-                let result = if args
-                    .get("use_isolated_next")
-                    .and_then(Json::as_bool)
-                    .unwrap_or(false)
-                {
-                    let isolated = runtime.create_scope_stack()?;
-                    let mut result = None;
-                    isolated.with_current(|| {
+                let runtime = runtime.clone();
+                async move {
+                    let args = mark_json(args, "native_plugin_tool_execution_request");
+                    let result = if args
+                        .get("use_isolated_next")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false)
+                    {
+                        let isolated = runtime.create_scope_stack()?;
+                        let previous = runtime.capture_scope_stack_thread()?;
+                        if isolated.set_thread() != NemoRelayStatus::Ok {
+                            return Err("failed to install isolated scope stack".into());
+                        }
                         let mut scope = runtime.scope(
                             "fixture.native.isolated.next",
                             ScopeType::Custom,
@@ -111,56 +140,91 @@ impl NativePlugin for FixtureNativePlugin {
                             None,
                             Some(&Json::String("isolated-next-input".into())),
                         )?;
-                        result = Some(next.call(args)?);
-                        scope.close(Some(&Json::String("isolated-next-output".into())), None)
-                    })?;
-                    result.ok_or_else(|| "isolated next did not produce a result".to_string())?
-                } else {
-                    next.call(args)?
-                };
-                let result = mark_json(result, "native_plugin_tool_execution");
-                Ok(
-                    ToolExecutionInterceptOutcome::new(result).with_pending_mark(
-                        PendingMarkSpec::builder()
-                            .name("fixture.native.tool_execution.mark")
-                            .category(EventCategory::custom())
-                            .category_profile(CategoryProfile {
-                                subtype: Some("fixture.native.tool_execution".into()),
-                                ..CategoryProfile::default()
-                            })
-                            .data(json!({ "source": "native_tool_execution" }))
-                            .metadata(json!({ "fixture": true }))
-                            .build(),
-                    ),
-                )
+                        let call_result = next.call(args).await;
+                        let close_result =
+                            scope.close(Some(&Json::String("isolated-next-output".into())), None);
+                        if previous.restore() != NemoRelayStatus::Ok {
+                            return Err("failed to restore callback scope stack".into());
+                        }
+                        close_result?;
+                        call_result?
+                    } else if args
+                        .get("use_concurrent_next")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false)
+                    {
+                        let first_next = next.clone();
+                        let (first, second) = tokio::join!(
+                            first_next.call(args.clone()),
+                            next.call(args),
+                        );
+                        let result = first?;
+                        second?;
+                        result
+                    } else {
+                        next.call(args).await?
+                    };
+                    let result = mark_json(result, "native_plugin_tool_execution");
+                    Ok(
+                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("fixture.native.tool_execution.mark")
+                                .category(EventCategory::custom())
+                                .category_profile(CategoryProfile {
+                                    subtype: Some("fixture.native.tool_execution".into()),
+                                    ..CategoryProfile::default()
+                                })
+                                .data(json!({ "source": "native_tool_execution" }))
+                                .metadata(json!({ "fixture": true }))
+                                .build(),
+                        ),
+                    )
+                }
             }
         })?;
 
         ctx.register_llm_sanitize_request_guardrail(
             "fixture_llm_sanitize_request",
             0,
-            |request, _context| {
-                Some(mark_llm_request(
+            |request, context| async move {
+                let request = if let Some(codec) = context.resolve_codec() {
+                    let annotated = codec.decode(&request)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    codec.encode(&annotated, &request)?
+                } else {
+                    request
+                };
+                Ok(Some(mark_llm_request(
                     request,
                     "native_plugin_llm_sanitize_request",
-                ))
+                )))
             },
         )?;
         ctx.register_llm_sanitize_response_guardrail(
             "fixture_llm_sanitize_response",
             0,
-            |response, _context| Some(mark_json(response, "native_plugin_llm_sanitize_response")),
+            |response, context| async move {
+                if let Some(codec) = context.resolve_codec() {
+                    codec.decode(&response)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    codec.decode(&response)?;
+                }
+                Ok(Some(mark_json(
+                    response,
+                    "native_plugin_llm_sanitize_response",
+                )))
+            },
         )?;
         ctx.register_llm_conditional_execution_guardrail(
             "fixture_llm_conditional",
             0,
-            |_request| Ok(None),
+            |_request| async move { Ok(None) },
         )?;
         ctx.register_llm_request_intercept(
             "fixture_llm_request_intercept",
             0,
             false,
-            |_name, request, annotated| {
+            |_name, request, annotated| async move {
                 Ok(LlmRequestInterceptOutcome::new(
                     mark_llm_request(request, "native_plugin_llm_request_intercept"),
                     annotated,
@@ -182,23 +246,27 @@ impl NativePlugin for FixtureNativePlugin {
         ctx.register_llm_execution_intercept(
             "fixture_llm_execution",
             0,
-            |_name, request, next| {
-                let response = next.call(mark_llm_request(
-                    request,
-                    "native_plugin_llm_execution_request",
-                ))?;
+            |_name, request, next| async move {
+                let response = next
+                    .call(mark_llm_request(
+                        request,
+                        "native_plugin_llm_execution_request",
+                    ))
+                    .await?;
                 Ok(mark_json(response, "native_plugin_llm_execution"))
             },
         )?;
         ctx.register_llm_stream_execution_intercept(
             "fixture_llm_stream_execution",
             0,
-            |_name, request, next| {
-                let stream = next.call(mark_llm_request(
-                    request,
-                    "native_plugin_llm_stream_execution_request",
-                ))?;
-                let stream: LlmJsonStream = Box::new(stream.map(|chunk| {
+            |_name, request, next| async move {
+                let stream = next
+                    .call(mark_llm_request(
+                        request,
+                        "native_plugin_llm_stream_execution_request",
+                    ))
+                    .await?;
+                let stream: LlmJsonAsyncStream = Box::pin(stream.map(|chunk| {
                     chunk.map(|chunk| mark_json(chunk, "native_plugin_llm_stream_execution"))
                 }));
                 Ok(stream)
