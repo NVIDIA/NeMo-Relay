@@ -831,6 +831,15 @@ impl RampartSanitizer {
         codec: &dyn LlmCodec,
         request: &LlmRequest,
     ) -> Result<LlmRequest, SanitizeError> {
+        // OCI's normalized codec flattens or reconstructs provider-native
+        // multipart/tool shapes. Until Relay exposes a lossless delta overlay,
+        // the copied observability value must be omitted instead of projected.
+        if matches!(
+            codec.codec_identity(),
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
+        ) {
+            return Err(SanitizeError::Codec);
+        }
         let annotated = codec.decode(request).map_err(|_| SanitizeError::Codec)?;
         let annotated = serde_json::to_value(annotated).map_err(|_| SanitizeError::Codec)?;
         let (headers, annotated) = self.sanitize_request_parts(
@@ -891,12 +900,26 @@ impl RampartSanitizer {
         surface: ProviderSurface,
         payload: Json,
     ) -> Result<Json, SanitizeError> {
+        // See the matching request guard above. The trajectory preset takes a
+        // separate raw-JSON path and therefore continues to support OCI.
+        if surface == ProviderSurface::OCIGenAI {
+            return Err(SanitizeError::Codec);
+        }
         if surface == ProviderSurface::OpenAIChat
             && payload
                 .get("choices")
                 .and_then(Json::as_array)
                 .is_some_and(|choices| choices.len() > 1)
-            && self.targets_normalized_openai_chat_choice()
+            && self.targets_normalized_single_projected_response()
+        {
+            return Err(SanitizeError::Codec);
+        }
+        if surface == ProviderSurface::GeminiGenerateContent
+            && payload
+                .get("candidates")
+                .and_then(Json::as_array)
+                .is_some_and(|candidates| candidates.len() > 1)
+            && self.targets_normalized_single_projected_response()
         {
             return Err(SanitizeError::Codec);
         }
@@ -908,7 +931,7 @@ impl RampartSanitizer {
         Ok(codec_name.overlay_response_payload(payload, &sanitized))
     }
 
-    fn targets_normalized_openai_chat_choice(&self) -> bool {
+    fn targets_normalized_single_projected_response(&self) -> bool {
         const CHOICE_ROOTS: [&str; 4] = ["message", "tool_calls", "finish_reason", "api_specific"];
 
         self.target_paths
@@ -934,6 +957,7 @@ impl RampartSanitizer {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages) => {
                 Some(ProviderSurface::AnthropicMessages)
             }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI) => Some(ProviderSurface::OCIGenAI),
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent) => {
                 Some(ProviderSurface::GeminiGenerateContent)
             }

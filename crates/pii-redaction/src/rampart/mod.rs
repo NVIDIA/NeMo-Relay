@@ -7,7 +7,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use nemo_relay::codec::resolve::supported_codec_names;
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, PluginError, Result as PluginResult,
     UnsupportedBehavior,
@@ -415,9 +414,9 @@ fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
         ));
     }
     if let Some(codec) = config.codec.as_deref()
-        && !supported_codec_names().contains(&codec)
+        && !supported_rampart_codec_names().contains(&codec)
     {
-        let supported = supported_codec_names()
+        let supported = supported_rampart_codec_names()
             .into_iter()
             .map(|name| format!("'{name}'"))
             .collect::<Vec<_>>()
@@ -494,6 +493,15 @@ fn config_value_violations(config: &RampartPiiConfig) -> Vec<ConfigViolation> {
         ));
     }
     violations
+}
+
+fn supported_rampart_codec_names() -> Vec<&'static str> {
+    vec![
+        "openai_chat",
+        "openai_responses",
+        "anthropic_messages",
+        "gemini_generate_content",
+    ]
 }
 
 fn validate_content_selection(config: &RampartPiiConfig, violations: &mut Vec<ConfigViolation>) {
@@ -634,7 +642,7 @@ fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::s
     let mut schema: schemars::schema::SchemaObject =
         <String as schemars::JsonSchema>::json_schema(generator).into();
     schema.enum_values = Some(
-        supported_codec_names()
+        supported_rampart_codec_names()
             .into_iter()
             .map(|value| Json::String(value.into()))
             .collect(),

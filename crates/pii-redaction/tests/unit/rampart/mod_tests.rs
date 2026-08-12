@@ -41,8 +41,8 @@ fn validates_explicit_model_and_content_paths() {
 }
 
 #[test]
-fn accepts_every_builtin_provider_codec() {
-    for codec in supported_codec_names() {
+fn accepts_only_builtin_codecs_with_proven_normalized_projection() {
+    for codec in supported_rampart_codec_names() {
         let mut config = valid_config();
         config.insert("codec".into(), Json::String(codec.into()));
         assert!(
@@ -50,6 +50,18 @@ fn accepts_every_builtin_provider_codec() {
             "built-in codec {codec} should be accepted"
         );
     }
+
+    let mut config = valid_config();
+    config.insert("codec".into(), Json::String("oci_genai".into()));
+    let diagnostics = validate_rampart_pii_config(&config);
+    assert!(
+        diagnostics.iter().any(|item| {
+            item.field.as_deref() == Some("codec")
+                && item.message.contains("openai_chat")
+                && !item.message.contains("oci_genai")
+        }),
+        "explicit normalized OCI projection must be rejected: {diagnostics:?}"
+    );
 }
 
 #[test]

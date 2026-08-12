@@ -110,6 +110,7 @@
     "tool_input",
     "tool_output",
     "priority",
+    "executor",
     "codec",
     "min_score",
     "excluded_labels",
@@ -161,6 +162,21 @@
       "title": "Middleware priority",
       "type": "integer",
       "default": 100
+    },
+    "executor": {
+      "title": "Async callback executor",
+      "description": "SDK-owned Tokio executor for typed asynchronous callbacks. This is separate from Rampart's bounded Rayon inference pool.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "worker_threads": {
+          "title": "Executor worker threads",
+          "description": "Number of Tokio workers that drive this plugin component's asynchronous callbacks.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        }
+      }
     },
     "codec": {
       "title": "Fallback provider codec",

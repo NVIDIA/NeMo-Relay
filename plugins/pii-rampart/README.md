@@ -9,10 +9,11 @@ This directory builds Rampart PII redaction as an opt-in Rust native dynamic
 plugin. The model and Tract inference engine are linked into the plugin
 library, not into the default Relay CLI or language-binding artifacts.
 
-The plugin runs inside the Relay process. Its sanitizer callbacks use the
-native ABI v3 asynchronous middleware contract, then run inference on the
-existing bounded Rampart Rayon pool. Relay's Tokio workers do not perform or
-wait synchronously on model inference.
+The plugin runs inside the Relay process. Its sanitizer callbacks use Relay's
+native ABI v4 typed asynchronous middleware SDK. The SDK drives callbacks on a
+per-component Tokio executor, while model inference runs on Rampart's separate
+bounded Rayon pool. Relay's runtime workers and the plugin's Tokio executor do
+not perform model inference synchronously.
 
 ## Build
 
@@ -65,12 +66,26 @@ At minimum, set `model_path` and either `preset = "trajectory_context"` or
 explicit `target_paths` or `target_path_patterns`. Native plugins are trusted
 code and are not sandboxed.
 
+The SDK-owned Tokio executor defaults to one worker for this plugin. A
+component can override that value independently of Rampart's inference pool:
+
+```toml
+[plugins.dynamic.config.executor]
+worker_threads = 2
+```
+
+Increase it only when measurements show async sanitizer callbacks queuing
+before they hand work to the bounded inference pool.
+
 ## Runtime behavior
 
 Rampart sanitizes copies used for events and exporters. It does not rewrite the
 request passed to a provider or tool, or the response returned to the caller.
-Relay still awaits each sanitizer before continuing the managed lifecycle, so
-model inference adds latency and can apply backpressure to the call.
+Managed calls submit copied payload snapshots to Relay's queued observability
+publication path without waiting for Rampart inference. Slow sanitization can
+delay event delivery to subscribers and exporters, and an explicit subscriber
+flush waits for the queued publication lineage to drain, but it does not add
+latency to the provider or tool call itself.
 
 The plugin admits at most 16 sanitizer callbacks, waits up to 500 ms for
 capacity, and runs model inference on at most three dedicated Rayon workers.
@@ -84,10 +99,20 @@ Successful detections use the configured replacement, which defaults to
 span from a sanitizer failure. The marker remains in the affected field of the
 emitted event and therefore reaches subscribers and exporters.
 
-The `trajectory_context` preset operates on provider-native request and response
-content and is the recommended configuration for coding-agent telemetry.
+The `trajectory_context` preset operates directly on selected provider-native
+request and response JSON and is the recommended configuration for coding-agent
+telemetry. It supports OCI Generative AI without converting its multipart,
+tool, candidate, or vendor-specific shapes through a normalized codec.
+
 Explicit normalized LLM paths support Relay's built-in OpenAI Chat, OpenAI
-Responses, Anthropic Messages, and Gemini generateContent codecs. The current
-native asynchronous ABI does not pass an owned runtime or opaque codec
-capability across the callback boundary, so explicit normalized paths fail
-closed for those codec kinds.
+Responses, Anthropic Messages, and Gemini generateContent codec surfaces
+through the ABI v4 capability for the payload shapes covered by their
+projection tests; normalized projection is not a claim of lossless support for
+every multipart or repeated-item provider shape. Runtime request codecs can
+also be inspected through that capability. Runtime and opaque response
+projections, and explicit
+normalized OCI request/response projection, fail closed by omitting the
+governed observable value: Relay's response codec is decode-only and OCI's
+normalized representation does not yet prove lossless preservation of every
+provider-native shape. The provider call and caller-visible result remain
+unchanged in every case.

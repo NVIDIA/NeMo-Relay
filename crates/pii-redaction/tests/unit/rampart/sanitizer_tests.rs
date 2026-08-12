@@ -1417,6 +1417,210 @@ fn gemini_response_projection_preserves_provider_fields() {
     assert_eq!(sanitized["vendorTrace"], "trace-José");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn explicit_normalized_oci_request_and_response_fail_closed_before_inference() {
+    use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = RampartSanitizer::new(
+        RampartPiiConfig {
+            model_path: "/tmp/rampart".into(),
+            target_paths: vec!["/message".into()],
+            target_path_patterns: vec!["/messages/*/content".into()],
+            ..RampartPiiConfig::default()
+        },
+        Arc::new(CountingNameDetector(Arc::clone(&calls))),
+    )
+    .unwrap();
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: serde_json::json!({
+            "chatRequest": {
+                "apiFormat": "GENERIC",
+                "messages": [{
+                    "role": "USER",
+                    "content": [{"type": "TEXT", "text": "Hello José"}]
+                }]
+            }
+        }),
+    };
+    let response = serde_json::json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [{"type": "TEXT", "text": "Hello José"}]
+                },
+                "finishReason": "stop"
+            }]
+        }
+    });
+
+    let sanitized_request = llm_sanitize_request_callback(backend.clone())(
+        request,
+        LlmSanitizeRequestContext::for_request_codec(Some(build_request_codec(
+            ProviderSurface::OCIGenAI,
+        ))),
+    )
+    .await
+    .unwrap();
+    let sanitized_response = llm_sanitize_response_callback(backend)(
+        response,
+        LlmSanitizeResponseContext::for_response_codec(Some(build_response_codec(
+            ProviderSurface::OCIGenAI,
+        ))),
+    )
+    .await
+    .unwrap();
+
+    assert!(sanitized_request.is_none());
+    assert!(sanitized_response.is_none());
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        0,
+        "unsupported normalized OCI projection must be rejected before model inference"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn trajectory_preset_sanitizes_raw_oci_shapes_without_projection() {
+    use nemo_relay::api::runtime::{LlmSanitizeRequestContext, LlmSanitizeResponseContext};
+
+    let backend = trajectory_sanitizer(Arc::new(NameDetector), "preserve");
+    let request = LlmRequest {
+        headers: Map::new(),
+        content: serde_json::json!({
+            "modelId": "unchanged-model",
+            "vendorEnvelope": {"revision": 7},
+            "chatRequest": {
+                "apiFormat": "GENERIC",
+                "messages": [{
+                    "role": "USER",
+                    "content": [
+                        {"type": "TEXT", "text": "First message from José"},
+                        {"type": "TEXT", "text": "Second message from José"}
+                    ]
+                }]
+            }
+        }),
+    };
+    let response = serde_json::json!({
+        "modelId": "unchanged-model",
+        "vendorEnvelope": {"revision": 9},
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "ASSISTANT",
+                        "content": [
+                            {"type": "TEXT", "text": "First reply to José"},
+                            {"type": "TEXT", "text": "Second reply to José"}
+                        ]
+                    },
+                    "finishReason": "stop"
+                },
+                {
+                    "index": 1,
+                    "message": {
+                        "role": "ASSISTANT",
+                        "content": [{"type": "TEXT", "text": "Alternate reply to José"}]
+                    },
+                    "finishReason": "stop"
+                }
+            ]
+        }
+    });
+
+    let sanitized_request = llm_sanitize_request_callback(backend.clone())(
+        request,
+        LlmSanitizeRequestContext::with_identity(LlmCodecIdentity::BuiltIn(
+            BuiltinLlmCodec::OCIGenAI,
+        )),
+    )
+    .await
+    .unwrap()
+    .expect("trajectory OCI request must remain observable");
+    let sanitized_response = llm_sanitize_response_callback(backend)(
+        response,
+        LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::BuiltIn(
+            BuiltinLlmCodec::OCIGenAI,
+        )),
+    )
+    .await
+    .unwrap()
+    .expect("trajectory OCI response must remain observable");
+
+    assert_eq!(sanitized_request.content["modelId"], "unchanged-model");
+    assert_eq!(sanitized_request.content["vendorEnvelope"]["revision"], 7);
+    let request_parts = sanitized_request.content["chatRequest"]["messages"][0]["content"]
+        .as_array()
+        .expect("OCI request parts remain an array");
+    assert_eq!(request_parts.len(), 2);
+    assert_eq!(request_parts[0]["text"], "First message from [REDACTED]");
+    assert_eq!(request_parts[1]["text"], "Second message from [REDACTED]");
+
+    assert_eq!(sanitized_response["modelId"], "unchanged-model");
+    assert_eq!(sanitized_response["vendorEnvelope"]["revision"], 9);
+    let choices = sanitized_response["chatResponse"]["choices"]
+        .as_array()
+        .expect("OCI response choices remain an array");
+    assert_eq!(choices.len(), 2);
+    assert_eq!(
+        choices[0]["message"]["content"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        choices[0]["message"]["content"][0]["text"],
+        "First reply to [REDACTED]"
+    );
+    assert_eq!(
+        choices[0]["message"]["content"][1]["text"],
+        "Second reply to [REDACTED]"
+    );
+    assert_eq!(
+        choices[1]["message"]["content"][0]["text"],
+        "Alternate reply to [REDACTED]"
+    );
+}
+
+#[test]
+fn gemini_response_projection_omits_multiple_candidates_for_normalized_targets() {
+    let sanitizer = sanitizer(Arc::new(NameDetector), vec!["/*"]);
+    let payload = serde_json::json!({
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello José"}]
+                },
+                "finishReason": "STOP"
+            },
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Private José"}]
+                },
+                "finishReason": "STOP"
+            }
+        ],
+        "modelVersion": "gemini"
+    });
+    let codec = build_response_codec(ProviderSurface::GeminiGenerateContent);
+
+    assert_eq!(
+        sanitizer.sanitize_response_with_codec(
+            codec.as_ref(),
+            ProviderSurface::GeminiGenerateContent,
+            payload,
+        ),
+        Err(SanitizeError::Codec)
+    );
+}
+
 #[test]
 fn openai_chat_response_projection_omits_multiple_choices_for_choice_targets() {
     let exact = RampartSanitizer::new(
