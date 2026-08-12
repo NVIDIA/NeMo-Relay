@@ -60,7 +60,9 @@ Common examples:
 
 - `ci: update codecov coverage reporting`
 - `docs: clarify release workflow`
+- `enhancement: improve scope configuration`
 - `chore: refresh generated attribution data`
+- `skills: add a plugin-authoring guide`
 - `test: add Python scope regression coverage`
 - `fix: preserve scope-local middleware cleanup`
 
