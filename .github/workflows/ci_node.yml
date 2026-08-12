@@ -172,12 +172,6 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
-      - name: Install managed Python for Zig packaging
-        if: ${{ startsWith(matrix.platform, 'linux-') && !contains(matrix.platform, 'musl') }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
-
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
