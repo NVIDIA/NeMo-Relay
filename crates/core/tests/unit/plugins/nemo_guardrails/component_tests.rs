@@ -403,6 +403,7 @@ fn schema_contains_every_supported_nemo_guardrails_option() {
             "openai_chat",
             "openai_responses",
             "anthropic_messages",
+            "oci_genai",
             "gemini_generate_content"
         ]
     ));
@@ -650,6 +651,7 @@ fn assert_invalid_remote_identity_and_codec() {
                 "openai_chat",
                 "openai_responses",
                 "anthropic_messages",
+                "oci_genai",
                 "gemini_generate_content",
             ]
             .iter()
@@ -688,6 +690,20 @@ fn assert_invalid_remote_identity_and_codec() {
                     .contains("remote mode currently supports only codec = 'openai_chat'")
             })
     );
+
+    let unsupported_remote_oci_codec = validate_plugin_config(&plugin_config(json!({
+        "mode": "remote",
+        "codec": "oci_genai",
+        "remote": {
+            "endpoint": "http://localhost:8000",
+            "config_id": "default"
+        }
+    })));
+    assert!(unsupported_remote_oci_codec.has_errors());
+    assert!(unsupported_remote_oci_codec.diagnostics.iter().any(|diag| {
+        diag.message
+            .contains("remote mode currently supports only codec = 'openai_chat'")
+    }));
 
     let unsupported_remote_gemini_codec = validate_plugin_config(&plugin_config(json!({
         "mode": "remote",

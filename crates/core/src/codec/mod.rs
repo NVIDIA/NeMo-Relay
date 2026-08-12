@@ -17,6 +17,7 @@
 pub mod anthropic;
 pub mod gemini_generate_content;
 pub mod model_pricing;
+pub mod oci_genai;
 pub mod openai_chat;
 pub mod openai_responses;
 pub mod optimization;

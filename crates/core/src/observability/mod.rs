@@ -97,6 +97,21 @@ pub(crate) fn relay_span_id(uuid: uuid::Uuid) -> opentelemetry::trace::SpanId {
     opentelemetry::trace::SpanId::from_bytes(bytes)
 }
 
+/// Format a W3C traceparent from Relay's deterministic trace and span IDs.
+pub(crate) fn format_traceparent(trace_uuid: uuid::Uuid, span_uuid: uuid::Uuid) -> String {
+    let trace_id = trace_uuid
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let span_id = &span_uuid.as_bytes()[8..];
+    let span_id = span_id
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("00-{trace_id}-{span_id}-01")
+}
+
 pub(crate) fn push_common_optimization_attributes(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     summary: &crate::codec::optimization::LlmOptimizationSummary,

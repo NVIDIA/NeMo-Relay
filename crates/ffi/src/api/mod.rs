@@ -99,6 +99,23 @@ fn tokio_runtime() -> &'static Runtime {
     })
 }
 
+/// Prevents a closed Unix worker socket from terminating the embedding process.
+///
+/// Rust executables configure `SIGPIPE` during startup, but this crate is also
+/// loaded as a library by Go. On Linux, that process-level initialization does
+/// not run for a `cdylib`, so socket writes after a worker exits can otherwise
+/// terminate the host instead of returning `EPIPE`.
+#[cfg(target_os = "linux")]
+fn ignore_sigpipe() {
+    static INITIALIZED: OnceLock<()> = OnceLock::new();
+    INITIALIZED.get_or_init(|| unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ignore_sigpipe() {}
+
 /// Initializes the Go binding runtime and installs default operational logging.
 ///
 /// Logging configuration is resolved from `NEMO_RELAY_LOG`,
@@ -107,6 +124,7 @@ fn tokio_runtime() -> &'static Runtime {
 #[unsafe(no_mangle)]
 pub extern "C" fn nemo_relay_initialize_default_logging() -> NemoRelayStatus {
     clear_last_error();
+    ignore_sigpipe();
     let result = nemo_relay::shared_runtime::initialize_shared_runtime_binding("go")
         .and_then(|()| nemo_relay::logging::initialize_default_logging());
     match result {

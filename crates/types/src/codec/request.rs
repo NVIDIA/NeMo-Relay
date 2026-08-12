@@ -534,6 +534,19 @@ pub enum ApiSpecificRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<Json>,
     },
+    /// OCI Generative AI-specific request fields.
+    #[serde(rename = "oci_genai")]
+    OCIGenAI {
+        /// Compartment OCID from the `ChatDetails` envelope.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        compartment_id: Option<String>,
+        /// Serving mode object (`servingType` plus `modelId` or `endpointId`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        serving_mode: Option<Json>,
+        /// Chat request API format (`GENERIC`, `COHERE`, or `COHEREV2`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_format: Option<String>,
+    },
     /// Custom provider request fields.
     #[serde(rename = "custom")]
     Custom {

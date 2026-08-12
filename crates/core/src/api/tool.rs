@@ -30,11 +30,6 @@ use uuid::Uuid;
 
 pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
 
-fn queue_sanitized_event(event: Event, subscribers: &[EventSubscriberFn]) -> bool {
-    let scope_stack = current_scope_stack();
-    queue_sanitized_event_with_scope_stack(event, subscribers, scope_stack)
-}
-
 fn queue_sanitized_event_with_scope_stack(
     event: Event,
     subscribers: &[EventSubscriberFn],
@@ -340,8 +335,8 @@ async fn tool_call_with_subscriber_snapshot(
 ) -> Result<(ToolHandle, Vec<EventSubscriberFn>)> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
+    let scope_stack = current_scope_stack();
     let (entries, subscribers) = {
-        let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_sanitize_request_guardrails
@@ -356,12 +351,7 @@ async fn tool_call_with_subscriber_snapshot(
         (entries, subscribers)
     };
     let skill_loads = resolve_skill_loads(params.name, &params.args, params.metadata.as_ref());
-    let sanitized_args = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
-        params.name,
-        params.args,
-        &entries,
-    )
-    .await;
+    let raw_args = params.args;
     let (handle, event, marks) = {
         let context = global_context();
         let state = context
@@ -377,7 +367,7 @@ async fn tool_call_with_subscriber_snapshot(
             .timestamp_opt(params.timestamp)
             .build();
         let handle = state.create_tool_handle(handle_params);
-        let event = state.build_tool_start_event(&handle, sanitized_args);
+        let event = state.build_tool_start_event(&handle, None);
         let marks = skill_loads
             .into_iter()
             .map(|skill_load| {
@@ -399,9 +389,29 @@ async fn tool_call_with_subscriber_snapshot(
             .collect::<Vec<_>>();
         (handle, event, marks)
     };
-    queue_sanitized_event(event, &subscribers);
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    let tool_name = handle.name.clone();
+    dispatch_transformed_event(
+        event,
+        Box::new(move |mut event| {
+            Box::pin(async move {
+                let sanitized = NemoRelayContextState::tool_sanitize_request_snapshot_chain(
+                    &tool_name, raw_args, &entries,
+                )
+                .await;
+                let mut fields = event.sanitize_fields();
+                fields.data = sanitized;
+                event.apply_sanitize_fields(fields);
+                event
+            })
+        }),
+        event_sanitizers,
+        &subscribers,
+        scope_stack.clone(),
+    );
     for mark in marks {
-        queue_sanitized_event(mark, &subscribers);
+        let sanitizers = snapshot_event_sanitizers(&mark, &scope_stack).unwrap_or_default();
+        dispatch_sanitized_event(mark, sanitizers, &subscribers, scope_stack.clone());
     }
     Ok((handle, subscribers))
 }
@@ -507,8 +517,8 @@ async fn tool_call_end_with_pending_marks(
     lifecycle_subscribers: Option<&[EventSubscriberFn]>,
 ) -> Result<()> {
     ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
     let (entries, subscribers) = {
-        let scope_stack = current_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
         let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
             &registries.tool_sanitize_response_guardrails
@@ -526,19 +536,6 @@ async fn tool_call_end_with_pending_marks(
         (entries, subscribers)
     };
     let subscribers = lifecycle_subscribers.unwrap_or(&subscribers);
-    let sanitized_result = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
-        &params.handle.name,
-        params.result,
-        &entries,
-    )
-    .await;
-    let data = sanitized_result.and_then(|value| {
-        if value.is_null() {
-            params.data
-        } else {
-            Some(value)
-        }
-    });
     let event = {
         let context = global_context();
         let state = context
@@ -547,7 +544,7 @@ async fn tool_call_end_with_pending_marks(
         state.build_tool_end_event(
             EndToolHandleParams::builder()
                 .handle(params.handle)
-                .data_opt(data)
+                .data(Json::Null)
                 .metadata_opt(params.metadata)
                 .timestamp_opt(params.timestamp)
                 .build(),
@@ -572,9 +569,37 @@ async fn tool_call_end_with_pending_marks(
             ))
         })
         .collect::<Vec<_>>();
-    queue_sanitized_event(event, subscribers);
+    let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
+    let tool_name = params.handle.name.clone();
+    let result = params.result;
+    let fallback = params.data;
+    dispatch_transformed_event(
+        event,
+        Box::new(move |mut event| {
+            Box::pin(async move {
+                let sanitized = NemoRelayContextState::tool_sanitize_response_snapshot_chain(
+                    &tool_name, result, &entries,
+                )
+                .await;
+                let mut fields = event.sanitize_fields();
+                fields.data = sanitized.and_then(|value| {
+                    if value.is_null() {
+                        fallback
+                    } else {
+                        Some(value)
+                    }
+                });
+                event.apply_sanitize_fields(fields);
+                event
+            })
+        }),
+        event_sanitizers,
+        subscribers,
+        scope_stack.clone(),
+    );
     for mark in marks {
-        queue_sanitized_event(mark, subscribers);
+        let sanitizers = snapshot_event_sanitizers(&mark, &scope_stack).unwrap_or_default();
+        dispatch_sanitized_event(mark, sanitizers, subscribers, scope_stack.clone());
     }
     Ok(())
 }

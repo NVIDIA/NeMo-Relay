@@ -41,6 +41,7 @@ fn sample_stability_result() -> StabilityAnalysisResult {
             observation_count: 4,
         }],
         stable_prefix_length: 1,
+        stable_prefix_fingerprint: Some("stable-prefix-1".to_string()),
         total_observations: 4,
     }
 }
@@ -195,5 +196,14 @@ fn hot_cache_serialization_keeps_acg_field_names_stable() {
     assert_eq!(
         decoded.acg_stability.as_ref().unwrap().total_observations,
         4
+    );
+    assert_eq!(
+        decoded
+            .acg_stability
+            .as_ref()
+            .unwrap()
+            .stable_prefix_fingerprint
+            .as_deref(),
+        Some("stable-prefix-1")
     );
 }

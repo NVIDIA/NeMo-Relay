@@ -6,7 +6,7 @@ position: 6
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Use this page to plan an upgrade from NeMo Relay 0.7 to 0.8. It will group the
+Use this page to plan an upgrade from NeMo Relay 0.7 to 0.8. It groups the
 actions from the release notes by the surface you operate. If you skip one or
 more releases, review the migration guides and release notes for every
 intervening release in sequence.
@@ -29,6 +29,65 @@ starting.
 NeMo Relay is built into Hermes Agent. Do not install Relay separately or
 enable an observability plugin. Hermes Agent understands NeMo Relay plugin
 configurations.
+
+### Upgrade Native Rust Plugins to NeMo Relay 0.8
+
+<Warning title="Breaking Change">
+NeMo Relay 0.8 is not source-compatible with typed native Rust plugins built
+against NeMo Relay 0.7. Update every typed guardrail, sanitizer, and intercept
+callback to the asynchronous contract, rebuild the plugin with
+`nemo-relay-plugin` 0.8.0, and update its Relay compatibility range before
+deployment.
+</Warning>
+
+NeMo Relay 0.8 changes every typed native Rust guardrail, sanitizer, and
+intercept callback to return a future. This is a source-breaking SDK change.
+Subscribers, validation, registration, scope and mark helpers, raw synchronous
+ABI callbacks, Go, and worker subscriber contracts remain synchronous.
+
+Use owned callback arguments and return `Result<T>` from an async block:
+
+```rust
+context.register_tool_request_intercept("policy", 10, false, |_name, args| {
+    async move {
+        // Await policy I/O here.
+        Ok(args)
+    }
+})?;
+
+context.register_tool_execution_intercept("policy", 10, |_name, args, next| {
+    async move {
+        let result = next.call(args).await?;
+        Ok(ToolExecutionInterceptOutcome::new(result))
+    }
+})?;
+```
+
+Event sanitizers now receive `Arc<Event>`. `ToolNext`, `LlmNext`, and
+`LlmStreamNext` are owned, cloneable values with async `call` methods. Stream
+interceptors return a future containing `LlmJsonAsyncStream`. LLM sanitizer
+codec facades remain available before and after an await for the lifetime of
+the middleware completion.
+
+The SDK owns one multi-thread Tokio runtime for each configured plugin component,
+starts it lazily, and uses two workers by default. Override
+`NativePlugin::executor_config` to select a different nonzero worker count.
+Use async I/O or `spawn_blocking`; do not block executor workers. Root
+middleware futures preserve Relay scope context across awaits and worker-thread
+migration. Child tasks created with `tokio::spawn` do not inherit that context
+automatically.
+
+Set new typed async native plugin manifests to:
+
+```toml
+[compat]
+relay = ">=0.8.0,<1.0"
+native_api = "1"
+```
+
+Relay 0.8 prefers native ABI v4 and falls back to frozen v3 and v2 tables for
+old binaries. ABI v4 adds completion-scoped codec operations and pull-based
+downstream LLM streams; it does not change the manifest `native_api` value.
 
 ### Move Project Configuration to a Supported Location
 

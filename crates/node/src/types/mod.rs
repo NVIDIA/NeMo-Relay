@@ -599,3 +599,62 @@ impl AnthropicMessagesCodec {
         serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
     }
 }
+
+/// Built-in codec for the OCI Generative AI chat API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decodeResponse). Construct with `new OCIGenAIChatCodec()`.
+#[napi(js_name = "OCIGenAIChatCodec")]
+pub struct OCIGenAIChatCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+}
+
+#[napi]
+impl OCIGenAIChatCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nemo_relay::codec::oci_genai::OCIGenAIChatCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nemo_relay::codec::oci_genai::OCIGenAIChatCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+        let orig: CoreLlmRequest = serde_json::from_value(original)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}

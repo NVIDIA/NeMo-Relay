@@ -18,7 +18,9 @@ use nemo_relay::api::optimization::LlmOptimizationRecorder;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{LlmJsonStream, LlmStreamInner, NemoRelayContextState};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::codec::openai_responses::{OpenAIResponsesCodec, OpenAIResponsesStreamingCodec};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
+use nemo_relay::codec::streaming::StreamingCodec;
 use nemo_relay::error::FlowError;
 use nemo_relay::error::Result;
 use nemo_relay::json::Json;
@@ -472,6 +474,72 @@ async fn test_stream_wrapper_drop_emits_end_event_for_partial_stream() {
 }
 
 #[tokio::test]
+async fn dropped_stream_after_terminal_response_emits_success() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "stream_terminal_drop_status_test",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let terminal_event = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_complete",
+            "model": "gpt-5",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "done"}]
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}
+        }
+    });
+    let streaming_codec = OpenAIResponsesStreamingCodec::new();
+    let collector = streaming_codec.collector();
+    let finalizer = streaming_codec.finalizer();
+    let request = LlmRequest {
+        headers: serde_json::Map::new(),
+        content: json!({"input": "finish"}),
+    };
+    let handle = llm_call(
+        LlmCallParams::builder()
+            .name("openai.responses")
+            .request(&request)
+            .attributes(LlmAttributes::STREAMING)
+            .build(),
+    )
+    .unwrap();
+    let mut wrapper = LlmStreamWrapper::new(
+        make_stream(vec![Ok(terminal_event.clone())]),
+        handle,
+        collector,
+        finalizer,
+        None,
+        None,
+        Some(Arc::new(OpenAIResponsesCodec)),
+    );
+
+    assert_eq!(wrapper.next().await.unwrap().unwrap(), terminal_event);
+    drop(wrapper);
+
+    let events = captured_snapshot(&events);
+    let end_event = events
+        .iter()
+        .find(|event| is_llm_end(event))
+        .expect("expected END event after the terminal response was dropped");
+    let metadata = end_event.metadata().unwrap();
+    assert_eq!(metadata["otel.status_code"], json!("OK"));
+    assert!(metadata.get("otel.status_description").is_none());
+
+    deregister_subscriber("stream_terminal_drop_status_test").unwrap();
+}
+
+#[tokio::test]
 async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
@@ -498,6 +566,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     while let Some(item) = clean.next().await {
         item.unwrap();
     }
+    flush_subscribers().unwrap();
     assert!(!clean_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (before_error_handle, before_error_recorder) =
@@ -513,6 +582,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
         None,
     );
     assert!(error_before.next().await.unwrap().is_err());
+    flush_subscribers().unwrap();
     assert!(!before_error_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (after_error_handle, after_error_recorder) =
@@ -532,6 +602,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     );
     assert!(error_after.next().await.unwrap().is_ok());
     assert!(error_after.next().await.unwrap().is_err());
+    flush_subscribers().unwrap();
     assert!(!after_error_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (drop_before_handle, drop_before_recorder) =
@@ -547,6 +618,7 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
         None,
     );
     drop(drop_before);
+    flush_subscribers().unwrap();
     assert!(!drop_before_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
     let (drop_after_handle, drop_after_recorder) =
@@ -567,8 +639,10 @@ async fn stream_termination_modes_close_accounting_without_losing_evidence() {
     );
     assert!(drop_after.next().await.unwrap().is_ok());
     drop(drop_after);
+    flush_subscribers().unwrap();
     assert!(!drop_after_recorder.record(LlmOptimizationContribution::new("late", "test")));
 
+    flush_subscribers().unwrap();
     let events = captured_snapshot(&events);
     let summary_for = |name: &str| {
         events

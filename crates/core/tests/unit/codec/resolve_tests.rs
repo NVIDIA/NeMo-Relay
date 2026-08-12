@@ -25,6 +25,7 @@ fn builtin_provider_surface_registry_keeps_request_priority() {
         vec![
             ProviderSurface::OpenAIResponses,
             ProviderSurface::AnthropicMessages,
+            ProviderSurface::OCIGenAI,
             ProviderSurface::OpenAIChat,
             ProviderSurface::GeminiGenerateContent,
         ]
@@ -447,10 +448,11 @@ fn hint_does_not_classify_non_object_or_keyless() {
 // Provider-codec factory (name<->surface mapping + codec construction)
 // ---------------------------------------------------------------------------
 
-const ALL_SURFACES: [ProviderSurface; 4] = [
+const ALL_SURFACES: [ProviderSurface; 5] = [
     ProviderSurface::OpenAIChat,
     ProviderSurface::OpenAIResponses,
     ProviderSurface::AnthropicMessages,
+    ProviderSurface::OCIGenAI,
     ProviderSurface::GeminiGenerateContent,
 ];
 
@@ -476,6 +478,7 @@ fn codec_name_uses_canonical_spellings() {
         ProviderSurface::AnthropicMessages.codec_name(),
         "anthropic_messages"
     );
+    assert_eq!(ProviderSurface::OCIGenAI.codec_name(), "oci_genai");
     assert_eq!(
         ProviderSurface::GeminiGenerateContent.codec_name(),
         "gemini_generate_content"
@@ -510,6 +513,7 @@ fn supported_codec_names_track_the_builtin_registry() {
         vec![
             "openai_responses",
             "anthropic_messages",
+            "oci_genai",
             "openai_chat",
             "gemini_generate_content"
         ]

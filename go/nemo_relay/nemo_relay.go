@@ -234,6 +234,8 @@ extern void nemo_relay_string_free(char* ptr);
 extern int32_t nemo_relay_scope_stack_create(FfiScopeStack** out);
 extern int32_t nemo_relay_capture_propagation_context_json(char** out);
 extern int32_t nemo_relay_capture_propagation_context_with_root_json(const char* root_uuid, char** out);
+extern int32_t nemo_relay_capture_traceparent(char** out);
+extern int32_t nemo_relay_propagation_context_to_traceparent(const char* context_json, char** out);
 extern int32_t nemo_relay_scope_stack_create_from_propagation_json(const char* context_json, FfiScopeStack** out);
 extern int32_t nemo_relay_scope_stack_set_thread(const FfiScopeStack* stack);
 extern int32_t nemo_relay_scope_stack_capture_thread(FfiThreadScopeStackBinding** out);
@@ -1611,6 +1613,22 @@ func (context PropagationContext) ToJSON() (string, error) {
 	return string(payload), nil
 }
 
+// ToTraceparent converts a rooted propagation context to a W3C traceparent value.
+func (context PropagationContext) ToTraceparent() (string, error) {
+	payload, err := context.ToJSON()
+	if err != nil {
+		return "", err
+	}
+	cPayload := C.CString(payload)
+	defer C.free(unsafe.Pointer(cPayload))
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_propagation_context_to_traceparent(cPayload, &out)); err != nil {
+		return "", err
+	}
+	defer C.nemo_relay_string_free(out)
+	return C.GoString(out), nil
+}
+
 // PropagationContextFromJSON deserializes and validates a transport context.
 func PropagationContextFromJSON(value string) (PropagationContext, error) {
 	var context PropagationContext
@@ -1656,6 +1674,16 @@ func CapturePropagationContextWithRoot(rootUUID *string) (PropagationContext, er
 	}
 	defer C.nemo_relay_string_free(out)
 	return PropagationContextFromJSON(C.GoString(out))
+}
+
+// CaptureTraceparent captures the current Relay context as a W3C traceparent value.
+func CaptureTraceparent() (string, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_capture_traceparent(&out)); err != nil {
+		return "", err
+	}
+	defer C.nemo_relay_string_free(out)
+	return C.GoString(out), nil
 }
 
 // NewScopeStack creates a new isolated scope stack.

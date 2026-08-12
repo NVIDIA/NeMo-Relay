@@ -280,6 +280,7 @@ fn free_null_ffi_handles() {
         nemo_relay_atif_exporter_free(std::ptr::null_mut());
         nemo_relay_otel_subscriber_free(std::ptr::null_mut());
         nemo_relay_adaptive_runtime_free(std::ptr::null_mut());
+        nemo_relay_plugin_activation_free(std::ptr::null_mut());
     }
 }
 

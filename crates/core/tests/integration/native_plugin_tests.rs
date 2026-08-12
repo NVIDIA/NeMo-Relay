@@ -228,6 +228,8 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     cleanup.mark_subscriber_registered("native_plugin_fixture_events");
 
     let stack = create_scope_stack();
+    let tool_callback_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let captured_tool_callback_calls = Arc::clone(&tool_callback_calls);
     let (outer_uuid, rewritten, tool_result) = TASK_SCOPE_STACK
         .scope(stack, async {
             let outer = push_scope(
@@ -244,9 +246,13 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             let tool_result = tool_call_execute(
                 ToolCallExecuteParams::builder()
                     .name("native-fixture-tool")
-                    .args(json!({ "input": "execute" }))
-                    .func(Arc::new(|args| {
-                        Box::pin(async move { Ok(json!({ "tool_callback": true, "args": args })) })
+                    .args(json!({ "input": "execute", "use_concurrent_next": true }))
+                    .func(Arc::new(move |args| {
+                        let calls = Arc::clone(&captured_tool_callback_calls);
+                        Box::pin(async move {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Ok(json!({ "tool_callback": true, "args": args }))
+                        })
                     }))
                     .build(),
             )
@@ -261,6 +267,10 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
     assert_eq!(rewritten["native_plugin"], true);
     assert_eq!(tool_result["tool_callback"], true);
     assert_eq!(tool_result["native_plugin_tool_execution"], true);
+    assert_eq!(
+        tool_callback_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
     assert_eq!(
         tool_result["args"]["native_plugin_tool_execution_request"],
         true
@@ -1055,7 +1065,7 @@ async fn native_request_intercept_rejects_manifest_that_admits_relay_0_5() {
         .expect_err("the request-intercept registration should reject Relay 0.5 compatibility")
         .to_string();
     assert!(
-        error.contains("llm request intercept failed: InvalidArg"),
+        error.contains("LLM request intercept failed: InvalidArg"),
         "{error}"
     );
 
