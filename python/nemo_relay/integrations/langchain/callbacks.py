@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
+import threading
 import typing
 
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -19,6 +21,54 @@ if typing.TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 
+class _CompletedScope(typing.NamedTuple):
+    """A run that has ended, waiting for its scope to reach the top of the stack.
+
+    A scope stack closes strictly LIFO, but concurrent sibling runs finish in the order
+    the graph chooses, so a run can end while scopes opened after it are still open.
+    Recording the completion and closing it once it reaches the top preserves the stack's
+    ordering without ever attempting a close the stack would reject.
+
+    A completion is only ever closed when its scope is the top of the active stack, so
+    ownership needs no separate check: a scope sits on exactly one stack, and its handle
+    uuid can only be the current top on that stack. Comparing ``ScopeStack`` objects
+    would not work anyway -- propagating a stack to a worker thread yields a different
+    Python wrapper for the same stack, with no way to correlate the two.
+
+    ``output`` is already serialized: callers own the mapping they hand to the callback
+    and may mutate it afterwards, so it is snapshotted when the callback fires, for the
+    same reason ``ended_at`` is.
+
+    Entries are removed as their scopes reach the top, so the set is bounded by the runs
+    a handler has open at once. The exception is a scope closed by something other than
+    this handler: it can never return to the top, so its entry is retained for the life
+    of the handler, holding the serialized output.
+    """
+
+    handle: nemo_relay.ScopeHandle
+    output: nemo_relay.Json | None
+    metadata: nemo_relay.Json | None
+    ended_at: datetime.datetime
+
+
+def _current_scope_handle() -> nemo_relay.ScopeHandle | None:
+    """Return the scope on top of the active stack, or ``None`` if there is not one.
+
+    ``get_handle`` creates a stack for the current context when it has none, so it is
+    guarded by a status check: a run completing somewhere without a stack has nothing
+    this handler could close, and should not leave one behind for having asked. The
+    check consults the thread binding as well as the context, so a stack propagated to
+    a worker thread still counts as active.
+    """
+    try:
+        if not nemo_relay.scope_stack_active():
+            return None
+        return nemo_relay.scope.get_handle()
+    except Exception:
+        _logger.debug("NeMo Relay: reading the current scope failed", exc_info=True)
+        return None
+
+
 class NemoRelayCallbackHandler(BaseCallbackHandler):
     """Bridge LangChain chain run IDs to NeMo Relay Agent scopes."""
 
@@ -27,7 +77,14 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
 
     def __init__(self) -> None:
         super().__init__()
-        self._scope_handles: dict[UUID, typing.Any] = {}
+        # Start, completion, top-check and pop are multi-step transitions over the maps
+        # below. A handler can be reused by callbacks delivered on worker threads, so the
+        # transitions are serialized: a top-check is only meaningful if the pop it
+        # authorizes cannot be overtaken by another thread pushing onto the same stack.
+        # Reentrant because completing a run drains, and both take the lock.
+        self._lock = threading.RLock()
+        self._scope_handles: dict[UUID, nemo_relay.ScopeHandle] = {}
+        self._completed: dict[str, _CompletedScope] = {}
 
     def on_chain_start(
         self,
@@ -68,7 +125,8 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
                 input=prepared_inputs,
                 metadata=scope_metadata,
             )
-            self._scope_handles[run_id] = handle
+            with self._lock:
+                self._scope_handles[run_id] = handle
         except Exception:
             _logger.error("NeMo Relay: on_chain_start failed", exc_info=True)
 
@@ -101,12 +159,86 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
     def _pop_scope(
         self, run_id: UUID, *, output: dict[str, typing.Any] | None = None, metadata: nemo_relay.Json | None = None
     ) -> None:
-        handle = self._scope_handles.pop(run_id, None)
-        if handle is None:
-            return
+        # Serialized before the run mappings are touched. Serialization walks
+        # caller-supplied data and can fail on its own -- a cyclic output raises
+        # ``RecursionError`` -- and a run dropped from the maps with no completion
+        # recorded is a scope nothing can ever close.
+        prepared_output = _prepare_output(output)
 
-        try:
-            prepared_outputs = _prepare_lc_payloads(output) if output is not None else None
-            nemo_relay.scope.pop(handle, output=prepared_outputs, metadata=metadata)
-        except Exception:
-            _logger.error("NeMo Relay: scope.pop failed", exc_info=True)
+        with self._lock:
+            handle = self._scope_handles.pop(run_id, None)
+            if handle is None:
+                return
+
+            self._completed[handle.uuid] = _CompletedScope(
+                handle=handle,
+                output=prepared_output,
+                metadata=metadata,
+                ended_at=datetime.datetime.now(datetime.timezone.utc),
+            )
+            self._close_completed_scopes_locked()
+
+    def _close_completed_scopes(self) -> None:
+        """Close finished scopes from the top of the active stack down."""
+        with self._lock:
+            self._close_completed_scopes_locked()
+
+    def _close_completed_scopes_locked(self) -> None:
+        """Close finished scopes from the top of ``stack`` down.
+
+        Only the scope currently on top is ever closed, so the stack is never asked to
+        accept a close it would reject. Draining stops as soon as the top is a run that
+        is still going, or a scope this handler does not own; anything completed
+        underneath it waits, which is what keeps the ordering intact.
+
+        This is also what confines a shared handler to one stack at a time: a completion
+        belonging to another stack cannot be the top here, so it is left alone.
+
+        The caller must hold ``self._lock``: a top-check is only meaningful if the pop it
+        authorizes cannot be overtaken by another thread pushing onto the same stack.
+        """
+        while self._completed:
+            top = _current_scope_handle()
+            if top is None:
+                return
+            completed = self._completed.get(top.uuid)
+            if completed is None:
+                return
+            if top.name != completed.handle.name:
+                # Same uuid, different scope. ``create_scope_stack_from_propagation``
+                # rebuilds a parent from a captured context, so our uuid can appear on
+                # another stack as a stand-in. Closing it would discard the completion
+                # and strand the real scope. Handles cannot be told apart by identity --
+                # reading the current one returns a fresh wrapper even on its own stack.
+                return
+            try:
+                nemo_relay.scope.pop(
+                    completed.handle,
+                    output=completed.output,
+                    metadata=completed.metadata,
+                    timestamp=completed.ended_at,
+                )
+            except Exception:
+                # The runtime can refuse before it mutates the stack, so the scope
+                # may still be live and closable later. Keep the completion -- it is
+                # the only record able to close it -- and stop rather than spin.
+                _logger.error("NeMo Relay: scope.pop failed", exc_info=True)
+                return
+            # Only once the stack has actually accepted the close.
+            del self._completed[top.uuid]
+
+
+def _prepare_output(output: dict[str, typing.Any] | None) -> nemo_relay.Json | None:
+    """Serialize a callback output, degrading to ``None`` if it cannot be serialized.
+
+    Losing an output payload costs one scope's telemetry detail. Letting the failure
+    escape would cost the scope itself, since the run has ended and nothing else will
+    close it.
+    """
+    if output is None:
+        return None
+    try:
+        return _prepare_lc_payloads(output)
+    except Exception:
+        _logger.error("NeMo Relay: preparing scope output failed", exc_info=True)
+        return None
