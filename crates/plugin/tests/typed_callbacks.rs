@@ -3355,7 +3355,17 @@ fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
         json!({ "prompt": "hello" })
     );
     unsafe { registration.free() };
-    assert_eq!(live_host_strings(), 0);
+    // The context's retained codec capability is released on the SDK executor
+    // after the result completion is delivered, so poll instead of asserting
+    // immediately.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while live_host_strings() != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "host strings were not released after the sanitize invocation"
+        );
+        std::thread::yield_now();
+    }
 }
 
 #[test]
