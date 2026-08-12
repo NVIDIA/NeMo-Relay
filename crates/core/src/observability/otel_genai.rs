@@ -303,10 +303,10 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
         attributes.push(KeyValue::new(GEN_AI_OUTPUT_MESSAGES, messages));
     }
     if let Some(usage) = response.usage.as_ref() {
-        // `prompt_tokens` is the canonical input count. Cache counts remain
-        // separate diagnostic attributes; adding them here would double-count
-        // providers such as OpenAI that include cache reads in prompt tokens.
-        if let Some(input_tokens) = usage.prompt_tokens.and_then(to_i64) {
+        // Anthropic reports uncached, cache-read, and cache-creation input
+        // tokens separately. Other providers such as OpenAI include cache
+        // reads in their prompt count, so only combine known Anthropic usage.
+        if let Some(input_tokens) = gen_ai_input_tokens(event, response) {
             attributes.push(KeyValue::new(
                 semconv::GEN_AI_USAGE_INPUT_TOKENS,
                 input_tokens,
@@ -325,6 +325,12 @@ fn push_llm_response_attributes(attributes: &mut Vec<KeyValue>, event: &Event) {
             ));
         }
     }
+}
+
+fn gen_ai_input_tokens(event: &Event, response: &AnnotatedLlmResponse) -> Option<i64> {
+    let usage = response.usage.as_ref()?;
+    let provider = provider_name(event);
+    super::input_tokens_including_cache(provider.as_deref(), Some(response), usage).and_then(to_i64)
 }
 
 fn input_messages_json(messages: &[Message]) -> Option<String> {

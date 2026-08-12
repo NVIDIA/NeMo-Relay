@@ -3733,7 +3733,7 @@ async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
     assert_eq!(steps[0]["message"], json!("Find the file."));
     assert_eq!(steps[1]["message"], json!("I will search."));
     assert_eq!(steps[1]["tool_calls"][0]["tool_call_id"], json!("toolu_01"));
-    assert_eq!(steps[1]["metrics"]["prompt_tokens"], json!(11));
+    assert_eq!(steps[1]["metrics"]["prompt_tokens"], json!(14));
     assert_eq!(steps[1]["metrics"]["cached_tokens"], json!(3));
     assert_eq!(steps[1]["metrics"]["cost_usd"], json!(0.0042));
 
@@ -3757,7 +3757,7 @@ async fn hermes_routed_provider_payloads_write_exact_atif_trajectory() {
     assert_eq!(steps[5]["metrics"]["cached_tokens"], json!(2));
     assert_eq!(steps[5]["metrics"]["cost_usd"], json!(0.001));
 
-    assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(89));
+    assert_eq!(atif["final_metrics"]["total_prompt_tokens"], json!(92));
     assert_eq!(atif["final_metrics"]["total_completion_tokens"], json!(31));
     assert_eq!(atif["final_metrics"]["total_cached_tokens"], json!(15));
     assert_eq!(atif["final_metrics"]["total_cost_usd"], json!(0.0102));
@@ -3825,11 +3825,15 @@ async fn hermes_routed_provider_payloads_emit_openinference_text_usage_and_cost(
     );
     assert_eq!(
         anthropic.get("llm.token_count.prompt"),
-        Some(&"11".to_string())
+        Some(&"14".to_string())
     );
     assert_eq!(
         anthropic.get("llm.token_count.completion"),
         Some(&"7".to_string())
+    );
+    assert_eq!(
+        anthropic.get("llm.token_count.total"),
+        Some(&"21".to_string())
     );
     assert_eq!(
         anthropic.get("llm.token_count.prompt_details.cache_read"),

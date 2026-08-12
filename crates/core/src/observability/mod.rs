@@ -4,6 +4,7 @@
 //! Optional observability integrations for NeMo Relay Core.
 
 use crate::api::event::EventNormalizationExt;
+use crate::codec::response::{AnnotatedLlmResponse, ApiSpecificResponse, Usage};
 use serde::{Deserialize, Serialize};
 
 /// Copies a projected OTLP attribute to a second attribute name.
@@ -44,6 +45,59 @@ pub(crate) mod openinference;
 pub mod otel;
 mod otel_genai;
 pub mod plugin_component;
+
+/// Return the provider-independent input total used by semantic observability
+/// projections. Anthropic reports uncached, cache-read, and cache-creation
+/// input tokens separately, while providers such as OpenAI include cache reads
+/// in their prompt count.
+pub(crate) fn input_tokens_including_cache(
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+    usage: &Usage,
+) -> Option<u64> {
+    let prompt_tokens = usage.prompt_tokens?;
+    if !uses_separate_anthropic_cache_tokens(provider, response) {
+        return Some(prompt_tokens);
+    }
+    [usage.cache_read_tokens, usage.cache_write_tokens]
+        .into_iter()
+        .flatten()
+        .try_fold(prompt_tokens, u64::checked_add)
+}
+
+/// Return the provider-independent prompt-plus-completion total used by
+/// semantic observability projections.
+pub(crate) fn total_tokens_including_cache(
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+    usage: &Usage,
+) -> Option<u64> {
+    if !uses_separate_anthropic_cache_tokens(provider, response) {
+        return usage.total_tokens;
+    }
+    match (
+        input_tokens_including_cache(provider, response, usage),
+        usage.completion_tokens,
+    ) {
+        (Some(input), Some(output)) => input.checked_add(output),
+        _ => usage.total_tokens,
+    }
+}
+
+fn uses_separate_anthropic_cache_tokens(
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+) -> bool {
+    response.is_some_and(|response| {
+        matches!(
+            response.api_specific.as_ref(),
+            Some(ApiSpecificResponse::AnthropicMessages { .. })
+        )
+    }) || provider.is_some_and(|provider| {
+        let provider = provider.to_ascii_lowercase();
+        provider.starts_with("anthropic") || provider.starts_with("claude")
+    })
+}
 
 /// Export representation for point-in-time mark events.
 ///

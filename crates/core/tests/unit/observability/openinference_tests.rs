@@ -4438,11 +4438,15 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
     );
     assert_eq!(
         attributes.get("llm.token_count.prompt"),
-        Some(&"11".to_string())
+        Some(&"19".to_string())
     );
     assert_eq!(
         attributes.get("llm.token_count.completion"),
         Some(&"7".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.total"),
+        Some(&"26".to_string())
     );
     assert_eq!(
         attributes.get("llm.token_count.prompt_details.cache_read"),

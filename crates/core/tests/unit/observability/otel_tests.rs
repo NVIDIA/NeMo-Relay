@@ -1600,6 +1600,44 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
 }
 
 #[test]
+fn gen_ai_projection_includes_anthropic_cache_tokens_in_input_total() {
+    let event = make_end_event(
+        Uuid::now_v7(),
+        None,
+        "anthropic.messages",
+        ScopeType::Llm,
+        Some(json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 17_980,
+                "cache_creation_input_tokens": 9_421
+            }
+        })),
+    );
+
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("gen_ai.usage.input_tokens"),
+        Some(&"27403".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_read.input_tokens"),
+        Some(&"17980".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        Some(&"9421".to_string())
+    );
+}
+
+#[test]
 fn gen_ai_end_projection_preserves_explicit_error_type() {
     let event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()

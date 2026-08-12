@@ -1946,7 +1946,7 @@ fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
     assert_eq!(agent_step.message, json!("I will search for it."));
     assert_eq!(agent_step.model_name, Some("claude-sonnet-4".to_string()));
     let metrics = agent_step.metrics.as_ref().unwrap();
-    assert_eq!(metrics.prompt_tokens, Some(11));
+    assert_eq!(metrics.prompt_tokens, Some(19));
     assert_eq!(metrics.completion_tokens, Some(7));
     assert_eq!(metrics.cached_tokens, Some(8));
     let tool_call = &agent_step.tool_calls.as_ref().unwrap()[0];

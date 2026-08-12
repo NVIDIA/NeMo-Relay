@@ -6,9 +6,10 @@
 //! Projection functions used by the unified OpenTelemetry subscriber.
 
 use super::{
-    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
-    merge_usage, model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_top_level_json_attributes,
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model,
+    input_tokens_including_cache, manual, merge_usage, model_name_for_llm_event,
+    push_serialized_top_level_attributes, push_top_level_json_attributes,
+    total_tokens_including_cache,
 };
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::scope::ScopeType;
@@ -150,7 +151,12 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
         fallback_usage.as_ref(),
     );
     if is_llm {
-        push_llm_usage_attributes(&mut attributes, usage.as_ref());
+        push_llm_usage_attributes(
+            &mut attributes,
+            Some(event.name()),
+            normalized.as_deref(),
+            usage.as_ref(),
+        );
     }
     if is_llm
         && let Some(cost_total) =
@@ -164,17 +170,22 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
     attributes
 }
 
-fn push_llm_usage_attributes(attributes: &mut Vec<KeyValue>, usage: Option<&Usage>) {
+fn push_llm_usage_attributes(
+    attributes: &mut Vec<KeyValue>,
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+    usage: Option<&Usage>,
+) {
     let Some(usage) = usage else {
         return;
     };
-    if let Some(v) = usage.prompt_tokens {
+    if let Some(v) = input_tokens_including_cache(provider, response, usage) {
         attributes.push(KeyValue::new("llm.token_count.prompt", v as i64));
     }
     if let Some(v) = usage.completion_tokens {
         attributes.push(KeyValue::new("llm.token_count.completion", v as i64));
     }
-    if let Some(v) = usage.total_tokens {
+    if let Some(v) = total_tokens_including_cache(provider, response, usage) {
         attributes.push(KeyValue::new("llm.token_count.total", v as i64));
     }
     if let Some(v) = usage.cache_read_tokens {
