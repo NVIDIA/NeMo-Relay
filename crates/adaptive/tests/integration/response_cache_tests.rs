@@ -2285,6 +2285,8 @@ async fn tool_hit_emits_a_surface_tool_mark_with_saved_invocations() {
         !miss_mark
             .metadata()
             .expect("miss mark has metadata")
+            .as_object()
+            .expect("miss mark metadata is an object")
             .contains_key("nemo_relay.response_cache.saved_invocations"),
         "a tool miss must not report saved invocations"
     );
