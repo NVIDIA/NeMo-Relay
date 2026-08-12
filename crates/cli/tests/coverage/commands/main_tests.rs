@@ -337,6 +337,17 @@ fn doctor_rejects_conflicting_agent_and_plugin_targets() {
 }
 
 #[test]
+fn doctor_rejects_install_dir_without_plugin_target() {
+    let error =
+        Cli::try_parse_from(["nemo-relay", "doctor", "--install-dir", "/tmp/plugins"]).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert!(error.to_string().contains("--plugin"));
+}
+
+#[test]
 fn doctor_accepts_offline_flag() {
     let cli = Cli::try_parse_from(["nemo-relay", "doctor", "--offline"]).unwrap();
     match cli.command {
