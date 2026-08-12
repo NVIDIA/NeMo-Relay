@@ -12,6 +12,8 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 #[cfg(feature = "redis-backend")]
 use std::thread;
+#[cfg(feature = "redis-backend")]
+use std::time::Duration;
 
 fn entry(key: &str, created: u64, expires: u64) -> CacheEntry {
     CacheEntry {
@@ -73,6 +75,9 @@ fn start_redis_test_server(response: Vec<u8>) -> (String, thread::JoinHandle<Vec
     );
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept Redis client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set Redis test peer read timeout");
         // redis-rs identifies itself with two `CLIENT SETINFO` commands before
         // it allows normal commands on a new connection.
         for _ in 0..2 {

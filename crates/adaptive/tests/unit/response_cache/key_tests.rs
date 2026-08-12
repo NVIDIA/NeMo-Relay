@@ -1125,7 +1125,7 @@ fn tool_keys_are_disjoint_from_llm_keys() {
         &request(json!({"model": "t", "messages": []})),
         &cache_all_config(),
     );
-    let tool = tool_key("", "t", None, json!({"messages": []}), &[]);
+    let tool = tool_key("openai", "t", None, json!({"messages": []}), &[]);
     assert_ne!(llm, tool);
 }
 

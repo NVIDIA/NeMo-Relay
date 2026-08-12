@@ -2270,6 +2270,24 @@ async fn tool_hit_emits_a_surface_tool_mark_with_saved_invocations() {
         Some(1),
         "a tool hit reports one saved invocation"
     );
+    let miss_mark = events
+        .iter()
+        .find(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("miss")
+        })
+        .expect("a response_cache tool miss mark should be emitted");
+    assert!(
+        !miss_mark
+            .metadata()
+            .expect("miss mark has metadata")
+            .contains_key("nemo_relay.response_cache.saved_invocations"),
+        "a tool miss must not report saved invocations"
+    );
 
     drop(events);
     deregister_subscriber("response_cache_tool_capture").unwrap();

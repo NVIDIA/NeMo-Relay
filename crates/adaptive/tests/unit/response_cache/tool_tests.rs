@@ -214,7 +214,7 @@ async fn stale_error_entries_are_not_replayed_when_error_caching_is_disabled() {
 }
 
 #[tokio::test]
-async fn disabling_error_caching_does_not_replay_an_opt_in_error_entry() {
+async fn cache_error_policy_partitions_tool_keys() {
     let store = Arc::new(InMemoryCacheStore::new(1 << 20));
     let response_cache = cache_config();
     let opt_in_tools = Arc::new(ToolCacheConfig {
