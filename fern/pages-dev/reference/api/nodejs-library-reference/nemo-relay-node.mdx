@@ -458,6 +458,24 @@ export declare class AnthropicMessagesCodec {
 }
 ```
 
+### `OCIGenAIChatCodec`
+
+Built-in codec for the OCI Generative AI chat API.
+
+Implements both request codec (decode/encode) and response codec (decodeResponse). Construct with `new OCIGenAIChatCodec()`.
+
+```ts
+export declare class OCIGenAIChatCodec {
+  constructor()
+  /** Decode an opaque LLM request into structured form. */
+  decode(request: Json): Json
+  /** Encode structured changes back into an opaque LLM request. */
+  encode(annotated: Json, original: Json): Json
+  /** Decode a raw LLM response into structured form. */
+  decodeResponse(response: Json): Json
+}
+```
+
 ## Enums
 
 ### `ScopeType`

@@ -165,6 +165,44 @@ def decode_response(response: Json) -> AnnotatedLLMResponse
 
 Decode an Anthropic Messages response.
 
+### `OCIGenAIChatCodec`
+
+Built-in codec for OCI Generative AI chat requests and responses.
+
+#### Methods
+
+##### `OCIGenAIChatCodec`
+
+```python
+def OCIGenAIChatCodec() -> None
+```
+
+Create an instance.
+
+##### `decode`
+
+```python
+def decode(request: LLMRequest) -> AnnotatedLLMRequest
+```
+
+Decode an OCI Generative AI chat request.
+
+##### `encode`
+
+```python
+def encode(annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest
+```
+
+Encode a normalized request back into OCI chat format.
+
+##### `decode_response`
+
+```python
+def decode_response(response: Json) -> AnnotatedLLMResponse
+```
+
+Decode an OCI Generative AI chat response.
+
 ### `GeminiGenerateContentCodec`
 
 Built-in codec for Gemini generateContent requests and responses.

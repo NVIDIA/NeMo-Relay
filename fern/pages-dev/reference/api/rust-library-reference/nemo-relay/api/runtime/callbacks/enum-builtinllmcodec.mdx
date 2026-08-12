@@ -14,6 +14,7 @@ pub enum BuiltinLlmCodec {
     OpenAiChat,
     OpenAiResponses,
     AnthropicMessages,
+    OCIGenAI,
     GeminiGenerateContent,
 }
 ```
@@ -39,6 +40,12 @@ OpenAI Responses request and response payloads.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "AnthropicMessages"}} /></pre>
 
 Anthropic Messages request and response payloads.
+
+### `OCIGenAI`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "OCIGenAI"}} /></pre>
+
+OCI Generative AI chat request and response payloads.
 
 ### `GeminiGenerateContent`
 
