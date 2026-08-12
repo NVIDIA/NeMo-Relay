@@ -11,14 +11,30 @@ use nemo_relay::observability::plugin_component::{
     AtofSectionConfig, OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig,
 };
 use nemo_relay::plugin::{ConfigPolicy, PluginComponentSpec, PluginConfig};
-use nemo_relay::plugins::nemo_guardrails::component::{
-    LocalBackendConfig, NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig, RemoteBackendConfig,
-};
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
 use serde_json::Map;
 use std::path::PathBuf;
+
+#[allow(
+    deprecated,
+    reason = "compatibility tests cover the built-in Guardrails editor until its scheduled removal"
+)]
+mod guardrails_compat {
+    pub(super) type Config = nemo_relay::plugins::nemo_guardrails::component::NeMoGuardrailsConfig;
+    pub(super) type LocalConfig =
+        nemo_relay::plugins::nemo_guardrails::component::LocalBackendConfig;
+    pub(super) type RemoteConfig =
+        nemo_relay::plugins::nemo_guardrails::component::RemoteBackendConfig;
+    pub(super) const PLUGIN_KIND: &str =
+        nemo_relay::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND;
+}
+
+use guardrails_compat::{
+    Config as NeMoGuardrailsConfig, LocalConfig as LocalBackendConfig,
+    PLUGIN_KIND as NEMO_GUARDRAILS_PLUGIN_KIND, RemoteConfig as RemoteBackendConfig,
+};
 
 fn write_editor_dynamic_manifest(
     dir: &Path,
@@ -470,7 +486,7 @@ fn plugin_menu_builds_ordered_component_actions() {
     assert!(
         plain_labels
             .iter()
-            .any(|label| { label.starts_with("NeMo Guardrails [off] —") })
+            .any(|label| { label.starts_with("NeMo Guardrails (Deprecated) [off] —") })
     );
     assert_eq!(
         plain_labels[components.len()],
@@ -979,6 +995,10 @@ fn editor_model_adds_disabled_adaptive_component() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "this compatibility test inspects the built-in Guardrails config until its removal"
+)]
 fn editor_model_reads_missing_nemo_guardrails_component_as_disabled_default() {
     let config = PluginConfig::default();
 
@@ -2718,6 +2738,10 @@ fn validate_config_rejects_local_nemo_guardrails_colang_without_yaml() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "this compatibility test serializes the built-in Guardrails config until its removal"
+)]
 fn nemo_guardrails_config_map_prunes_default_version() {
     let map = nemo_guardrails_config_map(&NeMoGuardrailsConfig {
         codec: Some("openai_chat".into()),
@@ -2773,6 +2797,10 @@ fn write_plugin_config_round_trips_local_nemo_guardrails_component() {
 }
 
 #[test]
+#[allow(
+    deprecated,
+    reason = "this compatibility test serializes the built-in Guardrails config until its removal"
+)]
 fn nemo_guardrails_config_map_serializes_local_mode_fields() {
     let map = nemo_guardrails_config_map(&NeMoGuardrailsConfig {
         mode: "local".into(),

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Unit tests for the planned NeMo Guardrails plugin component contract.
+//! Unit tests for the built-in NeMo Guardrails plugin component contract.
 #![allow(clippy::await_holding_lock)]
 
 use super::*;
@@ -347,6 +347,20 @@ fn schema_property<'a>(schema: &'a Json, name: &str) -> Option<&'a Json> {
 #[test]
 fn schema_contains_every_supported_nemo_guardrails_option() {
     let schema = nemo_guardrails_config_schema();
+    assert_eq!(schema.get("deprecated"), Some(&json!(true)));
+    for definition in [
+        "LocalBackendConfig",
+        "RemoteBackendConfig",
+        "RequestDefaultsConfig",
+        "RequestRailsConfig",
+        "RailSelector",
+    ] {
+        assert_eq!(
+            schema.pointer(&format!("/definitions/{definition}/deprecated")),
+            Some(&json!(true)),
+            "schema definition `{definition}` is not marked deprecated"
+        );
+    }
     for field in [
         "version",
         "mode",
@@ -445,6 +459,38 @@ fn builtin_registration_is_automatic() {
 }
 
 #[test]
+fn configured_component_reports_deprecation_warning() {
+    let _guard = crate::plugins::nemo_guardrails::test_mutex()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    reset_runtime();
+
+    for component in [
+        component(remote_valid_config()),
+        disabled_component(remote_valid_config()),
+    ] {
+        let report = validate_plugin_config(&PluginConfig {
+            version: 1,
+            components: vec![component],
+            policy: Default::default(),
+        });
+
+        assert!(!report.has_errors());
+        let diagnostic = report
+            .diagnostics
+            .iter()
+            .find(|diag| diag.code == NEMO_GUARDRAILS_DEPRECATION_CODE)
+            .expect("configured NeMo Guardrails component should report deprecation");
+        assert_eq!(diagnostic.level, DiagnosticLevel::Warning);
+        assert_eq!(
+            diagnostic.component.as_deref(),
+            Some(NEMO_GUARDRAILS_PLUGIN_KIND)
+        );
+        assert!(diagnostic.message.contains(NEMO_GUARDRAILS_REMOVAL_VERSION));
+    }
+}
+
+#[test]
 fn explicit_registration_helpers_are_idempotent_and_reversible() {
     let _guard = crate::plugins::nemo_guardrails::test_mutex()
         .lock()
@@ -471,7 +517,13 @@ fn disabled_component_validates_and_initializes_without_runtime_work() {
         policy: Default::default(),
     };
     assert!(!validate_plugin_config(&config).has_errors());
-    futures::executor::block_on(initialize_plugins(config)).unwrap();
+    let report = futures::executor::block_on(initialize_plugins(config)).unwrap();
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == NEMO_GUARDRAILS_DEPRECATION_CODE)
+    );
 }
 
 #[test]
@@ -1059,7 +1111,11 @@ fn unknown_fields_follow_policy() {
         "bogus": true
     })));
     assert!(!ignored.has_errors());
-    assert!(ignored.diagnostics.is_empty());
+    assert_eq!(ignored.diagnostics.len(), 1);
+    assert_eq!(
+        ignored.diagnostics[0].code,
+        NEMO_GUARDRAILS_DEPRECATION_CODE
+    );
 }
 
 #[test]

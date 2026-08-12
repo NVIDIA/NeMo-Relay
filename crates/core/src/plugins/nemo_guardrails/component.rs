@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! NeMo Guardrails plugin component contract.
+#![allow(
+    deprecated,
+    reason = "the built-in implementation remains supported until its scheduled removal"
+)]
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -27,8 +31,20 @@ use local::register_local_backend;
 #[cfg(feature = "guardrails-remote")]
 use remote::register_remote_backend;
 
-/// The plugin kind reserved for the planned first-party component.
+/// The built-in NeMo Guardrails plugin kind.
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 pub const NEMO_GUARDRAILS_PLUGIN_KIND: &str = "nemo_guardrails";
+
+/// Stable diagnostic code for the built-in plugin's deprecation warning.
+const NEMO_GUARDRAILS_DEPRECATION_CODE: &str = "nemo_guardrails.deprecated";
+
+/// NeMo Relay release in which the built-in plugin is scheduled for removal.
+const NEMO_GUARDRAILS_REMOVAL_VERSION: &str = "0.9";
+
+const NEMO_GUARDRAILS_DEPRECATION_MESSAGE: &str = "the built-in `nemo_guardrails` plugin is deprecated and scheduled for removal in NeMo Relay 0.9";
 
 #[cfg(not(feature = "guardrails-remote"))]
 fn register_remote_backend(
@@ -42,6 +58,10 @@ fn register_remote_backend(
 
 /// Top-level NeMo Guardrails component wrapper.
 #[derive(Debug, Clone)]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 pub struct ComponentSpec {
     /// Whether the component should be activated.
     pub enabled: bool,
@@ -75,8 +95,12 @@ impl From<ComponentSpec> for PluginComponentSpec {
     }
 }
 
-/// Canonical config document for the planned NeMo Guardrails component.
+/// Canonical config document for the deprecated built-in NeMo Guardrails component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NeMoGuardrailsConfig {
     /// NeMo Guardrails config schema version.
@@ -155,6 +179,10 @@ impl Default for NeMoGuardrailsConfig {
 
 /// Remote-backend settings for a hosted NeMo Guardrails service.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RemoteBackendConfig {
     /// Base URL for the remote Guardrails service.
@@ -188,6 +216,10 @@ impl Default for RemoteBackendConfig {
 
 /// Local-backend settings for the Python `nemoguardrails` runtime.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LocalBackendConfig {
     /// Optional import path for the Python runtime module.
@@ -203,6 +235,10 @@ pub struct LocalBackendConfig {
 
 /// Default request semantics applied by the selected Guardrails backend.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RequestDefaultsConfig {
     /// Default context object passed into Guardrails requests.
@@ -236,6 +272,10 @@ pub struct RequestDefaultsConfig {
 /// These are backend request options, not top-level NeMo Relay interception
 /// surfaces.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RequestRailsConfig {
     /// Input rails selection.
@@ -261,6 +301,10 @@ pub struct RequestRailsConfig {
 /// Rail-selection shape used by Guardrails generation options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RailSelector {
     /// Enable or disable the whole rail family.
@@ -405,17 +449,29 @@ impl Plugin for NeMoGuardrailsPlugin {
 }
 
 /// Registers the `nemo_guardrails` component kind in the plugin registry.
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 pub fn register_nemo_guardrails_component() -> PluginResult<()> {
     register_builtin_plugin(Arc::new(NeMoGuardrailsPlugin))
 }
 
 /// Deregisters the `nemo_guardrails` component kind from the plugin registry.
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 pub fn deregister_nemo_guardrails_component() -> bool {
     deregister_plugin(NEMO_GUARDRAILS_PLUGIN_KIND)
 }
 
 /// Returns the JSON Schema for the NeMo Guardrails component configuration.
 #[cfg(feature = "schema")]
+#[deprecated(
+    since = "0.8.0",
+    note = "the built-in NeMo Guardrails plugin is scheduled for removal in 0.9; no replacement is available in 0.8"
+)]
 pub fn nemo_guardrails_config_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(NeMoGuardrailsConfig))
         .expect("NeMo Guardrails config schema should serialize")
@@ -465,6 +521,14 @@ fn register_nemo_guardrails_backend(
     config: NeMoGuardrailsConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    log::warn!(
+        target: "nemo_relay.plugin",
+        event = "nemo_guardrails_deprecated",
+        plugin_kind = NEMO_GUARDRAILS_PLUGIN_KIND,
+        removal_version = NEMO_GUARDRAILS_REMOVAL_VERSION;
+        "The built-in NeMo Guardrails plugin is deprecated and scheduled for removal in NeMo Relay 0.9"
+    );
+
     match config.mode.as_str() {
         "remote" => register_remote_backend(config, ctx),
         "local" => register_local_backend(config, ctx),
@@ -492,23 +556,27 @@ fn validate_nemo_guardrails_plugin_config_with_policy(
     plugin_config: &Map<String, Json>,
     policy: Option<&ConfigPolicy>,
 ) -> Vec<ConfigDiagnostic> {
+    let deprecation = nemo_guardrails_deprecation_diagnostic();
     let mut config = match parse_nemo_guardrails_config(plugin_config) {
         Ok(config) => config,
         Err(err) => {
-            return vec![ConfigDiagnostic {
-                level: DiagnosticLevel::Error,
-                code: "nemo_guardrails.invalid_plugin_config".to_string(),
-                component: Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
-                field: None,
-                message: err.to_string(),
-            }];
+            return vec![
+                deprecation,
+                ConfigDiagnostic {
+                    level: DiagnosticLevel::Error,
+                    code: "nemo_guardrails.invalid_plugin_config".to_string(),
+                    component: Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+                    field: None,
+                    message: err.to_string(),
+                },
+            ];
         }
     };
     if let Some(policy) = policy {
         config.policy = apply_global_config_policy(config.policy, policy);
     }
 
-    let mut diagnostics = vec![];
+    let mut diagnostics = vec![deprecation];
 
     validate_unknown_fields(
         &mut diagnostics,
@@ -597,6 +665,16 @@ fn validate_nemo_guardrails_plugin_config_with_policy(
     validate_request_defaults(&mut diagnostics, &config.policy, &config);
 
     diagnostics
+}
+
+fn nemo_guardrails_deprecation_diagnostic() -> ConfigDiagnostic {
+    ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: NEMO_GUARDRAILS_DEPRECATION_CODE.to_string(),
+        component: Some(NEMO_GUARDRAILS_PLUGIN_KIND.to_string()),
+        field: None,
+        message: NEMO_GUARDRAILS_DEPRECATION_MESSAGE.to_string(),
+    }
 }
 
 fn validate_version(diagnostics: &mut Vec<ConfigDiagnostic>, policy: &ConfigPolicy, version: u32) {
