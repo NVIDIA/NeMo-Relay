@@ -28,7 +28,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Apply size, breaking, type, and language labels
+      - name: Apply size, breaking, type, language, and skills labels
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -39,7 +39,7 @@ jobs:
 
           size_labels=("size:XS" "size:S" "size:M" "size:L" "size:XL" "size:XXL")
           classifier_labels=("build" "chore" "ci" "docs" "feat" "fix" "perf" "refactor" "revert" "style" "test")
-          type_labels=("Automation" "Bug" "Documentation" "Feature" "Improvement" "Maintenance" "Test")
+          type_labels=("Automation" "Bug" "Documentation" "Feature" "Improvement" "Maintenance" "Skills" "Test")
           lang_labels=("lang:go" "lang:js" "lang:python" "lang:rust")
           controlled_labels=("${size_labels[@]}" "${classifier_labels[@]}" "${type_labels[@]}" "${lang_labels[@]}")
 
@@ -113,14 +113,14 @@ jobs:
 
           title_lower="${PR_TITLE,,}"
           type_label=""
-          title_pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?(!)?:'
-          breaking_pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!:'
+          title_pattern='^(build|chore|ci|docs|enhancement|feat|fix|perf|refactor|revert|skills|style|test)(\([^)]+\))?(!)?:'
+          breaking_pattern='^(build|chore|ci|docs|enhancement|feat|fix|perf|refactor|revert|skills|style|test)(\([^)]+\))?!:'
           if [[ "$title_lower" =~ $title_pattern ]]; then
             case "${BASH_REMATCH[1]}" in
               feat)
                 type_label="Feature"
                 ;;
-              perf|refactor)
+              enhancement|perf|refactor)
                 type_label="Improvement"
                 ;;
               fix|revert)
@@ -131,6 +131,9 @@ jobs:
                 ;;
               docs)
                 type_label="Documentation"
+                ;;
+              skills)
+                type_label="Skills"
                 ;;
               build|chore|ci|style)
                 type_label="Maintenance"
