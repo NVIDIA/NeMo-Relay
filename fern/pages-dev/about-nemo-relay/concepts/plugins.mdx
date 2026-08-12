@@ -225,9 +225,10 @@ Detailed observability plugin configuration belongs in
 
 ### NeMo Guardrails
 
-The core crate also ships a built-in `nemo_guardrails` plugin component. It is
-the first-party Guardrails integration point that NeMo Relay owns through the
-shared plugin system.
+The core crate also ships a built-in `nemo_guardrails` plugin component. The
+built-in integration is deprecated and scheduled for removal in NeMo Relay
+0.9. There is no replacement in NeMo Relay 0.8; any replacement will target 0.9
+or later. Do not use the built-in component for new deployments.
 
 The current shipped user-facing paths are:
 
