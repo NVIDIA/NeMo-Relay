@@ -1,6 +1,6 @@
 ---
 title: "Native Dynamic Plugins (Rust)"
-description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v3."
+description: "Build in-process Rust shared-library plugins against the NeMo Relay Native ABI v4."
 position: 10
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -55,10 +55,10 @@ Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"1"`, and
 from the manifest. The exported symbol must return a descriptor whose
 `plugin_kind` matches `plugin.id` exactly.
 
-If the plugin registers an LLM request intercept, set
-`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. Relay
-rejects the registration when the manifest admits a host that predates the
-version 2 request annotation envelope.
+Typed native middleware requires `compat.relay = ">=0.8.0,<1.0"`. Relay rejects
+its registration when the manifest admits a host that predates the SDK-owned
+executor and native ABI v4. Plugins that use only synchronous registrations,
+such as this example, should retain `compat.relay = ">=0.5,<1.0"`.
 
 ## Create a Native Plugin
 
@@ -116,10 +116,10 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
-## Native ABI v3
+## Native ABI v4
 
 The entry symbol receives a `*const NemoRelayNativeHostApiV1` pointer. It
-points at the v1 prefix of a v3 `NemoRelayNativeHostApiV3` table; check
+points at the v1 prefix of a v4 `NemoRelayNativeHostApiV4` table; check
 `abi_version` and `struct_size` before casting. The plugin returns a
 `NemoRelayNativePluginV1` descriptor:
 
@@ -130,10 +130,10 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The v3 host table retains the frozen legacy prefix and appends a
-completion-based asynchronous middleware extension. An entry that rejects the
-v3 table with `InvalidArg` is retried with the legacy table. Rust plugins using the
-typed `NativePlugin` APIs continue to work unchanged. Raw ABI plugins can use
+The v4 host table contains the complete frozen v3 table as its prefix and adds
+completion-scoped codecs plus pull-based downstream LLM streams. Relay
+negotiates v4, then a separately frozen v3 table, then the legacy v2 table.
+Raw ABI plugins can use
 `PluginContext::register_async_middleware_raw` when a callback must complete
 later. The callback receives a JSON invocation, an optional continuation for
 execution intercepts, and a one-shot completion handle.
@@ -170,6 +170,51 @@ operation against settlement, cancellation inspection, stream operations, or
 `next` invocation using that same reference; serialize the final release after
 the last such call returns.
 
+The Rust SDK registers typed middleware through these completion APIs and runs
+the returned futures on one SDK-owned multi-thread Tokio runtime per configured
+component. The default is two workers: enough for modest concurrent async I/O
+without broadly oversubscribing the host. Increase the count only when measured
+I/O concurrency leaves callbacks queued; lower it when the host runs many
+components or has a tight CPU budget. Do not block executor workers.
+
+Set a plugin-wide default in Rust:
+
+```rust
+use nemo_relay_plugin::{NativeExecutorConfig, NativePlugin};
+
+impl NativePlugin for NativePolicy {
+    fn plugin_kind(&self) -> &str {
+        "acme.native_policy"
+    }
+
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 4 }
+    }
+
+    // ... register and other trait methods ...
+}
+```
+
+Then override that default for one configured component in `plugins.toml`:
+
+```toml
+[[plugins.dynamic]]
+manifest = "./acme-plugin/relay-plugin.toml"
+
+[plugins.dynamic.config.executor]
+worker_threads = 4
+```
+
+The default `NativePlugin::executor_config_for_component` reads this positive
+integer override. Override that method only when the plugin needs custom
+configuration rules. If the plugin manifest declares `config_schema`, include
+the SDK-owned `executor` object and its positive-integer `worker_threads`
+property in that schema, even when the plugin has no other configuration.
+
+Relay scope context is installed around each root-future poll, but child tasks
+created with `tokio::spawn` do not automatically inherit it. Typed subscribers
+remain synchronous and continue to run on Relay's subscriber dispatcher.
+
 Event sanitizers registered through this extension still run on Relay's serial
 publication dispatcher. Scope and mark emission remain synchronous and their
 sanitized events are delivered later in emission order.
@@ -182,10 +227,12 @@ incrementally, so Relay does not buffer the provider stream into an array.
 
 The incremental output queue is bounded. `async_stream_push_json` and
 `async_stream_reject` never block a native callback thread. If either returns
-`Internal` and the host last-error contains `backpressured`, retain the logical
-chunk or rejection and retry after the consumer advances. `InvalidArg` means
-the stream is already closed or cancelled and must not be retried. Check
-`async_stream_is_cancelled` during longer producer work.
+`Backpressured`, retain that logical chunk or rejection and retry it after the
+consumer advances. `InvalidArg` means the stream is already closed or cancelled
+and must not be retried. `async_stream_is_backpressured` only reports whether
+the queue is full at the instant you call it; do not use it to decide whether a
+specific operation needs a retry. Check `async_stream_is_cancelled` during
+longer producer work.
 
 For `async_next_invoke_stream`, Relay reports downstream failure or consumer
 cancellation through one terminal callback with a non-null error, and reports
@@ -200,8 +247,9 @@ exactly once; cancellation only stops the host-side continuation and prevents
 it from retaining the plugin indefinitely.
 
 Legacy v1/v2 middleware callbacks are synchronous and run on the runtime's
-execution path. They must not block on I/O; use the v3 completion-based API for
-long-running work.
+execution path. They must not block on I/O; raw plugins can use the v3
+completion-based API for long-running work, while typed Rust plugins should
+return futures through the SDK's v4 adapters.
 
 Text and JSON data cross this boundary as host-owned
 `NemoRelayNativeString` handles. ABI structs also carry scalars, opaque

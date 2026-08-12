@@ -2,7 +2,7 @@
 title: "Struct Scope Guard"
 sidebar-title: "ScopeGuard"
 description: "RAII guard for a host scope opened by `PluginRuntime::scope`."
-position: 46
+position: 49
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -14,6 +14,8 @@ pub struct ScopeGuard<'a> { /* private fields */ }
 ```
 
 RAII guard for a host scope opened by [`PluginRuntime::scope`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pluginruntime).
+
+A guard may move between threads only while its scope stack is bound on the destination thread. Async middleware restores that binding around each poll; tasks created with `tokio::spawn` do not inherit it and must not own a guard.
 
 ## Implementations
 
@@ -42,3 +44,7 @@ Pops the scope with optional output and metadata.
 #### `drop`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+
+### `impl Send for ScopeGuard<'_>`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-scopeguard\">ScopeGuard</a>&lt;'_&gt;"}} /></pre>

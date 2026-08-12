@@ -2,7 +2,7 @@
 title: "Enum Nemo Relay Status"
 sidebar-title: "NemoRelayStatus"
 description: "Status codes returned by stable native ABI functions."
-position: 65
+position: 68
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -22,6 +22,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
     InvalidUtf8 = 8,
     InvalidArg = 9,
     StreamEnd = 10,
+    Backpressured = 11,
 }
 ```
 
@@ -94,6 +95,12 @@ A function argument had an invalid value.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "StreamEnd = 10"}} /></pre>
 
 A stream reached end-of-stream and has no chunk to return.
+
+### `Backpressured = 11`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Backpressured = 11"}} /></pre>
+
+A bounded stream queue is full; retry this operation after it advances.
 
 ## Trait Implementations
 

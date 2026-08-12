@@ -2,7 +2,7 @@
 title: "Struct Nemo Relay Native Host ApiV3"
 sidebar-title: "NemoRelayNativeHostApiV3"
 description: "ABI-v3 host extension appended to `NemoRelayNativeHostApiV1`."
-position: 30
+position: 31
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -59,7 +59,7 @@ Registers a completion-based asynchronous middleware surface.
 
 Pushes one JSON chunk to an incremental native stream without blocking.
 
-A full bounded host queue returns [`NemoRelayStatus::Internal`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus) and records a backpressure message in the host's last-error slot. The producer may retry the logical chunk after the consumer advances.
+A full bounded host queue returns [`NemoRelayStatus::Backpressured`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus); retry this same logical chunk after the consumer advances.
 
 ### `async_stream_finish: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus`
 
@@ -69,7 +69,7 @@ Finishes an incremental native stream successfully.
 
 Rejects an incremental native stream without blocking.
 
-A full bounded queue returns [`NemoRelayStatus::Internal`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus); the caller may retry the rejection after the consumer advances.
+A full bounded queue returns [`NemoRelayStatus::Backpressured`](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus); retry this same rejection after the consumer advances.
 
 ### `async_stream_is_cancelled: unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool`
 
