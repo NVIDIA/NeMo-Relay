@@ -3321,6 +3321,44 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
 }
 
 #[test]
+fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-request-oci-genai",
+        0,
+        |request, context| async move {
+            assert_eq!(
+                context.codec,
+                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
+            );
+            Ok(Some(request))
+        },
+    )
+    .unwrap();
+
+    let registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest);
+    assert_eq!(
+        invoke_async_registration(
+            &host,
+            &registration,
+            json!({
+                "request": test_llm_request(),
+                "context": { "codec_kind": "builtin", "codec_id": "oci_genai" }
+            }),
+            None,
+        )
+        .unwrap()["content"],
+        json!({ "prompt": "hello" })
+    );
+    unsafe { registration.free() };
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
 fn typed_async_registration_failure_rolls_back_callback_state() {
     let _guard = begin_test();
     let host = test_host_v4();

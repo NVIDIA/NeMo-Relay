@@ -1043,6 +1043,7 @@ impl CodecIdentityInvocation {
                 "anthropic_messages" => Ok(LlmCodecIdentity::BuiltIn(
                     BuiltinLlmCodec::AnthropicMessages,
                 )),
+                "oci_genai" => Ok(LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)),
                 "gemini_generate_content" => Ok(LlmCodecIdentity::BuiltIn(
                     BuiltinLlmCodec::GeminiGenerateContent,
                 )),

@@ -146,6 +146,30 @@ fn message_text(message: &Message) -> Option<&str> {
 }
 
 // ===================================================================
+// codec_identity
+// ===================================================================
+
+#[test]
+fn test_codec_identity_is_oci_genai_builtin() {
+    let codec = OCIGenAIChatCodec;
+    assert_eq!(
+        LlmCodec::codec_identity(&codec),
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI),
+        "OCIGenAIChatCodec must not return Opaque; PII sanitization depends on a known identity"
+    );
+}
+
+#[test]
+fn test_response_codec_identity_is_oci_genai_builtin() {
+    let codec = OCIGenAIChatCodec;
+    assert_eq!(
+        <OCIGenAIChatCodec as LlmResponseCodec>::codec_identity(&codec),
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI),
+        "OCIGenAIChatCodec response codec must not return Opaque"
+    );
+}
+
+// ===================================================================
 // GENERIC request decode tests
 // ===================================================================
 

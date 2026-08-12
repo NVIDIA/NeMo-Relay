@@ -46,6 +46,7 @@
 //! dicts) are the caller's responsibility to convert.
 
 use crate::api::llm::LlmRequest;
+use crate::api::runtime::{BuiltinLlmCodec, LlmCodecIdentity};
 use crate::error::{FlowError, Result};
 use crate::json::Json;
 
@@ -1003,6 +1004,10 @@ fn patch_oci_api_specific(
 // ---------------------------------------------------------------------------
 
 impl LlmCodec for OCIGenAIChatCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
+    }
+
     fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
         let obj = request
             .content
@@ -1173,6 +1178,10 @@ impl LlmCodec for OCIGenAIChatCodec {
 // ---------------------------------------------------------------------------
 
 impl LlmResponseCodec for OCIGenAIChatCodec {
+    fn codec_identity(&self) -> LlmCodecIdentity {
+        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
+    }
+
     fn decode_response(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
         let Some(obj) = response.as_object() else {
             // Non-object responses are preserved raw so observability still
