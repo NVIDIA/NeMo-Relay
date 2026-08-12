@@ -32,6 +32,7 @@ use crate::api::scope::{COMPACTION_EVENT_NAME, EmitMarkEventParams, event};
 use crate::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::codec::anthropic::AnthropicMessagesCodec;
+use crate::codec::oci_genai::OCIGenAIChatCodec;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::{AnnotatedLlmRequest, Message, MessageContent};
@@ -179,6 +180,10 @@ fn request_sanitizer_context_preserves_all_codec_identity_states() {
         &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
     );
     assert_eq!(
+        sanitize_context_for_request_codec(Some(&OCIGenAIChatCodec)).codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
+    );
+    assert_eq!(
         sanitize_context_for_request_codec(Some(&RuntimeIdentityCodec)).codec(),
         &LlmCodecIdentity::Runtime("com.example.chat.v1".into())
     );
@@ -217,6 +222,11 @@ fn response_sanitizer_context_preserves_all_codec_identity_states() {
         sanitize_context_for_response_codec(Some(&AnthropicMessagesCodec as &dyn LlmResponseCodec))
             .codec(),
         &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
+    );
+    assert_eq!(
+        sanitize_context_for_response_codec(Some(&OCIGenAIChatCodec as &dyn LlmResponseCodec))
+            .codec(),
+        &LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)
     );
     assert_eq!(
         sanitize_context_for_response_codec(Some(&RuntimeIdentityCodec)).codec(),

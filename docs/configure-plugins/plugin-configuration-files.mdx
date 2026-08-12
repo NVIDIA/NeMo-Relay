@@ -147,6 +147,9 @@ manifest = "./plugins/acme/relay-plugin.toml"
 
 [plugins.dynamic.config]
 mode = "audit"
+
+[plugins.dynamic.config.executor]
+worker_threads = 4
 ```
 
 <Warning>
@@ -156,6 +159,12 @@ environment that the worker requires at startup.
 </Warning>
 
 `manifest` is required and resolves relative to this file. `config` is optional.
+For Rust native plugins using the typed SDK, `config.executor.worker_threads`
+sets the positive worker count for that component's SDK-owned Tokio executor.
+When the manifest declares a configuration schema, it must include the
+SDK-owned `executor` object and a positive-integer `worker_threads` property;
+otherwise static validation and `nemo-relay plugins edit` reject this supported
+configuration.
 Run `nemo-relay plugins validate <plugin-id>` to validate it against the
 manifest’s optional static JSON Schema before you enable or run the plugin. Use
 `nemo-relay plugins add`, `validate`, `inspect`, and `enable` to manage the

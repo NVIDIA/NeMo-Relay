@@ -338,6 +338,12 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .is_some_and(|blocks| blocks.iter().any(lossy_system_block))
         }
         ProviderSurface::OpenAIResponses => false,
+        // OCI GenAI requests carry an envelope (`compartmentId`, `servingMode`)
+        // whose unmodeled fields the decode does not preserve in `extra`, and
+        // the generic scalar checks above target OpenAI-shaped keys rather
+        // than OCI camelCase. Keep OCI raw-keyed — a fallback only ever costs
+        // a miss.
+        ProviderSurface::OCIGenAI => true,
         ProviderSurface::GeminiGenerateContent => {
             object
                 .get("generationConfig")

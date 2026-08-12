@@ -33,6 +33,9 @@ changelog:
     - title: 📝 Documentation Updates
       labels:
         - Documentation
+    - title: 🧩 Skills Updates
+      labels:
+        - Skills
     - title: Other Changes
       labels:
         - "*"

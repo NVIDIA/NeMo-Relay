@@ -836,3 +836,234 @@ fn baseline_patching_rejects_multiple_reordered_and_edited_items_without_provena
             .contains("multiple edited array items without stable identities")
     );
 }
+
+// ===================================================================
+// OCI GenAI parity: the fourth built-in surface agrees with the others
+// ===================================================================
+
+/// The same logical response (one assistant text message) in the OCI GenAI
+/// GENERIC `ChatResult` schema.
+fn oci_text_response(model: &str) -> Json {
+    json!({
+        "modelId": model,
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [{"type": "TEXT", "text": "hello"}]
+                },
+                "finishReason": "stop"
+            }]
+        }
+    })
+}
+
+fn oci_response_with_usage(model: &str, extra_usage: Json) -> Json {
+    let mut raw = oci_text_response(model);
+    // OCI reports no cache token counters; only the three basic counters.
+    let mut usage = json!({
+        "promptTokens": 1000,
+        "completionTokens": 500,
+        "totalTokens": 1500
+    });
+    merge_object(&mut usage, extra_usage);
+    raw["chatResponse"]
+        .as_object_mut()
+        .unwrap()
+        .insert("usage".into(), usage);
+    raw
+}
+
+#[test]
+fn test_oci_response_model_name_and_text_parity() {
+    let chat = decode(&chat_text_response("parity-shared-model"));
+    let oci = decode(&oci_text_response("parity-shared-model"));
+
+    assert_eq!(oci.model, chat.model);
+    assert_eq!(oci.response_text(), chat.response_text());
+    assert_eq!(oci.finish_reason, chat.finish_reason);
+    // OCI ChatResult payloads carry no response id; the other schemas do.
+    assert_eq!(oci.id, None);
+}
+
+#[test]
+fn test_oci_finish_reason_parity() {
+    // Complete: GENERIC "stop" and COHERE "COMPLETE" agree with the others.
+    let generic_stop = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{"message": {"role": "ASSISTANT", "content": []}, "finishReason": "stop"}]
+        }
+    });
+    let cohere_complete = json!({
+        "chatResponse": {"apiFormat": "COHERE", "text": "x", "finishReason": "COMPLETE"}
+    });
+    for raw in [&generic_stop, &cohere_complete] {
+        assert_eq!(
+            decode(raw).finish_reason,
+            Some(FinishReason::Complete),
+            "expected Complete for {raw}",
+        );
+    }
+
+    // Length: GENERIC "length" and COHERE "MAX_TOKENS" agree with the others.
+    let generic_length = json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{"message": {"role": "ASSISTANT", "content": []}, "finishReason": "length"}]
+        }
+    });
+    let cohere_max_tokens = json!({
+        "chatResponse": {"apiFormat": "COHERE", "text": "x", "finishReason": "MAX_TOKENS"}
+    });
+    for raw in [&generic_length, &cohere_max_tokens] {
+        assert_eq!(
+            decode(raw).finish_reason,
+            Some(FinishReason::Length),
+            "expected Length for {raw}",
+        );
+    }
+}
+
+#[test]
+fn test_oci_response_tool_call_parity() {
+    // The same logical tool invocation as test_response_tool_call_parity, in
+    // the flat OCI GENERIC shape (string-encoded arguments like OpenAI Chat).
+    let chat = decode(&json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_parity_1",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"city\":\"NYC\",\"units\":\"c\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }]
+    }));
+    let oci = decode(&json!({
+        "chatResponse": {
+            "apiFormat": "GENERIC",
+            "choices": [{
+                "message": {
+                    "role": "ASSISTANT",
+                    "content": [],
+                    "toolCalls": [{
+                        "id": "call_parity_1",
+                        "type": "FUNCTION",
+                        "name": "get_weather",
+                        "arguments": "{\"city\":\"NYC\",\"units\":\"c\"}"
+                    }]
+                },
+                "finishReason": "tool_calls"
+            }]
+        }
+    }));
+
+    assert_eq!(oci.finish_reason, Some(FinishReason::ToolUse));
+    assert_eq!(oci.tool_calls, chat.tool_calls);
+    let calls = oci.tool_calls.expect("oci tool calls");
+    assert_eq!(calls[0].arguments, json!({"city": "NYC", "units": "c"}));
+    assert!(calls[0].arguments.is_object());
+}
+
+#[test]
+fn test_oci_response_usage_parity() {
+    let chat = decode(&chat_response_with_usage("parity-usage-model", json!({})));
+    let oci = decode(&oci_response_with_usage("parity-usage-model", json!({})));
+
+    let chat_usage = chat.usage.unwrap();
+    let oci_usage = oci.usage.unwrap();
+    assert_eq!(oci_usage.prompt_tokens, chat_usage.prompt_tokens);
+    assert_eq!(oci_usage.completion_tokens, chat_usage.completion_tokens);
+    assert_eq!(oci_usage.total_tokens, chat_usage.total_tokens);
+    // Divergence: OCI has no prompt-cache counters, so cache_read_tokens is
+    // None where the OpenAI Chat fixture reports 200 cached tokens.
+    assert_eq!(oci_usage.cache_read_tokens, None);
+    assert_eq!(chat_usage.cache_read_tokens, Some(200));
+    assert!(matches!(
+        oci.api_specific,
+        Some(ApiSpecificResponse::OCIGenAI { .. })
+    ));
+}
+
+#[test]
+fn test_oci_request_normalization_parity() {
+    let chat = normalize_request(&req(json!({
+        "model": "parity-request-model",
+        "messages": [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Summarize the docs."}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 256,
+        "stop": ["END"]
+    })))
+    .expect("chat request decodes");
+
+    let oci = normalize_request(&req(json!({
+        "compartmentId": "ocid1.compartment.oc1..parity",
+        "servingMode": {"servingType": "ON_DEMAND", "modelId": "parity-request-model"},
+        "chatRequest": {
+            "apiFormat": "GENERIC",
+            "messages": [
+                {"role": "SYSTEM", "content": [{"type": "TEXT", "text": "You are terse."}]},
+                {"role": "USER", "content": [{"type": "TEXT", "text": "Summarize the docs."}]}
+            ],
+            "temperature": 0.5,
+            "maxTokens": 256,
+            "stop": ["END"]
+        }
+    })))
+    .expect("oci request decodes");
+
+    // UPPERCASE roles and TEXT content-part lists normalize to the same
+    // messages OpenAI Chat produces; the model comes from servingMode.
+    assert_eq!(oci.messages, chat.messages);
+    assert_eq!(oci.params, chat.params);
+    assert_eq!(oci.model, chat.model);
+    assert_eq!(oci.system_prompt(), chat.system_prompt());
+    assert_eq!(oci.last_user_message(), chat.last_user_message());
+}
+
+#[test]
+fn test_oci_request_hint_never_overrides_strong_signals() {
+    // The "oci" hint must not reroute unambiguous non-OCI bodies.
+    let chat_request = req(json!({
+        "model": "gpt-parity",
+        "messages": [{"role": "user", "content": "hi"}]
+    }));
+    let hinted = normalize_request_with_hint(&chat_request, Some("oci"))
+        .expect("chat request decodes despite oci hint");
+    assert_eq!(
+        hinted,
+        normalize_request(&chat_request).expect("chat request decodes"),
+    );
+    // And the reverse: a strong OCI envelope decodes as OCI even with a
+    // wrong hint.
+    let oci_request = req(json!({
+        "compartmentId": "ocid1.compartment.oc1..parity",
+        "servingMode": {"servingType": "ON_DEMAND", "modelId": "m"},
+        "chatRequest": {
+            "apiFormat": "GENERIC",
+            "messages": [{"role": "USER", "content": [{"type": "TEXT", "text": "hi"}]}]
+        }
+    }));
+    let hinted = normalize_request_with_hint(&oci_request, Some("anthropic"))
+        .expect("oci request decodes despite wrong hint");
+    assert_eq!(
+        hinted,
+        normalize_request(&oci_request).expect("oci request decodes"),
+    );
+    assert!(matches!(
+        hinted.api_specific,
+        Some(super::request::ApiSpecificRequest::OCIGenAI { .. })
+    ));
+}

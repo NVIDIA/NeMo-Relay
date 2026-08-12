@@ -34,6 +34,7 @@ use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::oci_genai::OCIGenAIChatCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
@@ -1454,6 +1455,90 @@ async fn test_response_codec_populates_annotated_response() {
     );
 
     deregister_subscriber("resp_codec_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_oci_genai_response_codec_populates_annotated_response() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    register_subscriber(
+        "oci_resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    // Shape observed from a live OCI Generative AI GENERIC tool-call response.
+    let func: LlmExecutionNextFn = Arc::new(|_req| {
+        Box::pin(async move {
+            Ok(json!({
+                "modelId": "meta.llama-4-maverick-17b-128e-instruct-fp8",
+                "modelVersion": "1.0.0",
+                "chatResponse": {
+                    "apiFormat": "GENERIC",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "toolCalls": [{
+                                "type": "FUNCTION",
+                                "id": "chatcmpl-tool-bda9d62eab5cea3c",
+                                "name": "get_weather",
+                                "arguments": "{\"city\": \"Paris\"}"
+                            }]
+                        },
+                        "finishReason": "tool_calls"
+                    }],
+                    "usage": {"promptTokens": 627, "completionTokens": 13, "totalTokens": 640}
+                }
+            }))
+        })
+    });
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OCIGenAIChatCodec);
+
+    let _result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("oci_genai")
+            .request(make_llm_request(
+                json!({"messages": [{"role": "USER", "content": [{"type": "TEXT", "text": "hi"}]}]}),
+            ))
+            .func(func)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let end_event = captured
+        .iter()
+        .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
+        .expect("expected LlmEnd event");
+
+    let annotated = end_event
+        .annotated_response()
+        .expect("annotated_response should be Some when the OCI codec is active");
+    assert_eq!(
+        annotated.model.as_deref(),
+        Some("meta.llama-4-maverick-17b-128e-instruct-fp8")
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    assert_eq!(annotated.message, None);
+    let tool_calls = annotated.tool_calls.as_ref().expect("tool calls decoded");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "Paris"}));
+    let usage = annotated.usage.as_ref().expect("usage decoded");
+    assert_eq!(usage.prompt_tokens, Some(627));
+    assert_eq!(usage.completion_tokens, Some(13));
+    assert_eq!(usage.total_tokens, Some(640));
+
+    deregister_subscriber("oci_resp_codec_sub").unwrap();
 }
 
 #[tokio::test]

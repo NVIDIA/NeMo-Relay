@@ -304,6 +304,7 @@ impl CompiledBuiltinBackend {
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages) => {
                 Some(ProviderSurface::AnthropicMessages)
             }
+            LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI) => Some(ProviderSurface::OCIGenAI),
             LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent) => {
                 Some(ProviderSurface::GeminiGenerateContent)
             }

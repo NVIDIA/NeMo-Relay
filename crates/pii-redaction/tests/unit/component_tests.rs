@@ -422,6 +422,49 @@ async fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_c
 }
 
 #[tokio::test]
+async fn normalized_llm_response_paths_use_the_active_oci_genai_codec_identity() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_paths: vec!["/message".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
+
+    let sanitized = sanitize_response(
+        json!({
+            "modelId": "meta.llama-3.3-70b-instruct",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "ASSISTANT",
+                        "content": [{"type": "TEXT", "text": "sk-oci-secret"}]
+                    },
+                    "finishReason": "stop"
+                }]
+            }
+        }),
+        LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::BuiltIn(
+            BuiltinLlmCodec::OCIGenAI,
+        )),
+    )
+    .await
+    .expect("sanitizer callback must succeed")
+    .expect("the active OCI GenAI codec identity must retain the payload");
+    assert_eq!(
+        sanitized["chatResponse"]["choices"][0]["message"]["content"][0]["text"],
+        json!("[REDACTED]")
+    );
+}
+
+#[tokio::test]
 async fn normalized_llm_paths_omit_payloads_when_legacy_codec_decode_fails() {
     let backend = crate::builtin::CompiledBuiltinBackend::new(
         BuiltinBackendConfig {

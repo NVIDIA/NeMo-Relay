@@ -332,6 +332,17 @@ pub enum ApiSpecificResponse {
         content_blocks: Option<Vec<Json>>,
     },
 
+    /// OCI Generative AI-specific fields.
+    #[serde(rename = "oci_genai")]
+    OCIGenAI {
+        /// Chat response API format (`GENERIC`, `COHERE`, or `COHEREV2`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_format: Option<String>,
+        /// Model version reported on the `ChatResult` envelope.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_version: Option<String>,
+    },
+
     /// Gemini generateContent API-specific fields.
     #[serde(rename = "gemini_generate_content")]
     GeminiGenerateContent {

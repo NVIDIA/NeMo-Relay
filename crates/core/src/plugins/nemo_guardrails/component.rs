@@ -282,7 +282,7 @@ crate::editor_config! {
         codec => {
             label: "codec",
             kind: Enum,
-            values: ["openai_chat", "openai_responses", "anthropic_messages", "gemini_generate_content"],
+            values: ["openai_chat", "openai_responses", "anthropic_messages", "oci_genai", "gemini_generate_content"],
             optional: true,
         },
         input => { label: "input", kind: Boolean },
@@ -434,6 +434,7 @@ fn codec_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::s
             "openai_chat",
             "openai_responses",
             "anthropic_messages",
+            "oci_genai",
             "gemini_generate_content",
         ],
         None,

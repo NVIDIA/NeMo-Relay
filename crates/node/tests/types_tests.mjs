@@ -23,6 +23,7 @@ describe('Type constants', () => {
     assert.equal(typeof lib.OpenAIChatCodec, 'function');
     assert.equal(typeof lib.OpenAIResponsesCodec, 'function');
     assert.equal(typeof lib.AnthropicMessagesCodec, 'function');
+    assert.equal(typeof lib.OCIGenAIChatCodec, 'function');
     assert.equal(typeof lib.GeminiGenerateContentCodec, 'function');
   });
 
@@ -78,6 +79,87 @@ describe('ScopeStack', () => {
   it('constructs a scope stack instance', () => {
     const stack = new ScopeStack();
     assert.ok(stack instanceof ScopeStack);
+  });
+});
+
+// ===========================================================================
+// OCIGenAIChatCodec
+// ===========================================================================
+
+describe('OCIGenAIChatCodec', () => {
+  const { OCIGenAIChatCodec } = lib;
+
+  const chatDetails = () => ({
+    headers: {},
+    content: {
+      compartmentId: 'ocid1.compartment.oc1..example',
+      servingMode: { servingType: 'ON_DEMAND', modelId: 'meta.llama-3.3-70b-instruct' },
+      chatRequest: {
+        apiFormat: 'GENERIC',
+        messages: [
+          { role: 'USER', content: [{ type: 'TEXT', text: 'My SSN is 111-22-3333.' }] },
+        ],
+        maxTokens: 600,
+        seed: 7,
+      },
+    },
+  });
+
+  it('instantiates', () => {
+    const codec = new OCIGenAIChatCodec();
+    assert.ok(codec instanceof OCIGenAIChatCodec);
+  });
+
+  it('decode returns an AnnotatedLLMRequest with model and params', () => {
+    const codec = new OCIGenAIChatCodec();
+    const annotated = codec.decode(chatDetails());
+    assert.equal(annotated.model, 'meta.llama-3.3-70b-instruct');
+    assert.equal(annotated.messages.length, 1);
+    assert.equal(annotated.messages[0].role, 'user');
+    // Rust serializes GenerationParams fields in snake_case (max_tokens, not maxTokens)
+    assert.equal(annotated.params.max_tokens, 600);
+  });
+
+  it('encode is an identity for an unedited annotation', () => {
+    const codec = new OCIGenAIChatCodec();
+    const req = chatDetails();
+    const annotated = codec.decode(req);
+    const reEncoded = codec.encode(annotated, req);
+    assert.deepEqual(reEncoded.content, req.content);
+  });
+
+  it('encode applies edited messages and keeps unmodeled fields', () => {
+    const codec = new OCIGenAIChatCodec();
+    const req = chatDetails();
+    const annotated = codec.decode(req);
+    annotated.messages = [{ role: 'user', content: 'My SSN is [REDACTED].' }];
+    const reEncoded = codec.encode(annotated, req);
+    assert.deepEqual(reEncoded.content.chatRequest.messages[0].content, [
+      { type: 'TEXT', text: 'My SSN is [REDACTED].' },
+    ]);
+    assert.equal(reEncoded.content.chatRequest.seed, 7, 'unmodeled fields must survive edits');
+  });
+
+  it('decodeResponse extracts text, finish reason, and usage', () => {
+    const codec = new OCIGenAIChatCodec();
+    const raw = {
+      modelId: 'meta.llama-3.3-70b-instruct',
+      chatResponse: {
+        apiFormat: 'GENERIC',
+        choices: [{
+          index: 0,
+          message: { role: 'ASSISTANT', content: [{ type: 'TEXT', text: 'Hello!' }] },
+          finishReason: 'stop',
+        }],
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+      },
+    };
+    const resp = codec.decodeResponse(raw);
+    // message is a plain string (MessageContent::Text serializes to a string, not {text: ...})
+    assert.equal(resp.message, 'Hello!');
+    assert.equal(resp.finish_reason, 'complete');
+    assert.equal(resp.model, 'meta.llama-3.3-70b-instruct');
+    assert.equal(resp.usage?.prompt_tokens, 10);
   });
 });
 

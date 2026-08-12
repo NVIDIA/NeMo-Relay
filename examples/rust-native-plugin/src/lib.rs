@@ -1,12 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use futures::StreamExt;
 use nemo_relay_plugin::{
-    CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json, LlmJsonStream,
-    LlmRequest, LlmRequestInterceptOutcome, NativePlugin, PendingMarkSpec, PluginContext,
-    PluginRuntime, ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
+    CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json,
+    LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, NativeExecutorConfig, NativePlugin,
+    PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
+    ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct ExampleNativePlugin;
 
@@ -66,11 +69,7 @@ impl ConfigField {
         }
     }
 
-    fn parse_into(
-        self,
-        value: &Json,
-        config: &mut ExampleConfig,
-    ) -> nemo_relay_plugin::Result<()> {
+    fn parse_into(self, value: &Json, config: &mut ExampleConfig) -> nemo_relay_plugin::Result<()> {
         if !self.accepts(value) {
             return Err(format!(
                 "{} must be a {}",
@@ -80,7 +79,10 @@ impl ConfigField {
         }
         match self {
             Self::Tag => {
-                config.tag = value.as_str().expect("checked config field type").to_owned();
+                config.tag = value
+                    .as_str()
+                    .expect("checked config field type")
+                    .to_owned();
             }
             Self::BlockTools => {
                 config.block_tools = value.as_bool().expect("checked config field type");
@@ -89,9 +91,7 @@ impl ConfigField {
                 config.block_llms = value.as_bool().expect("checked config field type");
             }
             Self::EmitIsolatedScope => {
-                config.emit_isolated_scope = value
-                    .as_bool()
-                    .expect("checked config field type");
+                config.emit_isolated_scope = value.as_bool().expect("checked config field type");
             }
         }
         Ok(())
@@ -127,6 +127,10 @@ impl NativePlugin for ExampleNativePlugin {
         "examples.rust_native_policy"
     }
 
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 2 }
+    }
+
     fn allows_multiple_components(&self) -> bool {
         false
     }
@@ -135,9 +139,10 @@ impl NativePlugin for ExampleNativePlugin {
         let mut diagnostics = Vec::new();
 
         for key in plugin_config.keys() {
-            if !ConfigField::ALL
-                .iter()
-                .any(|field| field.name() == key.as_str())
+            if key != "executor"
+                && !ConfigField::ALL
+                    .iter()
+                    .any(|field| field.name() == key.as_str())
             {
                 diagnostics.push(diagnostic(
                     DiagnosticLevel::Warning,
@@ -161,6 +166,15 @@ impl NativePlugin for ExampleNativePlugin {
             }
         }
 
+        if let Err(error) = self.executor_config_for_component(plugin_config) {
+            diagnostics.push(diagnostic(
+                DiagnosticLevel::Error,
+                "examples.rust_native_policy.invalid_executor",
+                Some("executor.worker_threads"),
+                error,
+            ));
+        }
+
         diagnostics
     }
 
@@ -180,15 +194,21 @@ impl NativePlugin for ExampleNativePlugin {
 
         ctx.register_tool_sanitize_request_guardrail("example_tool_sanitize_request", 10, {
             let tag = config.tag.clone();
-            move |_name, args| tag_json(args, "native_tool_sanitize_request", &tag)
+            move |_name, args| {
+                let tag = tag.clone();
+                async move { Ok(tag_json(args, "native_tool_sanitize_request", &tag)) }
+            }
         })?;
         ctx.register_tool_sanitize_response_guardrail("example_tool_sanitize_response", 10, {
             let tag = config.tag.clone();
-            move |_name, result| tag_json(result, "native_tool_sanitize_response", &tag)
+            move |_name, result| {
+                let tag = tag.clone();
+                async move { Ok(tag_json(result, "native_tool_sanitize_response", &tag)) }
+            }
         })?;
         ctx.register_tool_conditional_execution_guardrail("example_tool_conditional", 10, {
             let block_tools = config.block_tools;
-            move |name, _args| {
+            move |name, _args| async move {
                 Ok(block_tools.then(|| format!("tool '{name}' blocked by Rust native plugin")))
             }
         })?;
@@ -197,103 +217,168 @@ impl NativePlugin for ExampleNativePlugin {
             let tag = config.tag.clone();
             let emit_isolated_scope = config.emit_isolated_scope;
             move |name, args| {
-                emit_runtime_events(&runtime, &tag, emit_isolated_scope)?;
-                let mut scope = runtime.scope(
-                    "example.native.tool_request",
-                    ScopeType::Tool,
-                    Some(&json!({ "tool": name, "tag": tag })),
-                    None,
-                    Some(&args),
-                )?;
-                let tagged = tag_json(args, "native_tool_request_intercept", &tag);
-                scope.close(Some(&tagged), None)?;
-                Ok(tagged)
+                let runtime = runtime.clone();
+                let tag = tag.clone();
+                async move {
+                    // Demonstration only: these operations show that Tokio timers and I/O
+                    // run on the SDK executor; production intercepts do not need them.
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    let (mut writer, mut reader) = tokio::io::duplex(16);
+                    writer
+                        .write_all(b"ready")
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let mut readiness = [0_u8; 5];
+                    reader
+                        .read_exact(&mut readiness)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    emit_runtime_events(&runtime, &tag, emit_isolated_scope)?;
+                    let mut scope = runtime.scope(
+                        "example.native.tool_request",
+                        ScopeType::Tool,
+                        Some(&json!({ "tool": name, "tag": tag })),
+                        None,
+                        Some(&args),
+                    )?;
+                    let tagged = tag_json(args, "native_tool_request_intercept", &tag);
+                    scope.close(Some(&tagged), None)?;
+                    Ok(tagged)
+                }
             }
         })?;
         ctx.register_tool_execution_intercept("example_tool_execution", 30, {
             let tag = config.tag.clone();
             move |_name, args, next| {
-                let request = tag_json(args, "native_tool_execution_request", &tag);
-                let result = next.call(request)?;
-                let result = tag_json(result, "native_tool_execution_response", &tag);
-                Ok(
-                    ToolExecutionInterceptOutcome::new(result).with_pending_mark(
-                        PendingMarkSpec::builder()
-                            .name("example.native.tool_execution")
-                            .category(EventCategory::custom())
-                            .category_profile(CategoryProfile {
-                                subtype: Some("example.native.tool_result_rewrite".into()),
-                                ..CategoryProfile::default()
-                            })
-                            .data(json!({ "tag": &tag }))
-                            .build(),
-                    ),
-                )
+                let tag = tag.clone();
+                async move {
+                    let request = tag_json(args, "native_tool_execution_request", &tag);
+                    let result = next.call(request).await?;
+                    let result = tag_json(result, "native_tool_execution_response", &tag);
+                    Ok(
+                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("example.native.tool_execution")
+                                .category(EventCategory::custom())
+                                .category_profile(CategoryProfile {
+                                    subtype: Some("example.native.tool_result_rewrite".into()),
+                                    ..CategoryProfile::default()
+                                })
+                                .data(json!({ "tag": &tag }))
+                                .build(),
+                        ),
+                    )
+                }
             }
         })?;
 
         ctx.register_llm_sanitize_request_guardrail("example_llm_sanitize_request", 10, {
             let tag = config.tag.clone();
-            move |request, _context| {
-                Some(tag_llm_request(
-                    request,
-                    "native_llm_sanitize_request",
-                    &tag,
-                ))
+            move |request, context| {
+                let tag = tag.clone();
+                async move {
+                    let request = if let Some(codec) = context.resolve_codec() {
+                        let annotated = codec.decode(&request)?;
+                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        codec.encode(&annotated, &request)?
+                    } else {
+                        request
+                    };
+                    Ok(Some(tag_llm_request(
+                        request,
+                        "native_llm_sanitize_request",
+                        &tag,
+                    )))
+                }
             }
         })?;
         ctx.register_llm_sanitize_response_guardrail("example_llm_sanitize_response", 10, {
             let tag = config.tag.clone();
             move |response, _context| {
-                Some(tag_json(response, "native_llm_sanitize_response", &tag))
+                let tag = tag.clone();
+                async move {
+                    Ok(Some(tag_json(
+                        response,
+                        "native_llm_sanitize_response",
+                        &tag,
+                    )))
+                }
             }
         })?;
         ctx.register_llm_conditional_execution_guardrail("example_llm_conditional", 10, {
             let block_llms = config.block_llms;
-            move |_request| {
+            move |_request| async move {
                 Ok(block_llms.then(|| "LLM call blocked by Rust native plugin".to_string()))
             }
         })?;
         ctx.register_llm_request_intercept("example_llm_request", 20, false, {
             let tag = config.tag.clone();
             move |_name, request, annotated| {
-                Ok(LlmRequestInterceptOutcome::new(
-                    tag_llm_request(request, "native_llm_request_intercept", &tag),
-                    annotated,
-                )
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("example.native.llm_request_intercept")
-                        .category(EventCategory::custom())
-                        .category_profile(CategoryProfile {
-                            subtype: Some("example.native.request_rewrite".into()),
-                            ..CategoryProfile::default()
-                        })
-                        .data(json!({ "tag": &tag }))
-                        .build(),
-                ))
+                let tag = tag.clone();
+                async move {
+                    Ok(LlmRequestInterceptOutcome::new(
+                        tag_llm_request(request, "native_llm_request_intercept", &tag),
+                        annotated,
+                    )
+                    .with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("example.native.llm_request_intercept")
+                            .category(EventCategory::custom())
+                            .category_profile(CategoryProfile {
+                                subtype: Some("example.native.request_rewrite".into()),
+                                ..CategoryProfile::default()
+                            })
+                            .data(json!({ "tag": &tag }))
+                            .build(),
+                    ))
+                }
             }
         })?;
         ctx.register_llm_execution_intercept("example_llm_execution", 30, {
             let tag = config.tag.clone();
             move |_name, request, next| {
-                let request = tag_llm_request(request, "native_llm_execution_request", &tag);
-                let response = next.call(request)?;
-                Ok(tag_json(response, "native_llm_execution_response", &tag))
+                let tag = tag.clone();
+                async move {
+                    let request = tag_llm_request(request, "native_llm_execution_request", &tag);
+                    let response = if request
+                        .content
+                        .get("native_concurrent_next")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false)
+                    {
+                        // Demonstrates concurrent continuations only. Each call reaches the
+                        // downstream provider, so this duplicates its cost and side effects.
+                        let first_next = next.clone();
+                        let (first, second) = tokio::join!(
+                            first_next.call(request.clone()),
+                            next.call(request),
+                        );
+                        let response = first?;
+                        second?;
+                        response
+                    } else {
+                        next.call(request).await?
+                    };
+                    Ok(tag_json(response, "native_llm_execution_response", &tag))
+                }
             }
         })?;
         ctx.register_llm_stream_execution_intercept("example_llm_stream_execution", 30, {
             let tag = config.tag;
             move |_name, request, next| {
-                let request = tag_llm_request(request, "native_llm_stream_execution_request", &tag);
-                let stream = next.call(request)?;
                 let tag = tag.clone();
-                let stream: LlmJsonStream = Box::new(stream.map(move |chunk| {
-                    chunk.map(|chunk| {
-                        tag_json(chunk, "native_llm_stream_execution_response", &tag)
-                    })
-                }));
-                Ok(stream)
+                async move {
+                    let request =
+                        tag_llm_request(request, "native_llm_stream_execution_request", &tag);
+                    let stream = next.call(request).await?;
+                    let tag = tag.clone();
+                    let stream: LlmJsonAsyncStream = Box::pin(stream.map(move |chunk| {
+                        chunk.map(|chunk| {
+                            tag_json(chunk, "native_llm_stream_execution_response", &tag)
+                        })
+                    }));
+                    Ok(stream)
+                }
             }
         })?;
 
