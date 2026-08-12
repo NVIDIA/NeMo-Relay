@@ -574,6 +574,7 @@ fn native_status_helpers_keep_error_categories_stable() {
         NemoRelayStatus::Internal
     );
     assert_eq!(panic_payload_message(&"string panic"), "string panic");
+    clear_native_last_error();
 }
 
 fn assert_native_compatibility_edges() {

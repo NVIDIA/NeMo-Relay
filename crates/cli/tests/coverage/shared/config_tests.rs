@@ -41,6 +41,10 @@ fn transparent_gateway_fingerprints_are_stable_and_url_scoped() {
         first,
         transparent_gateway_fingerprint("http://127.0.0.1:47633")
     );
+    assert_eq!(
+        first,
+        "transparent-sha256:bb0bbeaad4270d196ff14af97fc00e330c9d1385224b0b26dfbba9e626c44717"
+    );
     assert!(first.starts_with("transparent-sha256:"));
 }
 
@@ -99,7 +103,7 @@ id = "acme.coverage-worker"
 kind = "worker"
 
 [compat]
-relay = "0.8"
+relay = ">=0.5,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]

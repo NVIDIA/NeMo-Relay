@@ -311,13 +311,17 @@ fn translation_helpers_cover_diagnostics_and_cross_protocol_responses() {
         .unwrap(),
         response
     );
-    assert!(
-        translate_response(
-            &engine,
-            WireProtocol::OpenaiChat,
-            WireProtocol::AnthropicMessages,
-            &response,
-        )
-        .is_ok()
+    let translated = translate_response(
+        &engine,
+        WireProtocol::OpenaiChat,
+        WireProtocol::AnthropicMessages,
+        &response,
+    )
+    .unwrap();
+    assert_eq!(translated["type"], "message");
+    assert_eq!(translated["role"], "assistant");
+    assert_eq!(
+        translated["content"],
+        json!([{ "type": "text", "text": "ok" }])
     );
 }

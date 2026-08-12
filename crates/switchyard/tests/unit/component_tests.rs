@@ -272,14 +272,14 @@ fn wire_protocol_and_plugin_lifecycle_contracts_are_stable() {
 
 #[test]
 fn switchyard_target_bindings_keep_protocol_specific_endpoints() {
-    for protocol in [
-        WireProtocol::OpenaiChat,
-        WireProtocol::OpenaiResponses,
-        WireProtocol::AnthropicMessages,
+    for (protocol, endpoint) in [
+        (WireProtocol::OpenaiChat, "/v1/chat/completions"),
+        (WireProtocol::OpenaiResponses, "/v1/responses"),
+        (WireProtocol::AnthropicMessages, "/v1/messages"),
     ] {
         let binding = binding(protocol, "coverage-model");
         assert_eq!(binding.protocol, protocol);
-        assert_eq!(binding.endpoint, protocol.endpoint());
+        assert_eq!(binding.endpoint, endpoint);
         assert_eq!(binding.base_url, "http://127.0.0.1:9999");
     }
     let defaults = ProtocolDefaults {
@@ -288,6 +288,8 @@ fn switchyard_target_bindings_keep_protocol_specific_endpoints() {
         anthropic_messages: "anthropic".into(),
     };
     assert_eq!(defaults.openai_chat, "chat");
+    assert_eq!(defaults.openai_responses, "responses");
+    assert_eq!(defaults.anthropic_messages, "anthropic");
 }
 
 #[tokio::test]

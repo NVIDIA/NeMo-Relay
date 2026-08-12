@@ -27,6 +27,8 @@ fn native_executor_config_accepts_only_positive_integer_overrides() {
         serde_json::json!(true),
         serde_json::json!({"worker_threads": 0}),
         serde_json::json!({"worker_threads": -1}),
+        serde_json::json!({"worker_threads": true}),
+        serde_json::json!({"worker_threads": 1.5}),
         serde_json::json!({"worker_threads": "two"}),
     ] {
         assert!(
@@ -42,7 +44,7 @@ fn native_executor_starts_once_and_drains_accepted_tasks_on_drop() {
     let executor = NativeExecutor::new(NativeExecutorConfig { worker_threads: 1 }, "coverage-test");
     let first = executor.ensure_started().unwrap();
     let second = executor.ensure_started().unwrap();
-    assert_eq!(first.runtime_flavor(), second.runtime_flavor());
+    assert_eq!(first.id(), second.id());
 
     let completed = Arc::new(AtomicBool::new(false));
     let observed = Arc::clone(&completed);

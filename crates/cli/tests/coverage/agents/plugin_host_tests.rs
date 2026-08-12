@@ -3866,7 +3866,7 @@ fn codex_host_helpers_honor_home_and_quote_gateway_commands() {
     assert_eq!(codex_home_dir().unwrap(), dir.path().join(".codex"));
     let command = codex_hook_command("http://127.0.0.1:47632/path with space");
     assert!(command.contains("hook-forward codex --gateway-url"));
-    assert!(command.contains("path with space"));
+    assert!(command.contains("'http://127.0.0.1:47632/path with space'"));
     assert_eq!(
         legacy_named_codex_hook_command(),
         "nemo-relay plugin-shim hook codex"

@@ -1232,15 +1232,21 @@ fn test_gemini_request_decoders_cover_generation_tools_and_model_validation() {
         json!({"generationConfig": {"temperature": "hot"}}),
         json!({"generationConfig": {"maxOutputTokens": -1}}),
         json!({"generationConfig": {"stopSequences": [1]}}),
-        json!({"model": 1}),
+    ] {
+        assert!(
+            decode_gemini_generation_params(request.as_object().unwrap()).is_err(),
+            "{request}"
+        );
+    }
+    assert!(decode_gemini_model(json!({"model": 1}).as_object().unwrap()).is_err());
+    for request in [
         json!({"tools": 1}),
         json!({"tools": [{"functionDeclarations": [{"name": ""}]}]}),
     ] {
-        let object = request.as_object().unwrap();
-        let error = decode_gemini_generation_params(object).is_err()
-            || decode_gemini_model(object).is_err()
-            || decode_gemini_tools(object).is_err();
-        assert!(error, "{request}");
+        assert!(
+            decode_gemini_tools(request.as_object().unwrap()).is_err(),
+            "{request}"
+        );
     }
 }
 
