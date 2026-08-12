@@ -3369,6 +3369,85 @@ fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
 }
 
 #[test]
+fn typed_async_llm_sanitize_context_decodes_all_builtin_identities() {
+    let _guard = begin_test();
+
+    for expected in [
+        BuiltinLlmCodec::OpenAiChat,
+        BuiltinLlmCodec::OpenAiResponses,
+        BuiltinLlmCodec::AnthropicMessages,
+        BuiltinLlmCodec::OCIGenAI,
+        BuiltinLlmCodec::GeminiGenerateContent,
+    ] {
+        let host = test_host_v4();
+        let mut ctx = test_context(&host.v3.v1);
+        ctx.register_llm_sanitize_request_guardrail(
+            "llm-request-builtins",
+            0,
+            move |request, context| async move {
+                assert_eq!(context.codec, LlmCodecIdentity::BuiltIn(expected));
+                Ok(Some(request))
+            },
+        )
+        .unwrap();
+
+        let registration =
+            take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest);
+        assert_eq!(
+            invoke_async_registration(
+                &host,
+                &registration,
+                json!({
+                    "request": test_llm_request(),
+                    "context": { "codec_kind": "builtin", "codec_id": expected.id() }
+                }),
+                None,
+            )
+            .unwrap()["content"],
+            json!({ "prompt": "hello" })
+        );
+        unsafe { registration.free() };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live_host_strings() != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "host strings were not released after the sanitize invocation"
+            );
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[test]
+fn typed_async_llm_sanitize_context_rejects_unknown_builtin_identity() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-request-unknown",
+        0,
+        |request, _context| async move { Ok(Some(request)) },
+    )
+    .unwrap();
+
+    let registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest);
+    let error = invoke_async_registration(
+        &host,
+        &registration,
+        json!({
+            "request": test_llm_request(),
+            "context": { "codec_kind": "builtin", "codec_id": "future_provider" }
+        }),
+        None,
+    )
+    .expect_err("unknown built-in codec identities must be rejected");
+    assert!(error.contains("unknown built-in LLM codec: future_provider"));
+    unsafe { registration.free() };
+}
+
+#[test]
 fn typed_async_registration_failure_rolls_back_callback_state() {
     let _guard = begin_test();
     let host = test_host_v4();

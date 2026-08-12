@@ -22,6 +22,7 @@ use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
 use crate::json::Json;
+pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 
 /// Sanitize mutable observability fields on a fully constructed event.
 ///
@@ -150,49 +151,6 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
         + Send
         + Sync,
 >;
-
-/// Relay's built-in LLM codec identities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinLlmCodec {
-    /// OpenAI Chat Completions request and response payloads.
-    OpenAiChat,
-    /// OpenAI Responses request and response payloads.
-    OpenAiResponses,
-    /// Anthropic Messages request and response payloads.
-    AnthropicMessages,
-    /// OCI Generative AI chat request and response payloads.
-    OCIGenAI,
-    /// Gemini generateContent request and response payloads.
-    GeminiGenerateContent,
-}
-
-impl BuiltinLlmCodec {
-    /// Stable identifier used in configuration and language bindings.
-    #[must_use]
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::OpenAiChat => "openai_chat",
-            Self::OpenAiResponses => "openai_responses",
-            Self::AnthropicMessages => "anthropic_messages",
-            Self::OCIGenAI => "oci_genai",
-            Self::GeminiGenerateContent => "gemini_generate_content",
-        }
-    }
-}
-
-/// Per-call LLM codec identity supplied to sanitize guardrails.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum LlmCodecIdentity {
-    /// No codec was active for this payload direction.
-    #[default]
-    None,
-    /// A Relay built-in codec was active.
-    BuiltIn(BuiltinLlmCodec),
-    /// A runtime-registered codec was active, identified by its stable ID.
-    Runtime(String),
-    /// A codec was active but does not expose a registered identity.
-    Opaque,
-}
 
 /// Per-call codec context for LLM request sanitize guardrails.
 ///

@@ -27,6 +27,7 @@ pub use nemo_relay_types::api::event::{
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
 pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
+pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
     LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationPayload,
@@ -51,43 +52,6 @@ pub const NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC: u32 = 4;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
-
-/// Built-in LLM codec identities available to native plugins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BuiltinLlmCodec {
-    /// OpenAI Chat Completions.
-    #[serde(rename = "openai_chat")]
-    OpenAiChat,
-    /// OpenAI Responses.
-    #[serde(rename = "openai_responses")]
-    OpenAiResponses,
-    /// Anthropic Messages.
-    #[serde(rename = "anthropic_messages")]
-    AnthropicMessages,
-    /// OCI Generative AI chat.
-    #[serde(rename = "oci_genai")]
-    OCIGenAI,
-    /// Gemini generateContent.
-    #[serde(rename = "gemini_generate_content")]
-    GeminiGenerateContent,
-}
-
-/// Per-call LLM codec identity delivered to native plugins.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
-#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
-pub enum LlmCodecIdentity {
-    /// No codec was active.
-    #[default]
-    None,
-    /// A Relay built-in codec was active.
-    #[serde(rename = "builtin")]
-    BuiltIn(BuiltinLlmCodec),
-    /// A runtime-registered codec was active, identified by its stable ID.
-    Runtime(String),
-    /// A codec was active but has no registered identity.
-    Opaque,
-}
 
 /// Per-call request codec context delivered to an LLM sanitizer.
 pub struct LlmSanitizeRequestContext<'a> {

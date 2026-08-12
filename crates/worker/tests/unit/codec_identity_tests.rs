@@ -4,35 +4,39 @@
 use super::*;
 
 #[test]
-fn test_gemini_codec_identity_decoded_as_builtin_not_opaque() {
+fn known_builtin_codec_identities_decode_as_builtins() {
     use nemo_relay_worker_proto::v1::LlmCodecIdentity as ProtoIdentity;
     use nemo_relay_worker_proto::v1::LlmCodecKind;
 
-    let proto = ProtoIdentity {
-        kind: LlmCodecKind::Builtin as i32,
-        id: Some("gemini_generate_content".to_string()),
-    };
-    let identity = codec_identity_from_proto(Some(&proto));
-    assert_eq!(
-        identity,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent),
-        "Gemini generateContent codec id must decode to BuiltIn(GeminiGenerateContent), not Opaque"
-    );
+    for codec in [
+        BuiltinLlmCodec::OpenAiChat,
+        BuiltinLlmCodec::OpenAiResponses,
+        BuiltinLlmCodec::AnthropicMessages,
+        BuiltinLlmCodec::OCIGenAI,
+        BuiltinLlmCodec::GeminiGenerateContent,
+    ] {
+        let proto = ProtoIdentity {
+            kind: LlmCodecKind::Builtin as i32,
+            id: Some(codec.id().to_owned()),
+        };
+        assert_eq!(
+            codec_identity_from_proto(Some(&proto)),
+            LlmCodecIdentity::BuiltIn(codec),
+        );
+    }
 }
 
 #[test]
-fn test_oci_genai_codec_identity_decoded_as_builtin_not_opaque() {
+fn unknown_builtin_codec_identity_decodes_as_opaque() {
     use nemo_relay_worker_proto::v1::LlmCodecIdentity as ProtoIdentity;
     use nemo_relay_worker_proto::v1::LlmCodecKind;
 
     let proto = ProtoIdentity {
         kind: LlmCodecKind::Builtin as i32,
-        id: Some("oci_genai".to_string()),
+        id: Some("future_provider".to_owned()),
     };
-    let identity = codec_identity_from_proto(Some(&proto));
     assert_eq!(
-        identity,
-        LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI),
-        "OCI GenAI codec id must decode to BuiltIn(OCIGenAI), not Opaque"
+        codec_identity_from_proto(Some(&proto)),
+        LlmCodecIdentity::Opaque
     );
 }

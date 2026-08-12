@@ -38,6 +38,7 @@ pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, P
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
 pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
+pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
     LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationPayload,
@@ -144,34 +145,6 @@ type LlmSanitizeRequestFn = Arc<
 >;
 type LlmSanitizeResponseFn =
     Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> BoxFutureResult<Option<Json>> + Send + Sync>;
-
-/// Relay built-in codec identities supplied to worker sanitizers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinLlmCodec {
-    /// OpenAI Chat Completions.
-    OpenAiChat,
-    /// OpenAI Responses.
-    OpenAiResponses,
-    /// Anthropic Messages.
-    AnthropicMessages,
-    /// OCI Generative AI chat request and response payloads.
-    OCIGenAI,
-    /// Gemini generateContent request and response payloads.
-    GeminiGenerateContent,
-}
-
-/// Per-call LLM codec identity supplied to worker sanitizers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LlmCodecIdentity {
-    /// No codec was active.
-    None,
-    /// A Relay built-in codec was active.
-    BuiltIn(BuiltinLlmCodec),
-    /// A runtime-registered codec was active, identified by its stable ID.
-    Runtime(String),
-    /// A codec was active but has no registered identity.
-    Opaque,
-}
 
 /// Active codec context supplied to an LLM request sanitizer.
 #[derive(Clone)]
@@ -2155,18 +2128,10 @@ fn codec_identity_from_proto(
     let codec_id = codec.and_then(|codec| codec.id.clone());
     match LlmCodecKind::try_from(codec_kind).ok() {
         Some(LlmCodecKind::Unspecified) => LlmCodecIdentity::None,
-        Some(LlmCodecKind::Builtin) => match codec_id.as_deref() {
-            Some("openai_chat") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
-            Some("openai_responses") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
-            Some("anthropic_messages") => {
-                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
-            }
-            Some("oci_genai") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI),
-            Some("gemini_generate_content") => {
-                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
-            }
-            _ => LlmCodecIdentity::Opaque,
-        },
+        Some(LlmCodecKind::Builtin) => codec_id
+            .as_deref()
+            .and_then(BuiltinLlmCodec::from_id)
+            .map_or(LlmCodecIdentity::Opaque, LlmCodecIdentity::BuiltIn),
         Some(LlmCodecKind::Runtime) => codec_id
             .filter(|id| !id.is_empty())
             .map_or(LlmCodecIdentity::Opaque, LlmCodecIdentity::Runtime),
