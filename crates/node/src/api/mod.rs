@@ -1550,7 +1550,12 @@ impl NodePluginValidateCallback {
             plugin_config,
             ThreadsafeFunctionCallMode::Blocking,
             move |value: Option<Json>| {
-                let _ = tx.send(callback_json(value));
+                let result = callable::unwrap_middleware_result(
+                    callback_json(value),
+                    "JS plugin validate callback failed",
+                )
+                .map_err(|error| napi::Error::from_reason(error.to_string()));
+                let _ = tx.send(result);
                 Ok(())
             },
         );
@@ -1560,7 +1565,7 @@ impl NodePluginValidateCallback {
             )));
         }
         rx.recv()
-            .map_err(|_| napi::Error::from_reason("JS plugin validate completion channel closed"))
+            .map_err(|_| napi::Error::from_reason("JS plugin validate completion channel closed"))?
     }
 }
 
@@ -4782,7 +4787,8 @@ pub fn register_plugin(
     let validate_callback = match validate {
         Some(func) => {
             let direct = PersistentJsFunction::new(&env, &func)?;
-            let mut thread_safe = func.create_threadsafe_function(
+            let callback = callable::safe_middleware_callback(&env, &func)?;
+            let mut thread_safe = callback.create_threadsafe_function(
                 0,
                 |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
             )?;

@@ -141,6 +141,34 @@ describe('core plugins', () => {
     }
   });
 
+  it('reports throwing async plugin validation without terminating Node', async () => {
+    const pluginKind = `node.test.async_validate_throw.${Date.now()}`;
+    plugin.register(pluginKind, {
+      validate() {
+        throw new Error('plugin validation boom');
+      },
+      register() {
+        assert.fail('registration must not run after validation fails');
+      },
+    });
+
+    try {
+      const config = {
+        version: 1,
+        components: [plugin.ComponentSpec(pluginKind, {})],
+      };
+      await assert.rejects(() => plugin.initialize(config), /plugin validation boom/);
+      const report = plugin.validate(config);
+      assert.equal(report.diagnostics.length, 1);
+      assert.equal(report.diagnostics[0].code, 'plugin.validate_failed');
+      assert.match(report.diagnostics[0].message, /plugin validation boom/);
+      assert.deepEqual(await lib.toolCallExecute('validation_error_survives', {}, (args) => args), {});
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
+
   it('invokes top-level plugin registration during plugin configuration', async () => {
     const pluginKind = `node.test.register.${Date.now()}`;
     let registerCalls = 0;
