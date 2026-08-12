@@ -16,7 +16,8 @@ use nemo_relay::plugin::{
     initialize_plugins_exact, list_plugin_kinds, register_plugin, validate_plugin_config,
 };
 use nemo_relay_language_binding_plugin_example::{
-    DocumentationPlugin, config, config_with_enabled, observed_event_count, reset_observed_events,
+    DocumentationPlugin, config, config_with_enabled, observed_event_count, observed_events,
+    reset_observed_events,
 };
 use serde_json::{Map, json};
 use tokio::sync::{Mutex, MutexGuard};
@@ -110,6 +111,15 @@ fn validation_warns_about_unknown_field() {
 
     assert_eq!(diagnostics[0].level, DiagnosticLevel::Warning);
     assert_eq!(diagnostics[0].field.as_deref(), Some("unexpected"));
+}
+
+#[tokio::test]
+async fn registration_rejects_a_duplicate_kind_and_missing_deregistration_is_false() {
+    let _lock = PLUGIN_TEST_LOCK.lock().await;
+    register_plugin(Arc::new(DocumentationPlugin)).expect("first registration should succeed");
+    assert!(register_plugin(Arc::new(DocumentationPlugin)).is_err());
+    assert!(!deregister_plugin("missing-documentation-plugin"));
+    assert!(deregister_plugin("documentation-plugin"));
 }
 
 #[tokio::test]
@@ -270,6 +280,35 @@ async fn subscriber_observes_managed_call() {
     flush_subscribers().expect("subscriber flush should succeed");
 
     assert!(observed_event_count() > 0);
+}
+
+#[tokio::test]
+async fn configuration_controls_redaction_pending_marks_and_isolated_scope_events() {
+    let _active = activate().await;
+
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("safe_tool")
+            .args(json!({"value": 1}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .expect("tool call should succeed");
+    flush_subscribers().expect("subscriber flush should succeed");
+
+    let events = observed_events();
+    let runtime_mark = events
+        .iter()
+        .find(|event| event.name() == "documentation-plugin.request")
+        .expect("configured runtime mark should be delivered");
+    assert_eq!(runtime_mark.data().expect("mark data")["secret"], "[REDACTED]");
+    assert!(events
+        .iter()
+        .any(|event| event.name() == "documentation-plugin.tool-complete"));
+    assert!(events
+        .iter()
+        .any(|event| event.name() == "documentation-plugin.isolated"));
 }
 
 #[tokio::test]

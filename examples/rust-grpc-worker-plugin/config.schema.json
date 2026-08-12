@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Rust gRPC Worker Documentation Plugin",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "tag": {
       "description": "Non-empty label attached to plugin-created metadata and runtime events.",
@@ -14,7 +14,7 @@
     "observe": {
       "description": "Controls the subscriber and all observability sanitizers.",
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "enabled": {
           "description": "Registers the subscriber and event, tool, and LLM observability sanitizers.",
@@ -32,7 +32,7 @@
     "requests": {
       "description": "Controls blocking and real request rewriting.",
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "enabled": {
           "description": "Registers tool and model policy plus request-rewriting middleware.",
@@ -84,7 +84,7 @@
     "execution": {
       "description": "Controls tool, unary LLM, and streaming continuation wrappers.",
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "enabled": {
           "description": "Registers tool, unary LLM, and streaming LLM execution intercepts.",
@@ -106,7 +106,7 @@
     "runtime": {
       "description": "Controls host marks, scopes, and isolated scope stacks.",
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "emit_marks": {
           "description": "Emits a host-runtime mark during the tool request intercept.",

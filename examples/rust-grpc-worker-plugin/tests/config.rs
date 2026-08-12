@@ -84,7 +84,7 @@ fn schema_contains_every_feature_group() {
     let schema: Json = serde_json::from_str(include_str!("../config.schema.json"))
         .expect("schema should be valid JSON");
     let fields = schema["properties"].as_object().expect("properties object");
-    assert_eq!(schema["additionalProperties"], Json::Bool(false));
+    assert_eq!(schema["additionalProperties"], Json::Bool(true));
     assert_eq!(fields.len(), 5);
     for field in ["tag", "observe", "requests", "execution", "runtime"] {
         assert!(fields.contains_key(field));

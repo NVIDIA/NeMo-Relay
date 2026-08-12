@@ -55,6 +55,16 @@ def test_validation_rejects_wrong_type() -> None:
     assert diagnostics[0]["code"] == "documentation-plugin.invalid_config"
 
 
+def test_registration_rejects_a_duplicate_kind_and_missing_deregistration_is_false() -> None:
+    plugin.register("documentation-plugin", DocumentationPlugin())
+    try:
+        with pytest.raises(RuntimeError):
+            plugin.register("documentation-plugin", DocumentationPlugin())
+        assert plugin.deregister("missing-documentation-plugin") is False
+    finally:
+        plugin.deregister("documentation-plugin")
+
+
 @pytest.mark.parametrize(
     ("config", "field", "code"),
     [

@@ -52,6 +52,13 @@ test('validation rejects a wrong type', () => {
   assert.equal(diagnostics[0].code, 'documentation-plugin.invalid_config');
 });
 
+test('validation reports a non-object configuration', () => {
+  const diagnostics = documentationPlugin.validate(null);
+
+  assert.equal(diagnostics[0].code, 'documentation-plugin.invalid_config');
+  assert.equal(diagnostics[0].field, undefined);
+});
+
 for (const [config, field, code] of [
   [{ tag: '' }, 'tag', 'documentation-plugin.invalid_tag'],
   [{ requests: { header_name: '' } }, 'requests.header_name', 'documentation-plugin.invalid_header'],
@@ -140,6 +147,19 @@ test('teardown removes the plugin kind', async () => {
     plugin.clear();
     assert.equal(plugin.deregister('documentation-plugin'), true);
     assert.equal(plugin.listKinds().includes('documentation-plugin'), false);
+  } finally {
+    plugin.clear();
+    plugin.deregister('documentation-plugin');
+    restoreEnvironment();
+  }
+});
+
+test('registration rejects a duplicate kind and missing deregistration is false', () => {
+  const restoreEnvironment = isolateExampleEnvironment();
+  plugin.register('documentation-plugin', documentationPlugin);
+  try {
+    assert.throws(() => plugin.register('documentation-plugin', documentationPlugin));
+    assert.equal(plugin.deregister('missing-documentation-plugin'), false);
   } finally {
     plugin.clear();
     plugin.deregister('documentation-plugin');

@@ -74,6 +74,9 @@ function normalizedConfig(config) {
 
 function validateDocumentationConfig(config) {
   const diagnostics = [];
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) {
+    return [diagnostic('error', 'invalid_config', null, 'plugin config must be a JSON object')];
+  }
   const topLevel = new Set(['tag', ...Object.keys(GROUP_FIELDS)]);
   for (const key of Object.keys(config)) {
     if (!topLevel.has(key)) {
