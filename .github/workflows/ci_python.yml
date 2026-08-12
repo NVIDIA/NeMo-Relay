@@ -96,6 +96,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
+      - name: Set up Python
+        if: ${{ matrix.platform != 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
       - name: Set up Windows ARM Python
         if: ${{ matrix.platform == 'windows-arm64' }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -104,19 +110,12 @@ jobs:
           architecture: arm64
 
       - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
         run: |
           set -e
           python - <<'PY' >> "$GITHUB_ENV"
           import sys
           print(f"UV_PYTHON={sys.executable}")
           PY
-
-      - name: Install managed Python
-        if: ${{ matrix.platform != 'windows-arm64' }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Install Windows ARM64 OpenSSL
         if: ${{ matrix.platform == 'windows-arm64' }}
@@ -222,6 +221,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
+      - name: Set up Python
+        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
       - name: Set up Windows ARM Python
         if: ${{ matrix.platform == 'windows-arm64' }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -230,19 +235,13 @@ jobs:
           architecture: arm64
 
       - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
+        if: ${{ !contains(matrix.platform, 'musl') }}
         run: |
           set -e
           python - <<'PY' >> "$GITHUB_ENV"
           import sys
           print(f"UV_PYTHON={sys.executable}")
           PY
-
-      - name: Install managed Python
-        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         if: ${{ !contains(matrix.platform, 'musl') }}
@@ -459,6 +458,12 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
 
+      - name: Set up Python
+        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
       - name: Set up Windows ARM Python
         if: ${{ matrix.platform == 'windows-arm64' }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
@@ -467,17 +472,13 @@ jobs:
           architecture: arm64
 
       - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
+        if: ${{ !contains(matrix.platform, 'musl') }}
         run: |
           set -e
           python - <<'PY' >> "$GITHUB_ENV"
           import sys
           print(f"UV_PYTHON={sys.executable}")
           PY
-
-      - name: Install managed Python
-        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
-        run: UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Download matching Python wheel artifact
         if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'source-and-plugin' }}
