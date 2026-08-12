@@ -215,6 +215,14 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
         tools.default.ttl_seconds,
         tools.default.bypass_rate,
     );
+    if tools.default.cacheable {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_cacheable_default",
+            Some("tools.default.cacheable"),
+            "tools.default.cacheable must be false; use a named class or override to classify cacheable tools"
+                .to_string(),
+        ));
+    }
     if !tools.default.members.is_empty() {
         report.diagnostics.push(response_cache_error(
             "response_cache.tool_default_members",
@@ -250,14 +258,13 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
                 owning_class.insert(member.as_str(), class_name.as_str());
             }
             if class.cacheable && !member.is_empty() && member.chars().all(|c| c == '*') {
-                report.diagnostics.push(response_cache_warning(
+                report.diagnostics.push(response_cache_error(
                     "response_cache.tool_catch_all_member",
                     Some("tools.classes"),
                     format!(
                         "class '{class_name}' lists the catch-all member '{member}' with \
-                         cacheable = true, which caches every tool no other class claims; \
-                         prefer flipping default.cacheable on explicitly if broad coverage is \
-                         intended"
+                         cacheable = true, which caches every tool; use a named class to \
+                         classify cacheable tools"
                     ),
                 ));
             }
@@ -277,12 +284,12 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
             && !tool_name.is_empty()
             && tool_name.chars().all(|c| c == '*')
         {
-            report.diagnostics.push(response_cache_warning(
+            report.diagnostics.push(response_cache_error(
                 "response_cache.tool_catch_all_override",
                 Some("tools.overrides"),
                 format!(
-                    "override '{tool_name}' sets cacheable = true for every tool; prefer \
-                     flipping default.cacheable on explicitly if broad coverage is intended"
+                    "override '{tool_name}' sets cacheable = true for every tool; use a \
+                     named override to classify cacheable tools"
                 ),
             ));
         }
@@ -372,10 +379,6 @@ fn validate_tool_policy(
 
 fn response_cache_error(code: &str, field: Option<&str>, message: String) -> ConfigDiagnostic {
     response_cache_diag(DiagnosticLevel::Error, code, field, message)
-}
-
-fn response_cache_warning(code: &str, field: Option<&str>, message: String) -> ConfigDiagnostic {
-    response_cache_diag(DiagnosticLevel::Warning, code, field, message)
 }
 
 fn response_cache_diag(

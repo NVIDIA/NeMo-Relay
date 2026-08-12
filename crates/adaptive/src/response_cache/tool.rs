@@ -476,26 +476,6 @@ mod tests {
     }
 
     #[test]
-    fn default_bucket_can_be_flipped_on_for_broad_coverage() {
-        let tools = ToolCacheConfig {
-            default: ToolClass {
-                cacheable: true,
-                ttl_seconds: Some(60),
-                bypass_rate: Some(0.5),
-                ..ToolClass::default()
-            },
-            ..ToolCacheConfig::default()
-        };
-        let policy = resolve_policy("unknown_tool", &response_cache(3600, 0.0), &tools);
-        assert!(
-            policy.cacheable,
-            "default cacheable=true covers unknown tools"
-        );
-        assert_eq!(policy.ttl, Duration::from_secs(60));
-        assert_eq!(policy.bypass_rate, 0.5);
-    }
-
-    #[test]
     fn wildcard_match_table() {
         let cases = [
             ("*", "", true),

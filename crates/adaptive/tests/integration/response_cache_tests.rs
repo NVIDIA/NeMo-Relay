@@ -2312,6 +2312,7 @@ async fn invalid_tool_config_is_rejected_by_validation() {
         response_cache: Some(cache_with_tools(ToolCacheConfig {
             enabled: true,
             default: ToolClass {
+                cacheable: true,
                 members: vec!["safe_lookup".to_string()],
                 ..ToolClass::default()
             },
@@ -2356,6 +2357,14 @@ async fn invalid_tool_config_is_rejected_by_validation() {
             .iter()
             .any(|diagnostic| diagnostic.code == "response_cache.tool_default_members"),
         "members on the default bucket must be rejected: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_cacheable_default"),
+        "a cacheable default bucket must be rejected: {:?}",
         report.diagnostics
     );
 }
@@ -2456,7 +2465,7 @@ async fn wildcard_member_validation_rules() {
                 .diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_member"),
-            "a cacheable '{catch_all}' member must warn: {:?}",
+            "a cacheable '{catch_all}' member must be rejected: {:?}",
             report.diagnostics
         );
     }
@@ -2486,7 +2495,7 @@ async fn wildcard_member_validation_rules() {
             .diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_override"),
-        "a cacheable '*' override must warn: {:?}",
+        "a cacheable '*' override must be rejected: {:?}",
         report.diagnostics
     );
 
