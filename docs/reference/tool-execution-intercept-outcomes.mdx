@@ -147,8 +147,8 @@ Rebuild native plugins and workers against the same NeMo Relay release that
 hosts them. For binding-specific examples, refer to the
 [Migration Guides](/reference/migration-guides#return-canonical-tool-execution-results).
 
-## Related Topics
-
-- [LLM Request Intercept Outcomes](/reference/llm-request-intercept-outcomes)
-- [Add Middleware](/instrument-applications/advanced-guide)
-- [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
+LLM request intercepts use a different outcome because they must preserve an
+annotated request and codec authority. That contract is described in [LLM
+Request Intercept Outcomes](/reference/llm-request-intercept-outcomes). Worker
+authors can trace both outcome envelopes through the [grpc-v1 protocol
+reference](/build-plugins/workers/grpc-v1-protocol).

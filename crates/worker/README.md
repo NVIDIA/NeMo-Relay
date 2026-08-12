@@ -20,34 +20,18 @@ SPDX-License-Identifier: Apache-2.0
 dynamic worker plugins. Use it when plugin code needs process isolation and
 communicates with Relay through the versioned `grpc-v1` worker protocol.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline.
-Workers built for an earlier Relay release must be rebuilt with this SDK and
-declare a `compat.relay` range beginning at `0.8.0` or later. The protocol name
-remains `grpc-v1`, but its generated `ToolNext` response and tool-execution
-outcome fields now use structural protobuf messages.
+## Authoring Surface
 
-## Why Use It?
+| Surface | Role |
+|---|---|
+| `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
+| `PluginContext` | Installs typed handlers for all 15 supported registration surfaces. |
+| `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
+| `serve_plugin` | Starts the Tokio gRPC server from the activation identity, local endpoints, and token supplied by Relay. |
 
-- **Isolate plugin code**: Run custom runtime behavior outside the Relay host
-  process.
-- **Use typed registration APIs**: Implement `WorkerPlugin` and register
-  subscribers, guardrails, or intercepts with `PluginContext`.
-- **Call the host runtime**: Emit marks, manage scopes, and invoke middleware
-  continuations through `PluginRuntime`.
-- **Keep lifecycle managed**: Let Relay provide authenticated endpoints and
-  start the worker with `serve_plugin`.
-
-## What You Get
-
-- **`WorkerPlugin`**: The plugin identity, validation, and registration
-  contract.
-- **`PluginContext`**: Typed registrations for all supported worker surfaces.
-- **`PluginRuntime` and continuations**: Host-runtime callbacks and tool/LLM
-  execution-chain helpers.
-- **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, so
-  workers can preserve an opaque annotation independently of the tool result.
-- **`serve_plugin`**: Tokio gRPC server startup using the Relay-provided worker
-  environment.
+This model keeps plugin dependencies and crashes outside the Relay process, while the
+SDK retains the shared runtime contract and manages authentication, cancellation, and
+shutdown.
 
 ## Installation
 
@@ -113,8 +97,7 @@ or stops consuming a stream, and the SDK aborts the matching async callback
 task. An accepted cancellation confirms the task was found; it cannot prove
 that arbitrary blocking work started by the callback has stopped.
 
-## Documentation
-
-- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
-- [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md)
+The [Rust worker guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/rust)
+connects this SDK to packaging and host activation. Complete [Rust](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/rust-grpc-worker-plugin/README.md)
+and [Python](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md)
+workers demonstrate the same middleware contract.

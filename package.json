@@ -7,6 +7,7 @@
   },
   "workspaces": [
     "crates/node",
+    "examples/language-binding-plugin/node",
     "integrations/openclaw"
   ],
   "devDependencies": {
