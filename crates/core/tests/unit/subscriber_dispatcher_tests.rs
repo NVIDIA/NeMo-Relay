@@ -7,11 +7,22 @@ use super::native::{
     register_pending_publication, resume_after_fork_parent, sanitize_event_snapshot,
     set_sanitizer_runtime_failure_for_test, spawn_background_publication,
 };
-use super::{EventSubscriberFn, publication_context};
+use super::{EventSubscriberFn, SubscriberDelivery, publication_context, with_publication_context};
 use crate::api::registry::RegistryRecord;
 use crate::api::runtime::EventSanitizeFn;
 use crate::api::runtime::scope_stack::current_scope_stack;
 use std::sync::{Arc, Mutex, mpsc};
+
+#[test]
+fn publication_context_and_completed_delivery_restore_the_calling_thread() {
+    assert!(publication_context::<String>().is_none());
+    let observed = with_publication_context(Some(Arc::new("binding".to_string())), || {
+        publication_context::<String>().map(|value| value.as_str().to_string())
+    });
+    assert_eq!(observed.as_deref(), Some("binding"));
+    assert!(publication_context::<String>().is_none());
+    futures::executor::block_on(SubscriberDelivery::completed().wait()).unwrap();
+}
 
 #[test]
 fn subscriber_dispatcher_parent_fork_hooks_validate_balanced_calls() {

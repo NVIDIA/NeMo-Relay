@@ -270,6 +270,26 @@ fn wire_protocol_and_plugin_lifecycle_contracts_are_stable() {
     assert_eq!(diagnostics[0].code, "switchyard.invalid_config");
 }
 
+#[test]
+fn switchyard_target_bindings_keep_protocol_specific_endpoints() {
+    for protocol in [
+        WireProtocol::OpenaiChat,
+        WireProtocol::OpenaiResponses,
+        WireProtocol::AnthropicMessages,
+    ] {
+        let binding = binding(protocol, "coverage-model");
+        assert_eq!(binding.protocol, protocol);
+        assert_eq!(binding.endpoint, protocol.endpoint());
+        assert_eq!(binding.base_url, "http://127.0.0.1:9999");
+    }
+    let defaults = ProtocolDefaults {
+        openai_chat: "chat".into(),
+        openai_responses: "responses".into(),
+        anthropic_messages: "anthropic".into(),
+    };
+    assert_eq!(defaults.openai_chat, "chat");
+}
+
 #[tokio::test]
 async fn plugin_registration_installs_and_rolls_back_both_execution_intercepts() {
     let plugin = SwitchyardPlugin;

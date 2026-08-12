@@ -203,6 +203,27 @@ fn builtin_backend_config_default_matches_documented_action_default() {
 }
 
 #[test]
+fn component_spec_and_plugin_contract_preserve_the_public_configuration_shape() {
+    let config = PiiRedactionConfig::default();
+    let component = ComponentSpec::new(config.clone());
+    assert!(component.enabled);
+    assert_eq!(component.config.mode, "builtin");
+
+    let registered: PluginComponentSpec = component.into();
+    assert_eq!(registered.kind, PII_REDACTION_PLUGIN_KIND);
+    assert!(registered.enabled);
+    assert!(registered.config.get("mode").is_none());
+
+    let plugin = PiiRedactionPlugin;
+    assert_eq!(plugin.plugin_kind(), PII_REDACTION_PLUGIN_KIND);
+    assert!(!plugin.allows_multiple_components());
+    assert_eq!(
+        plugin.validate(&Map::from_iter([("input".into(), json!("invalid"))]))[0].code,
+        "pii_redaction.invalid_plugin_config"
+    );
+}
+
+#[test]
 fn trajectory_preset_validates_without_an_action_and_rejects_matcher_fields() {
     let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
     reset_runtime();

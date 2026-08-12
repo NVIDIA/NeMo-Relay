@@ -19,6 +19,27 @@ use super::host::{
     validate_host_registration, validate_host_version, validate_relay_hook_forward,
     validate_relay_mcp,
 };
+
+#[test]
+fn host_plugin_readiness_aggregates_success_and_failure_checks() {
+    let mut readiness = HostPluginReadiness {
+        host: "codex".into(),
+        remediation: "repair".into(),
+        state_path: PathBuf::from("/tmp/state.json"),
+        marketplace: None,
+        plugin: None,
+        checks: vec![],
+        relay: None,
+        host_plugin_registered: None,
+        host_marketplace_registered: None,
+        plugin_setup: None,
+    };
+    readiness.push("Host CLI", Ok("available".into()));
+    assert!(readiness.ok());
+    readiness.push("Plugin files", Err("missing".into()));
+    assert!(!readiness.ok());
+    assert_eq!(readiness.checks[1].details, "missing");
+}
 use super::*;
 use crate::agents::CodingAgent;
 use crate::agents::strip_windows_verbatim_prefix;

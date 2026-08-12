@@ -314,3 +314,7 @@ fn ensure_portable_response(protocol: WireProtocol, response: &Json) -> Result<(
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/translation_tests.rs"]
+mod tests;
