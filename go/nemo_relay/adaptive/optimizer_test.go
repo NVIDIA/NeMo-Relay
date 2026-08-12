@@ -9,6 +9,8 @@ import (
 	nemo_relay "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
 )
 
+const redisURL = "redis://127.0.0.1:6379"
+
 func TestConfigBuilders(t *testing.T) {
 	config := NewConfig()
 	if config.Version != 1 {
@@ -39,11 +41,11 @@ func TestConfigBuilders(t *testing.T) {
 }
 
 func TestRedisBackendAndComponentSpecBuilders(t *testing.T) {
-	backend := NewRedisBackend("redis://127.0.0.1:6379", "adaptive:")
+	backend := NewRedisBackend(redisURL, "adaptive:")
 	if backend.Kind != "redis" {
 		t.Fatalf("expected redis backend kind, got %q", backend.Kind)
 	}
-	if backend.Config["url"] != "redis://127.0.0.1:6379" {
+	if backend.Config["url"] != redisURL {
 		t.Fatalf("expected backend url to round-trip, got %#v", backend.Config["url"])
 	}
 	if backend.Config["key_prefix"] != "adaptive:" {
@@ -115,7 +117,7 @@ func TestResponseCacheBuilders(t *testing.T) {
 	if NewInMemoryResponseCacheBackend().Kind != "in_memory" {
 		t.Fatal("expected in-memory response cache backend")
 	}
-	backend := NewRedisResponseCacheBackend("redis://127.0.0.1:6379", "responses:")
+	backend := NewRedisResponseCacheBackend(redisURL, "responses:")
 	if backend.Kind != "redis" || backend.Config["key_prefix"] != "responses:" {
 		t.Fatalf("unexpected redis response cache backend: %#v", backend)
 	}

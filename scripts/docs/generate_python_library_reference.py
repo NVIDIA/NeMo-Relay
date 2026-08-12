@@ -256,25 +256,28 @@ def _collect_module(
     )
 
     for node in api_tree.body:
-        if isinstance(node, ast.ClassDef) and _is_public(node.name):
-            impl_node = impl_nodes.get(node.name)
-            module.classes.append(_class_doc(node, impl_node if isinstance(impl_node, ast.ClassDef) else None))
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public(node.name):
-            impl_node = impl_nodes.get(node.name)
-            module.functions.append(
-                _function_doc(
-                    node,
-                    impl_node=impl_node if isinstance(impl_node, (ast.FunctionDef, ast.AsyncFunctionDef)) else None,
-                )
-            )
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            module.aliases.extend(_assignment_names(node))
-        elif module_path.stem == "__init__" and isinstance(node, ast.ImportFrom):
-            module.reexports.extend(_reexport_names(node))
+        _collect_module_node(module, module_path, node, impl_nodes)
 
     module.aliases = sorted(set(module.aliases))
     module.reexports = sorted(set(module.reexports) - set(module.aliases))
     return module
+
+
+def _collect_module_node(module: ModuleDoc, module_path: Path, node: ast.AST, impl_nodes: dict[str, ast.AST]) -> None:
+    if isinstance(node, ast.ClassDef) and _is_public(node.name):
+        impl_node = impl_nodes.get(node.name)
+        module.classes.append(_class_doc(node, impl_node if isinstance(impl_node, ast.ClassDef) else None))
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public(node.name):
+        impl_node = impl_nodes.get(node.name)
+        module.functions.append(
+            _function_doc(
+                node, impl_node=impl_node if isinstance(impl_node, (ast.FunctionDef, ast.AsyncFunctionDef)) else None
+            )
+        )
+    elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+        module.aliases.extend(_assignment_names(node))
+    elif module_path.stem == "__init__" and isinstance(node, ast.ImportFrom):
+        module.reexports.extend(_reexport_names(node))
 
 
 def _discover_modules(package: Package, package_root: Path) -> list[ModuleDoc]:
