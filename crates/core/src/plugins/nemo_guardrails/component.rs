@@ -523,7 +523,7 @@ fn register_nemo_guardrails_backend(
 ) -> PluginResult<()> {
     log::warn!(
         target: "nemo_relay.plugin",
-        event = NEMO_GUARDRAILS_DEPRECATION_CODE,
+        event = "nemo_guardrails_deprecated",
         plugin_kind = NEMO_GUARDRAILS_PLUGIN_KIND,
         removal_version = NEMO_GUARDRAILS_REMOVAL_VERSION;
         "The built-in NeMo Guardrails plugin is deprecated and scheduled for removal in NeMo Relay 0.9"
