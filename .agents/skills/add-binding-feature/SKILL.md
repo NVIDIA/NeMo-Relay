@@ -87,6 +87,9 @@ Lock these before implementing:
 - Does the new API need manual lifecycle and managed execute variants, or only
   one of them?
 - Does the new behavior change event fields, metadata, or scope expectations?
+- If tool execution is affected, does every callback, continuation, managed
+  return, and manual end surface use the canonical `ToolExecutionResult`
+  contract and preserve its opaque annotation?
 - Are docs/examples required because the intended usage changed?
 
 ## Key References

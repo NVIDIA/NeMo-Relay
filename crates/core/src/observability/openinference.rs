@@ -8,8 +8,8 @@
 use super::{
     estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model,
     input_tokens_including_cache, manual, merge_usage, model_name_for_llm_event,
-    push_serialized_top_level_attributes, push_top_level_json_attributes,
-    total_tokens_including_cache,
+    push_serialized_top_level_attributes, push_tool_result_annotation_attribute,
+    push_top_level_json_attributes, total_tokens_including_cache,
 };
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::scope::ScopeType;
@@ -127,6 +127,7 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
     }
     push_top_level_json_attributes(&mut attributes, "openinference.metadata", event.metadata());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
+    push_tool_result_annotation_attribute(&mut attributes, event);
     if let Some((output, mime_type)) = openinference_output_value(event) {
         attributes.push(KeyValue::new("output.value", output));
         attributes.push(KeyValue::new("output.mime_type", mime_type));

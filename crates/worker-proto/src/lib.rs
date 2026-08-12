@@ -9,8 +9,13 @@
 //! are carried as JSON envelopes so `nemo-relay-types` remains the shared source
 //! of truth for event, LLM, tool, scope, and plugin diagnostic data shapes.
 
-/// Stable worker protocol identifier accepted by `compat.worker_protocol`.
+/// Legacy worker protocol identifier retained for source compatibility.
+///
+/// Relay no longer accepts this protocol in worker manifests or handshakes.
 pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
+
+/// Stable worker protocol identifier accepted by `compat.worker_protocol`.
+pub const WORKER_PROTOCOL_GRPC_V2: &str = "grpc-v2";
 
 /// Generated protobuf and gRPC service definitions.
 #[allow(missing_docs)]

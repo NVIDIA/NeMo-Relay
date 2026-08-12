@@ -14,6 +14,7 @@ use crate::api::runtime::{
     BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
     MiddlewareContinuationLease, NemoRelayContextState,
 };
+use crate::api::tool::{TOOL_EXECUTION_RESULT_SCHEMA, ToolExecutionResult};
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::optimization::LlmOptimizationContribution;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -27,7 +28,8 @@ use nemo_relay_worker_proto::v1::{
     HealthResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest, LlmCodecDecodeResponse,
     LlmCodecEncodeRequest, LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, Registration, ScopeContext, ScopeType as ProtoScopeType,
-    ShutdownRequest, StreamChunk, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
+    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
+    ValidateResponse, WorkerAck,
 };
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -581,6 +583,29 @@ fn relay_compatibility_and_blocking_helpers_cover_local_edges() {
 }
 
 #[test]
+fn worker_handshake_validation_rejects_grpc_v1_response() {
+    let handshake = HandshakeResponse {
+        plugin_id: "fixture_worker".into(),
+        plugin_kind: "fixture_worker".into(),
+        allows_multiple_components: false,
+        worker_protocol: "grpc-v1".into(),
+        sdk_name: "unit".into(),
+        sdk_version: "0".into(),
+        runtime_name: "unit".into(),
+        runtime_version: "0".into(),
+        supported_surfaces: Vec::new(),
+    };
+
+    let error = validate_worker_handshake("fixture_worker", &handshake)
+        .expect_err("a grpc-v1 handshake response must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported worker_protocol 'grpc-v1'")
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn worker_endpoints_fail_when_host_socket_cannot_bind() {
     enable_operational_logs();
@@ -668,6 +693,14 @@ async fn callback_helpers_cover_worker_response_edges() {
             },
             "llm_intercept_error" => InvokeResponse {
                 result: Some(InvokeResult::Error(worker_error.clone())),
+            },
+            "tool_intercept_legacy_outcome" => InvokeResponse {
+                result: Some(InvokeResult::ToolExecution(ToolExecutionInterceptResult {
+                    outcome: Some(JsonEnvelope {
+                        schema: "nemo.relay.ToolExecutionInterceptOutcome@1".into(),
+                        json: br#"{"result":{},"pending_marks":[]}"#.to_vec(),
+                    }),
+                })),
             },
             _ => InvokeResponse {
                 result: Some(InvokeResult::Empty(EmptyResult {})),
@@ -765,6 +798,21 @@ async fn callback_helpers_cover_worker_response_edges() {
         .await
         .expect_err("LLM intercept worker error should surface");
     assert!(error.to_string().contains("worker.failed: boom"));
+
+    let error = callback
+        .invoke_tool_execution(
+            "tool_intercept_legacy_outcome",
+            "lookup",
+            json!({}),
+            Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
+        )
+        .await
+        .expect_err("grpc-v1 tool outcome schema should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported tool execution intercept outcome schema")
+    );
 
     let error = callback
         .invoke_llm_request_intercept(
@@ -1300,7 +1348,7 @@ async fn dropping_callback_future_cancels_worker_and_cleans_host_state() {
     let continuation_id = callback
         .host_state
         .insert_continuation(Continuation::tool(Arc::new(|value| {
-            Box::pin(async move { Ok(value) })
+            Box::pin(async move { Ok(ToolExecutionResult::new(value)) })
         })))
         .expect("continuation should insert");
     let request = callback.base_request(
@@ -2240,7 +2288,7 @@ async fn host_runtime_service_covers_continuation_errors_and_stream_items() {
 
     let tool_continuation = state
         .insert_continuation(Continuation::tool(Arc::new(|value| {
-            Box::pin(async move { Ok(value) })
+            Box::pin(async move { Ok(ToolExecutionResult::new(value)) })
         })))
         .expect("tool continuation should insert");
     let invalid_tool_json = service
@@ -2453,7 +2501,7 @@ async fn worker_continuations_reject_calls_after_the_interceptor_settles() {
                     invocation?
                         .invoke(|| async move {
                             provider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                            Ok(value)
+                            Ok(ToolExecutionResult::new(value))
                         })
                         .await
                 })
@@ -2532,9 +2580,9 @@ async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
     let continuation_id = state
         .insert_continuation(Continuation::tool(Arc::new(|_| {
             Box::pin(async {
-                Ok(json!(
+                Ok(ToolExecutionResult::new(json!(
                     crate::api::runtime::task_scope_top().uuid.to_string()
-                ))
+                )))
             })
         })))
         .expect("tool continuation should insert");
@@ -2556,13 +2604,14 @@ async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
         service.tool_next(request("worker-next-second"))
     );
     let decode = |response: tonic::Response<JsonResult>| {
-        decode_json_envelope::<Json>(
-            &response
-                .into_inner()
-                .value
-                .expect("tool next should return a value"),
-        )
-        .unwrap()
+        let value = response
+            .into_inner()
+            .value
+            .expect("tool next should return a value");
+        assert_eq!(value.schema, TOOL_EXECUTION_RESULT_SCHEMA);
+        decode_json_envelope::<ToolExecutionResult>(&value)
+            .unwrap()
+            .result
     };
 
     assert_eq!(decode(first.unwrap()), json!(expected[0]));
@@ -2801,7 +2850,7 @@ impl PluginWorker for FakePluginWorker {
             plugin_id: "fixture_worker".into(),
             plugin_kind: "fixture_worker".into(),
             allows_multiple_components: false,
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             sdk_name: "unit".into(),
             sdk_version: "0".into(),
             runtime_name: "unit".into(),
@@ -2818,7 +2867,7 @@ impl PluginWorker for FakePluginWorker {
             ok: true,
             message: String::new(),
             plugin_id: "fixture_worker".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             sdk_name: "unit".into(),
             sdk_version: "0".into(),
             runtime_name: "unit".into(),

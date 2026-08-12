@@ -99,7 +99,7 @@ async fn test_tool_intercept_calls_next() {
     let intercept = create_tool_execution_intercept(hot_cache);
 
     let next: ToolExecutionNextFn =
-        Arc::new(|_args| Box::pin(async move { Ok(json!({"result": "ok"})) }));
+        Arc::new(|_args| Box::pin(async move { Ok(json!({"result": "ok"}).into()) }));
 
     let result = intercept("test", json!({"input": 1}), next).await;
     assert!(result.is_ok());
@@ -121,7 +121,7 @@ async fn test_tool_intercept_with_populated_cache() {
     let intercept = create_tool_execution_intercept(hot_cache);
 
     let next: ToolExecutionNextFn =
-        Arc::new(|_args| Box::pin(async move { Ok(json!({"from_next": true})) }));
+        Arc::new(|_args| Box::pin(async move { Ok(json!({"from_next": true}).into()) }));
 
     // Should not panic and should return next's result
     let result = intercept("test", json!({"tool_input": "data"}), next).await;
@@ -143,7 +143,7 @@ async fn test_tool_intercept_passes_args_to_next() {
     let intercept = create_tool_execution_intercept(hot_cache);
 
     // next captures and returns the args it received, proving pass-through
-    let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
 
     let input = json!({"tool_arg": "value", "count": 42});
     let result = intercept("test", input.clone(), next).await;
@@ -317,7 +317,7 @@ async fn test_schedule_mode_intercept_waits_for_primer_before_running_follower()
                         "follower should not call next until the primer has released the cohort"
                     );
                 }
-                Ok(args)
+                Ok(args.into())
             })
         })
     };

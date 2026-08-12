@@ -253,10 +253,11 @@ impl NativePlugin for ExampleNativePlugin {
                 let tag = tag.clone();
                 async move {
                     let request = tag_json(args, "native_tool_execution_request", &tag);
-                    let result = next.call(request).await?;
-                    let result = tag_json(result, "native_tool_execution_response", &tag);
+                    let mut result = next.call(request).await?;
+                    result.result =
+                        tag_json(result.result, "native_tool_execution_response", &tag);
                     Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name("example.native.tool_execution")
                                 .category(EventCategory::custom())

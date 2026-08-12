@@ -536,7 +536,8 @@ global_execution_registry_api!(
     /// Register a global tool execution intercept.
     /// Execution intercepts can wrap or replace the tool callback. Each
     /// callback returns a canonical tool execution outcome, while its
-    /// continuation resolves to the raw downstream result JSON.
+    /// continuation resolves to the downstream
+    /// [`ToolExecutionResult`](crate::api::tool::ToolExecutionResult).
     register_tool_execution_intercept,
     /// Deregister a global tool execution intercept.
     deregister_tool_execution_intercept,
@@ -670,7 +671,8 @@ scope_execution_registry_api!(
     /// Register a scope-local tool execution intercept.
     /// Execution intercepts can wrap or replace the tool callback inside the
     /// owning scope. Each callback returns a canonical tool execution outcome,
-    /// while its continuation resolves to the raw downstream result JSON.
+    /// while its continuation resolves to the downstream
+    /// [`ToolExecutionResult`](crate::api::tool::ToolExecutionResult).
     scope_register_tool_execution_intercept,
     /// Deregister a scope-local tool execution intercept.
     scope_deregister_tool_execution_intercept,

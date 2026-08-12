@@ -18,7 +18,7 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-worker` is the Rust authoring SDK for out-of-process NeMo Relay
 dynamic worker plugins. Use it when plugin code needs process isolation and
-communicates with Relay through the versioned `grpc-v1` worker protocol.
+communicates with Relay through the versioned `grpc-v2` worker protocol.
 
 ## Why Use It?
 
@@ -38,6 +38,8 @@ communicates with Relay through the versioned `grpc-v1` worker protocol.
 - **`PluginContext`**: Typed registrations for all supported worker surfaces.
 - **`PluginRuntime` and continuations**: Host-runtime callbacks and tool/LLM
   execution-chain helpers.
+- **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, so
+  workers can preserve an opaque annotation independently of the tool result.
 - **`serve_plugin`**: Tokio gRPC server startup using the Relay-provided worker
   environment.
 

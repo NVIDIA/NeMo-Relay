@@ -40,6 +40,12 @@ and native subscribers remain synchronous. Follow the [native Rust migration
 guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08)
 for callback and executor changes.
 
+Managed and manual tool execution now uses the canonical
+`ToolExecutionResult` shape across Rust, Python, Node.js, Go, the public C
+surface, native plugins, and `grpc-v2` workers. The required `result` remains
+application-owned, while an optional opaque `annotation` travels beside it and
+is projected consistently into sanitized observability.
+
 ### Highlights
 
 The following updates expand native Rust plugin capabilities:
@@ -48,6 +54,11 @@ The following updates expand native Rust plugin capabilities:
   continuations, and downstream LLM streams on an SDK-owned executor.
 - Native ABI v4 provides completion-scoped codec operations and pull-based LLM
   stream continuations.
+- Tool callbacks and execution-intercept continuations share one canonical
+  result contract with an optional opaque annotation.
+- ATOF, ATIF, and the `full` and `openinference` OpenTelemetry projections
+  preserve sanitized tool result annotations without flattening their
+  application-defined schemas.
 
 ### Support Matrix and Compatibility Updates
 
@@ -64,6 +75,11 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
 - Typed native Rust middleware callbacks now return futures and receive owned
   arguments. Native subscribers and raw synchronous ABI entry points are
   unchanged.
+- Managed tool callbacks, execution-intercept continuations, execute-helper
+  returns, and manual tool end APIs now use `ToolExecutionResult` instead of a
+  raw JSON result. Applications that need the original business payload must
+  read its `result` field. Refer to the
+  [tool result migration guide](/reference/migration-guides#return-canonical-tool-execution-results).
 - Repository-local `.nemo-relay/config.toml`, `plugins.toml`, and
   `.dynamic-plugins.json` files are no longer discovered or activated. Runtime
   resolution is explicit-or-user followed by higher-precedence system policy.
@@ -129,7 +145,7 @@ for destination paths and explicit-file alternatives.
   the `gen_ai` OpenTelemetry projection also omits marks. The `full` and
   `openinference` projections retain their fixed native mark handling.
 - Native dynamic plugins run in the Relay process and are not sandboxed. A
-  `grpc-v1` worker runs in a separate process, but that process is not a
+  `grpc-v2` worker runs in a separate process, but that process is not a
   security sandbox.
 - Treat Python `LLMRequest` objects as immutable. Request middleware that
   changes content must return a new request object.

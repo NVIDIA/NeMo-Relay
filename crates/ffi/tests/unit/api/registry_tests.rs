@@ -1421,7 +1421,9 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         _args_json: *const c_char,
         _next_ctx: *mut libc::c_void,
     ) -> *mut c_char {
-        CString::new(r#"{"next":true}"#).unwrap().into_raw()
+        CString::new(r#"{"result":{"next":true},"annotation":{"source":"next"}}"#)
+            .unwrap()
+            .into_raw()
     }
 
     unsafe extern "C" fn llm_next_passthrough(
@@ -1816,7 +1818,11 @@ fn test_ffi_duplicate_registration_sweep_and_helper_callbacks() {
         .unwrap();
         assert_eq!(
             serde_json::from_str::<Json>(&tool_intercept_json).unwrap(),
-            json!({"result": {"next": true}, "pending_marks": []})
+            json!({
+                "result": {"next": true},
+                "annotation": {"source": "next"},
+                "pending_marks": [],
+            })
         );
 
         let request = cstring(r#"{"headers":{},"content":{"model":"ffi-model","messages":[]}}"#);

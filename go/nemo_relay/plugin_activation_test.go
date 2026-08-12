@@ -1018,7 +1018,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = "=%s"
-native_api = "1"
+native_api = "2"
 
 [defaults]
 enabled = false
@@ -1047,7 +1047,7 @@ kind = "worker"
 
 [compat]
 relay = "=%s"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false

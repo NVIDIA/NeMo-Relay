@@ -36,7 +36,7 @@ use nemo_relay::api::event::{
     PendingMarkSpec,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay::codec::optimization::LlmOptimizationContribution;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse;
@@ -729,10 +729,20 @@ pub fn wrap_js_tool_request_intercept_fn(
     })
 }
 
-/// Wrap a JS function `(args: object) => object` for tool execution (synchronous callbacks).
+fn parse_tool_execution_result(value: Json) -> Result<ToolExecutionResult> {
+    serde_json::from_value(value).map_err(|error| {
+        FlowError::Internal(format!(
+            "tool execution callback must return ToolExecutionResult: {error}"
+        ))
+    })
+}
+
+/// Wrap a JS function `(args: object) => ToolExecutionResult` for tool execution.
 pub fn wrap_js_tool_exec_fn(
     func: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
-) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
+) -> Box<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionResult>> + Send>> + Send + Sync,
+> {
     let func = Arc::new(func);
     Box::new(move |args: Json| {
         let func = func.clone();
@@ -752,7 +762,10 @@ pub fn wrap_js_tool_exec_fn(
                 )));
             }
             let result = rx.await.map_err(|e| FlowError::Internal(e.to_string()))?;
-            unwrap_middleware_result(result, "JS tool execution callback failed")
+            parse_tool_execution_result(unwrap_middleware_result(
+                result,
+                "JS tool execution callback failed",
+            )?)
         })
     })
 }
@@ -1486,7 +1499,7 @@ pub fn wrap_js_response_codec(
     })
 }
 
-/// Wrap a JS function `(args, next) => { result, pendingMarks? }` for tool execution intercept.
+/// Wrap a JS function `(args, next) => { result, annotation?, pendingMarks? }` for tool execution intercept.
 ///
 /// The JS callback receives the tool arguments and a real `next(args)` function
 /// that returns a Promise for the downstream result.
@@ -1495,13 +1508,21 @@ pub fn wrap_js_tool_exec_intercept_fn(
 ) -> nemo_relay::api::runtime::ToolExecutionFn {
     Arc::new(move |_name: &str, args: Json, next: ToolExecutionNextFn| {
         let func = func.clone();
-        let next_json: JsonNextFn = Arc::new(move |next_args| next(next_args));
+        let next_json: JsonNextFn = Arc::new(move |next_args| {
+            let next = next.clone();
+            Box::pin(async move {
+                serde_json::to_value(next(next_args).await?)
+                    .map_err(|error| FlowError::Internal(error.to_string()))
+            })
+        });
         Box::pin(async move {
             let result = func.call_with_json_next(args, next_json).await?;
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
             struct JsOutcome {
                 result: Json,
+                #[serde(default)]
+                annotation: Option<Json>,
                 #[serde(default)]
                 pending_marks: Vec<JsPendingMarkSpec>,
             }
@@ -1512,6 +1533,9 @@ pub fn wrap_js_tool_exec_intercept_fn(
             })?;
             Ok(ToolExecutionInterceptOutcome {
                 result: outcome.result,
+                annotation: outcome
+                    .annotation
+                    .filter(|annotation| !annotation.is_null()),
                 pending_marks: outcome.pending_marks.into_iter().map(Into::into).collect(),
             })
         })

@@ -109,13 +109,15 @@ describe('core plugins', () => {
       assert.deepEqual((await plugin.initialize(config)).diagnostics, []);
       assert.equal(validateCalls, 2);
       assert.equal(registerCalls, 1);
-      assert.deepEqual(await lib.toolCallExecute('validated_plugin_tool', {}, (args) => args), {
-        marker: 'validated',
+      assert.deepEqual(await lib.toolCallExecute('validated_plugin_tool', {}, (args) => ({ result: args })), {
+        result: { marker: 'validated' },
       });
 
       plugin.clear();
       assert.equal(plugin.deregister(pluginKind), true);
-      assert.deepEqual(await lib.toolCallExecute('cleared_plugin_tool', {}, (args) => args), {});
+      assert.deepEqual(await lib.toolCallExecute('cleared_plugin_tool', {}, (args) => ({ result: args })), {
+        result: {},
+      });
     } finally {
       plugin.clear();
       plugin.deregister(pluginKind);
@@ -162,7 +164,9 @@ describe('core plugins', () => {
       assert.equal(report.diagnostics.length, 1);
       assert.equal(report.diagnostics[0].code, 'plugin.validate_failed');
       assert.match(report.diagnostics[0].message, /plugin validation boom/);
-      assert.deepEqual(await lib.toolCallExecute('validation_error_survives', {}, (args) => args), {});
+      assert.deepEqual(await lib.toolCallExecute('validation_error_survives', {}, (args) => ({ result: args })), {
+        result: {},
+      });
     } finally {
       plugin.clear();
       plugin.deregister(pluginKind);
@@ -262,7 +266,7 @@ describe('core plugins', () => {
       });
       assert.deepEqual(report.diagnostics, []);
       await assert.rejects(
-        () => lib.toolCallExecute('plugin_request_throw', {}, () => ({ should_not: 'run' })),
+        () => lib.toolCallExecute('plugin_request_throw', {}, () => ({ result: { should_not: 'run' } })),
         /plugin request intercept boom/i,
       );
     } finally {
@@ -284,16 +288,20 @@ describe('core plugins', () => {
 
     plugin.register(pluginKind, {
       register(_config, context) {
-        context.registerToolExecutionIntercept('target', 100, async (args, next) => ({
-          result: {
-            ...(await next(args)),
-            snapshotted: true,
-          },
-        }));
+        context.registerToolExecutionIntercept('target', 100, async (args, next) => {
+          const downstream = await next(args);
+          return {
+            result: {
+              ...downstream.result,
+              snapshotted: true,
+            },
+            ...(downstream.annotation == null ? {} : { annotation: downstream.annotation }),
+          };
+        });
         context.registerToolExecutionIntercept('blocker', -100, async (args, next) => {
           blockerEntered();
           await release;
-          return { result: await next(args) };
+          return await next(args);
         });
       },
     });
@@ -315,14 +323,16 @@ describe('core plugins', () => {
         ],
       });
       const execution = lib.toolCallExecute('plugin_snapshot_tool', {}, () => ({
-        downstream: true,
+        result: { downstream: true },
       }));
       await entered;
       plugin.clear();
       releaseBlocker();
       assert.deepEqual(await execution, {
-        downstream: true,
-        snapshotted: true,
+        result: {
+          downstream: true,
+          snapshotted: true,
+        },
       });
     } finally {
       releaseBlocker();

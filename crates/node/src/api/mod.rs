@@ -87,7 +87,9 @@ use crate::convert::{
 use crate::promise_call::PromiseAwareFn;
 use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
-use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
+use crate::types::{
+    LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolExecutionResult, ToolHandle,
+};
 
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NODE_ENVIRONMENT_LIFECYCLE_LOCK: StdMutex<()> = StdMutex::new(());
@@ -2309,7 +2311,7 @@ pub fn tool_call(
 pub fn tool_call_end(
     env: Env,
     handle: &ToolHandle,
-    result: Json,
+    result: ToolExecutionResult,
     data: Option<Json>,
     metadata: Option<Json>,
     timestamp: Option<f64>,
@@ -2319,7 +2321,7 @@ pub fn tool_call_end(
         core_tool_api::tool_call_end(
             core_tool_api::ToolCallEndParams::builder()
                 .handle(&handle.inner)
-                .result(result)
+                .execution_result(result.into())
                 .data_opt(opt_json(data))
                 .metadata_opt(opt_json(metadata))
                 .timestamp_opt(timestamp)
@@ -2338,12 +2340,12 @@ pub fn tool_call_end(
 /// (no Start/End pair) and `GuardrailRejected` is returned. Returns the final
 /// execution result; sanitize guardrails do not rewrite the caller-visible value.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<unknown>")]
+#[napi(ts_return_type = "Promise<ToolExecutionResult>")]
 pub fn tool_call_execute(
     env: Env,
     name: String,
     args: Json,
-    #[napi(ts_arg_type = "(arg: Json) => any")] func: JsFunction,
+    #[napi(ts_arg_type = "(arg: Json) => ToolExecutionResult")] func: JsFunction,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -2379,6 +2381,7 @@ pub fn tool_call_execute(
                                     .build(),
                             )
                             .await
+                            .map(ToolExecutionResult::from)
                             .map_err(to_napi_err)
                         })
                         .await
@@ -2399,11 +2402,14 @@ pub fn tool_call_execute(
 /// Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a
 /// promise-aware wrapper with access to `Env`.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<unknown>")]
+#[napi(ts_return_type = "Promise<ToolExecutionResult>")]
 pub fn tool_call_execute_async(
     env: Env,
     name: String,
     args: Json,
+    #[napi(
+        ts_arg_type = "(arg: Json, signal: AbortSignal) => ToolExecutionResult | Promise<ToolExecutionResult>"
+    )]
     func: JsFunction,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
@@ -2426,7 +2432,14 @@ pub fn tool_call_execute_async(
 
     let exec_fn: ToolExecutionNextFn = std::sync::Arc::new(move |args| {
         let pa_fn = pa_fn.clone();
-        Box::pin(async move { pa_fn.call(args).await })
+        Box::pin(async move {
+            let result = pa_fn.call(args).await?;
+            serde_json::from_value(result).map_err(|error| {
+                FlowError::Internal(format!(
+                    "tool execution callback must return ToolExecutionResult: {error}"
+                ))
+            })
+        })
     });
 
     env.execute_tokio_future(
@@ -2449,6 +2462,7 @@ pub fn tool_call_execute_async(
                                     .build(),
                             )
                             .await
+                            .map(ToolExecutionResult::from)
                             .map_err(to_napi_err)
                         })
                         .await
@@ -3138,7 +3152,7 @@ pub fn register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -3717,7 +3731,7 @@ pub fn scope_register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {

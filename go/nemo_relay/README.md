@@ -135,12 +135,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	result, err := tools.Execute("search", json.RawMessage(`{"query":"hello"}`), func(args json.RawMessage) (json.RawMessage, error) {
-		return args, nil
+	result, err := tools.Execute("search", json.RawMessage(`{"query":"hello"}`), func(args json.RawMessage) (nemo.ToolExecutionResult, error) {
+		return nemo.ToolExecutionResult{Result: args}, nil
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(string(result))
+	fmt.Println(string(result.Result))
 }
 ```

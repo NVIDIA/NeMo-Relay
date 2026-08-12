@@ -28,10 +28,10 @@ Use this skill for docs-only or example-heavy changes.
   only point at namespaced helper paths when documenting internal maintenance
   work
 - When detailed dynamic plugin guides exist, keep Rust native plugin examples,
-  Python worker plugin examples, and `grpc-v1` protocol details on separate
+  Python worker plugin examples, and `grpc-v2` protocol details on separate
   pages.
-- Dynamic plugin manifests in docs/examples should use
-  `compat.relay = ">=0.5,<1.0"` unless deliberately narrower.
+- Dynamic plugin manifests that use native API 2 or `grpc-v2` should use
+  `compat.relay = ">=0.8.0,<1.0"` unless deliberately narrower.
 - In MDX files, top-of-file comments must use JSX comment delimiters:
   `{/*` to open and `*/}` to close. Do not use HTML comments for MDX SPDX
   headers.

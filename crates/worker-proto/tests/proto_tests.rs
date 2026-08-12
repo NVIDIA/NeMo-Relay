@@ -6,13 +6,16 @@
 use nemo_relay_worker_proto::v1::{
     HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, RegistrationSurface, ScopeType,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope,
+};
 use prost::Message;
 use serde_json::json;
 
 #[test]
 fn worker_protocol_identifier_is_stable() {
     assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
+    assert_eq!(WORKER_PROTOCOL_GRPC_V2, "grpc-v2");
 }
 
 #[test]
@@ -63,15 +66,15 @@ fn request_field_numbers_are_stable() {
     let handshake = HandshakeRequest {
         activation_id: "act".into(),
         plugin_id: "plugin".into(),
-        relay_version: "0.5.0".into(),
-        worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+        relay_version: "0.8.0".into(),
+        worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
         auth_token: "token".into(),
         host_endpoint: "unix:///tmp/host.sock".into(),
     };
     let encoded = handshake.encode_to_vec();
     assert_eq!(
         encoded,
-        b"\x0a\x03act\x12\x06plugin\x1a\x050.5.0\x22\x07grpc-v1\x2a\x05token\x32\x15unix:///tmp/host.sock"
+        b"\x0a\x03act\x12\x06plugin\x1a\x050.8.0\x22\x07grpc-v2\x2a\x05token\x32\x15unix:///tmp/host.sock"
             .to_vec()
     );
     assert_eq!(

@@ -9,12 +9,13 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use nemo_relay::api::event::{CategoryProfile, Event};
+use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, ToolSanitizeFn,
 };
+use nemo_relay::api::tool::TOOL_RESULT_ANNOTATION_PROFILE_KEY;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
     ProviderSurface, detect_response_surface, request_codec as build_request_codec,
@@ -184,6 +185,18 @@ impl CompiledBuiltinBackend {
     fn sanitize_json_preorder_dfs(&self, value: Json) -> Json {
         self.sanitize_json_preorder_dfs_at_path(value, &mut Vec::new())
             .unwrap_or(Json::Null)
+    }
+
+    fn sanitize_tool_result_annotation(&self, profile: &mut CategoryProfile) {
+        let Some(annotation) = profile.extra.remove(TOOL_RESULT_ANNOTATION_PROFILE_KEY) else {
+            return;
+        };
+        let sanitized = self.sanitize_json_preorder_dfs(annotation);
+        if !sanitized.is_null() {
+            profile
+                .extra
+                .insert(TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(), sanitized);
+        }
     }
 
     fn sanitize_json_preorder_dfs_at_path(
@@ -530,7 +543,20 @@ fn event_sanitize_callback_with_scope_categories(
                     .category()
                     .is_some_and(|category| matches!(category.as_str(), "tool" | "llm"));
 
-            if !specialized_scope {
+            if specialized_scope {
+                let sanitize_tool_annotation = scope_categories
+                    .is_some_and(|(_, sanitize_tool)| sanitize_tool)
+                    && event.scope_category() == Some(ScopeCategory::End)
+                    && event
+                        .category()
+                        .is_some_and(|category| category.as_str() == "tool");
+                if sanitize_tool_annotation {
+                    fields.category_profile = fields.category_profile.map(|mut profile| {
+                        backend.sanitize_tool_result_annotation(&mut profile);
+                        profile
+                    });
+                }
+            } else {
                 fields.data = fields
                     .data
                     .map(|data| backend.sanitize_json_preorder_dfs(data));

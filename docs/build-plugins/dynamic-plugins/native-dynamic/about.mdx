@@ -30,8 +30,8 @@ id = "acme.native_policy"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.5,<1.0"
-native_api = "1"
+relay = ">=0.8.0,<1.0"
+native_api = "2"
 
 [defaults]
 enabled = false
@@ -50,15 +50,18 @@ library = "target/release/libacme_native_policy.dylib"
 symbol = "nemo_relay_register_plugin"
 ```
 
-Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"1"`, and
+Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"2"`, and
 `capabilities.items` to include `plugin_native`. Relay resolves relative paths
 from the manifest. The exported symbol must return a descriptor whose
 `plugin_kind` matches `plugin.id` exactly.
 
-Typed native middleware requires `compat.relay = ">=0.8.0,<1.0"`. Relay rejects
-its registration when the manifest admits a host that predates the SDK-owned
-executor and native ABI v4. Plugins that use only synchronous registrations,
-such as this example, should retain `compat.relay = ">=0.5,<1.0"`.
+Native API 2 requires `compat.relay = ">=0.8.0,<1.0"`. It uses
+`ToolExecutionResult` for tool continuations and preserves opaque result
+annotations through synchronous and asynchronous tool intercepts. This JSON
+contract is independent of the negotiated native ABI table version. The current
+Rust SDK uses ABI v4, while custom ABI v2 and v3 plugins can also declare native
+API 2. Relay still accepts `native_api = "1"` for existing ABI v2, v3, and v4
+plugins, but that legacy raw-JSON boundary drops tool-result annotations.
 
 ## Create a Native Plugin
 
@@ -74,7 +77,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-nemo-relay-plugin = "0.5.0"
+nemo-relay-plugin = "0.8.0"
 serde_json = "1"
 ```
 

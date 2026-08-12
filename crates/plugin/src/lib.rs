@@ -26,7 +26,10 @@ pub use nemo_relay_types::api::event::{
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
-pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
+pub use nemo_relay_types::api::tool::{
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
+    ToolExecutionInterceptOutcome, ToolExecutionResult,
+};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,

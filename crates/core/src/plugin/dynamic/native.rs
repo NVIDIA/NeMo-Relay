@@ -39,7 +39,7 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
@@ -280,9 +280,63 @@ fn native_error_diagnostic(plugin_kind: &str, code: &str, message: &str) -> Conf
 struct NativePluginInstance {
     plugin_kind: String,
     relay_compat: String,
+    tool_result_contract: NativeToolResultContract,
     allows_multiple_components: bool,
     plugin: Mutex<NemoRelayNativePluginV1>,
     _library: Library,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeToolResultContract {
+    LegacyRaw,
+    Canonical,
+}
+
+#[derive(serde::Deserialize)]
+struct LegacyToolExecutionInterceptOutcome {
+    result: Json,
+    #[serde(default)]
+    pending_marks: Vec<crate::api::event::PendingMarkSpec>,
+}
+
+fn serialize_native_tool_result(
+    result: ToolExecutionResult,
+    contract: NativeToolResultContract,
+) -> serde_json::Result<Json> {
+    match contract {
+        NativeToolResultContract::LegacyRaw => Ok(result.result),
+        NativeToolResultContract::Canonical => serde_json::to_value(result),
+    }
+}
+
+fn serialize_native_tool_outcome(
+    outcome: ToolExecutionInterceptOutcome,
+    contract: NativeToolResultContract,
+) -> serde_json::Result<Json> {
+    match contract {
+        NativeToolResultContract::LegacyRaw => Ok(serde_json::json!({
+            "result": outcome.result,
+            "pending_marks": outcome.pending_marks,
+        })),
+        NativeToolResultContract::Canonical => serde_json::to_value(outcome),
+    }
+}
+
+fn deserialize_native_tool_outcome(
+    outcome: Json,
+    contract: NativeToolResultContract,
+) -> serde_json::Result<ToolExecutionInterceptOutcome> {
+    match contract {
+        NativeToolResultContract::LegacyRaw => {
+            let outcome = serde_json::from_value::<LegacyToolExecutionInterceptOutcome>(outcome)?;
+            Ok(ToolExecutionInterceptOutcome {
+                result: outcome.result,
+                annotation: None,
+                pending_marks: outcome.pending_marks,
+            })
+        }
+        NativeToolResultContract::Canonical => serde_json::from_value(outcome),
+    }
 }
 
 unsafe impl Send for NativePluginInstance {}
@@ -330,13 +384,17 @@ fn load_one_native_plugin(
         .as_deref()
         .expect("validated native manifest must declare compat.relay")
         .to_string();
-    if manifest.compat.native_api.as_deref().map(str::trim) != Some("1") {
-        return Err(PluginError::InvalidConfig(format!(
-            "dynamic plugin '{}' declares unsupported compat.native_api '{}'; expected 1",
-            spec.plugin_id,
-            manifest.compat.native_api.as_deref().unwrap_or("")
-        )));
-    }
+    let tool_result_contract = match manifest.compat.native_api.as_deref().map(str::trim) {
+        Some("1") => NativeToolResultContract::LegacyRaw,
+        Some("2") => NativeToolResultContract::Canonical,
+        other => {
+            return Err(PluginError::InvalidConfig(format!(
+                "dynamic plugin '{}' declares unsupported compat.native_api '{}'; expected 1 or 2",
+                spec.plugin_id,
+                other.unwrap_or("")
+            )));
+        }
+    };
     let DynamicPluginManifestLoad::RustDynamic(load) = &manifest.load else {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin '{}' has invalid rust_dynamic load contract",
@@ -424,6 +482,7 @@ fn load_one_native_plugin(
     Ok(Arc::new(NativePluginInstance {
         plugin_kind,
         relay_compat,
+        tool_result_contract,
         allows_multiple_components: plugin.allows_multiple_components,
         plugin: Mutex::new(plugin),
         _library: library,
@@ -1491,7 +1550,10 @@ fn abort_completion_continuations(completion: &NativeAsyncCompletion) {
 }
 
 enum NativeAsyncNextInner {
-    Tool(ToolExecutionNextFn),
+    Tool {
+        next: ToolExecutionNextFn,
+        contract: NativeToolResultContract,
+    },
     Llm(LlmExecutionNextFn),
     LlmStream(LlmStreamExecutionNextFn),
 }
@@ -2310,7 +2372,7 @@ unsafe extern "C" fn native_async_next_invoke(
         Llm(LlmRequest),
     }
     let invocation = match &next.inner {
-        NativeAsyncNextInner::Tool(_) => Invocation::Tool(invocation),
+        NativeAsyncNextInner::Tool { .. } => Invocation::Tool(invocation),
         NativeAsyncNextInner::Llm(_) => match serde_json::from_value(invocation) {
             Ok(request) => Invocation::Llm(request),
             Err(error) => {
@@ -2327,13 +2389,12 @@ unsafe extern "C" fn native_async_next_invoke(
     }
     let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> =
         match (&next.inner, invocation) {
-            (NativeAsyncNextInner::Tool(next), Invocation::Tool(invocation)) => {
+            (NativeAsyncNextInner::Tool { next, contract }, Invocation::Tool(invocation)) => {
                 let next = next.clone();
+                let contract = *contract;
                 Box::pin(async move {
-                    serde_json::to_value(ToolExecutionInterceptOutcome::new(
-                        next(invocation).await?,
-                    ))
-                    .map_err(|error| {
+                    let result = next(invocation).await?;
+                    serialize_native_tool_outcome(result.into(), contract).map_err(|error| {
                         FlowError::Internal(format!(
                             "failed to serialize native async tool outcome: {error}"
                         ))
@@ -2593,9 +2654,17 @@ unsafe extern "C" fn native_async_next_invoke_result(
         Err(status) => return status,
     };
     let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> = match &next.inner {
-        NativeAsyncNextInner::Tool(next_fn) => {
-            let next_fn = next_fn.clone();
-            Box::pin(async move { next_fn(invocation).await })
+        NativeAsyncNextInner::Tool { next, contract } => {
+            let next = next.clone();
+            let contract = *contract;
+            Box::pin(async move {
+                let result = next(invocation).await?;
+                serialize_native_tool_result(result, contract).map_err(|error| {
+                    FlowError::Internal(format!(
+                        "failed to serialize native async tool result: {error}"
+                    ))
+                })
+            })
         }
         NativeAsyncNextInner::Llm(next_fn) => {
             let request = match serde_json::from_value(invocation) {
@@ -3368,22 +3437,21 @@ fn wrap_native_async_tool_execution(
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> ToolExecutionFn {
+    let contract = instance.tool_result_contract;
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, args, next| {
         let user_data = user_data.clone();
         let invocation = serde_json::json!({"name": name, "value": args});
         Box::pin(async move {
-            serde_json::from_value(
-                invoke_native_async_callback(
-                    cb,
-                    user_data,
-                    invocation,
-                    Some(NativeAsyncNextInner::Tool(next)),
-                    None,
-                )
-                .await?,
+            let outcome = invoke_native_async_callback(
+                cb,
+                user_data,
+                invocation,
+                Some(NativeAsyncNextInner::Tool { next, contract }),
+                None,
             )
-            .map_err(|error| {
+            .await?;
+            deserialize_native_tool_outcome(outcome, contract).map_err(|error| {
                 FlowError::Internal(format!("invalid native async tool outcome: {error}"))
             })
         })
@@ -4258,6 +4326,7 @@ fn wrap_tool_execution_fn(
     user_data: *mut c_void,
     free_fn: NemoRelayNativeFreeFn,
 ) -> ToolExecutionFn {
+    let contract = instance.tool_result_contract;
     let user_data = make_user_data(instance, user_data, free_fn);
     Arc::new(move |name, args, next| {
         let name = name.to_owned();
@@ -4268,7 +4337,8 @@ fn wrap_tool_execution_fn(
                 .ok_or_else(|| FlowError::Internal("failed to allocate native name".into()))?;
             let args_string = native_string_from_json(&args)
                 .ok_or_else(|| FlowError::Internal("failed to allocate native args".into()))?;
-            let next_ctx = Box::into_raw(Box::new(next)) as *mut c_void;
+            let next_ctx =
+                Box::into_raw(Box::new(NativeToolNextContext { next, contract })) as *mut c_void;
             let mut out_outcome = ptr::null_mut();
             let status = unsafe {
                 cb(
@@ -4281,7 +4351,7 @@ fn wrap_tool_execution_fn(
                 )
             };
             unsafe {
-                drop(Box::from_raw(next_ctx as *mut ToolExecutionNextFn));
+                drop(Box::from_raw(next_ctx as *mut NativeToolNextContext));
                 native_string_free(name_string);
                 native_string_free(args_string);
             }
@@ -4298,11 +4368,16 @@ fn wrap_tool_execution_fn(
                 out_outcome,
                 "native tool execution returned null outcome",
             )?;
-            serde_json::from_value::<ToolExecutionInterceptOutcome>(outcome_json).map_err(|err| {
+            deserialize_native_tool_outcome(outcome_json, contract).map_err(|err| {
                 FlowError::Internal(format!("invalid native tool execution outcome JSON: {err}"))
             })
         })
     })
+}
+
+struct NativeToolNextContext {
+    next: ToolExecutionNextFn,
+    contract: NativeToolResultContract,
 }
 
 unsafe extern "C" fn native_tool_next(
@@ -4318,11 +4393,19 @@ unsafe extern "C" fn native_tool_next(
         Ok(args) => args,
         Err(status) => return status,
     };
-    let next = unsafe { (*(next_ctx as *const ToolExecutionNextFn)).clone() };
+    let next_ctx = unsafe { &*(next_ctx as *const NativeToolNextContext) };
+    let next = next_ctx.next.clone();
+    let contract = next_ctx.contract;
     let context = MiddlewareContinuationContext::capture();
     let result = spawn_with_continuation_context(context, move || next(args)).join();
     match result {
-        Ok(Ok(result)) => write_native_json(&result, out_json),
+        Ok(Ok(result)) => match serialize_native_tool_result(result, contract) {
+            Ok(result) => write_native_json(&result, out_json),
+            Err(error) => {
+                set_native_last_error(format!("failed to serialize native tool result: {error}"));
+                NemoRelayStatus::Internal
+            }
+        },
         Ok(Err(err)) => status_from_flow_error(err),
         Err(_) => {
             set_native_last_error("native tool next panicked");

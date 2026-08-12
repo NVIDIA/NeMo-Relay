@@ -224,7 +224,7 @@ describe('withScope', () => {
       toolResult = await toolCallExecute(
         'search',
         { query: 'hello' },
-        (args) => ({ echo: args.query }),
+        (args) => ({ result: { echo: args.query } }),
         handle,
         null,
         null,
@@ -242,7 +242,7 @@ describe('withScope', () => {
       );
       assert.equal(childParentUuid, handleUuid, 'child scope should record the handle as its parent');
     });
-    assert.deepEqual(toolResult, { echo: 'hello' });
+    assert.deepEqual(toolResult, { result: { echo: 'hello' } });
     assert.deepEqual(llmResult, { ok: true, messages: [{ role: 'user', content: 'hi' }] });
   });
 

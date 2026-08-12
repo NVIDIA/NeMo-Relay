@@ -50,6 +50,11 @@ OpenTelemetry projections.
 - [ ] Does Relay derive compliant trace and span IDs consistently across typed
   OpenTelemetry endpoints while preserving lifecycle parentage?
 - [ ] Are mark events, start/end events, and orphan cases still handled correctly?
+- [ ] Does a sanitized tool result annotation remain opaque under
+      `category_profile.tool_result_annotation`, ATIF observation-result
+      `extra.tool_result_annotation`, and the single
+      `nemo_relay.tool.result.annotation` attribute in `full` and
+      `openinference`, while `gen_ai` omits it?
 - [ ] Do examples and docs use each exporter's documented flush/deregister
   order before shutdown?
 - [ ] Are span or trajectory fields still derived from the intended event data?

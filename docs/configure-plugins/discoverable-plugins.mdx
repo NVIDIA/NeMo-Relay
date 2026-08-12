@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 Use this guide to add a manifest-backed plugin that another author has
 packaged. Discoverable plugins are separate from built-in `[[components]]`:
 their `relay-plugin.toml` manifest describes a native shared library or a
-`grpc-v1` worker, while `plugins.toml` records where Relay can find it and
+`grpc-v2` worker, while `plugins.toml` records where Relay can find it and
 stores its component configuration.
 
 <Warning>
@@ -115,4 +115,4 @@ guides when you need to understand the package:
 - [gRPC Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about)
   covers Relay-managed Python workers.
 - [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol) describes the
-  shared `grpc-v1` protocol.
+  shared `grpc-v2` protocol.

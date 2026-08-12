@@ -7,7 +7,7 @@
 //!
 //! # Invocation cancellation
 //!
-//! The `grpc-v1` service tracks active unary and streaming callbacks by the
+//! The `grpc-v2` service tracks active unary and streaming callbacks by the
 //! host-provided invocation ID. Relay sends `CancelInvocation` when a managed
 //! caller is cancelled, an invocation times out, or a host stream is abandoned.
 //! The SDK aborts the matching async callback task and reports
@@ -37,7 +37,10 @@ pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
-pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
+pub use nemo_relay_types::api::tool::{
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA,
+    ToolExecutionInterceptOutcome, ToolExecutionResult,
+};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
@@ -60,7 +63,7 @@ use nemo_relay_worker_proto::v1::{
     ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
     ValidateResponse, WorkerAck, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -484,8 +487,8 @@ impl PluginContext {
     /// Registers a tool execution intercept.
     ///
     /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
-    /// [`ToolNext::call`] continues the chain and returns only the raw
-    /// downstream result JSON; Relay retains downstream pending marks.
+    /// [`ToolNext::call`] continues the chain and returns the downstream
+    /// [`ToolExecutionResult`]; Relay retains downstream pending marks.
     /// `ToolNext` may be called repeatedly or concurrently while the callback
     /// is active. Each call snapshots its visible worker scope stack, and Relay
     /// rejects late calls or cancels unfinished calls when the callback settles.
@@ -919,7 +922,7 @@ impl ToolNext {
     /// Calls may be repeated or concurrent while the owning interceptor is
     /// active. Each call receives an isolated snapshot of the scope stack
     /// visible here. Calls still unfinished when the interceptor settles fail.
-    pub async fn call(&self, value: Json) -> Result<Json> {
+    pub async fn call(&self, value: Json) -> Result<ToolExecutionResult> {
         let mut client = self.runtime.host_client().await?;
         let response = client
             .tool_next(Request::new(ToolNextRequest {
@@ -932,7 +935,7 @@ impl ToolNext {
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        json_result_to_sdk(response)
+        decode_typed_json_result(response, TOOL_EXECUTION_RESULT_SCHEMA)
     }
 }
 
@@ -1202,7 +1205,7 @@ impl PluginWorker for WorkerService {
             plugin_id: self.plugin.plugin_id().into(),
             plugin_kind: self.plugin.plugin_id().into(),
             allows_multiple_components: self.plugin.allows_multiple_components(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             sdk_name: "nemo-relay-worker".into(),
             sdk_version: env!("CARGO_PKG_VERSION").into(),
             runtime_name: "rust".into(),
@@ -1224,7 +1227,7 @@ impl PluginWorker for WorkerService {
             ok: true,
             message: "ready".into(),
             plugin_id: self.plugin.plugin_id().into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             sdk_name: "nemo-relay-worker".into(),
             sdk_version: env!("CARGO_PKG_VERSION").into(),
             runtime_name: "rust".into(),
@@ -2254,7 +2257,7 @@ fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<Inv
             nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
                 ToolExecutionInterceptResult {
                     outcome: Some(json_envelope(
-                        "nemo.relay.ToolExecutionInterceptOutcome@1",
+                        TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
                         &outcome,
                     )?),
                 },

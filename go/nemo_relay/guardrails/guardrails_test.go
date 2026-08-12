@@ -103,8 +103,8 @@ func runGlobalToolGuardrailShorthandChecks(t *testing.T, output func() json.RawM
 	})
 
 	if _, err := nemo_relay.ToolCallExecute("guardrails_tool", json.RawMessage(`{"value": 1}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok": true}`), nil
+		func(args json.RawMessage) (nemo_relay.ToolExecutionResult, error) {
+			return nemo_relay.ToolExecutionResult{Result: json.RawMessage(`{"ok": true}`)}, nil
 		},
 	); err != nil {
 		t.Fatalf("ToolCallExecute failed: %v", err)
@@ -193,7 +193,9 @@ func runScopeLocalToolGuardrailShorthandChecks(t *testing.T, scopeUUID string) {
 	}
 
 	if _, err := nemo_relay.ToolCallExecute("guardrails_scope_tool", json.RawMessage(`{"ok": true}`),
-		func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		func(args json.RawMessage) (nemo_relay.ToolExecutionResult, error) {
+			return nemo_relay.ToolExecutionResult{Result: args}, nil
+		},
 	); err != nil {
 		t.Fatalf("ToolCallExecute failed: %v", err)
 	}

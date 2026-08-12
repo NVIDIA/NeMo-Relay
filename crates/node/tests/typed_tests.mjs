@@ -287,22 +287,67 @@ describe('typedToolExecute', () => {
     });
   });
 
+  it('preserves annotations while codecs transform only the result', async () => {
+    const annotation = { provider: 'typed-node' };
+    let interceptAnnotation;
+    registerToolExecutionIntercept('typed_node_annotation', 10, async (args, next) => {
+      const downstream = await next(args);
+      interceptAnnotation = downstream.annotation;
+      return downstream;
+    });
+    try {
+      const result = await typedToolExecute(
+        'typed_annotated_tool',
+        new Point(2, 3),
+        (point) => ({
+          result: new Point(point.x * 2, point.y * 2),
+          annotation,
+        }),
+        pointCodec,
+        pointCodec,
+      );
+
+      assert.ok(result.result instanceof Point);
+      assert.deepEqual(result.result, new Point(4, 6));
+      assert.deepEqual(result.annotation, annotation);
+      assert.deepEqual(interceptAnnotation, annotation);
+    } finally {
+      deregisterToolExecutionIntercept('typed_node_annotation');
+    }
+  });
+
+  it('rejects legacy raw typed-tool results from sync and async producers', async () => {
+    const passthrough = new JsonPassthrough();
+    for (const producer of [() => 7, async () => 7]) {
+      await assert.rejects(
+        () => typedToolExecute('typed_legacy_result', {}, producer, passthrough, passthrough),
+        /must return ToolExecutionResult/i,
+      );
+    }
+  });
+
   it('custom codec transforms args and result', async () => {
     const result = await typedToolExecute(
       'point_tool',
       new Point(3, 4),
-      (p) => new Point(p.x * 2, p.y * 2),
+      (p) => ({ result: new Point(p.x * 2, p.y * 2) }),
       pointCodec,
       pointCodec,
     );
-    assert.ok(result instanceof Point);
-    assert.equal(result.x, 6);
-    assert.equal(result.y, 8);
+    assert.ok(result.result instanceof Point);
+    assert.equal(result.result.x, 6);
+    assert.equal(result.result.y, 8);
   });
 
   it('envelope codec wraps/unwraps', async () => {
-    const result = await typedToolExecute('envelope_tool', 42, (val) => val * 3, envelopeCodec, envelopeCodec);
-    assert.equal(result, 126);
+    const result = await typedToolExecute(
+      'envelope_tool',
+      42,
+      (val) => ({ result: val * 3 }),
+      envelopeCodec,
+      envelopeCodec,
+    );
+    assert.deepEqual(result, { result: 126 });
   });
 
   it('intercepts operate on JSON', async () => {
@@ -316,12 +361,12 @@ describe('typedToolExecute', () => {
     const result = await typedToolExecute(
       'int_tool',
       new Point(1, 2),
-      (p) => new Point(p.x, p.y),
+      (p) => ({ result: new Point(p.x, p.y) }),
       pointCodec,
       pointCodec,
     );
 
-    assert.equal(result.x, 99);
+    assert.equal(result.result.x, 99);
     assert.equal(seen.length, 1);
     assert.equal(typeof seen[0], 'object');
     assert.ok(!(seen[0] instanceof Point));
@@ -336,7 +381,7 @@ describe('typedToolExecute', () => {
       {
         v: 1,
       },
-      (args) => args,
+      (args) => ({ result: args }),
       passthrough,
       passthrough,
       {
@@ -350,7 +395,7 @@ describe('typedToolExecute', () => {
       },
     );
     assert.deepEqual(result, {
-      v: 1,
+      result: { v: 1 },
     });
   });
 
@@ -394,13 +439,13 @@ describe('typedToolExecute', () => {
     const result = await typedToolExecute(
       'async_codec_tool',
       new Point(2, 5),
-      async (p) => new Point(p.x + 1, p.y + 1),
+      async (p) => ({ result: new Point(p.x + 1, p.y + 1) }),
       pointCodec,
       pointCodec,
     );
-    assert.ok(result instanceof Point);
-    assert.equal(result.x, 3);
-    assert.equal(result.y, 6);
+    assert.ok(result.result instanceof Point);
+    assert.equal(result.result.x, 3);
+    assert.equal(result.result.y, 6);
   });
 
   it('forwards continuation cancellation to typed tool providers', async () => {
@@ -445,12 +490,12 @@ describe('typedToolExecute', () => {
             }),
           ]);
           providerSideEffects += 1;
-          return { source: 'provider' };
+          return { result: { source: 'provider' } };
         },
         new JsonPassthrough(),
         new JsonPassthrough(),
       );
-      assert.deepEqual(result, { source: 'intercept' });
+      assert.deepEqual(result, { result: { source: 'intercept' } });
       await assert.rejects(downstream, /execution continuation is no longer active/i);
       await assertCompletesWithin(aborted, 'typed tool provider did not receive cancellation');
       releaseProvider();
@@ -1007,25 +1052,25 @@ describe('typedToolExecute — mixed codecs', () => {
     const result = await typedToolExecute(
       'mixed_tool',
       new Point(5, 10),
-      (p) => p.x + p.y, // receives Point, returns number
+      (p) => ({ result: p.x + p.y }), // receives Point, returns number
       pointCodec,
       envelopeCodec,
     );
     // envelopeCodec.fromJson unwraps { value: 15 } to 15
-    assert.equal(result, 15);
+    assert.deepEqual(result, { result: 15 });
   });
 
   it('envelopeCodec for args and pointCodec for result', async () => {
     const result = await typedToolExecute(
       'mixed_tool_rev',
       42,
-      (val) => new Point(val, val * 2), // receives number, returns Point
+      (val) => ({ result: new Point(val, val * 2) }), // receives number, returns Point
       envelopeCodec,
       pointCodec,
     );
-    assert.ok(result instanceof Point);
-    assert.equal(result.x, 42);
-    assert.equal(result.y, 84);
+    assert.ok(result.result instanceof Point);
+    assert.equal(result.result.x, 42);
+    assert.equal(result.result.y, 84);
   });
 });
 
@@ -1039,24 +1084,24 @@ describe('typedToolExecute — sync function', () => {
     const result = await typedToolExecute(
       'sync_tool',
       new Point(7, 3),
-      (p) => new Point(p.x - p.y, p.x + p.y),
+      (p) => ({ result: new Point(p.x - p.y, p.x + p.y) }),
       pointCodec,
       pointCodec,
     );
-    assert.ok(result instanceof Point);
-    assert.equal(result.x, 4);
-    assert.equal(result.y, 10);
+    assert.ok(result.result instanceof Point);
+    assert.equal(result.result.x, 4);
+    assert.equal(result.result.y, 10);
   });
 
   it('sync function with envelope codec', async () => {
     const result = await typedToolExecute(
       'sync_env_tool',
       'hello',
-      (val) => val.toUpperCase(),
+      (val) => ({ result: val.toUpperCase() }),
       envelopeCodec,
       envelopeCodec,
     );
-    assert.equal(result, 'HELLO');
+    assert.deepEqual(result, { result: 'HELLO' });
   });
 });
 

@@ -14,7 +14,7 @@ two execution lanes:
 | Lane | Use when | Stable boundary |
 | --- | --- | --- |
 | `rust_dynamic` | Behavior must run in the Relay process. | Native ABI v2 |
-| `worker` | Behavior should run in a separate local process. | `grpc-v1` |
+| `worker` | Behavior should run in a separate local process. | `grpc-v2` |
 
 The manifest describes compatibility, capabilities, artifact integrity, and the
 load contract. Operators register the manifest reference and component
@@ -37,8 +37,8 @@ id = "acme.example"
 kind = "worker"
 
 [compat]
-relay = ">=0.5,<1.0"
-worker_protocol = "grpc-v1"
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -58,32 +58,30 @@ runtime = "python"
 entrypoint = "acme_example.worker:main"
 ```
 
-`compat.relay` is a normal SemVer requirement. Use `>=0.5,<1.0` unless your
-plugin requires a narrower Relay version. Keep `defaults.enabled = false`:
+`compat.relay` is a normal SemVer requirement. The native API 2 and `grpc-v2`
+contracts require `>=0.8.0,<1.0`; use a narrower range when your plugin needs
+newer behavior. Keep `defaults.enabled = false`:
 operators must enable a registered dynamic plugin explicitly. Declare only the
 capabilities the plugin needs. Add `config_schema.path` only with the
 `config_schema` capability.
-
-<Warning>
-Dynamic plugins that register an LLM request intercept consume the versioned
-request annotation contract. For Relay 0.6 request intercepts, set
-`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. Relay
-rejects the registration when the manifest still admits Relay 0.5.
-</Warning>
 
 The following requirements vary by execution lane:
 
 | Manifest area | Native dynamic plugin | Worker plugin |
 | --- | --- | --- |
 | `plugin.kind` | `rust_dynamic` | `worker` |
-| `compat` | `native_api = "1"` | `worker_protocol = "grpc-v1"` |
+| `compat` | `native_api = "2"` | `worker_protocol = "grpc-v2"` |
 | `capabilities.items` | Includes `plugin_native` | Includes `plugin_worker` |
 | `load` | `library` and `symbol` | `runtime` and `entrypoint` |
 | `source.manifest_root` | Optional | Required for `runtime = "python"`; `nemo-relay plugins add` uses it to create and retain the managed worker environment. |
 
+Use native API 2 for new native plugins. Native API 1 remains loadable for
+existing binaries, but its raw tool-result contract is an annotation barrier.
+Worker plugins use `grpc-v2`; Relay rejects `grpc-v1` manifests and handshakes.
+
 Use `runtime = "python"` for a `module:function` entrypoint, `runtime =
 "rust"` for a Rust executable, or `runtime = "command"` for another local
-executable that implements `grpc-v1`.
+executable that implements `grpc-v2`.
 
 The CLI verifies `source.artifact` against `integrity.sha256` during `plugins
 add` and `plugins validate`. After a native artifact or non-Python worker
@@ -107,7 +105,7 @@ manifest-backed package you distribute:
   for runtime choices, lifecycle, and trust; [gRPC Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about)
   or [gRPC Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about)
   for language-specific authoring; and [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
-  for the stable `grpc-v1` boundary.
+  for the stable `grpc-v2` boundary.
 
 For the complete comparison of manifest-backed packages and in-process,
 code-driven language binding plugins, refer to [Build Plugins](/build-plugins).

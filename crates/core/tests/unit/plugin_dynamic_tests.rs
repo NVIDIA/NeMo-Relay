@@ -43,7 +43,7 @@ fn sample_record() -> DynamicPluginRecord {
         },
         compatibility: DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
             relay: ">=0.1.0,<0.2.0".into(),
-            worker_protocol: "grpc-v1".into(),
+            worker_protocol: "grpc-v2".into(),
         }),
         load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
             runtime: WorkerRuntime::Python,
@@ -265,7 +265,7 @@ fn registry_rejects_missing_raw_record_relay_compatibility() {
     let mut record = sample_record();
     record.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
         relay: String::new(),
-        worker_protocol: "grpc-v1".into(),
+        worker_protocol: "grpc-v2".into(),
     });
 
     let err = registry
@@ -286,7 +286,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     record.metadata.id = " acme.guardrails.pii ".into();
     record.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
         relay: " >=0.1.0,<0.2.0 ".into(),
-        worker_protocol: " grpc-v1 ".into(),
+        worker_protocol: " grpc-v2 ".into(),
     });
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
         runtime: WorkerRuntime::Python,
@@ -299,7 +299,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
         stored.compatibility,
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
             relay: ">=0.1.0,<0.2.0".into(),
-            worker_protocol: "grpc-v1".into(),
+            worker_protocol: "grpc-v2".into(),
         })
     );
     assert_eq!(
@@ -507,7 +507,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -619,7 +619,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -667,7 +667,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -705,7 +705,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -910,7 +910,7 @@ kind = "worker"
 
 [compat]
 relay = " >=0.1.0,<0.2.0 "
-worker_protocol = " grpc-v1 "
+worker_protocol = " grpc-v2 "
 
 [defaults]
 enabled = false
@@ -933,7 +933,7 @@ entrypoint = " acme_guardrails.plugin:register "
         record.compatibility,
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
             relay: ">=0.1.0,<0.2.0".into(),
-            worker_protocol: "grpc-v1".into(),
+            worker_protocol: "grpc-v2".into(),
         })
     );
     assert_eq!(
@@ -961,7 +961,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -1001,7 +1001,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -1018,7 +1018,7 @@ entrypoint = "acme_guardrails.plugin:register"
 
     match err {
         PluginError::InvalidConfig(message) => {
-            assert!(message.contains("grpc-v1"), "{message}");
+            assert!(message.contains("grpc-v2"), "{message}");
         }
         other => panic!("unexpected worker protocol error: {other}"),
     }
@@ -1046,6 +1046,28 @@ fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
             native_api: "1".into(),
         })
     );
+}
+
+#[test]
+fn manifest_accepts_native_api_two_and_rejects_unknown_native_api() {
+    let native_api_two =
+        valid_rust_manifest_toml().replace("native_api = \"1\"", "native_api = \"2\"");
+    let record = DynamicPluginManifest::parse_toml(&native_api_two)
+        .expect("native API 2 manifest should parse")
+        .into_record(None)
+        .expect("native API 2 manifest should convert");
+    assert_eq!(
+        record.compatibility,
+        DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+            relay: ">=0.1.0,<0.2.0".into(),
+            native_api: "2".into(),
+        })
+    );
+
+    let unknown = native_api_two.replace("native_api = \"2\"", "native_api = \"3\"");
+    let error =
+        DynamicPluginManifest::parse_toml(&unknown).expect_err("unknown native API should fail");
+    assert!(error.to_string().contains("native_api = \"1\" or \"2\""));
 }
 
 #[test]
@@ -1131,7 +1153,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -1344,7 +1366,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = true
@@ -1379,7 +1401,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -1513,7 +1535,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -1548,7 +1570,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -1586,7 +1608,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.1.0,<0.2.0"
-worker_protocol = "grpc-v1"
+worker_protocol = "grpc-v2"
 
 [defaults]
 enabled = false
@@ -1732,7 +1754,7 @@ fn manifest_validation_covers_forbidden_cross_lane_fields() {
     );
 
     let mut native = DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).unwrap();
-    native.compat.worker_protocol = Some("grpc-v1".into());
+    native.compat.worker_protocol = Some("grpc-v2".into());
     assert!(
         native
             .validate()
@@ -1800,7 +1822,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     native.metadata.kind = DynamicPluginKind::RustDynamic;
     native.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
         relay: ">=0.5,<1.0".into(),
-        worker_protocol: "grpc-v1".into(),
+        worker_protocol: "grpc-v2".into(),
     });
     native.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
         library: "plugin.so".into(),

@@ -1072,14 +1072,14 @@ async fn remote_tool_output_can_rewrite_tool_result() {
             .name("weather_lookup")
             .args(json!({"city": "Phoenix"}))
             .func(Arc::new(move |_args| {
-                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+                Box::pin(async move { Ok(json!({"forecast": "sunny"}).into()) })
             }))
             .build(),
     )
     .await
     .unwrap();
 
-    assert_eq!(result, json!({"forecast": "cloudy"}));
+    assert_eq!(result.result, json!({"forecast": "cloudy"}));
 
     let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();
@@ -1159,7 +1159,7 @@ async fn remote_tool_output_rejects_when_remote_rail_refuses_without_stop_flag()
             .name("weather_lookup")
             .args(json!({"city": "Phoenix"}))
             .func(Arc::new(move |_args| {
-                Box::pin(async move { Ok(json!({"secret": "ZXCVSECRET42"})) })
+                Box::pin(async move { Ok(json!({"secret": "ZXCVSECRET42"}).into()) })
             }))
             .build(),
     )
@@ -1238,7 +1238,7 @@ async fn remote_tool_output_preserves_named_rail_selectors() {
             .name("weather_lookup")
             .args(json!({"city": "Phoenix"}))
             .func(Arc::new(move |_args| {
-                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+                Box::pin(async move { Ok(json!({"forecast": "sunny"}).into()) })
             }))
             .build(),
     )
@@ -1315,14 +1315,14 @@ async fn remote_tool_output_unrecognized_non_blocking_response_falls_back_to_ori
             .name("weather_lookup")
             .args(json!({"city": "Phoenix"}))
             .func(Arc::new(move |_args| {
-                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+                Box::pin(async move { Ok(json!({"forecast": "sunny"}).into()) })
             }))
             .build(),
     )
     .await
     .unwrap();
 
-    assert_eq!(result, json!({"forecast": "sunny"}));
+    assert_eq!(result.result, json!({"forecast": "sunny"}));
 }
 
 #[tokio::test]
@@ -1435,14 +1435,14 @@ async fn remote_tool_checks_forward_context_state_and_thread_id() {
             .name("weather_lookup")
             .args(json!({"city": "Phoenix"}))
             .func(Arc::new(move |_args| {
-                Box::pin(async move { Ok(json!({"forecast": "sunny"})) })
+                Box::pin(async move { Ok(json!({"forecast": "sunny"}).into()) })
             }))
             .build(),
     )
     .await
     .unwrap();
 
-    assert_eq!(result, json!({"forecast": "cloudy"}));
+    assert_eq!(result.result, json!({"forecast": "cloudy"}));
 
     let captured = recv_captured_request(&request_rx);
     let request_json: Json = serde_json::from_slice(&captured.body).unwrap();

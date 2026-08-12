@@ -76,26 +76,41 @@ const {
   flushSubscribers,
   registerSubscriber,
   withScope,
-} = require("nemo-relay-node");
+} = require('nemo-relay-node');
 
 async function main() {
-  registerSubscriber("printer", (runtimeEvent) => {
+  registerSubscriber('printer', (runtimeEvent) => {
     console.log(`${runtimeEvent.kind} ${runtimeEvent.name}`);
     console.log(JSON.stringify(runtimeEvent));
   });
 
-  await withScope("demo-agent", ScopeType.Agent, async (handle) => {
-    event("initialized", handle, { binding: "node" }, null);
+  await withScope('demo-agent', ScopeType.Agent, async (handle) => {
+    event('initialized', handle, { binding: 'node' }, null);
   });
 
   await flushSubscribers();
-  deregisterSubscriber("printer");
+  deregisterSubscriber('printer');
 }
 
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+```
+
+Tool producers return the canonical `{ result, annotation? }` object. Typed
+helpers apply result codecs only to the application-owned `result`, while Relay
+preserves the optional opaque `annotation` as adjacent metadata:
+
+```js
+const { toolCallExecuteAsync } = require('nemo-relay-node');
+
+const execution = await toolCallExecuteAsync('lookup', { query: 'relay' }, async (args) => ({
+  result: { answer: args.query.toUpperCase() },
+  annotation: { provider: 'example' },
+}));
+
+console.log(execution.result.answer);
 ```
 
 Native subscriber delivery is asynchronous. Awaiting `flushSubscribers()` drains

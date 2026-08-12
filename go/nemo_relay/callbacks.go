@@ -87,6 +87,7 @@ typedef NemoRelayCodecEncodeCb NemoRelayCodecEncodeFn;
 import "C"
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -168,16 +169,17 @@ type ToolSanitizeFunc func(name string, args json.RawMessage) json.RawMessage
 type ToolConditionalFunc func(name string, args json.RawMessage) *string
 
 // ToolExecutionFunc is a callback that executes a tool call, receiving the
-// arguments as JSON and returning the result JSON or an error.
-type ToolExecutionFunc func(args json.RawMessage) (json.RawMessage, error)
+// arguments as JSON and returning the canonical result or an error.
+type ToolExecutionFunc func(args json.RawMessage) (ToolExecutionResult, error)
 
 // ToolExecutionInterceptFunc is a callback for tool execution intercepts
 // following the middleware chain pattern. It receives the tool arguments and
 // a `next` function. Call `next` to invoke the next intercept in the chain
 // (or the original tool implementation if this is the innermost intercept).
 // Skip calling `next` to short-circuit the chain entirely. The callback returns
-// the canonical outcome containing the tool result and any pending marks.
-type ToolExecutionInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error)
+// the canonical outcome containing the tool result, optional annotation, and
+// any pending marks.
+type ToolExecutionInterceptFunc func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error)
 
 // LLMCodecKind identifies the active codec state supplied to a sanitizer.
 type LLMCodecKind string
@@ -444,12 +446,44 @@ type LLMRequestInterceptOutcome struct {
 	OptimizationContributions []LLMOptimizationContribution `json:"optimization_contributions"`
 }
 
+// ToolExecutionResult is the canonical application-visible result of a tool
+// execution. Result contains the protocol payload. Annotation carries optional
+// Relay-adjacent metadata without changing that payload.
+type ToolExecutionResult struct {
+	Result     json.RawMessage `json:"result"`
+	Annotation json.RawMessage `json:"annotation,omitempty"`
+}
+
+func normalizeToolExecutionAnnotation(annotation json.RawMessage) json.RawMessage {
+	if bytes.Equal(bytes.TrimSpace(annotation), []byte("null")) {
+		return nil
+	}
+	return annotation
+}
+
+func normalizeToolExecutionResult(result ToolExecutionResult) ToolExecutionResult {
+	result.Annotation = normalizeToolExecutionAnnotation(result.Annotation)
+	return result
+}
+
+func decodeToolExecutionResult(payload []byte) (ToolExecutionResult, error) {
+	var result ToolExecutionResult
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return ToolExecutionResult{}, err
+	}
+	if result.Result == nil {
+		return ToolExecutionResult{}, errors.New("canonical tool execution result is missing required result field")
+	}
+	return normalizeToolExecutionResult(result), nil
+}
+
 // ToolExecutionInterceptOutcome is the canonical result of a tool execution
-// intercept. Result is passed to the remaining middleware and application;
-// PendingMarks are Relay-owned lifecycle metadata emitted after the tool-end
-// event and are not included in the application-visible result.
+// intercept. Result and Annotation are passed to the remaining middleware and
+// application. PendingMarks are Relay-owned lifecycle metadata emitted after
+// the tool-end event and are not included in the application-visible result.
 type ToolExecutionInterceptOutcome struct {
 	Result       json.RawMessage   `json:"result"`
+	Annotation   json.RawMessage   `json:"annotation,omitempty"`
 	PendingMarks []PendingMarkSpec `json:"pending_marks"`
 }
 
@@ -611,7 +645,13 @@ func goToolExecTrampoline(userData unsafe.Pointer, argsJSON *C.char) *C.char {
 		setLastErrorMessage(err.Error())
 		return nil
 	}
-	return C.CString(string(result))
+	result = normalizeToolExecutionResult(result)
+	resultJSON, err := jsonMarshal(result)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(resultJSON))
 }
 
 //export goEventSubscriberTrampoline
@@ -772,15 +812,15 @@ func goLlmExecTrampoline(userData unsafe.Pointer, nativeJSON *C.char) *C.char {
 func goToolExecInterceptTrampoline(userData unsafe.Pointer, argsJSON *C.char, nextFn C.NemoRelayToolExecNextFn, nextCtx unsafe.Pointer) *C.char {
 	fn := lookupClosure(userData).(ToolExecutionInterceptFunc)
 	goArgs := json.RawMessage(C.GoString(argsJSON))
-	goNext := func(args json.RawMessage) (json.RawMessage, error) {
+	goNext := func(args json.RawMessage) (ToolExecutionResult, error) {
 		cArgs := C.CString(string(args))
 		defer C.free(unsafe.Pointer(cArgs))
 		result := C.callToolExecNext(nextFn, cArgs, nextCtx)
 		if result == nil {
-			return nil, lastError()
+			return ToolExecutionResult{}, lastError()
 		}
 		defer C.nemo_relay_string_free(result)
-		return json.RawMessage(C.GoString(result)), nil
+		return decodeToolExecutionResult([]byte(C.GoString(result)))
 	}
 	outcome, err := fn(goArgs, goNext)
 	if err != nil {
@@ -790,6 +830,7 @@ func goToolExecInterceptTrampoline(userData unsafe.Pointer, argsJSON *C.char, ne
 	if outcome.PendingMarks == nil {
 		outcome.PendingMarks = []PendingMarkSpec{}
 	}
+	outcome.Annotation = normalizeToolExecutionAnnotation(outcome.Annotation)
 	outcomeJSON, err := jsonMarshal(outcome)
 	if err != nil {
 		setLastErrorMessage(err.Error())

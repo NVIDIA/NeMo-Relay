@@ -79,7 +79,7 @@ def async_tool_request_handler_fixture(
 
 @pytest.fixture(name="mock_tool_execute")
 def mock_tool_execute_fixture() -> AsyncMock:
-    async def execute_side_effect(*, func: Any, **kwargs: Any) -> ToolMessage:
+    async def execute_side_effect(*, func: Any, **kwargs: Any) -> nemo_relay.ToolExecutionResult[ToolMessage]:
         result = func({"query": "intercepted"})
         if inspect.isawaitable(result):
             return await result

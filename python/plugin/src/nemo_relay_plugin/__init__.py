@@ -5,7 +5,7 @@
 
 Use :class:`WorkerPlugin` and :class:`PluginContext` to define plugin behavior,
 then pass the implementation to :func:`serve_plugin`. The SDK owns the
-``grpc-v1`` transport, host authentication, JSON envelopes, continuation calls,
+``grpc-v2`` transport, host authentication, JSON envelopes, continuation calls,
 and task-local scope-stack propagation.
 
 The worker can keep multiple RPCs in flight, but callback execution is
@@ -36,6 +36,7 @@ Public data types:
     LlmOptimizationTokens: Explicit token evidence by category.
     LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
+    ToolExecutionResult: Canonical application-visible tool result.
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
@@ -65,7 +66,7 @@ Public authoring types:
     LlmStreamNext: Continuation for a streaming LLM execution intercept.
 
 Public functions:
-    serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
+    serve_plugin: Run a local ``grpc-v2`` worker until host shutdown.
 """
 
 from ._api import (
@@ -104,6 +105,7 @@ from ._api import (
     ToolConditionalCallback,
     ToolExecutionCallback,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     ToolNext,
     ToolRequestCallback,
     ToolSanitizeCallback,
@@ -150,6 +152,7 @@ __all__ = [
     "ToolConditionalCallback",
     "ToolExecutionCallback",
     "ToolExecutionInterceptOutcome",
+    "ToolExecutionResult",
     "ToolNext",
     "ToolRequestCallback",
     "ToolSanitizeCallback",

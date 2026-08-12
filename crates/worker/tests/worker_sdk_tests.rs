@@ -20,7 +20,8 @@ use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
     ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
+    PluginContext, PluginRuntime, Result, ScopeType, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
+    TOOL_EXECUTION_RESULT_SCHEMA, ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
     WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
     serve_plugin_arc_with_config,
 };
@@ -36,7 +37,7 @@ use nemo_relay_worker_proto::v1::{
     RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope};
 use serde_json::json;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -74,8 +75,8 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            relay_version: "0.8.0".into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             auth_token: "bad-token".into(),
             host_endpoint: "http://127.0.0.1:9".into(),
         }))
@@ -87,8 +88,8 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: "wrong-activation".into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            relay_version: "0.8.0".into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
         }))
@@ -100,8 +101,8 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            relay_version: "0.8.0".into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
         }))
@@ -135,7 +136,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert!(health.ok);
     assert_eq!(health.message, "ready");
     assert_eq!(health.plugin_id, PLUGIN_ID);
-    assert_eq!(health.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
+    assert_eq!(health.worker_protocol, WORKER_PROTOCOL_GRPC_V2);
     assert_eq!(health.sdk_name, "nemo-relay-worker");
     assert_eq!(health.runtime_name, "rust");
 
@@ -612,6 +613,7 @@ async fn worker_service_invokes_every_registration_surface() {
     .await;
     assert_eq!(tool_outcome.pending_marks.len(), 1);
     assert_eq!(tool_outcome.pending_marks[0].name, "worker.tool.execution");
+    assert_eq!(tool_outcome.annotation, Some(json!({"source": "host"})));
     let tool_exec = tool_outcome.result;
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
@@ -1476,6 +1478,13 @@ async fn worker_service_propagates_host_runtime_errors() {
             },
             "tool next failed",
         ),
+        (
+            MockHostFailures {
+                tool_next_wrong_schema: true,
+                ..Default::default()
+            },
+            "nemo.relay.ToolExecutionResult@1",
+        ),
     ] {
         host.set_failures(failures);
         assert_worker_error(
@@ -1810,17 +1819,15 @@ impl WorkerPlugin for SurfacePlugin {
                     .await?;
                 runtime.pop_scope(&handle, None, None).await?;
                 runtime.drop_scope_stack(&stack_id).await?;
-                let next_value = next.call(value).await?;
-                Ok(ToolExecutionInterceptOutcome::new(set_json_field(
-                    next_value,
-                    "phase",
-                    "tool_exec",
-                ))
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("worker.tool.execution")
-                        .build(),
-                ))
+                let mut next_value = next.call(value).await?;
+                next_value.result = set_json_field(next_value.result, "phase", "tool_exec");
+                Ok(
+                    ToolExecutionInterceptOutcome::from(next_value).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("worker.tool.execution")
+                            .build(),
+                    ),
+                )
             }
         });
         let scope_runtime = runtime.clone();
@@ -2018,6 +2025,7 @@ struct MockHostFailures {
     pop_scope: HostFailure,
     drop_scope_stack: HostFailure,
     tool_next: bool,
+    tool_next_wrong_schema: bool,
     llm_next: bool,
     llm_stream_mode: MockStreamMode,
     codec_request_decode: bool,
@@ -2176,8 +2184,22 @@ impl RelayHostRuntime for MockHost {
                 error: Some(worker_error("tool next failed")),
             }));
         }
+        let schema = if self.failures().tool_next_wrong_schema {
+            "nemo.relay.Json@1"
+        } else {
+            TOOL_EXECUTION_RESULT_SCHEMA
+        };
         Ok(Response::new(JsonResult {
-            value: Some(json_env(json!({"next": "tool"}))),
+            value: Some(
+                json_envelope(
+                    schema,
+                    &ToolExecutionResult::annotated(
+                        json!({"next": "tool"}),
+                        json!({"source": "host"}),
+                    ),
+                )
+                .expect("encode tool result"),
+            ),
             error: None,
         }))
     }
@@ -2752,7 +2774,7 @@ async fn invoke_tool_execution(
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
             let outcome = result.outcome.expect("tool execution outcome");
-            assert_eq!(outcome.schema, "nemo.relay.ToolExecutionInterceptOutcome@1");
+            assert_eq!(outcome.schema, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA);
             decode_json_envelope(&outcome).expect("decode tool execution outcome")
         }
         other => panic!("unexpected invoke result: {other:?}"),

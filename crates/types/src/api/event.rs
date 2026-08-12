@@ -255,6 +255,16 @@ pub struct CategoryProfile {
 }
 
 impl CategoryProfile {
+    /// Return the opaque annotation attached to a successful tool result.
+    ///
+    /// JSON null is normalized to absence, matching the canonical
+    /// [`crate::api::tool::ToolExecutionResult`] contract.
+    pub fn tool_result_annotation(&self) -> Option<&Json> {
+        self.extra
+            .get(crate::api::tool::TOOL_RESULT_ANNOTATION_PROFILE_KEY)
+            .filter(|value| !value.is_null())
+    }
+
     /// Return true when the profile has no wire-serialized fields.
     ///
     /// # Returns

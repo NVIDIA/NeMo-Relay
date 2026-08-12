@@ -51,6 +51,8 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **Async continuations and streams**: Cloneable `ToolNext`, `LlmNext`, and
   `LlmStreamNext` handles support repeated or concurrent calls. Streaming LLM
   continuations use a pull-based host handle.
+- **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, keeping
+  application results and opaque annotations adjacent across native API 2.
 
 ## Installation
 
@@ -97,7 +99,11 @@ Build the `cdylib`, describe its entry symbol and compatibility in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. See the
 complete example for platform-specific artifact and manifest setup.
 
-Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. Relay creates one
+Use `compat.native_api = "2"` for new plugins. Native API 2 requires
+`compat.relay = ">=0.8.0,<1.0"`; its JSON result contract is independent of
+the negotiated native ABI table. This SDK currently exports ABI v4. Native API
+1 remains accepted for existing ABI v2, v3, and v4 binaries, but its raw
+tool-result boundary drops annotations. Relay creates one
 SDK-owned Tokio executor for each configured plugin component. It defaults to
 two workers: enough for modest concurrent async I/O without broadly
 oversubscribing the host. Increase the count only when measured I/O concurrency

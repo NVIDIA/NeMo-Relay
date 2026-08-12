@@ -20,17 +20,17 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HealthRequest,
-    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
-    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecIdentity as ProtoLlmCodecIdentity,
-    LlmCodecKind, LlmInvocation, LlmNextRequest,
+    DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HandshakeResponse,
+    HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
+    LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest,
+    LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
     Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope};
 use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -72,7 +72,10 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
     event as emit_scope_mark, pop_scope, push_scope,
 };
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA,
+    ToolExecutionInterceptOutcome,
+};
 use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
@@ -557,26 +560,14 @@ fn load_one_worker_plugin(
             activation_id: activation_id.clone(),
             plugin_id: spec.plugin_id.clone(),
             relay_version: env!("CARGO_PKG_VERSION").into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
             auth_token: auth_token.clone(),
             host_endpoint: host_advertise.clone(),
         }))),
     )
     .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
     let handshake = handshake.into_inner();
-    if handshake.plugin_id != spec.plugin_id || handshake.plugin_kind != spec.plugin_id {
-        return Err(PluginError::InvalidConfig(format!(
-            "worker plugin returned id '{}' kind '{}' but manifest id is '{}'",
-            handshake.plugin_id, handshake.plugin_kind, spec.plugin_id
-        )));
-    }
-    if handshake.worker_protocol != WORKER_PROTOCOL_GRPC_V1 {
-        let message = format!(
-            "unsupported worker_protocol '{}'",
-            handshake.worker_protocol
-        );
-        return Err(PluginError::InvalidConfig(message));
-    }
+    validate_worker_handshake(&spec.plugin_id, &handshake)?;
 
     let config = Json::Object(spec.config.clone());
     let validate = block_on_runtime(
@@ -1577,7 +1568,7 @@ impl WorkerPluginCallback {
             Some(invoke_response_result::Result::ToolExecution(result)) => {
                 let outcome =
                     required_envelope(result.outcome, "tool execution intercept outcome")?;
-                if outcome.schema != "nemo.relay.ToolExecutionInterceptOutcome@1" {
+                if outcome.schema != TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA {
                     return Err(FlowError::Internal(format!(
                         "worker returned unsupported tool execution intercept outcome schema: {}",
                         outcome.schema
@@ -2660,7 +2651,10 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                     panic_payload_message(payload.as_ref())
                 )))
             });
-        Ok(Response::new(json_result(result)))
+        Ok(Response::new(typed_json_result(
+            TOOL_EXECUTION_RESULT_SCHEMA,
+            result,
+        )))
     }
 
     async fn llm_next(
@@ -3183,6 +3177,25 @@ fn worker_error_diagnostic(plugin_kind: &str, code: &str, message: &str) -> Conf
         field: None,
         message: message.into(),
     }
+}
+
+fn validate_worker_handshake(
+    expected_plugin_id: &str,
+    handshake: &HandshakeResponse,
+) -> crate::plugin::Result<()> {
+    if handshake.plugin_id != expected_plugin_id || handshake.plugin_kind != expected_plugin_id {
+        return Err(PluginError::InvalidConfig(format!(
+            "worker plugin returned id '{}' kind '{}' but manifest id is '{}'",
+            handshake.plugin_id, handshake.plugin_kind, expected_plugin_id
+        )));
+    }
+    if handshake.worker_protocol != WORKER_PROTOCOL_GRPC_V2 {
+        return Err(PluginError::InvalidConfig(format!(
+            "unsupported worker_protocol '{}'",
+            handshake.worker_protocol
+        )));
+    }
+    Ok(())
 }
 
 fn validate_relay_compatibility(relay: Option<&str>) -> crate::plugin::Result<()> {

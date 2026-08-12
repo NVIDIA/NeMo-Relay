@@ -191,6 +191,12 @@ controls shown above. `gen_ai` is standards-only: it ignores those controls and
 does not emit Relay-private attributes. `semantic_selector` and
 `capture_content` are unsupported.
 
+On a successful tool end span with a present, non-null annotation, the `full`
+and `openinference` projections emit the opaque value as one JSON string
+attribute named `nemo_relay.tool.result.annotation`. Relay does not flatten the
+annotation's application-defined keys. The `gen_ai` projection omits this
+Relay-private attribute.
+
 ## GenAI Projection
 
 The `gen_ai` endpoint uses these operation names:

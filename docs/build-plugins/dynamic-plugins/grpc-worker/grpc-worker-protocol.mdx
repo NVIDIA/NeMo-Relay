@@ -1,13 +1,13 @@
 ---
 title: "gRPC Worker Protocol Overview"
-description: "Understand the local `grpc-v1` contract and canonical protocol definition for NeMo Relay worker plugins."
+description: "Understand the local `grpc-v2` contract and canonical protocol definition for NeMo Relay worker plugins."
 position: 15
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-`grpc-v1` is the stable out-of-process plugin protocol for
+`grpc-v2` is the stable out-of-process plugin protocol for
 `plugin.kind = "worker"`. Python, Rust, and other local executables can
 implement the `nemo.relay.worker.v1` API. Relay starts every worker and connects
 to it through local endpoints. Remote worker endpoints are not supported.
@@ -33,7 +33,7 @@ worker emit marks, manage scopes and isolated scope stacks, and call tool, LLM,
 or LLM-stream continuations during execution intercepts.
 
 This page summarizes the stable contract. Refer to the [canonical protocol
-definition](https://github.com/NVIDIA/NeMo-Relay/blob/0.5.0-alpha.20260706/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
+definition](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
 for every message and RPC field required to implement another runtime.
 
 ## PluginWorker RPCs
@@ -42,7 +42,7 @@ The worker implements the following RPCs:
 
 | RPC | Request and response | Purpose |
 | --- | --- | --- |
-| `Handshake` | `HandshakeRequest` → `HandshakeResponse` | Confirms plugin identity, `grpc-v1`, SDK/runtime details, and supported registration surfaces. |
+| `Handshake` | `HandshakeRequest` → `HandshakeResponse` | Confirms plugin identity, `grpc-v2`, SDK/runtime details, and supported registration surfaces. |
 | `Health` | `HealthRequest` → `HealthResponse` | Reports whether the worker is ready. |
 | `Validate` | `ValidateRequest` → `ValidateResponse` | Validates the component `config` envelope and returns diagnostics or `WorkerError`. |
 | `Register` | `RegisterRequest` → `RegisterResponse` | Returns declarative registrations or `WorkerError`. |
@@ -147,6 +147,13 @@ operations additionally require the unforgeable capability ID supplied for the
 current sanitizer invocation. Relay rejects missing, forged, expired,
 wrong-direction, or activation-mismatched capabilities. Codec transformation
 failures are non-retryable worker errors.
+
+`ToolNext` keeps its existing `JsonResult` protobuf response, but `grpc-v2`
+places a `nemo.relay.ToolExecutionResult@1` envelope in `value`. Tool execution
+intercepts return `nemo.relay.ToolExecutionInterceptOutcome@2`, whose flat
+payload contains `result`, optional `annotation`, and Relay-owned
+`pending_marks`. This semantic change is why Relay rejects `grpc-v1` workers;
+no protobuf package or RPC was added.
 
 A worker may call an execution continuation repeatedly or concurrently while
 the corresponding `Invoke` or `InvokeStream` callback is active. Each call gets

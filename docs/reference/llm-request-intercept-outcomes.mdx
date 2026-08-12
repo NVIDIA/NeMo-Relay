@@ -96,7 +96,7 @@ or object shape:
   `pending_marks` and `category_profile`.
 - Public C callbacks return one owned canonical outcome JSON string, and native
   ABI v2 callbacks return one host-owned outcome JSON string.
-- Rust and Python `grpc-v1` worker SDKs return their canonical outcome in a
+- Rust and Python `grpc-v2` worker SDKs return their canonical outcome in a
   `JsonEnvelope` with schema `nemo.relay.LlmRequestInterceptOutcome@2`.
 
 The standalone request-intercept helper returns the complete outcome but does
@@ -118,7 +118,10 @@ earlier than `T + 1µs`. Streaming and non-streaming calls use the same rules.
 Pending marks are never added to the provider request, annotated request,
 codec input, sanitizer input, or start payload.
 
-## Migration
+## Historical 0.6 Migration
+
+This section describes the NeMo Relay 0.6 migration and its then-current
+`grpc-v1` worker protocol. Current workers use `grpc-v2`.
 
 This finalizes unpublished native ABI v2 and `grpc-v1` contracts. Rebuild all
 development native plugins and workers against the same NeMo Relay release that

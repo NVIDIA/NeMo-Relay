@@ -19,7 +19,7 @@ use super::{
 };
 use crate::plugin::{PluginError, Result};
 
-const SUPPORTED_WORKER_PROTOCOL: &str = "grpc-v1";
+const SUPPORTED_WORKER_PROTOCOL: &str = "grpc-v2";
 
 /// Authored `relay-plugin.toml` manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -668,7 +668,13 @@ fn validate_compat_shape(
 ) -> Result<()> {
     match kind {
         DynamicPluginKind::RustDynamic => {
-            required_trimmed_string(compat.native_api.as_deref(), "compat.native_api")?;
+            let native_api =
+                required_trimmed_string(compat.native_api.as_deref(), "compat.native_api")?;
+            if !matches!(native_api.trim(), "1" | "2") {
+                return Err(PluginError::InvalidConfig(
+                    "rust_dynamic plugins must declare compat.native_api = \"1\" or \"2\"".into(),
+                ));
+            }
             if compat.worker_protocol.is_some() {
                 return Err(PluginError::InvalidConfig(
                     "rust_dynamic plugins must not declare compat.worker_protocol".into(),

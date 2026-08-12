@@ -20,7 +20,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 ## Rules
 
 - Keep the stable boundary explicit: native plugins cross a C ABI; worker
-  plugins cross `grpc-v1`.
+  plugins cross `grpc-v2`.
 - Do not pass Rust runtime types, trait objects, futures, or allocator-owned
   strings across the native dynamic-library boundary.
 - Typed native middleware futures run on the SDK-owned Tokio executor. Keep
@@ -30,9 +30,9 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 - Keep `relay-plugin.toml` dynamic records separate from generic runtime
   components. Enabled dynamic records may synthesize internal component specs;
   disabled records stay inspectable but unloaded.
-- Treat plugin Relay compatibility as normal SemVer. Typed async native plugin
-  examples require `>=0.8.0,<1.0`; other examples use `>=0.5,<1.0` unless a
-  plugin intentionally declares a narrower range.
+- Treat plugin Relay compatibility as normal SemVer. Native API 2 and `grpc-v2`
+  examples require `>=0.8.0,<1.0` unless a plugin intentionally declares a
+  narrower range.
 - Do not add tests under `src`; Rust tests belong in crate `tests/` trees and
   Python SDK tests belong under `python/tests`.
 - Native and worker plugins are trusted extensions. Document that native plugins
@@ -55,7 +55,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 - [ ] Top-level `doctor` reports resolved dynamic plugin and host configuration
       status.
 - [ ] When detailed dynamic plugin guides exist, they keep Rust native, Python
-      worker, and `grpc-v1` protocol details on separate pages.
+      worker, and `grpc-v2` protocol details on separate pages.
 - [ ] `justfile`, Codecov, and CI package/test workflows include new plugin
       crates and packages.
 

@@ -36,6 +36,7 @@ from nemo_relay_plugin import (  # noqa: E402
     PluginRuntime,
     ScopeType,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     ToolNext,
     WorkerPlugin,
     WorkerSdkError,
@@ -49,6 +50,7 @@ from nemo_relay_plugin._api import (  # noqa: E402
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
     TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
+    TOOL_EXECUTION_RESULT_SCHEMA,
     WORKER_PROTOCOL,
     _announced_worker_endpoint,
     _decode_required_envelope,
@@ -78,6 +80,32 @@ def optimization_contribution_fixture_fixture() -> Json:
         / "llm_optimization_contribution_v1.json"
     )
     return json.loads(fixture_path.read_text(encoding="utf-8"))
+
+
+def test_tool_execution_result_and_outcome_preserve_optional_annotation():
+    result = ToolExecutionResult(result={"ok": True}, annotation={"source": "worker"})
+    assert result.to_json() == {
+        "result": {"ok": True},
+        "annotation": {"source": "worker"},
+    }
+    assert ToolExecutionResult.from_json(result.to_json()) == result
+    null_result = ToolExecutionResult.from_json({"result": {"ok": True}, "annotation": None})
+    assert null_result.annotation is None
+    assert null_result.to_json() == {"result": {"ok": True}}
+    assert ToolExecutionResult(result=None).to_json() == {"result": None}
+    assert ToolExecutionInterceptOutcome(result={"ok": True}).to_json() == {
+        "result": {"ok": True},
+        "pending_marks": [],
+    }
+    positional_marks = [PendingMarkSpec("worker.positional-mark")]
+    positional_outcome = ToolExecutionInterceptOutcome({"ok": True}, positional_marks)
+    assert positional_outcome.pending_marks == positional_marks
+    assert positional_outcome.annotation is None
+    null_outcome = ToolExecutionInterceptOutcome(result={"ok": True}, annotation=None)
+    assert null_outcome.annotation is None
+    assert null_outcome.to_json() == {"result": {"ok": True}, "pending_marks": []}
+    with pytest.raises(WorkerSdkError, match="result field"):
+        ToolExecutionResult.from_json({"annotation": {"source": "worker"}})
 
 
 def test_optimization_contribution_fixture_round_trips_losslessly(optimization_contribution_fixture: Json):
@@ -223,7 +251,16 @@ class RecordingHostStub:
         if self.failures.get("ToolNext") == "error":
             return pb.JsonResult(error=_worker_error("ToolNext failed"))
         value = json.loads(request.value.json.decode("utf-8"))
-        return pb.JsonResult(value=_json_envelope(JSON_SCHEMA, {"next_tool": value}))
+        schema = JSON_SCHEMA if self.failures.get("ToolNext") == "wrong_schema" else TOOL_EXECUTION_RESULT_SCHEMA
+        return pb.JsonResult(
+            value=_json_envelope(
+                schema,
+                ToolExecutionResult(
+                    result={"next_tool": value},
+                    annotation={"source": "host"},
+                ).to_json(),
+            )
+        )
 
     async def LlmNext(self, request: Any) -> Any:
         self.requests.append(request)
@@ -330,7 +367,8 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def tool_execution(name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
             result = await next_call.call(_tag(value, f"execute_{name}"))
             return ToolExecutionInterceptOutcome(
-                result=_tag(result, "tool_execution"),
+                result=_tag(result.result, "tool_execution"),
+                annotation=result.annotation,
                 pending_marks=[PendingMarkSpec("worker.tool.execution")],
             )
 
@@ -1366,6 +1404,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     tool_execution = await _invoke_tool_execution_async(service, "tool_execution")
     assert tool_execution["result"]["tag"] == "tool_execution"
     assert tool_execution["result"]["next_tool"]["tag"] == "execute_lookup"
+    assert tool_execution["annotation"] == {"source": "host"}
     assert tool_execution["pending_marks"][0]["name"] == "worker.tool.execution"
 
     llm_sanitize_request = await _invoke_json_async(
@@ -1892,7 +1931,8 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
             assert runtime.current_parent_scope_id() is None
         assert runtime.current_scope_stack_id() == stack_id
     assert runtime.current_scope_stack_id() is None
-    assert tool_next["next_tool"]["value"] == 1
+    assert tool_next.result["next_tool"]["value"] == 1
+    assert tool_next.annotation == {"source": "host"}
     assert llm_next["next_llm"]["content"]["prompt"] == "hello"
     assert stream_next[0]["next_stream"]["content"]["prompt"] == "hello"
 
@@ -2024,6 +2064,10 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
 
     host_stub.failures["ToolNext"] = "error"
     with pytest.raises(WorkerSdkError, match="ToolNext failed"):
+        await ToolNext(runtime, "tool-next").call({"value": 1})
+
+    host_stub.failures["ToolNext"] = "wrong_schema"
+    with pytest.raises(WorkerSdkError, match=r"nemo\.relay\.ToolExecutionResult@1"):
         await ToolNext(runtime, "tool-next").call({"value": 1})
 
     host_stub.failures["LlmNext"] = "error"

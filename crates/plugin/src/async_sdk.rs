@@ -256,8 +256,10 @@ pub struct ToolNext(Arc<NextInner>);
 
 impl ToolNext {
     /// Continues the tool chain with replacement arguments.
-    pub async fn call(&self, args: Json) -> Result<Json> {
-        invoke_unary_next(&self.0, &args).await
+    pub async fn call(&self, args: Json) -> Result<ToolExecutionResult> {
+        let result = invoke_unary_next(&self.0, &args).await?;
+        serde_json::from_value(result)
+            .map_err(|error| format!("invalid canonical tool execution result: {error}"))
     }
 }
 

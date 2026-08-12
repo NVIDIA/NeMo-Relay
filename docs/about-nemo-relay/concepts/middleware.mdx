@@ -73,6 +73,12 @@ rejected. For a streaming execution intercept, the interceptor's returned
 stream extends that active lifetime until it closes, so a lazy stream adapter
 can call `next` while it is being consumed. A stream successfully returned by
 streaming `next` keeps its ordinary stream lifetime.
+
+A tool execution continuation returns `ToolExecutionResult`, which contains the
+application-owned `result` and an optional opaque `annotation`. A forwarding
+intercept must preserve both fields in its `ToolExecutionInterceptOutcome` or
+deliberately replace or remove the annotation. Relay retains pending marks
+separately from this application-visible result.
 </Warning>
 
 ## Registration Levels
@@ -197,6 +203,9 @@ Use them when the event stream should hide or reduce sensitive request data.
 Sanitize-response guardrails rewrite the payload recorded on emitted end events.
 
 Use them when the event stream should hide or reduce sensitive response data.
+For tools, this guardrail receives only `ToolExecutionResult.result`. Sanitize
+the projected `category_profile.tool_result_annotation` with a scope-end event
+sanitizer instead.
 
 ### Sanitize Mark and Scope Events
 

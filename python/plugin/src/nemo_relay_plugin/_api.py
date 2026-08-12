@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""High-level Python API for NeMo Relay ``grpc-v1`` worker plugins.
+"""High-level Python API for NeMo Relay ``grpc-v2`` worker plugins.
 
 The module exposes the authoring contract for out-of-process Python plugins.
 Callbacks can be synchronous or asynchronous unless a method documents a more
@@ -52,7 +52,7 @@ Public callback aliases used in registration annotations:
     LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
 
 Public functions:
-    serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
+    serve_plugin: Run a local ``grpc-v2`` worker until host shutdown.
 """
 
 from __future__ import annotations
@@ -203,13 +203,14 @@ def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
     return context.codec_capability_id if context is not None and context.HasField("codec_capability_id") else None
 
 
-WORKER_PROTOCOL = "grpc-v1"
+WORKER_PROTOCOL = "grpc-v2"
 JSON_SCHEMA = "nemo.relay.Json@1"
 EVENT_SCHEMA = "nemo.relay.Event@1"
 LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
 ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@2"
 LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.LlmRequestInterceptOutcome@2"
-TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.ToolExecutionInterceptOutcome@1"
+TOOL_EXECUTION_RESULT_SCHEMA = "nemo.relay.ToolExecutionResult@1"
+TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.ToolExecutionInterceptOutcome@2"
 PLUGIN_DIAGNOSTICS_SCHEMA = "nemo.relay.PluginDiagnostics@1"
 _OBJECT_SCHEMAS = frozenset(
     {
@@ -217,6 +218,7 @@ _OBJECT_SCHEMAS = frozenset(
         LLM_REQUEST_SCHEMA,
         ANNOTATED_LLM_REQUEST_SCHEMA,
         LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
+        TOOL_EXECUTION_RESULT_SCHEMA,
         TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     }
 )
@@ -654,11 +656,34 @@ class LlmRequestInterceptOutcome:
 
 
 @dataclass(slots=True)
+class ToolExecutionResult:
+    """Canonical application-visible result of tool execution."""
+
+    result: Json
+    annotation: Json | None = None
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this result to the canonical worker-envelope payload."""
+        payload: dict[str, Json] = {"result": self.result}
+        if self.annotation is not None:
+            payload["annotation"] = self.annotation
+        return payload
+
+    @classmethod
+    def from_json(cls, value: Json) -> "ToolExecutionResult":
+        """Decode and validate a canonical worker-envelope payload."""
+        if not isinstance(value, dict) or "result" not in value:
+            raise WorkerSdkError("tool execution result must be an object with a result field")
+        return cls(result=value["result"], annotation=value.get("annotation"))
+
+
+@dataclass(slots=True)
 class ToolExecutionInterceptOutcome:
     """Canonical result returned by a Python worker tool execution intercept."""
 
     result: Json
     pending_marks: list[PendingMarkSpec] = field(default_factory=list)
+    annotation: Json | None = field(default=None, kw_only=True)
 
     def to_json(self) -> dict[str, Json]:
         """Convert this outcome to the canonical worker-envelope payload."""
@@ -669,10 +694,13 @@ class ToolExecutionInterceptOutcome:
                     "tool execution intercept outcome pending_marks must contain PendingMarkSpec values"
                 )
             marks.append(mark.to_json())
-        return {
+        payload: dict[str, Json] = {
             "result": self.result,
             "pending_marks": marks,
         }
+        if self.annotation is not None:
+            payload["annotation"] = self.annotation
+        return payload
 
 
 def _normalize_diagnostic(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1603,14 +1631,15 @@ class ToolNext:
         self._runtime = runtime
         self._continuation_id = continuation_id
 
-    async def call(self, value: Json) -> Json:
+    async def call(self, value: Json) -> ToolExecutionResult:
         """Call the remaining tool execution chain with replacement arguments.
 
         Args:
             value: JSON arguments passed to the next intercept or real tool.
 
         Returns:
-            JSON returned by the remaining chain.
+            Canonical result and optional annotation returned by the remaining
+            chain.
 
         Raises:
             WorkerSdkError: The continuation is invalid, complete, cancelled,
@@ -1632,7 +1661,7 @@ class ToolNext:
                 scope=self._runtime._scope_context(),
             )
         )
-        return _json_result_to_value(response)
+        return ToolExecutionResult.from_json(_json_result_to_value(response, TOOL_EXECUTION_RESULT_SCHEMA))
 
 
 class LlmNext:
@@ -1744,7 +1773,7 @@ class LlmStreamNext:
 
 
 async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
-    """Run a local ``grpc-v1`` worker until the Relay host shuts it down.
+    """Run a local ``grpc-v2`` worker until the Relay host shuts it down.
 
     Args:
         plugin: Plugin implementation with a non-empty ``plugin_id`` plus
