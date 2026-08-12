@@ -35,6 +35,6 @@ the `sha256:` prefix. The same relative artifact path must appear in
 `source.artifact` and `load.library`.
 
 The strict schema documents every feature group and the SDK-owned
-`executor.worker_threads` override. The [Build and Package guide](https://github.com/NVIDIA/NeMo-Relay/blob/main/docs/build-plugins/native/build-and-package.mdx)
+`executor.worker_threads` override. The [Build and Package guide](https://docs.nvidia.com/nemo/relay/build-plugins/native/build-and-package)
 continues through manifest validation, activation, representative calls,
 registration cleanup, and safe unload.
