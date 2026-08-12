@@ -204,6 +204,13 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
             completed = self._completed.get(top.uuid)
             if completed is None:
                 return
+            if top.name != completed.handle.name:
+                # Same uuid, different scope. ``create_scope_stack_from_propagation``
+                # rebuilds a parent from a captured context, so our uuid can appear on
+                # another stack as a stand-in. Closing it would discard the completion
+                # and strand the real scope. Handles cannot be told apart by identity --
+                # reading the current one returns a fresh wrapper even on its own stack.
+                return
             try:
                 nemo_relay.scope.pop(
                     completed.handle,

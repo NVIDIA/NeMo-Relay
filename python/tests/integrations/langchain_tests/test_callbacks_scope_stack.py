@@ -686,3 +686,92 @@ async def test_two_concurrent_invocations_share_one_handler(
     assert outcomes == {"one": None, "two": None}
     assert handler._completed == {}
     assert handler._scope_handles == {}
+
+
+async def test_a_propagated_stack_does_not_consume_another_stacks_completion(
+    handler: NemoRelayCallbackHandler,
+):
+    """A propagated stack seeds a scope carrying an existing scope's uuid.
+
+    ``create_scope_stack_from_propagation`` rebuilds a parent scope from a captured
+    context, so the same uuid legitimately appears on a second stack. Matching a
+    completion on uuid alone closes that stand-in, discards the record, and strands the
+    real scope — the original defect, reached through propagation instead of ordering.
+    """
+
+    import uuid as uuid_module
+
+    parent_run, run_a, run_b = uuid4(), uuid4(), uuid4()
+    baseline = nemo_relay.scope.get_handle()
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+
+    _start(handler, parent_run, "parent")
+    _start(handler, run_a, "A", parent_run_id=parent_run)
+    # Captured while A is on top, so the propagated stack's parent carries A's uuid.
+    context = nemo_relay.capture_propagation_context_with_root(str(uuid_module.uuid4()))
+    _start(handler, run_b, "B", parent_run_id=parent_run)
+
+    _end(handler, run_a, "A")
+    assert len(handler._completed) == 1, "A should be waiting on B"
+
+    propagated = nemo_relay.create_scope_stack_from_propagation(context)
+    with nemo_relay.use_scope_stack(propagated):
+        assert nemo_relay.scope.get_handle().uuid == context.parent_uuid
+        handler._close_completed_scopes()
+
+    assert len(handler._completed) == 1, "a propagated stack consumed another stack's completion"
+
+    # The real scope is still closable, and the enclosing scope with it.
+    _end(handler, run_b, "B")
+    _end(handler, parent_run, "parent")
+    assert handler._completed == {}
+    nemo_relay.scope.pop(request)
+    assert nemo_relay.scope.get_handle().uuid == baseline.uuid
+
+
+async def test_propagated_stand_ins_keep_their_reserved_names(
+    handler: NemoRelayCallbackHandler,
+):
+    """Pin the naming the uuid+name check depends on.
+
+    A propagated stack rebuilds scopes carrying an existing uuid, so the name is what
+    separates a stand-in from the scope it represents. Those names are fixed in the
+    runtime (``propagated-parent``/``propagated-root`` in
+    ``crates/core/src/api/runtime/scope_stack.rs``); if either changes, matching silently
+    starts closing the wrong scope, so fail here instead.
+
+    Propagating an already-propagated stack yields stand-ins identical in both uuid and
+    name, which still cannot be confused with a run this handler opened.
+    """
+
+    import uuid as uuid_module
+
+    run_id = uuid4()
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+    _start(handler, run_id, "A")
+    opened = handler._scope_handles[run_id]
+
+    with_root = nemo_relay.capture_propagation_context_with_root(str(uuid_module.uuid4()))
+    first = nemo_relay.create_scope_stack_from_propagation(with_root)
+    with nemo_relay.use_scope_stack(first):
+        stand_in = nemo_relay.scope.get_handle()
+        assert stand_in.uuid == opened.uuid, "the stand-in should carry the same uuid"
+        assert stand_in.name == "propagated-parent"
+        again = nemo_relay.capture_propagation_context_with_root(str(uuid_module.uuid4()))
+
+    # Propagating the propagation: identical uuid and name, still not our scope.
+    second = nemo_relay.create_scope_stack_from_propagation(again)
+    with nemo_relay.use_scope_stack(second):
+        repeated = nemo_relay.scope.get_handle()
+        assert (repeated.uuid, repeated.name) == (stand_in.uuid, stand_in.name)
+        assert (repeated.uuid, repeated.name) != (opened.uuid, opened.name)
+
+    # And the branch where the propagated parent is the root.
+    as_root = nemo_relay.create_scope_stack_from_propagation(nemo_relay.PropagationContext(opened.uuid, opened.uuid))
+    with nemo_relay.use_scope_stack(as_root):
+        root_stand_in = nemo_relay.scope.get_handle()
+        assert root_stand_in.name == "propagated-root"
+        assert (root_stand_in.uuid, root_stand_in.name) != (opened.uuid, opened.name)
+
+    _end(handler, run_id, "A")
+    nemo_relay.scope.pop(request)
