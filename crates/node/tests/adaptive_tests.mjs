@@ -80,6 +80,48 @@ describe('core plugins', () => {
     }
   });
 
+  it('validates a registered JS plugin during asynchronous initialization', async () => {
+    const pluginKind = `node.test.async_validate.${Date.now()}`;
+    const config = {
+      version: 1,
+      components: [plugin.ComponentSpec(pluginKind, { marker: 'validated' })],
+    };
+    let validateCalls = 0;
+    let registerCalls = 0;
+
+    plugin.register(pluginKind, {
+      validate(pluginConfig) {
+        validateCalls += 1;
+        assert.equal(pluginConfig.marker, 'validated');
+        return [];
+      },
+      register(pluginConfig, context) {
+        registerCalls += 1;
+        context.registerToolRequestIntercept('marker', 1, false, (_name, args) => ({
+          ...args,
+          marker: pluginConfig.marker,
+        }));
+      },
+    });
+
+    try {
+      assert.deepEqual(plugin.validate(config).diagnostics, []);
+      assert.deepEqual((await plugin.initialize(config)).diagnostics, []);
+      assert.equal(validateCalls, 2);
+      assert.equal(registerCalls, 1);
+      assert.deepEqual(await lib.toolCallExecute('validated_plugin_tool', {}, (args) => args), {
+        marker: 'validated',
+      });
+
+      plugin.clear();
+      assert.equal(plugin.deregister(pluginKind), true);
+      assert.deepEqual(await lib.toolCallExecute('cleared_plugin_tool', {}, (args) => args), {});
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
+
   it('treats implicit undefined plugin validation as no diagnostics', () => {
     const pluginKind = `node.test.validate_undefined.${Date.now()}`;
 
