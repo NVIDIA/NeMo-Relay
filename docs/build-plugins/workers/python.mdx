@@ -97,8 +97,8 @@ Relay calls validation before registration, but `register` still rejects invalid
 use instead of assuming every possible host followed the expected sequence.
 
 The corresponding manifest tells Relay to install this directory and import `main` from
-the installed module. The digest shown is the checked value for the current `worker.py`;
-changing that file requires a new digest.
+the installed module. Calculate the `<worker-source-sha256>` placeholder from the current
+`worker.py`; changing that file requires a new digest.
 
 ```toml
 manifest_version = 1
@@ -122,7 +122,7 @@ manifest_root = "."
 artifact = "nemo_relay_python_grpc_worker_example/worker.py"
 
 [integrity]
-sha256 = "sha256:1f678f03847b7634ce8b253be7eb09a7324741e9d399295b6542382c7d898bda"
+sha256 = "sha256:<worker-source-sha256>"
 
 [load]
 runtime = "python"

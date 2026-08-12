@@ -156,8 +156,8 @@ be retried after the consumer advances. `InvalidArg` means the stream is closed 
 cancelled and the operation must not be retried. `async_stream_is_backpressured` is only
 a point-in-time observation; it does not replace checking the result of a push.
 
-A downstream terminal callback reports failure or consumer cancellation through a
-non-null error and clean completion with `done = true`. Reclaim its `user_data` in that
+A downstream terminal callback reports failure or consumer cancellation with a non-null
+error and reports clean completion with `done = true`. Reclaim its `user_data` in that
 terminal callback. If a chunk callback returns false, reclaim state before returning
 because the host does not call it again.
 

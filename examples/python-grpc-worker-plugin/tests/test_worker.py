@@ -375,6 +375,22 @@ async def test_llm_execution_can_repeat_continuation(example: Any) -> None:
     assert next_call.call.await_count == 2
 
 
+async def test_repeated_llm_continuation_propagates_the_second_failure(example: Any) -> None:
+    context, _runtime = register_example(example)
+    intercept = callback(context, "register_llm_execution_intercept")
+    next_call = MagicMock()
+    next_call.call = AsyncMock(side_effect=[{"choice": 1}, RuntimeError("second call failed")])
+
+    with pytest.raises(RuntimeError, match="second call failed"):
+        await intercept(
+            "allowed-model",
+            {"headers": {}, "content": {"repeat_downstream": True}},
+            next_call,
+        )
+
+    assert next_call.call.await_count == 2
+
+
 async def test_stream_execution_transforms_chunks_lazily(example: Any) -> None:
     context, _runtime = register_example(example)
     intercept = callback(context, "register_llm_stream_execution_intercept")

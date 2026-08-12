@@ -4,10 +4,10 @@
 use std::collections::HashSet;
 
 use nemo_relay_worker::{ConfigDiagnostic, DiagnosticLevel, Json};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Map;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct ExampleConfig {
     pub tag: String,
@@ -17,14 +17,14 @@ pub(crate) struct ExampleConfig {
     pub runtime: RuntimeConfig,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct ObserveConfig {
     pub enabled: bool,
     pub redact_keys: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct RequestsConfig {
     pub enabled: bool,
@@ -37,7 +37,7 @@ pub(crate) struct RequestsConfig {
     pub break_chain: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct ExecutionConfig {
     pub enabled: bool,
@@ -45,7 +45,7 @@ pub(crate) struct ExecutionConfig {
     pub emit_pending_marks: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct RuntimeConfig {
     pub emit_marks: bool,

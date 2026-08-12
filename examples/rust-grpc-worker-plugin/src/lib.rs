@@ -49,6 +49,14 @@ pub fn validate_example_config(config: &Json) -> Vec<ConfigDiagnostic> {
     config::validate(config)
 }
 
+/// Return the configuration defaults as the JSON document accepted by this worker.
+///
+/// The integration tests compare this document with the checked JSON Schema so the
+/// documented defaults cannot drift from the runtime defaults.
+pub fn default_example_config() -> Json {
+    serde_json::to_value(ExampleConfig::default()).expect("example configuration must serialize")
+}
+
 fn register_observation(context: &mut PluginContext, config: &ExampleConfig) {
     context.register_subscriber("documentation_subscriber", |_event| {});
 
@@ -259,9 +267,11 @@ fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
                 .unwrap_or(false)
             {
                 let repeated = next.clone();
-                let (first, _second) =
+                let (first, second) =
                     tokio::join!(repeated.call(request.clone()), next.call(request));
-                first
+                let response = first?;
+                second?;
+                Ok(response)
             } else {
                 next.call(request).await
             }

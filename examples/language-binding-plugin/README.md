@@ -21,6 +21,3 @@ The test names separate validation, activation, tool and model policies, request
 rewrites, streaming, subscription, and teardown. The `main` program in each
 directory is the end-to-end demonstration, while its atomic tests identify the
 exact contract that failed.
-
-Run the commands and compare their expected output in the
-[Runnable Examples guide](https://docs.nvidia.com/nemo/relay/build-plugins/language-binding/code-examples).

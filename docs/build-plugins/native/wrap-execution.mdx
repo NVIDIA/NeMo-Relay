@@ -67,11 +67,13 @@ context.register_llm_execution_intercept(
             .unwrap_or(false);
         if repeat {
             let repeated = next.clone();
-            let (first, _second) = tokio::join!(
+            let (first, second) = tokio::join!(
                 repeated.call(request.clone()),
                 next.call(request),
             );
-            first
+            let response = first?;
+            second?;
+            Ok(response)
         } else {
             next.call(request).await
         }
@@ -81,8 +83,9 @@ context.register_llm_execution_intercept(
 
 Cloning `next` creates another handle to the same downstream continuation. `tokio::join!`
 polls both calls concurrently; it does not make either provider operation free or
-idempotent. The request flag makes repeated execution observable and opt-in for this
-example.
+idempotent. The wrapper propagates a failure from either call and returns the first
+response only after both calls succeed. The request flag makes repeated execution
+observable and opt-in for this example.
 
 Calling `next` zero times is also valid and replaces downstream execution. Conditional
 guardrails are clearer for ordinary allow-or-block policy; zero-call execution wrappers

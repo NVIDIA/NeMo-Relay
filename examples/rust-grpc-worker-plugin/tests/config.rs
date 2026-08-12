@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay_rust_grpc_worker_plugin_example::validate_example_config;
+use nemo_relay_rust_grpc_worker_plugin_example::{
+    default_example_config, validate_example_config,
+};
 use serde_json::{Value as Json, json};
 
 #[test]
@@ -89,6 +91,64 @@ fn schema_contains_every_feature_group() {
     for field in ["tag", "observe", "requests", "execution", "runtime"] {
         assert!(fields.contains_key(field));
     }
+}
+
+#[test]
+fn schema_defaults_match_the_runtime_defaults() {
+    let schema: Json = serde_json::from_str(include_str!("../config.schema.json"))
+        .expect("schema should be valid JSON");
+    assert_schema_defaults(&schema, &default_example_config(), "");
+}
+
+fn assert_schema_defaults(schema: &Json, value: &Json, path: &str) {
+    if let Some(expected) = schema.get("default") {
+        assert_eq!(value, expected, "default mismatch at {path}");
+    }
+    let Some(properties) = schema.get("properties").and_then(Json::as_object) else {
+        return;
+    };
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("runtime default at {path} must be an object"));
+    for (name, child_schema) in properties {
+        let child_value = object
+            .get(name)
+            .unwrap_or_else(|| panic!("runtime default is missing {path}{name}"));
+        assert_schema_defaults(child_schema, child_value, &format!("{path}{name}."));
+    }
+}
+
+#[test]
+fn implementation_declares_each_safe_worker_surface() {
+    let source = include_str!("../src/lib.rs");
+    assert_eq!(
+        [
+            "register_subscriber",
+            "register_mark_sanitize_guardrail",
+            "register_scope_sanitize_start_guardrail",
+            "register_scope_sanitize_end_guardrail",
+            "register_tool_sanitize_request_guardrail",
+            "register_tool_sanitize_response_guardrail",
+            "register_tool_conditional_execution_guardrail",
+            "register_tool_request_intercept",
+            "register_tool_execution_intercept",
+            "register_llm_sanitize_request_guardrail",
+            "register_llm_sanitize_response_guardrail",
+            "register_llm_conditional_execution_guardrail",
+            "register_llm_request_intercept",
+            "register_llm_execution_intercept",
+            "register_llm_stream_execution_intercept",
+        ]
+        .iter()
+        .filter(|method| source.contains(**method))
+        .count(),
+        15
+    );
+    assert!(source.contains("config.requests.priority"));
+    assert!(source.contains("config.execution.priority"));
+    assert!(source.contains("config.requests.break_chain"));
+    assert!(source.contains("pop_scope(&handle"));
+    assert!(source.contains("drop_scope_stack(&stack"));
 }
 
 #[test]

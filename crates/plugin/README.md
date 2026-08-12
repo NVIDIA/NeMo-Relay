@@ -139,7 +139,3 @@ ABI-v2 compatibility tables cannot use runtime diagnostics.
 Relay scope context is restored around every poll of a registered middleware
 future. Child tasks created with `tokio::spawn` do not automatically inherit
 that scope context.
-
-The [native plugin guide](https://docs.nvidia.com/nemo/relay/build-plugins/native/about)
-connects these APIs to packaging, configuration, and the complete [Rust
-example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/rust-native-plugin/README.md).

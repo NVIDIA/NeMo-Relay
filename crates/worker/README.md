@@ -96,8 +96,3 @@ Relay sends `CancelInvocation` when a managed caller is cancelled, times out,
 or stops consuming a stream, and the SDK aborts the matching async callback
 task. An accepted cancellation confirms the task was found; it cannot prove
 that arbitrary blocking work started by the callback has stopped.
-
-The [Rust worker guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/rust)
-connects this SDK to packaging and host activation. Complete [Rust](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/rust-grpc-worker-plugin/README.md)
-and [Python](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md)
-workers demonstrate the same middleware contract.

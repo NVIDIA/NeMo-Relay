@@ -188,7 +188,3 @@ Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and
 tests for this SDK on Windows ARM64 rather than creating a package without its
 required gRPC runtime.
-
-The [Python worker guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/python)
-connects these callbacks to packaging, managed environments, and the complete
-[Python example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md).

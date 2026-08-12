@@ -36,11 +36,11 @@ impl Drop for ActivePlugin {
     }
 }
 
-async fn activate() -> ActivePlugin {
+async fn activate_with(plugin_config: nemo_relay::plugin::PluginConfig) -> ActivePlugin {
     let lock = PLUGIN_TEST_LOCK.lock().await;
     reset_observed_events();
     register_plugin(Arc::new(DocumentationPlugin)).expect("plugin registration should succeed");
-    let report = match initialize_plugins_exact(config("enforce")).await {
+    let report = match initialize_plugins_exact(plugin_config).await {
         Ok(report) => report,
         Err(error) => {
             deregister_plugin("documentation-plugin");
@@ -51,6 +51,10 @@ async fn activate() -> ActivePlugin {
         report,
         _lock: lock,
     }
+}
+
+async fn activate() -> ActivePlugin {
+    activate_with(config("enforce")).await
 }
 
 #[test]
@@ -83,20 +87,23 @@ fn validation_rejects_wrong_type() {
 
 #[test]
 fn validation_reports_each_empty_required_string_at_its_field() {
-    for (configuration, field) in [
-        (json!({ "tag": "" }), "tag"),
-        (json!({ "requests": { "header_name": "" } }), "requests.header_name"),
+    for (configuration, code, field) in [
+        (json!({ "tag": "" }), "documentation-plugin.invalid_tag", "tag"),
+        (
+            json!({ "requests": { "header_name": "" } }),
+            "documentation-plugin.invalid_header",
+            "requests.header_name",
+        ),
         (
             json!({ "requests": { "header_value": "" } }),
+            "documentation-plugin.invalid_header",
             "requests.header_value",
         ),
     ] {
         let diagnostics = DocumentationPlugin.validate(&configuration.as_object().unwrap().clone());
         assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "documentation-plugin.invalid_header"
-                || (field == "tag" && diagnostic.code == "documentation-plugin.invalid_tag")
+            diagnostic.code == code && diagnostic.field.as_deref() == Some(field)
         }));
-        assert!(diagnostics.iter().any(|diagnostic| diagnostic.field.as_deref() == Some(field)));
     }
 }
 
@@ -309,6 +316,50 @@ async fn configuration_controls_redaction_pending_marks_and_isolated_scope_event
     assert!(events
         .iter()
         .any(|event| event.name() == "documentation-plugin.isolated"));
+}
+
+#[tokio::test]
+async fn runtime_events_do_not_depend_on_request_rewriting() {
+    let mut plugin_config = config("enforce");
+    plugin_config.components[0].config["requests"]["enabled"] = json!(false);
+    let _active = activate_with(plugin_config).await;
+
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("safe_tool")
+            .args(json!({"value": 1}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .expect("tool call should succeed");
+    flush_subscribers().expect("subscriber flush should succeed");
+
+    assert!(observed_events()
+        .iter()
+        .any(|event| event.name() == "documentation-plugin.request"));
+}
+
+#[tokio::test]
+async fn runtime_events_are_not_stopped_by_request_break_chain() {
+    let mut plugin_config = config("enforce");
+    plugin_config.components[0].config["requests"]["break_chain"] = json!(true);
+    let _active = activate_with(plugin_config).await;
+
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("safe_tool")
+            .args(json!({"value": 1}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .build(),
+    )
+    .await
+    .expect("tool call should succeed");
+    flush_subscribers().expect("subscriber flush should succeed");
+
+    assert!(observed_events()
+        .iter()
+        .any(|event| event.name() == "documentation-plugin.request"));
 }
 
 #[tokio::test]

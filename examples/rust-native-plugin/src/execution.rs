@@ -51,9 +51,11 @@ pub(crate) fn register(
                 .unwrap_or(false)
             {
                 let repeated = next.clone();
-                let (first, _second) =
+                let (first, second) =
                     tokio::join!(repeated.call(request.clone()), next.call(request));
-                first
+                let response = first?;
+                second?;
+                Ok(response)
             } else {
                 next.call(request).await
             }

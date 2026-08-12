@@ -16,6 +16,3 @@ contract. Copy
 `relay-plugin.toml` to `relay-plugin.local.toml`, replace the platform worker
 placeholder with the built executable name, and replace the digest placeholder
 with `shasum -a 256`, `sha256sum`, or `Get-FileHash` output for that executable.
-
-The complete registration, execution, verification, and shutdown procedure is
-in the [Rust Worker guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/rust).

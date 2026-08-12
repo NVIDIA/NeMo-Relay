@@ -62,8 +62,3 @@ fn main() -> Result<(), serde_json::Error> {
     Ok(())
 }
 ```
-
-The [grpc-v1 protocol reference](https://docs.nvidia.com/nemo/relay/build-plugins/workers/grpc-v1-protocol)
-describes the complete service contract. Prefer the [Rust worker
-SDK](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker/README.md)
-unless you are implementing that protocol directly.

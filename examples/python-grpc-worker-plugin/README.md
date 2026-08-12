@@ -43,7 +43,3 @@ Removal also deletes the Relay-managed Python environment.
 nemo-relay --config "$relay_config" plugins remove examples.python_grpc_worker
 rm -rf -- "$relay_tmp"
 ```
-
-The [Python Worker guide](https://docs.nvidia.com/nemo/relay/build-plugins/workers/python)
-connects these commands to expected activation, call-path, cancellation, and
-shutdown evidence.

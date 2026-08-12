@@ -161,19 +161,20 @@ impl Plugin for DocumentationPlugin {
                         }
                     }),
                 )?;
-                context.register_tool_request_intercept(
+            }
+            if settings.runtime.emit_marks || settings.runtime.emit_isolated_scope {
+                context.register_tool_execution_intercept(
                     "runtime-events",
-                    settings.requests.priority,
-                    false,
+                    0,
                     Arc::new({
                         let tag = settings.tag.clone();
                         let runtime = settings.runtime.clone();
-                        move |_name, args| {
+                        move |_name, args, next| {
                             let tag = tag.clone();
                             let runtime = runtime.clone();
                             Box::pin(async move {
                                 emit_runtime_events(&tag, &runtime)?;
-                                Ok(args)
+                                Ok(ToolExecutionInterceptOutcome::new(next(args).await?))
                             })
                         }
                     }),
