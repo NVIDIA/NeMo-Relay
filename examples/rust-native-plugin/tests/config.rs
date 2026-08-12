@@ -70,6 +70,32 @@ fn wrong_types_are_rejected() {
 }
 
 #[test]
+fn invalid_values_are_rejected_at_their_fields() {
+    for (config, code, field) in [
+        (
+            json!({ "executor": { "worker_threads": 0 } }),
+            "examples.rust_native_policy.invalid_executor",
+            "executor.worker_threads",
+        ),
+        (
+            json!({ "tag": "" }),
+            "examples.rust_native_policy.empty_tag",
+            "tag",
+        ),
+        (
+            json!({ "requests": { "header_name": "" } }),
+            "examples.rust_native_policy.invalid_header",
+            "requests.header_name",
+        ),
+    ] {
+        let diagnostics = validate_example_config(&object(config));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == code && diagnostic.field.as_deref() == Some(field)
+        }));
+    }
+}
+
+#[test]
 fn schema_declares_every_feature_group_and_executor() {
     let schema: Json = serde_json::from_str(include_str!("../config.schema.json"))
         .expect("example schema should be valid JSON");

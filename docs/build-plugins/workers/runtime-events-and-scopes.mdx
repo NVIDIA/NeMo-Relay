@@ -41,11 +41,14 @@ async def emit_runtime_events(ctx, tag, settings):
     try:
         if settings["emit_marks"]:
             await ctx.runtime.emit_mark(
-                "examples.python_grpc_worker.tool_request",
+                "example.python_worker.tool_request",
                 {"tag": tag},
             )
     except BaseException:
-        await ctx.runtime.pop_scope(handle, metadata={"failed": True})
+        try:
+            await ctx.runtime.pop_scope(handle, metadata={"failed": True})
+        except BaseException:
+            pass
         raise
     else:
         await ctx.runtime.pop_scope(handle, output={"done": True})
@@ -54,10 +57,11 @@ async def emit_runtime_events(ctx, tag, settings):
         stack_id = await ctx.runtime.create_scope_stack()
         try:
             with ctx.runtime.bind_scope_stack(stack_id):
-                await ctx.runtime.emit_mark(
-                    "example.python_worker.isolated.mark",
-                    {"tag": tag},
-                )
+                if settings["emit_marks"]:
+                    await ctx.runtime.emit_mark(
+                        "example.python_worker.isolated.mark",
+                        {"tag": tag},
+                    )
         finally:
             await ctx.runtime.drop_scope_stack(stack_id)
 ```
@@ -97,11 +101,11 @@ async fn emit_runtime_events(
             None,
         ).await?,
         Err(error) => {
-            runtime.pop_scope(
+            let _ = runtime.pop_scope(
                 &handle,
                 None,
                 Some(json!({ "failed": true })),
-            ).await?;
+            ).await;
             return Err(error);
         }
     }

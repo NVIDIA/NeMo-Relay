@@ -353,9 +353,12 @@ async def _emit_runtime_events(ctx: PluginContext, tag: str, settings: dict[str,
     )
     try:
         if settings["emit_marks"]:
-            await ctx.runtime.emit_mark("examples.python_grpc_worker.tool_request", {"tag": tag})
+            await ctx.runtime.emit_mark("example.python_worker.tool_request", {"tag": tag})
     except BaseException:
-        await ctx.runtime.pop_scope(handle, metadata={"failed": True})
+        try:
+            await ctx.runtime.pop_scope(handle, metadata={"failed": True})
+        except BaseException:
+            pass
         raise
     else:
         await ctx.runtime.pop_scope(handle, output={"done": True})
@@ -363,7 +366,8 @@ async def _emit_runtime_events(ctx: PluginContext, tag: str, settings: dict[str,
         stack_id = await ctx.runtime.create_scope_stack()
         try:
             with ctx.runtime.bind_scope_stack(stack_id):
-                await ctx.runtime.emit_mark("example.python_worker.isolated.mark", {"tag": tag})
+                if settings["emit_marks"]:
+                    await ctx.runtime.emit_mark("example.python_worker.isolated.mark", {"tag": tag})
         finally:
             await ctx.runtime.drop_scope_stack(stack_id)
 

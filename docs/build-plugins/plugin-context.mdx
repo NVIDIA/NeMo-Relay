@@ -131,7 +131,7 @@ the LLM paths. Relay consumes pending marks and optimization contributions when 
 events. They are not properties to splice into an application result. Because the stream
 uses `map`, no downstream chunk is requested until the consumer polls for it.
 
-LLM sanitizers receive a structured context whose codec state can be absent, built in,
+LLM sanitizers receive a structured context whose codec state can be absent, built-in,
 runtime-resolved, or opaque. In-process callbacks can resolve the active codec directly.
 Worker callbacks receive an invocation-scoped asynchronous proxy that calls the host for
 directional encode or decode operations. A codec can be unavailable or opaque, so a

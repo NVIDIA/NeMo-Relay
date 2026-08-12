@@ -67,13 +67,11 @@ context.register_llm_execution_intercept(
             .unwrap_or(false);
         if repeat {
             let repeated = next.clone();
-            let (first, second) = tokio::join!(
+            let (first, _second) = tokio::join!(
                 repeated.call(request.clone()),
                 next.call(request),
             );
-            let selected_response = first?;
-            second?;
-            Ok(selected_response)
+            first
         } else {
             next.call(request).await
         }

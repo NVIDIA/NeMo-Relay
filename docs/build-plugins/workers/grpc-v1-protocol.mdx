@@ -184,7 +184,7 @@ context used for continuation and runtime calls. `registration_name` is the
 component-local name the worker returned in `RegisterResponse`; Relay separately owns
 its qualification in the host registries.
 
-`LlmCodecKind` has four wire values: unspecified, built in, runtime, and opaque. A built-in
+`LlmCodecKind` has four wire values: unspecified, built-in, runtime, and opaque. A built-in
 identity carries `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`,
 or `gemini_generate_content`; a runtime identity carries its registered ID. An opaque
 identity deliberately withholds an ID. The capability ID is optional and

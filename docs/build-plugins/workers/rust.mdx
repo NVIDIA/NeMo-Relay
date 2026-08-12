@@ -50,7 +50,7 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.5,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -72,6 +72,11 @@ sha256 = "sha256:<artifact-sha256>"
 runtime = "rust"
 entrypoint = "target/debug/<platform-worker-file>"
 ```
+
+The manifest expresses the `grpc-v1` protocol range that the worker can speak, so the
+checked worker uses `relay = ">=0.5,<1.0"`. Its crate dependency remains 0.8.0 because
+that is the SDK version used to build this example; the broader manifest range is not a
+claim that every SDK feature existed in every compatible Relay release.
 
 The artifact and entrypoint paths must identify the same executable. Relay verifies the
 artifact digest before it starts the command, and the worker handshake must return the

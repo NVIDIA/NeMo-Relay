@@ -56,8 +56,11 @@ fn register_observation(context: &mut PluginContext, config: &ExampleConfig) {
         fields.data = fields.data.map(|value| redact(value, keys));
         fields.metadata = Some(tag_metadata(fields.metadata, tag, keys));
         if let Some(profile) = fields.category_profile.take() {
-            let value = serde_json::to_value(profile).unwrap_or(Json::Null);
-            fields.category_profile = serde_json::from_value(redact(value, keys)).ok();
+            fields.category_profile = serde_json::to_value(&profile)
+                .map(|value| redact(value, keys))
+                .and_then(serde_json::from_value)
+                .ok()
+                .or(Some(profile));
         }
         fields
     };
@@ -256,11 +259,9 @@ fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
                 .unwrap_or(false)
             {
                 let repeated = next.clone();
-                let (first, second) =
+                let (first, _second) =
                     tokio::join!(repeated.call(request.clone()), next.call(request));
-                let response = first?;
-                second?;
-                Ok(response)
+                first
             } else {
                 next.call(request).await
             }
@@ -318,9 +319,9 @@ async fn emit_runtime_events(
                 .await?;
         }
         Err(error) => {
-            runtime
+            let _ = runtime
                 .pop_scope(&handle, None, Some(json!({ "failed": true })))
-                .await?;
+                .await;
             return Err(error);
         }
     }

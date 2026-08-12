@@ -108,7 +108,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.8.0,<1.0"
+relay = ">=0.5,<1.0"
 worker_protocol = "grpc-v1"
 
 [capabilities]
@@ -122,12 +122,16 @@ manifest_root = "."
 artifact = "nemo_relay_python_grpc_worker_example/worker.py"
 
 [integrity]
-sha256 = "sha256:645b6fc6b5ebab3a01ab6505bd18baf614ee007bbba9a219cbdc130477a9d17d"
+sha256 = "sha256:1f678f03847b7634ce8b253be7eb09a7324741e9d399295b6542382c7d898bda"
 
 [load]
 runtime = "python"
 entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
 ```
+
+The manifest uses `relay = ">=0.5,<1.0"` because `grpc-v1` is the compatibility
+contract. The package still pins its own authoring dependency to the 0.8 SDK line shown
+above; that is independent of the host versions that can negotiate this protocol.
 
 ## Install and Activate the Package
 

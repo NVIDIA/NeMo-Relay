@@ -32,11 +32,13 @@ pub(crate) fn emit_configured_runtime_events(
     if config.emit_isolated_scope {
         let isolated = runtime.create_scope_stack()?;
         isolated.with_current(|| {
-            runtime.emit_mark(
-                "example.native.isolated.mark",
-                Some(&json!({ "tag": tag })),
-                None,
-            )?;
+            if config.emit_marks {
+                runtime.emit_mark(
+                    "example.native.isolated.mark",
+                    Some(&json!({ "tag": tag })),
+                    None,
+                )?;
+            }
             let mut scope = runtime.scope(
                 "example.native.isolated.scope",
                 ScopeType::Custom,

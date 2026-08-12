@@ -52,6 +52,18 @@ test('validation rejects a wrong type', () => {
   assert.equal(diagnostics[0].code, 'documentation-plugin.invalid_config');
 });
 
+for (const [config, field, code] of [
+  [{ tag: '' }, 'tag', 'documentation-plugin.invalid_tag'],
+  [{ requests: { header_name: '' } }, 'requests.header_name', 'documentation-plugin.invalid_header'],
+  [{ requests: { header_value: '' } }, 'requests.header_value', 'documentation-plugin.invalid_header'],
+]) {
+  test(`validation rejects an empty ${field}`, () => {
+    const diagnostics = documentationPlugin.validate(config);
+
+    assert.ok(diagnostics.some((diagnostic) => diagnostic.code === code && diagnostic.field === field));
+  });
+}
+
 test('validation warns about an unknown field', () => {
   const diagnostics = documentationPlugin.validate({ unexpected: true });
 

@@ -15,7 +15,9 @@ with a strict schema. Run every command in this procedure from
 The example crate exposes both `cdylib` and `rlib`. Relay loads the `cdylib`; the `rlib`
 lets the example integration tests call validation helpers without loading an unsafe
 dynamic boundary. The dependencies use the current 0.8.0 public SDK rather than a Git
-revision or an older package line.
+revision or an older package line. The `path = "../../crates/plugin"` override exists
+only because this checked example builds inside the NeMo Relay repository. A standalone
+plugin depends on the published `nemo-relay-plugin = "0.8.0"` package without `path`.
 
 The checked example uses the following package and dependency configuration:
 
@@ -34,7 +36,7 @@ futures = "0.3"
 nemo-relay-plugin = { version = "0.8.0", path = "../../crates/plugin" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["io-util", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "time"] }
 ```
 
 Build and materialize the platform-specific library as follows:

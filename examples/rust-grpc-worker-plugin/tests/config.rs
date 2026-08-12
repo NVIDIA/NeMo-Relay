@@ -63,6 +63,23 @@ fn wrong_types_are_rejected() {
 }
 
 #[test]
+fn empty_headers_are_reported_at_their_individual_fields() {
+    for (config, field) in [
+        (json!({ "requests": { "header_name": "" } }), "requests.header_name"),
+        (
+            json!({ "requests": { "header_value": "" } }),
+            "requests.header_value",
+        ),
+    ] {
+        let diagnostics = validate_example_config(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "examples.rust_grpc_worker.invalid_header"
+                && diagnostic.field.as_deref() == Some(field)
+        }));
+    }
+}
+
+#[test]
 fn schema_contains_every_feature_group() {
     let schema: Json = serde_json::from_str(include_str!("../config.schema.json"))
         .expect("schema should be valid JSON");

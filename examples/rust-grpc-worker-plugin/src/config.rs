@@ -144,12 +144,20 @@ pub(crate) fn validate(config: &Json) -> Vec<ConfigDiagnostic> {
             "requests.mode must be either observe or enforce",
         ));
     }
-    if parsed.requests.header_name.is_empty() || parsed.requests.header_value.is_empty() {
+    if parsed.requests.header_name.is_empty() {
         diagnostics.push(diagnostic(
             DiagnosticLevel::Error,
             "invalid_header",
             Some("requests.header_name"),
-            "request header name and value must not be empty",
+            "requests.header_name must not be empty",
+        ));
+    }
+    if parsed.requests.header_value.is_empty() {
+        diagnostics.push(diagnostic(
+            DiagnosticLevel::Error,
+            "invalid_header",
+            Some("requests.header_value"),
+            "requests.header_value must not be empty",
         ));
     }
     diagnostics

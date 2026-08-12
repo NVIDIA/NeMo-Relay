@@ -141,12 +141,20 @@ pub(crate) fn validate(plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnosti
                     "tag must not be empty",
                 ));
             }
-            if config.requests.header_name.is_empty() || config.requests.header_value.is_empty() {
+            if config.requests.header_name.is_empty() {
                 diagnostics.push(diagnostic(
                     DiagnosticLevel::Error,
                     "examples.rust_native_policy.invalid_header",
                     Some("requests.header_name"),
-                    "requests.header_name and requests.header_value must not be empty",
+                    "requests.header_name must not be empty",
+                ));
+            }
+            if config.requests.header_value.is_empty() {
+                diagnostics.push(diagnostic(
+                    DiagnosticLevel::Error,
+                    "examples.rust_native_policy.invalid_header",
+                    Some("requests.header_value"),
+                    "requests.header_value must not be empty",
                 ));
             }
         }

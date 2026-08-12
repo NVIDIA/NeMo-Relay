@@ -81,6 +81,25 @@ fn validation_rejects_wrong_type() {
 }
 
 #[test]
+fn validation_reports_each_empty_required_string_at_its_field() {
+    for (configuration, field) in [
+        (json!({ "tag": "" }), "tag"),
+        (json!({ "requests": { "header_name": "" } }), "requests.header_name"),
+        (
+            json!({ "requests": { "header_value": "" } }),
+            "requests.header_value",
+        ),
+    ] {
+        let diagnostics = DocumentationPlugin.validate(&configuration.as_object().unwrap().clone());
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "documentation-plugin.invalid_header"
+                || (field == "tag" && diagnostic.code == "documentation-plugin.invalid_tag")
+        }));
+        assert!(diagnostics.iter().any(|diagnostic| diagnostic.field.as_deref() == Some(field)));
+    }
+}
+
+#[test]
 fn validation_warns_about_unknown_field() {
     let mut configuration = config("enforce");
     configuration.components[0]

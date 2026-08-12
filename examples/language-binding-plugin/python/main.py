@@ -155,6 +155,13 @@ def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]
                     f"{field} must contain only strings",
                 )
             )
+    if isinstance(settings["tag"], str) and not settings["tag"]:
+        diagnostics.append(_diagnostic("error", "invalid_tag", "tag", "tag must be a non-empty string"))
+    for field in ("requests.header_name", "requests.header_value"):
+        group, key = field.split(".")
+        value = settings[group][key]
+        if isinstance(value, str) and not value:
+            diagnostics.append(_diagnostic("error", "invalid_header", field, f"{field} must be a non-empty string"))
     requests = settings["requests"]
     if isinstance(requests["mode"], str) and requests["mode"] not in {"observe", "enforce"}:
         diagnostics.append(

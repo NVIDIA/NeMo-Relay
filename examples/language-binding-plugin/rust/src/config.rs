@@ -142,12 +142,20 @@ pub(crate) fn validate(config: &Map<String, Json>, policy: &ConfigPolicy) -> Vec
             "requests.mode must be either observe or enforce",
         ));
     }
-    if settings.requests.header_name.is_empty() || settings.requests.header_value.is_empty() {
+    if settings.requests.header_name.is_empty() {
         diagnostics.push(diagnostic(
             DiagnosticLevel::Error,
             "invalid_header",
             Some("requests.header_name"),
-            "request header name and value must be non-empty strings",
+            "requests.header_name must be a non-empty string",
+        ));
+    }
+    if settings.requests.header_value.is_empty() {
+        diagnostics.push(diagnostic(
+            DiagnosticLevel::Error,
+            "invalid_header",
+            Some("requests.header_value"),
+            "requests.header_value must be a non-empty string",
         ));
     }
     diagnostics

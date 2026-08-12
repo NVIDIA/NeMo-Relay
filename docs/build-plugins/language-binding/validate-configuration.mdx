@@ -65,6 +65,27 @@ fn validate_with_policy(
             "requests.mode must be either observe or enforce",
         ));
     }
+    if settings.tag.is_empty() {
+        diagnostics.push(diagnostic(
+            DiagnosticLevel::Error,
+            "invalid_tag",
+            Some("tag"),
+            "tag must be a non-empty string",
+        ));
+    }
+    for (field, value) in [
+        ("requests.header_name", &settings.requests.header_name),
+        ("requests.header_value", &settings.requests.header_value),
+    ] {
+        if value.is_empty() {
+            diagnostics.push(diagnostic(
+                DiagnosticLevel::Error,
+                "invalid_header",
+                Some(field),
+                format!("{field} must be a non-empty string"),
+            ));
+        }
+    }
     diagnostics
 }
 ```
@@ -97,6 +118,16 @@ def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]
                 ))
 
     settings = normalized_config(config)
+    if not isinstance(settings["tag"], str) or not settings["tag"]:
+        diagnostics.append(_diagnostic(
+            "error", "invalid_tag", "tag", "tag must be a non-empty string",
+        ))
+    for field in ("requests.header_name", "requests.header_value"):
+        group, key = field.split(".")
+        if not isinstance(settings[group][key], str) or not settings[group][key]:
+            diagnostics.append(_diagnostic(
+                "error", "invalid_header", field, f"{field} must be a non-empty string",
+            ))
     if settings["requests"]["mode"] not in {"observe", "enforce"}:
         diagnostics.append(_diagnostic(
             "error", "unsupported_mode", "requests.mode",
@@ -142,6 +173,21 @@ function validateDocumentationConfig(config) {
     }
   }
   const settings = normalizedConfig(config);
+  if (typeof settings.tag !== 'string' || settings.tag.length === 0) {
+    diagnostics.push(diagnostic(
+      'error', 'invalid_tag', 'tag', 'tag must be a non-empty string',
+    ));
+  }
+  for (const [field, value] of [
+    ['requests.header_name', settings.requests.header_name],
+    ['requests.header_value', settings.requests.header_value],
+  ]) {
+    if (typeof value !== 'string' || value.length === 0) {
+      diagnostics.push(diagnostic(
+        'error', 'invalid_header', field, `${field} must be a non-empty string`,
+      ));
+    }
+  }
   if (!new Set(['observe', 'enforce']).has(settings.requests.mode)) {
     diagnostics.push(diagnostic(
       'error', 'unsupported_mode', 'requests.mode',

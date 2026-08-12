@@ -57,7 +57,7 @@ if preflight.diagnostics.iter().any(|item| {
     return Err("plugin configuration failed validation".into());
 }
 
-let report = initialize_plugins_exact(plugin_config).await?;
+let report = initialize_plugins(plugin_config).await?;
 println!("active report: {report:?}");
 assert!(active_plugin_report().is_some());
 
@@ -75,6 +75,11 @@ fn allows_multiple_components(&self) -> bool {
     false
 }
 ```
+
+`initialize_plugins` resolves the supplied document with discovered `plugins.toml`
+configuration before it activates the result. `initialize_plugins_exact` is an internal
+escape hatch for hosts that have already resolved a `PluginConfig` and need Relay to
+apply those values without discovery or layering.
 </Tab>
 <Tab title="Python" language="python">
 ```python

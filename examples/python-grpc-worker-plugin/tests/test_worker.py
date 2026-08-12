@@ -91,7 +91,7 @@ def test_manifest_digest_matches_worker_source() -> None:
 def test_manifest_declares_current_worker_protocol() -> None:
     manifest = read_manifest()
 
-    assert manifest["compat"] == {"relay": ">=0.8.0,<1.0", "worker_protocol": "grpc-v1"}
+    assert manifest["compat"] == {"relay": ">=0.5,<1.0", "worker_protocol": "grpc-v1"}
 
 
 def test_schema_declares_only_supported_groups() -> None:
@@ -320,6 +320,18 @@ async def test_runtime_helpers_close_failed_request(example: Any) -> None:
 
     runtime.pop_scope.assert_awaited_once_with("scope-handle", metadata={"failed": True})
     runtime.create_scope_stack.assert_not_awaited()
+
+
+async def test_runtime_cleanup_preserves_the_callback_error(example: Any) -> None:
+    context, runtime = register_example(example)
+    runtime.emit_mark.side_effect = RuntimeError("mark failed")
+    runtime.pop_scope.side_effect = RuntimeError("cleanup failed")
+    intercept = callback(context, "register_tool_request_intercept")
+
+    with pytest.raises(RuntimeError, match="mark failed"):
+        await intercept("safe_tool", {"value": 1})
+
+    runtime.pop_scope.assert_awaited_once_with("scope-handle", metadata={"failed": True})
 
 
 def test_llm_request_intercept_preserves_outcome_fields(example: Any) -> None:

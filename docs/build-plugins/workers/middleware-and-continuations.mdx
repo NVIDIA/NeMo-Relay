@@ -207,6 +207,11 @@ optimization accounting.
 
 ## Continuation Behavior
 
+When the example enables `repeat_downstream`, it starts two concurrent downstream calls
+and returns only the first result. The second call is intentional demonstration code: it
+can still consume provider capacity, incur cost, and cause provider-side effects even
+though Relay does not expose its result to the application.
+
 `ToolNext`, `LlmNext`, and `LlmStreamNext` are host proxies identified by an opaque
 continuation ID. Calling one issues a host-runtime RPC under the scope snapshot captured
 for that worker invocation. A callback can call a unary proxy zero, one, or multiple
@@ -305,13 +310,11 @@ context.register_llm_execution_intercept(
             .unwrap_or(false)
         {
             let repeated = next.clone();
-            let (first, second) = tokio::join!(
+            let (first, _second) = tokio::join!(
                 repeated.call(request.clone()),
                 next.call(request),
             );
-            let selected = first?;
-            second?;
-            Ok(selected)
+            first
         } else {
             next.call(request).await
         }

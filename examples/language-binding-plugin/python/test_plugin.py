@@ -55,6 +55,20 @@ def test_validation_rejects_wrong_type() -> None:
     assert diagnostics[0]["code"] == "documentation-plugin.invalid_config"
 
 
+@pytest.mark.parametrize(
+    ("config", "field", "code"),
+    [
+        ({"tag": ""}, "tag", "documentation-plugin.invalid_tag"),
+        ({"requests": {"header_name": ""}}, "requests.header_name", "documentation-plugin.invalid_header"),
+        ({"requests": {"header_value": ""}}, "requests.header_value", "documentation-plugin.invalid_header"),
+    ],
+)
+def test_validation_rejects_empty_required_strings(config: dict[str, Any], field: str, code: str) -> None:
+    diagnostics = DocumentationPlugin().validate(config)
+
+    assert any(item["code"] == code and item["field"] == field for item in diagnostics)
+
+
 def test_validation_warns_about_unknown_field() -> None:
     diagnostics = DocumentationPlugin().validate({"unexpected": True})
 

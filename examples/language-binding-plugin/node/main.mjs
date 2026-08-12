@@ -12,6 +12,8 @@ const invokedDirectly = path.resolve(process.argv[1] ?? '') === fileURLToPath(im
 const require = createRequire(import.meta.url);
 const relay = require('nemo-relay-node');
 const plugin = require('nemo-relay-node/plugin');
+const typed = require('nemo-relay-node/typed');
+const JSON_CODEC = new typed.JsonPassthrough();
 
 export { plugin, relay };
 
@@ -128,6 +130,15 @@ function validateDocumentationConfig(config) {
       diagnostics.push(diagnostic('error', 'invalid_config', field, `${field} has the wrong type`));
     }
   }
+  if (typeof settings.tag === 'string' && settings.tag.length === 0) {
+    diagnostics.push(diagnostic('error', 'invalid_tag', 'tag', 'tag must be a non-empty string'));
+  }
+  for (const field of ['requests.header_name', 'requests.header_value']) {
+    const value = fields[field];
+    if (typeof value === 'string' && value.length === 0) {
+      diagnostics.push(diagnostic('error', 'invalid_header', field, `${field} must be a non-empty string`));
+    }
+  }
   if (typeof settings.requests.mode === 'string' && !new Set(['observe', 'enforce']).has(settings.requests.mode)) {
     diagnostics.push(
       diagnostic('error', 'unsupported_mode', 'requests.mode', 'requests.mode must be either observe or enforce'),
@@ -231,16 +242,17 @@ export async function main() {
       headers: rewritten.headers,
     }));
     console.log('llm:', llmResult);
-    const stream = await relay.llmStreamCallExecute(
+    const stream = await typed.typedLlmStreamExecute(
       'allowed-model',
       request,
-      (wrapper) => {
-        relay.pushStreamChunk(wrapper.__nemo_relay_stream_id, { chunk: 1 });
-        relay.pushStreamChunk(wrapper.__nemo_relay_stream_id, { chunk: 2 });
-        relay.endStream(wrapper.__nemo_relay_stream_id);
+      async function* streamChunks() {
+        yield { chunk: 1 };
+        yield { chunk: 2 };
       },
       () => {},
       () => ({ done: true }),
+      JSON_CODEC,
+      JSON_CODEC,
     );
     const streamResults = [];
     for (;;) {

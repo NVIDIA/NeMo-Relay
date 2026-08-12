@@ -24,8 +24,8 @@ Run and inspect the Rust host as follows:
 
    ```bash
    cd rust
-   cargo test
-   cargo run
+   cargo test --locked
+   cargo run --locked
    ```
 
 2. Read the printed invalid report, active report, allowed tool result, rewritten LLM
@@ -69,9 +69,9 @@ Run and inspect the Node.js host as follows:
    ```
 
 2. Confirm that promise-returning middleware is awaited, the LLM request outcome retains
-   `annotated`, and stream output preserves chunk order. The Node.js stream continuation
-   resolves to an array of downstream chunks; unlike the native and worker stream APIs,
-   this language-binding surface does not expose a lazy downstream stream.
+   `annotated`, and stream output preserves chunk order. The host uses the public
+   `nemo-relay-node/typed` stream wrapper, which owns the native stream bridge; plugin
+   callbacks receive an array of downstream chunks rather than a lazy downstream stream.
 
 The host registers one implementation object and keeps it registered for the complete
 lifecycle. A direct preflight and asynchronous initialization both invoke the same

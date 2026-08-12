@@ -23,6 +23,8 @@ protocol.
 
 ## Authoring Surface
 
+The following rows describe the plugin authoring surfaces available through this SDK.
+
 | Surface | Role |
 |---|---|
 | `WorkerPlugin` and `PluginContext` | Define validation and install all 15 worker-owned subscriber and middleware registrations. |

@@ -98,12 +98,9 @@ pub(crate) fn register(
         10,
         {
             let redact_keys = config.observe.redact_keys.clone();
-            move |response, codec_context| {
+            move |response, _codec_context| {
                 let redact_keys = redact_keys.clone();
                 async move {
-                    if let Some(codec) = codec_context.resolve_codec() {
-                        let _annotated = codec.decode(&response)?;
-                    }
                     Ok(Some(redact_json(response, &redact_keys)))
                 }
             }

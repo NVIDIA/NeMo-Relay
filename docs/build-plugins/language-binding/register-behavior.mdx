@@ -21,6 +21,7 @@ this common center.
 <Tab title="Rust" language="rust">
 ```rust
 let tag = config.tag.clone();
+let mode = config.requests.mode.clone();
 let blocked_tools = config.requests.blocked_tools.clone();
 let header_name = config.requests.header_name.clone();
 let header_value = config.requests.header_value.clone();
@@ -36,9 +37,10 @@ ctx.register_tool_conditional_execution_guardrail(
     "tool-policy",
     10,
     Arc::new(move |name, _args| {
+        let mode = mode.clone();
         let blocked = blocked_tools.clone();
         Box::pin(async move {
-            Ok(blocked.contains(&name)
+            Ok((mode == "enforce" && blocked.contains(&name))
                 .then(|| format!("tool '{name}' is blocked")))
         })
     }),
