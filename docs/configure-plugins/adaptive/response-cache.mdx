@@ -527,15 +527,16 @@ Redis capacity and eviction in Redis itself.
 - A tool policy sets `ttl_seconds = 0` or a `bypass_rate` outside `[0.0, 1.0]`,
   or the same member name or pattern appears in two classes.
 - Overlapping wildcard class patterns or wildcard overrides disagree on
-  `cacheable`. A cacheable catch-all `*` member or override also warns; use
-  named classes to limit caching to explicitly read-only tools.
+  `cacheable`. `tools.default.cacheable` and a cacheable catch-all `*` member
+  or override are rejected; use named classes to limit caching to explicitly
+  read-only tools.
 
-Tool-cache diagnostics use the following codes. The catch-all diagnostics are
-warnings; the others are errors.
+Tool-cache diagnostics use the following error codes.
 
 | Diagnostic | Condition |
 |---|---|
 | `response_cache.tool_default_members` | `tools.default.members` is non-empty. The default bucket is not a matcher. |
+| `response_cache.tool_cacheable_default` | `tools.default.cacheable` is true. |
 | `response_cache.tool_multiple_classes` | The same exact member or pattern appears in more than one named class. |
 | `response_cache.tool_invalid_ttl` | A class, default policy, or override sets `ttl_seconds = 0`. |
 | `response_cache.tool_invalid_bypass_rate` | A class, default policy, or override sets `bypass_rate` outside `[0.0, 1.0]`. |
