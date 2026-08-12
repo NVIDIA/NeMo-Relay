@@ -20,7 +20,9 @@ use crate::config::ResponseCacheConfig;
 use crate::response_cache::config::{ToolCacheConfig, ToolClass, ToolOverride};
 use crate::response_cache::intercept::should_bypass;
 use crate::response_cache::key::{KeyOutcome, build_tool_cache_key};
-use crate::response_cache::mark::{CacheMark, CacheSurface, emit_cache_mark};
+use crate::response_cache::mark::{
+    CacheMark, CacheMarkStatus, CacheReason, CacheSurface, emit_cache_mark,
+};
 use crate::response_cache::store::{CacheEntry, CacheStore, now_unix_ms};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -252,7 +254,7 @@ async fn run_tool_cache(
         KeyOutcome::Key(key) => key,
         KeyOutcome::Bypass(reason) => {
             emit_cache_mark(
-                CacheMark::new("bypass", backend)
+                CacheMark::new(CacheMarkStatus::Bypass, backend)
                     .surface(CacheSurface::Tool)
                     .reason(reason),
             );
@@ -262,9 +264,9 @@ async fn run_tool_cache(
 
     if should_bypass(policy.bypass_rate) {
         emit_cache_mark(
-            CacheMark::new("bypass", backend)
+            CacheMark::new(CacheMarkStatus::Bypass, backend)
                 .surface(CacheSurface::Tool)
-                .reason("sampled")
+                .reason(CacheReason::Sampled)
                 .key_hash(&key),
         );
         let result = next(args).await?;
@@ -278,9 +280,9 @@ async fn run_tool_cache(
             // result under this same policy. Never replay it after error
             // caching is disabled; a successful live result replaces it.
             emit_cache_mark(
-                CacheMark::new("bypass", backend)
+                CacheMark::new(CacheMarkStatus::Bypass, backend)
                     .surface(CacheSurface::Tool)
-                    .reason("cached_error")
+                    .reason(CacheReason::CachedError)
                     .key_hash(&key),
             );
             let result = next(args).await?;
@@ -290,7 +292,7 @@ async fn run_tool_cache(
         Ok(Some(entry)) => {
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             emit_cache_mark(
-                CacheMark::new("hit", backend)
+                CacheMark::new(CacheMarkStatus::Hit, backend)
                     .surface(CacheSurface::Tool)
                     .key_hash(&key)
                     .age_ms(age_ms)
@@ -301,7 +303,7 @@ async fn run_tool_cache(
         }
         Ok(None) => {
             emit_cache_mark(
-                CacheMark::new("miss", backend)
+                CacheMark::new(CacheMarkStatus::Miss, backend)
                     .surface(CacheSurface::Tool)
                     .key_hash(&key)
                     .ttl_ms(policy.ttl.as_millis() as u64),
@@ -312,9 +314,9 @@ async fn run_tool_cache(
         }
         Err(_) => {
             emit_cache_mark(
-                CacheMark::new("miss", backend)
+                CacheMark::new(CacheMarkStatus::Miss, backend)
                     .surface(CacheSurface::Tool)
-                    .reason("store_error")
+                    .reason(CacheReason::StoreError)
                     .key_hash(&key),
             );
             next(args).await.map(Into::into)

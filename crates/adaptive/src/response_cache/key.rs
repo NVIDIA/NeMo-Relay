@@ -25,6 +25,7 @@ use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::ResponseCacheConfig;
+use crate::response_cache::mark::CacheReason;
 use crate::response_cache::store::CACHE_SCHEMA_VERSION;
 
 /// Top-level request-body keys that never affect the answer and are always
@@ -42,7 +43,7 @@ pub enum KeyOutcome {
     Key(String),
     /// The request is intentionally not cacheable; the reason is a short,
     /// stable label suitable for telemetry.
-    Bypass(&'static str),
+    Bypass(CacheReason),
 }
 
 /// Derives the cache key for a request, or decides it must bypass the cache.
@@ -91,18 +92,18 @@ pub fn build_cache_key(
         "header_allowlist": header_allowlist,
     });
     if contains_unrepresentable_int(&key_doc) {
-        return KeyOutcome::Bypass("unrepresentable_number");
+        return KeyOutcome::Bypass(CacheReason::UnrepresentableNumber);
     }
 
     match fingerprint(&key_doc) {
         Some(key) => KeyOutcome::Key(key),
-        None => KeyOutcome::Bypass("canonicalization_failed"),
+        None => KeyOutcome::Bypass(CacheReason::CanonicalizationFailed),
     }
 }
 
-fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Option<&'static str> {
+fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Option<CacheReason> {
     if request.content.is_null() {
-        return Some("unparseable_body");
+        return Some(CacheReason::UnparseableBody);
     }
     if let Some(reason) = request
         .content
@@ -113,21 +114,21 @@ fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Op
     }
     (!config.cache_nondeterministic
         && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0))
-    .then_some("nondeterministic_temperature")
+    .then_some(CacheReason::NondeterministicTemperature)
 }
 
-fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<&'static str> {
+fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<CacheReason> {
     if object
         .get("store")
         .is_some_and(|value| !matches!(value, Json::Bool(false) | Json::Null))
     {
-        return Some("stateful_store");
+        return Some(CacheReason::StatefulStore);
     }
     if object.contains_key("previous_response_id") {
-        return Some("stateful_previous_response_id");
+        return Some(CacheReason::StatefulPreviousResponseId);
     }
     if object.contains_key("conversation") || object.contains_key("container") {
-        return Some("stateful_conversation");
+        return Some(CacheReason::StatefulConversation);
     }
     let responses_surface = object.contains_key("input")
         || object.contains_key("instructions")
@@ -135,7 +136,7 @@ fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<&'static
     let explicitly_stateless = object
         .get("store")
         .is_some_and(|store| store == &Json::Bool(false));
-    (responses_surface && !explicitly_stateless).then_some("stateful_store")
+    (responses_surface && !explicitly_stateless).then_some(CacheReason::StatefulStore)
 }
 
 /// Preserves which OpenAI Chat token-cap field the caller sent.
@@ -236,7 +237,7 @@ pub fn build_tool_cache_key(
     }
 
     if contains_unrepresentable_int(&args) {
-        return KeyOutcome::Bypass("unrepresentable_number");
+        return KeyOutcome::Bypass(CacheReason::UnrepresentableNumber);
     }
 
     let key_doc = json!({
@@ -252,7 +253,7 @@ pub fn build_tool_cache_key(
 
     match fingerprint(&key_doc) {
         Some(key) => KeyOutcome::Key(key),
-        None => KeyOutcome::Bypass("canonicalization_failed"),
+        None => KeyOutcome::Bypass(CacheReason::CanonicalizationFailed),
     }
 }
 

@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::acg::canonicalize::{canonicalize_value, sha256_hex};
+use crate::response_cache::mark::CacheReason;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 
@@ -408,14 +409,14 @@ fn stateful_conversation_and_default_store_bypass() {
     }));
     assert_eq!(
         build_cache_key("openai", &with_conversation, &config),
-        KeyOutcome::Bypass("stateful_conversation")
+        KeyOutcome::Bypass(CacheReason::StatefulConversation)
     );
     // Responses persists by default: no explicit `store: false` opt-out
     // means the call is stateful.
     let default_store = request(json!({"model": "gpt-4o", "input": "hello"}));
     assert_eq!(
         build_cache_key("openai", &default_store, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let opted_out = request(json!({"model": "gpt-4o", "input": "hello", "store": false}));
     assert!(matches!(
@@ -430,7 +431,7 @@ fn stateful_conversation_and_default_store_bypass() {
     }));
     assert_eq!(
         build_cache_key("openai", &template, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let template_opted_out = request(json!({
         "model": "gpt-4o",
@@ -449,7 +450,7 @@ fn null_bodies_bypass_the_cache() {
     // request would share one key, so they are never cacheable.
     assert_eq!(
         build_cache_key("openai", &request(Json::Null), &cache_all_config()),
-        KeyOutcome::Bypass("unparseable_body")
+        KeyOutcome::Bypass(CacheReason::UnparseableBody)
     );
 }
 
@@ -474,7 +475,7 @@ fn unrepresentable_integers_bypass_the_cache() {
     for id in [9_007_199_254_740_995_u64, 9_007_199_254_740_996] {
         assert_eq!(
             build_cache_key("anthropic", &make(id), &config),
-            KeyOutcome::Bypass("unrepresentable_number"),
+            KeyOutcome::Bypass(CacheReason::UnrepresentableNumber),
             "id {id} lies beyond 2^53 and must not be trusted in a key"
         );
     }
@@ -516,7 +517,7 @@ fn integers_beyond_u64_bypass_after_parsing_as_f64() {
     for request in [&first, &second] {
         assert_eq!(
             build_cache_key("anthropic", request, &config),
-            KeyOutcome::Bypass("unrepresentable_number")
+            KeyOutcome::Bypass(CacheReason::UnrepresentableNumber)
         );
     }
 }
@@ -527,20 +528,20 @@ fn stateful_responses_calls_bypass() {
     let with_store = request(json!({"model": "m", "messages": [], "store": true}));
     assert_eq!(
         build_cache_key("openai", &with_store, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let with_prev =
         request(json!({"model": "m", "messages": [], "previous_response_id": "resp_1"}));
     assert_eq!(
         build_cache_key("openai", &with_prev, &config),
-        KeyOutcome::Bypass("stateful_previous_response_id")
+        KeyOutcome::Bypass(CacheReason::StatefulPreviousResponseId)
     );
     // A truthy non-boolean `store` must still bypass (it is otherwise stripped
     // from the key), while `store: false` stays cacheable.
     let with_truthy = request(json!({"model": "m", "messages": [], "store": "true"}));
     assert_eq!(
         build_cache_key("openai", &with_truthy, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let not_stored = request(json!({"model": "m", "messages": [], "store": false}));
     assert!(matches!(
@@ -555,13 +556,13 @@ fn nondeterministic_calls_bypass_only_when_disabled() {
     let skip = ResponseCacheConfig::default();
     assert_eq!(
         build_cache_key("openai", &sampled, &skip),
-        KeyOutcome::Bypass("nondeterministic_temperature")
+        KeyOutcome::Bypass(CacheReason::NondeterministicTemperature)
     );
     // Absent temperature: providers default to positive sampling.
     let absent = request(json!({"model": "m", "messages": []}));
     assert_eq!(
         build_cache_key("openai", &absent, &skip),
-        KeyOutcome::Bypass("nondeterministic_temperature")
+        KeyOutcome::Bypass(CacheReason::NondeterministicTemperature)
     );
     // Explicitly pinned deterministic stays cacheable.
     let pinned = request(json!({"model": "m", "messages": [], "temperature": 0.0}));
@@ -1028,7 +1029,7 @@ fn tool_keys_bypass_unrepresentable_integers() {
             &[],
             false,
         ),
-        KeyOutcome::Bypass("unrepresentable_number")
+        KeyOutcome::Bypass(CacheReason::UnrepresentableNumber)
     );
 }
 
@@ -1152,7 +1153,7 @@ fn negative_integers_beyond_the_safe_json_range_bypass_tool_keys() {
     let too_large = -9_007_199_254_740_993_i64;
     assert_eq!(
         build_tool_cache_key("key-test", "lookup", None, &json!(too_large), &[], false),
-        KeyOutcome::Bypass("unrepresentable_number")
+        KeyOutcome::Bypass(CacheReason::UnrepresentableNumber)
     );
 }
 

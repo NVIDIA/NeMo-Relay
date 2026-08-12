@@ -26,6 +26,40 @@ fn cache_surfaces_have_stable_metadata_values() {
 }
 
 #[test]
+fn cache_mark_labels_have_stable_telemetry_values() {
+    assert_eq!(CacheMarkStatus::Bypass.as_str(), "bypass");
+    assert_eq!(CacheMarkStatus::Hit.as_str(), "hit");
+    assert_eq!(CacheMarkStatus::Miss.as_str(), "miss");
+    assert_eq!(
+        CacheReason::CanonicalizationFailed.as_str(),
+        "canonicalization_failed"
+    );
+    assert_eq!(CacheReason::CachedError.as_str(), "cached_error");
+    assert_eq!(
+        CacheReason::NondeterministicTemperature.as_str(),
+        "nondeterministic_temperature"
+    );
+    assert_eq!(CacheReason::ReplayLossy.as_str(), "replay_lossy");
+    assert_eq!(CacheReason::Sampled.as_str(), "sampled");
+    assert_eq!(
+        CacheReason::StatefulConversation.as_str(),
+        "stateful_conversation"
+    );
+    assert_eq!(
+        CacheReason::StatefulPreviousResponseId.as_str(),
+        "stateful_previous_response_id"
+    );
+    assert_eq!(CacheReason::StatefulStore.as_str(), "stateful_store");
+    assert_eq!(CacheReason::StoreError.as_str(), "store_error");
+    assert_eq!(CacheReason::StreamNoCodec.as_str(), "stream_no_codec");
+    assert_eq!(CacheReason::UnparseableBody.as_str(), "unparseable_body");
+    assert_eq!(
+        CacheReason::UnrepresentableNumber.as_str(),
+        "unrepresentable_number"
+    );
+}
+
+#[test]
 fn anthropic_shaped_bodies_price_through_the_catalog() {
     // A real Anthropic response body must yield a dollar figure when the
     // model is in the pricing catalog: its usage carries only
