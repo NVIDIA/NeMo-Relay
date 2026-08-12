@@ -69,8 +69,8 @@ interceptors return a future containing `LlmJsonAsyncStream`. LLM sanitizer
 codec facades remain available before and after an await for the lifetime of
 the middleware completion.
 
-The SDK owns one multi-thread Tokio runtime per exported plugin, starts it
-lazily, and uses two workers by default. Override
+The SDK owns one multi-thread Tokio runtime for each configured plugin component,
+starts it lazily, and uses two workers by default. Override
 `NativePlugin::executor_config` to select a different nonzero worker count.
 Use async I/O or `spawn_blocking`; do not block executor workers. Root
 middleware futures preserve Relay scope context across awaits and worker-thread

@@ -227,10 +227,12 @@ incrementally, so Relay does not buffer the provider stream into an array.
 
 The incremental output queue is bounded. `async_stream_push_json` and
 `async_stream_reject` never block a native callback thread. If either returns
-`Internal`, call `async_stream_is_backpressured`: retain and retry the logical
-chunk or rejection only when it returns `true`. `InvalidArg` means the stream
-is already closed or cancelled and must not be retried. Check
-`async_stream_is_cancelled` during longer producer work.
+`Backpressured`, retain that logical chunk or rejection and retry it after the
+consumer advances. `InvalidArg` means the stream is already closed or cancelled
+and must not be retried. `async_stream_is_backpressured` only reports whether
+the queue is full at the instant you call it; do not use it to decide whether a
+specific operation needs a retry. Check `async_stream_is_cancelled` during
+longer producer work.
 
 For `async_next_invoke_stream`, Relay reports downstream failure or consumer
 cancellation through one terminal callback with a non-null error, and reports

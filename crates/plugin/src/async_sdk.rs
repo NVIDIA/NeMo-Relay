@@ -130,10 +130,18 @@ impl Drop for NativeExecutor {
             .unwrap_or_else(|error| error.into_inner())
             .take();
         if let Some(runtime) = runtime {
-            // The host removes callbacks before dropping the plugin descriptor,
-            // so this is not called by an SDK worker. Drain accepted middleware
-            // before the descriptor can unload its dynamic library.
-            runtime.block_on(self.tracker.wait());
+            let tracker = self.tracker.clone();
+            // Callback deregistration can run from a Relay Tokio worker. Drain
+            // and destroy this separate runtime on an OS thread so teardown
+            // never starts or drops a runtime from within another runtime. The
+            // join keeps callback state, including the native-library guard,
+            // alive until every accepted middleware task has finished.
+            std::thread::Builder::new()
+                .name(format!("{}-shutdown", self.thread_name))
+                .spawn(move || runtime.block_on(tracker.wait()))
+                .expect("native plugin executor shutdown thread should start")
+                .join()
+                .expect("native plugin executor shutdown thread should not panic");
         }
     }
 }
