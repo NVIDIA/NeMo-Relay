@@ -1619,7 +1619,7 @@ async fn collect_observability_reports_tool_cache_surface_for_cacheable_override
         ..GatewayConfig::default()
     };
 
-    let checks = collect_observability(&gateway).await;
+    let checks = collect_live_observability(&gateway).await;
 
     let tools = checks
         .iter()
