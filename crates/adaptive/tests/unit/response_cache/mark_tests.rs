@@ -3,7 +3,7 @@
 
 //! Unit tests for response-cache savings marks in the NeMo Relay adaptive crate.
 
-use std::time::Duration;
+use std::{hint::black_box, time::Duration};
 
 use nemo_relay::codec::model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -27,34 +27,43 @@ fn cache_surfaces_have_stable_metadata_values() {
 
 #[test]
 fn cache_mark_labels_have_stable_telemetry_values() {
-    assert_eq!(CacheMarkStatus::Bypass.as_str(), "bypass");
-    assert_eq!(CacheMarkStatus::Hit.as_str(), "hit");
-    assert_eq!(CacheMarkStatus::Miss.as_str(), "miss");
+    assert_eq!(black_box(CacheMarkStatus::Bypass).as_str(), "bypass");
+    assert_eq!(black_box(CacheMarkStatus::Hit).as_str(), "hit");
+    assert_eq!(black_box(CacheMarkStatus::Miss).as_str(), "miss");
     assert_eq!(
-        CacheReason::CanonicalizationFailed.as_str(),
+        black_box(CacheReason::CanonicalizationFailed).as_str(),
         "canonicalization_failed"
     );
-    assert_eq!(CacheReason::CachedError.as_str(), "cached_error");
+    assert_eq!(black_box(CacheReason::CachedError).as_str(), "cached_error");
     assert_eq!(
-        CacheReason::NondeterministicTemperature.as_str(),
+        black_box(CacheReason::NondeterministicTemperature).as_str(),
         "nondeterministic_temperature"
     );
-    assert_eq!(CacheReason::ReplayLossy.as_str(), "replay_lossy");
-    assert_eq!(CacheReason::Sampled.as_str(), "sampled");
+    assert_eq!(black_box(CacheReason::ReplayLossy).as_str(), "replay_lossy");
+    assert_eq!(black_box(CacheReason::Sampled).as_str(), "sampled");
     assert_eq!(
-        CacheReason::StatefulConversation.as_str(),
+        black_box(CacheReason::StatefulConversation).as_str(),
         "stateful_conversation"
     );
     assert_eq!(
-        CacheReason::StatefulPreviousResponseId.as_str(),
+        black_box(CacheReason::StatefulPreviousResponseId).as_str(),
         "stateful_previous_response_id"
     );
-    assert_eq!(CacheReason::StatefulStore.as_str(), "stateful_store");
-    assert_eq!(CacheReason::StoreError.as_str(), "store_error");
-    assert_eq!(CacheReason::StreamNoCodec.as_str(), "stream_no_codec");
-    assert_eq!(CacheReason::UnparseableBody.as_str(), "unparseable_body");
     assert_eq!(
-        CacheReason::UnrepresentableNumber.as_str(),
+        black_box(CacheReason::StatefulStore).as_str(),
+        "stateful_store"
+    );
+    assert_eq!(black_box(CacheReason::StoreError).as_str(), "store_error");
+    assert_eq!(
+        black_box(CacheReason::StreamNoCodec).as_str(),
+        "stream_no_codec"
+    );
+    assert_eq!(
+        black_box(CacheReason::UnparseableBody).as_str(),
+        "unparseable_body"
+    );
+    assert_eq!(
+        black_box(CacheReason::UnrepresentableNumber).as_str(),
         "unrepresentable_number"
     );
 }

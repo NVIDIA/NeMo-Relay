@@ -129,20 +129,19 @@ jobs:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
           architecture: arm64
 
+      - name: Set up Python
+        if: ${{ matrix.platform != 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
       - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
         run: |
           set -e
           python - <<'PY' >> "$GITHUB_ENV"
           import sys
           print(f"UV_PYTHON={sys.executable}")
           PY
-
-      - name: Install managed Python
-        if: ${{ matrix.platform != 'windows-arm64' }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Add Python DLL directory to PATH on Windows
         if: runner.os == 'Windows'
@@ -438,18 +437,20 @@ jobs:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
           architecture: arm64
 
+      - name: Set up Python
+        if: ${{ matrix.runtime_image == '' && matrix.platform != 'windows-arm64' }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
       - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
+        if: ${{ matrix.runtime_image == '' }}
         run: |
           set -e
           python - <<'PY' >> "$GITHUB_ENV"
           import sys
           print(f"UV_PYTHON={sys.executable}")
           PY
-
-      - name: Install managed Python
-        if: ${{ matrix.runtime_image == '' && matrix.platform != 'windows-arm64' }}
-        run: UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Download matching CLI binary artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

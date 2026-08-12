@@ -103,11 +103,18 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - name: Install managed Python
-        working-directory: source-checkout
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
+      - name: Select setup-python interpreter for uv
         run: |
           set -euo pipefail
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+          python - <<'PY' >> "$GITHUB_ENV"
+          import sys
+          print(f"UV_PYTHON={sys.executable}")
+          PY
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
@@ -287,11 +294,18 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - name: Install managed Python
-        working-directory: source-checkout
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
+      - name: Select setup-python interpreter for uv
         run: |
           set -euo pipefail
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+          python - <<'PY' >> "$GITHUB_ENV"
+          import sys
+          print(f"UV_PYTHON={sys.executable}")
+          PY
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
@@ -442,11 +456,18 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - name: Install managed Python
-        working-directory: source-checkout
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
+
+      - name: Select setup-python interpreter for uv
         run: |
           set -euo pipefail
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+          python - <<'PY' >> "$GITHUB_ENV"
+          import sys
+          print(f"UV_PYTHON={sys.executable}")
+          PY
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
