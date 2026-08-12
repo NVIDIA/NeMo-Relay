@@ -1435,6 +1435,12 @@ async fn collect_observability_skips_redis_response_cache_probe_offline() {
                                     "key_prefix": "doctor-test:"
                                 }
                             }
+                        },
+                        "tools": {
+                            "enabled": true,
+                            "overrides": {
+                                "docs_*": { "cacheable": true }
+                            }
                         }
                     }
                 }
@@ -1453,6 +1459,16 @@ async fn collect_observability_skips_redis_response_cache_probe_offline() {
     assert_eq!(
         cache.details,
         "configured; live redis backend probe skipped (--offline)"
+    );
+    let tools = checks
+        .iter()
+        .find(|check| check.name == "Response cache (tools)")
+        .expect("a Response cache (tools) check should be present");
+    assert_eq!(tools.status, Status::Info, "checks: {checks:?}");
+    assert!(
+        tools.details.contains("on") && tools.details.contains("1 cacheable override"),
+        "details: {}",
+        tools.details
     );
 }
 

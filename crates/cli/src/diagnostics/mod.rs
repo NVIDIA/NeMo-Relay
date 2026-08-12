@@ -753,18 +753,6 @@ async fn collect_response_cache_component_checks(
         });
         return;
     }
-    if probe_mode.is_offline() && config.backend.kind != "in_memory" {
-        checks.push(Check {
-            name: "Response cache",
-            status: Status::Info,
-            details: format!(
-                "configured; live {} backend probe skipped (--offline)",
-                config.backend.kind
-            ),
-        });
-        return;
-    }
-    checks.push(response_cache_backend_check(response_cache::check_backend_health(&config)).await);
     if let Some(tools) = config.tools.as_ref() {
         let details = if tools.enabled {
             let cacheable_classes = tools
@@ -794,6 +782,18 @@ async fn collect_response_cache_component_checks(
             details,
         });
     }
+    if probe_mode.is_offline() && config.backend.kind != "in_memory" {
+        checks.push(Check {
+            name: "Response cache",
+            status: Status::Info,
+            details: format!(
+                "configured; live {} backend probe skipped (--offline)",
+                config.backend.kind
+            ),
+        });
+        return;
+    }
+    checks.push(response_cache_backend_check(response_cache::check_backend_health(&config)).await);
 }
 
 async fn response_cache_backend_check(
