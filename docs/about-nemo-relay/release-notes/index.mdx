@@ -27,11 +27,27 @@ Relay](/about-nemo-relay/overview).
 
 ## Release 0.8
 
-NVIDIA NeMo Relay 0.8 release notes are in preparation.
+NeMo Relay 0.8 changes the typed native Rust SDK's guardrail, sanitizer, and
+intercept callbacks to return futures. The SDK runs these futures on one
+plugin-owned Tokio executor and provides async, cloneable unary and streaming
+continuations. This is a source-breaking change for typed native Rust plugins;
+rebuild them with `nemo-relay-plugin` 0.8.0 and declare
+`compat.relay = ">=0.8.0,<1.0"`.
+
+Native ABI v4 adds completion-scoped codec operations and pull-based LLM
+stream continuations. Relay still accepts existing raw ABI v2 and v3 binaries,
+and native subscribers remain synchronous. Follow the [native Rust migration
+guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08)
+for callback and executor changes.
 
 ### Highlights
 
-- _Highlights will be added for the 0.8 release._
+The following updates expand native Rust plugin capabilities:
+
+- Typed native Rust middleware can await Tokio timers, I/O, codecs, unary
+  continuations, and downstream LLM streams on an SDK-owned executor.
+- Native ABI v4 provides completion-scoped codec operations and pull-based LLM
+  stream continuations.
 
 ### Support Matrix and Compatibility Updates
 
@@ -45,6 +61,9 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
 
 ### Breaking Changes
 
+- Typed native Rust middleware callbacks now return futures and receive owned
+  arguments. Native subscribers and raw synchronous ABI entry points are
+  unchanged.
 - Repository-local `.nemo-relay/config.toml`, `plugins.toml`, and
   `.dynamic-plugins.json` files are no longer discovered or activated. Runtime
   resolution is explicit-or-user followed by higher-precedence system policy.
@@ -55,6 +74,12 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
 - `nemo-relay doctor` reports ignored ancestor project configuration as
   warning-only migration diagnostics. Relay does not automatically move,
   rewrite, or delete those legacy files.
+- Removed Hermes-specific support from the NeMo Relay CLI, including the
+  `hermes` shortcut, `run --agent hermes`, and Hermes-specific install,
+  uninstall, doctor, configuration, MCP selection, and `/hooks/hermes` paths.
+  NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay
+  plugin configurations. No separate observability plugin or Relay CLI setup is
+  required.
 
 Refer to [Migration Guides](/reference/migration-guides#move-project-configuration-to-a-supported-location)
 for destination paths and explicit-file alternatives.
@@ -62,15 +87,6 @@ for destination paths and explicit-file alternatives.
 ### Fixed Known Issues in 0.8
 
 - _Fixed issues will be added for the 0.8 release._
-
-### Breaking Changes in 0.8
-
-- Removed Hermes-specific support from the NeMo Relay CLI, including the
-  `hermes` shortcut, `run --agent hermes`, and Hermes-specific install,
-  uninstall, doctor, configuration, MCP selection, and `/hooks/hermes` paths.
-  NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay
-  plugin configurations. No separate observability plugin or Relay CLI setup is
-  required.
 
 ## Known Issues in 0.8
 

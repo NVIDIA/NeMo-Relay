@@ -9,11 +9,15 @@
 //! Native plugins built with it communicate with a host through versioned
 //! C-compatible tables and host-owned string handles.
 
+mod async_sdk;
+
+pub use async_sdk::{LlmJsonAsyncStream, LlmNext, LlmStreamNext, NativeExecutorConfig, ToolNext};
+
 use std::ffi::{c_char, c_void};
 use std::marker::{PhantomData, PhantomPinned};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
@@ -37,11 +41,13 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 3 reserves the native async middleware extension. Hosts retain a
-/// version-2 table for already-built plugins during entry-point negotiation.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 3;
+/// Version 4 adds completion-scoped codecs and pull-based LLM streams. Hosts
+/// retain frozen version-3 and version-2 tables for already-built plugins.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 4;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
+/// ABI version that introduced typed async middleware capabilities.
+pub const NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC: u32 = 4;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
@@ -86,6 +92,9 @@ pub struct LlmSanitizeRequestContext<'a> {
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmSanitizeRequestCodec<'a>>,
 }
+// SAFETY: this context is constructed only by the async SDK from a retained
+// completion capability; callback-scoped native contexts never construct it.
+unsafe impl Send for LlmSanitizeRequestContext<'_> {}
 
 /// Per-call response codec context delivered to an LLM sanitizer.
 pub struct LlmSanitizeResponseContext<'a> {
@@ -93,6 +102,9 @@ pub struct LlmSanitizeResponseContext<'a> {
     pub codec: LlmCodecIdentity,
     resolved: Option<LlmSanitizeResponseCodec<'a>>,
 }
+// SAFETY: this context is constructed only by the async SDK from a retained
+// completion capability; callback-scoped native contexts never construct it.
+unsafe impl Send for LlmSanitizeResponseContext<'_> {}
 
 /// Status codes returned by stable native ABI functions.
 #[repr(i32)]
@@ -120,6 +132,8 @@ pub enum NemoRelayStatus {
     InvalidArg = 9,
     /// A stream reached end-of-stream and has no chunk to return.
     StreamEnd = 10,
+    /// A bounded stream queue is full; retry this operation after it advances.
+    Backpressured = 11,
 }
 
 /// Opaque host-owned UTF-8 string or JSON byte buffer.
@@ -186,23 +200,38 @@ pub struct NemoRelayNativeLlmSanitizeResponseContext {
     pub codec: *const NemoRelayNativeLlmResponseCodec,
 }
 
-/// Safe callback-scoped request codec facade for typed native plugins.
+/// Safe completion-backed request codec facade for typed native plugins.
 pub struct LlmSanitizeRequestCodec<'a> {
-    host: NemoRelayNativeHostApiV1,
-    handle: *const NemoRelayNativeLlmRequestCodec,
+    async_host: NemoRelayNativeHostApiV4,
+    completion: *const NemoRelayNativeAsyncCompletion,
+    completion_release: unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion),
     _lifetime: PhantomData<&'a NemoRelayNativeLlmRequestCodec>,
+}
+// SAFETY: this type has no borrowed-handle construction path. The async SDK
+// retains the completion capability until this facade is dropped.
+unsafe impl Send for LlmSanitizeRequestCodec<'_> {}
+// SAFETY: calls use the immutable host API and retained completion capability,
+// which the host permits from concurrent plugin tasks.
+unsafe impl Sync for LlmSanitizeRequestCodec<'_> {}
+
+impl Drop for LlmSanitizeRequestCodec<'_> {
+    fn drop(&mut self) {
+        unsafe { (self.completion_release)(self.completion) };
+    }
 }
 
 impl LlmSanitizeRequestCodec<'_> {
     /// Decode an opaque request into Relay's normalized request model.
     pub fn decode(&self, request: &LlmRequest) -> Result<AnnotatedLlmRequest> {
-        native_codec_call(&self.host, |out| unsafe {
-            let request = HostString::from_json(&self.host, request)
+        native_codec_call(&self.async_host.v3.v1, |out| unsafe {
+            let request = HostString::from_json(&self.async_host.v3.v1, request)
                 .ok_or_else(|| "failed to serialize LLM request".to_string())?;
-            codec_status(
-                &self.host,
-                (self.host.llm_request_codec_decode)(self.handle, request.as_ptr(), out),
-            )
+            let status = (self.async_host.async_completion_llm_request_codec_decode)(
+                self.completion,
+                request.as_ptr(),
+                out,
+            );
+            codec_status(&self.async_host.v3.v1, status)
         })
     }
 
@@ -212,41 +241,54 @@ impl LlmSanitizeRequestCodec<'_> {
         annotated: &AnnotatedLlmRequest,
         original: &LlmRequest,
     ) -> Result<LlmRequest> {
-        native_codec_call(&self.host, |out| unsafe {
-            let annotated = HostString::from_json(&self.host, annotated)
+        native_codec_call(&self.async_host.v3.v1, |out| unsafe {
+            let annotated = HostString::from_json(&self.async_host.v3.v1, annotated)
                 .ok_or_else(|| "failed to serialize annotated request".to_string())?;
-            let original = HostString::from_json(&self.host, original)
+            let original = HostString::from_json(&self.async_host.v3.v1, original)
                 .ok_or_else(|| "failed to serialize original request".to_string())?;
-            codec_status(
-                &self.host,
-                (self.host.llm_request_codec_encode)(
-                    self.handle,
-                    annotated.as_ptr(),
-                    original.as_ptr(),
-                    out,
-                ),
-            )
+            let status = (self.async_host.async_completion_llm_request_codec_encode)(
+                self.completion,
+                annotated.as_ptr(),
+                original.as_ptr(),
+                out,
+            );
+            codec_status(&self.async_host.v3.v1, status)
         })
     }
 }
 
-/// Safe callback-scoped response codec facade for typed native plugins.
+/// Safe completion-backed response codec facade for typed native plugins.
 pub struct LlmSanitizeResponseCodec<'a> {
-    host: NemoRelayNativeHostApiV1,
-    handle: *const NemoRelayNativeLlmResponseCodec,
+    async_host: NemoRelayNativeHostApiV4,
+    completion: *const NemoRelayNativeAsyncCompletion,
+    completion_release: unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion),
     _lifetime: PhantomData<&'a NemoRelayNativeLlmResponseCodec>,
+}
+// SAFETY: this type has no borrowed-handle construction path. The async SDK
+// retains the completion capability until this facade is dropped.
+unsafe impl Send for LlmSanitizeResponseCodec<'_> {}
+// SAFETY: calls use the immutable host API and the retained completion
+// capability, which the host permits from concurrent plugin tasks.
+unsafe impl Sync for LlmSanitizeResponseCodec<'_> {}
+
+impl Drop for LlmSanitizeResponseCodec<'_> {
+    fn drop(&mut self) {
+        unsafe { (self.completion_release)(self.completion) };
+    }
 }
 
 impl LlmSanitizeResponseCodec<'_> {
     /// Decode an opaque response into Relay's normalized response model.
     pub fn decode(&self, response: &Json) -> Result<AnnotatedLlmResponse> {
-        native_codec_call(&self.host, |out| unsafe {
-            let response = HostString::from_json(&self.host, response)
+        native_codec_call(&self.async_host.v3.v1, |out| unsafe {
+            let response = HostString::from_json(&self.async_host.v3.v1, response)
                 .ok_or_else(|| "failed to serialize LLM response".to_string())?;
-            codec_status(
-                &self.host,
-                (self.host.llm_response_codec_decode)(self.handle, response.as_ptr(), out),
-            )
+            let status = (self.async_host.async_completion_llm_response_codec_decode)(
+                self.completion,
+                response.as_ptr(),
+                out,
+            );
+            codec_status(&self.async_host.v3.v1, status)
         })
     }
 }
@@ -874,6 +916,35 @@ pub struct NemoRelayNativeAsyncStream {
     _marker: PhantomData<(*mut u8, PhantomPinned)>,
 }
 
+/// Opaque pull-based downstream LLM stream owned by the host.
+#[repr(C)]
+pub struct NemoRelayNativeLlmAsyncStream {
+    _private: [u8; 0],
+    _marker: PhantomData<(*mut u8, PhantomPinned)>,
+}
+
+/// Receives the result of asynchronously opening a downstream LLM stream.
+///
+/// Exactly one of `stream` and `error` is non-null. A non-null stream is an
+/// owned plugin reference and must be released exactly once.
+pub type NemoRelayNativeAsyncLlmStreamOpenCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    stream: *const NemoRelayNativeLlmAsyncStream,
+    error: *const NemoRelayNativeString,
+);
+
+/// Receives one item from a pull-based downstream LLM stream.
+///
+/// A chunk has non-null `chunk_json` and `done = false`; clean completion has
+/// both strings null and `done = true`; failure has non-null `error` and
+/// `done = true`. Only one pull may be outstanding per stream.
+pub type NemoRelayNativeAsyncLlmStreamPullCb = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    chunk_json: *const NemoRelayNativeString,
+    error: *const NemoRelayNativeString,
+    done: bool,
+);
+
 /// Receives one downstream stream item. `chunk_json` is non-null for a chunk,
 /// `error` is non-null for failure or consumer cancellation, and `done` marks
 /// clean completion. Unless the callback itself returns `false`, the host
@@ -1006,9 +1077,8 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
     /// Pushes one JSON chunk to an incremental native stream without blocking.
     ///
-    /// A full bounded host queue returns [`NemoRelayStatus::Internal`] and
-    /// records a backpressure message in the host's last-error slot. The
-    /// producer may retry the logical chunk after the consumer advances.
+    /// A full bounded host queue returns [`NemoRelayStatus::Backpressured`];
+    /// retry this same logical chunk after the consumer advances.
     pub async_stream_push_json: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         chunk_json: *const NemoRelayNativeString,
@@ -1018,8 +1088,8 @@ pub struct NemoRelayNativeHostApiV3 {
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> NemoRelayStatus,
     /// Rejects an incremental native stream without blocking.
     ///
-    /// A full bounded queue returns [`NemoRelayStatus::Internal`]; the caller
-    /// may retry the rejection after the consumer advances.
+    /// A full bounded queue returns [`NemoRelayStatus::Backpressured`]; retry
+    /// this same rejection after the consumer advances.
     pub async_stream_reject: unsafe extern "C" fn(
         stream: *const NemoRelayNativeAsyncStream,
         message: *const NemoRelayNativeString,
@@ -1065,8 +1135,68 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
 }
 
+/// ABI-v4 host extension for typed asynchronous native middleware.
+///
+/// The complete ABI-v3 table is the prefix, preserving layout compatibility.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct NemoRelayNativeHostApiV4 {
+    /// Frozen ABI-v3 compatibility prefix.
+    pub v3: NemoRelayNativeHostApiV3,
+    /// Decodes an LLM request using the request codec attached to `completion`.
+    pub async_completion_llm_request_codec_decode: unsafe extern "C" fn(
+        completion: *const NemoRelayNativeAsyncCompletion,
+        request_json: *const NemoRelayNativeString,
+        out: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Encodes an annotated LLM request using the request codec attached to `completion`.
+    pub async_completion_llm_request_codec_encode: unsafe extern "C" fn(
+        completion: *const NemoRelayNativeAsyncCompletion,
+        annotated_json: *const NemoRelayNativeString,
+        original_json: *const NemoRelayNativeString,
+        out: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Decodes an LLM response using the response codec attached to `completion`.
+    pub async_completion_llm_response_codec_decode: unsafe extern "C" fn(
+        completion: *const NemoRelayNativeAsyncCompletion,
+        response_json: *const NemoRelayNativeString,
+        out: *mut *mut NemoRelayNativeString,
+    ) -> NemoRelayStatus,
+    /// Opens an independent pull-based downstream LLM stream.
+    pub async_next_open_llm_stream: unsafe extern "C" fn(
+        next: *const NemoRelayNativeAsyncNext,
+        request_json: *const NemoRelayNativeString,
+        cb: NemoRelayNativeAsyncLlmStreamOpenCb,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+    /// Requests one item from a pull-based downstream LLM stream.
+    pub async_llm_stream_pull: unsafe extern "C" fn(
+        stream: *const NemoRelayNativeLlmAsyncStream,
+        cb: NemoRelayNativeAsyncLlmStreamPullCb,
+        user_data: *mut c_void,
+    ) -> NemoRelayStatus,
+    /// Cancels a pull-based downstream LLM stream.
+    pub async_llm_stream_cancel:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeLlmAsyncStream) -> NemoRelayStatus,
+    /// Releases the plugin-owned stream reference exactly once.
+    pub async_llm_stream_release:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeLlmAsyncStream),
+    /// Retains a completion capability for a codec facade that outlives the
+    /// callback's original completion reference.
+    pub async_completion_retain:
+        unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion) -> NemoRelayStatus,
+    /// Returns whether the output queue is currently full.
+    ///
+    /// Use [`NemoRelayStatus::Backpressured`] from the individual push or
+    /// rejection operation to decide whether that operation must be retried.
+    pub async_stream_is_backpressured:
+        unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool,
+}
+
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
+unsafe impl Send for NemoRelayNativeHostApiV4 {}
+unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -1240,10 +1370,15 @@ impl From<ScopeType> for NemoRelayNativeScopeType {
 }
 
 /// RAII guard for a host scope opened by [`PluginRuntime::scope`].
+///
+/// A guard may move between threads only while its scope stack is bound on the
+/// destination thread. Async middleware restores that binding around each poll;
+/// tasks created with `tokio::spawn` do not inherit it and must not own a guard.
 pub struct ScopeGuard<'a> {
     runtime: &'a PluginRuntime,
     handle: Option<ScopeHandle<'a>>,
 }
+unsafe impl Send for ScopeGuard<'_> {}
 
 impl<'a> ScopeGuard<'a> {
     /// Returns the active scope handle.
@@ -1295,79 +1430,6 @@ impl Drop for ThreadScopeStackGuard<'_> {
         if let Some(previous) = self.previous.take() {
             let _ = previous.restore();
         }
-    }
-}
-
-/// Typed continuation passed to tool execution intercepts.
-pub struct ToolNext<'a> {
-    host: &'a NemoRelayNativeHostApiV1,
-    next_fn: NemoRelayNativeToolNextFn,
-    next_ctx: *mut c_void,
-}
-
-impl ToolNext<'_> {
-    /// Continues the tool execution chain with replacement arguments.
-    pub fn call(&self, args: Json) -> Result<Json> {
-        let args = HostString::from_json(self.host, &args)
-            .ok_or_else(|| "failed to allocate tool next args".to_string())?;
-        let mut out = ptr::null_mut();
-        let status = unsafe { (self.next_fn)(args.as_ptr(), self.next_ctx, &mut out) };
-        if status != NemoRelayStatus::Ok {
-            return Err(format!("tool next failed: {status:?}"));
-        }
-        if out.is_null() {
-            return Err("tool next returned null output".into());
-        }
-        let result = read_json_value(self.host, out, "tool next result");
-        unsafe { (self.host.string_free)(out) };
-        result.map_err(|status| format!("tool next returned invalid JSON: {status:?}"))
-    }
-}
-
-/// Typed continuation passed to LLM execution intercepts.
-pub struct LlmNext<'a> {
-    host: &'a NemoRelayNativeHostApiV1,
-    next_fn: NemoRelayNativeLlmNextFn,
-    next_ctx: *mut c_void,
-}
-
-impl LlmNext<'_> {
-    /// Continues the LLM execution chain with a replacement request.
-    pub fn call(&self, request: LlmRequest) -> Result<Json> {
-        let request = HostString::from_json(self.host, &request)
-            .ok_or_else(|| "failed to allocate LLM next request".to_string())?;
-        let mut out = ptr::null_mut();
-        let status = unsafe { (self.next_fn)(request.as_ptr(), self.next_ctx, &mut out) };
-        if status != NemoRelayStatus::Ok {
-            return Err(format!("llm next failed: {status:?}"));
-        }
-        if out.is_null() {
-            return Err("llm next returned null output".into());
-        }
-        let result = read_json_value(self.host, out, "llm next result");
-        unsafe { (self.host.string_free)(out) };
-        result.map_err(|status| format!("llm next returned invalid JSON: {status:?}"))
-    }
-}
-
-/// Typed continuation passed to LLM stream execution intercepts.
-pub struct LlmStreamNext<'a> {
-    host: &'a NemoRelayNativeHostApiV1,
-    next_fn: NemoRelayNativeLlmStreamNextFn,
-    next_ctx: *mut c_void,
-}
-
-impl LlmStreamNext<'_> {
-    /// Continues the LLM stream execution chain with a replacement request.
-    pub fn call(&self, request: LlmRequest) -> Result<LlmStream> {
-        let request = HostString::from_json(self.host, &request)
-            .ok_or_else(|| "failed to allocate LLM stream next request".to_string())?;
-        let mut raw = NemoRelayNativeLlmStreamV1::default();
-        let status = unsafe { (self.next_fn)(request.as_ptr(), self.next_ctx, &mut raw) };
-        if status != NemoRelayStatus::Ok {
-            return Err(format!("llm stream next failed: {status:?}"));
-        }
-        unsafe { LlmStream::from_raw(self.host, raw) }
     }
 }
 
@@ -1508,6 +1570,7 @@ pub struct ScopeHandle<'a> {
     host: &'a NemoRelayNativeHostApiV1,
     ptr: *mut NemoRelayNativeScopeHandle,
 }
+unsafe impl Send for ScopeHandle<'_> {}
 
 impl<'a> ScopeHandle<'a> {
     /// Returns the raw ABI pointer.
@@ -1527,6 +1590,7 @@ pub struct ScopeStack<'a> {
     host: &'a NemoRelayNativeHostApiV1,
     ptr: *mut NemoRelayNativeScopeStack,
 }
+unsafe impl Send for ScopeStack<'_> {}
 
 impl<'a> ScopeStack<'a> {
     /// Returns the raw ABI pointer.
@@ -1534,7 +1598,12 @@ impl<'a> ScopeStack<'a> {
         self.ptr
     }
 
-    fn set_thread(&self) -> NemoRelayStatus {
+    /// Binds this stack to the current executor thread.
+    ///
+    /// Prefer [`PluginRuntime::bind_scope_stack_thread`] for synchronous code.
+    /// Async middleware may pair this with a captured binding across an await.
+    /// Capture the previous binding first and restore it after the future completes.
+    pub fn set_thread(&self) -> NemoRelayStatus {
         unsafe { (self.host.scope_stack_set_thread)(self.ptr) }
     }
 
@@ -1607,6 +1676,7 @@ pub struct ScopeStackBinding<'a> {
     host: &'a NemoRelayNativeHostApiV1,
     ptr: *mut NemoRelayNativeScopeStackBinding,
 }
+unsafe impl Send for ScopeStackBinding<'_> {}
 
 impl<'a> ScopeStackBinding<'a> {
     /// Restores and consumes this binding.
@@ -1755,9 +1825,40 @@ pub trait NativePlugin: Send + 'static {
         true
     }
 
+    /// Configures the SDK-owned Tokio executor used by typed middleware.
+    ///
+    /// This supplies the plugin-wide default. Relay applies an optional
+    /// component-local `[plugins.dynamic.config.executor]` override when it
+    /// registers each component.
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig::default()
+    }
+
+    /// Resolves the executor configuration for one component registration.
+    ///
+    /// Override this only when the plugin needs custom component configuration
+    /// rules. The default recognizes `executor.worker_threads` and validates
+    /// that it is a positive integer.
+    fn executor_config_for_component(
+        &self,
+        plugin_config: &Map<String, Json>,
+    ) -> Result<NativeExecutorConfig> {
+        self.executor_config().with_component_config(plugin_config)
+    }
+
     /// Validates one component-local JSON config object.
-    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        vec![]
+    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        self.executor_config_for_component(plugin_config)
+            .err()
+            .map(|message| ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "native_executor_config.invalid".into(),
+                component: None,
+                field: Some("executor.worker_threads".into()),
+                message,
+            })
+            .into_iter()
+            .collect()
     }
 
     /// Registers runtime behavior through the component-scoped plugin context.
@@ -1772,6 +1873,7 @@ pub trait NativePlugin: Send + 'static {
 pub struct PluginContext<'a> {
     host: &'a NemoRelayNativeHostApiV1,
     raw: *mut NemoRelayNativePluginContext,
+    executor: Arc<async_sdk::NativeExecutor>,
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -1784,7 +1886,23 @@ impl<'a> PluginContext<'a> {
         host: &'a NemoRelayNativeHostApiV1,
         raw: *mut NemoRelayNativePluginContext,
     ) -> Self {
-        Self { host, raw }
+        Self {
+            host,
+            raw,
+            executor: async_sdk::NativeExecutor::new(NativeExecutorConfig::default(), "standalone"),
+        }
+    }
+
+    unsafe fn from_raw_with_executor(
+        host: &'a NemoRelayNativeHostApiV1,
+        raw: *mut NemoRelayNativePluginContext,
+        executor: Arc<async_sdk::NativeExecutor>,
+    ) -> Self {
+        Self {
+            host,
+            raw,
+            executor,
+        }
     }
 
     /// Returns the host ABI table backing this registration context.
@@ -1811,412 +1929,7 @@ impl<'a> PluginContext<'a> {
                 Some(drop_typed_callback::<F>),
             )
         };
-        finish_typed_registration::<F>(self.host, status, user_data, "subscriber")
-    }
-
-    fn register_event_sanitizer<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-        register: unsafe extern "C" fn(
-            *mut NemoRelayNativePluginContext,
-            *const NemoRelayNativeString,
-            i32,
-            NemoRelayNativeEventSanitizeCb,
-            *mut c_void,
-            NemoRelayNativeFreeFn,
-        ) -> NemoRelayStatus,
-        label: &str,
-    ) -> Result<()>
-    where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = self.with_name(name, |_, name| unsafe {
-            register(
-                self.raw,
-                name,
-                priority,
-                typed_event_sanitize_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        });
-        finish_typed_registration::<F>(self.host, status, user_data, label)
-    }
-
-    /// Registers a typed mark event sanitizer.
-    pub fn register_mark_sanitize_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
-    {
-        self.register_event_sanitizer(
-            name,
-            priority,
-            callback,
-            self.host.plugin_context_register_mark_sanitize_guardrail,
-            "mark sanitize guardrail",
-        )
-    }
-
-    /// Registers a typed scope-start event sanitizer.
-    pub fn register_scope_sanitize_start_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
-    {
-        self.register_event_sanitizer(
-            name,
-            priority,
-            callback,
-            self.host
-                .plugin_context_register_scope_sanitize_start_guardrail,
-            "scope-start sanitize guardrail",
-        )
-    }
-
-    /// Registers a typed scope-end event sanitizer.
-    pub fn register_scope_sanitize_end_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
-    {
-        self.register_event_sanitizer(
-            name,
-            priority,
-            callback,
-            self.host
-                .plugin_context_register_scope_sanitize_end_guardrail,
-            "scope-end sanitize guardrail",
-        )
-    }
-
-    /// Registers a typed tool sanitize-request guardrail.
-    pub fn register_tool_sanitize_request_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&str, Json) -> Json + Send + Sync + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_tool_sanitize_request_guardrail_raw(
-                name,
-                priority,
-                typed_tool_sanitize_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "tool sanitize request guardrail",
-        )
-    }
-
-    /// Registers a typed tool sanitize-response guardrail.
-    pub fn register_tool_sanitize_response_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&str, Json) -> Json + Send + Sync + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_tool_sanitize_response_guardrail_raw(
-                name,
-                priority,
-                typed_tool_sanitize_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "tool sanitize response guardrail",
-        )
-    }
-
-    /// Registers a typed tool conditional-execution guardrail.
-    pub fn register_tool_conditional_execution_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&str, &Json) -> Result<Option<String>> + Send + Sync + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_tool_conditional_execution_guardrail_raw(
-                name,
-                priority,
-                typed_tool_conditional_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "tool conditional execution guardrail",
-        )
-    }
-
-    /// Registers a typed tool request intercept.
-    pub fn register_tool_request_intercept<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        break_chain: bool,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&str, Json) -> Result<Json> + Send + Sync + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_tool_request_intercept_raw(
-                name,
-                priority,
-                break_chain,
-                typed_tool_intercept_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(self.host, status, user_data, "tool request intercept")
-    }
-
-    /// Registers a typed tool execution intercept.
-    ///
-    /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
-    /// [`ToolNext::call`] continues the chain and returns only the raw
-    /// downstream result JSON; Relay retains downstream pending marks.
-    pub fn register_tool_execution_intercept<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: for<'next> Fn(&str, Json, ToolNext<'next>) -> Result<ToolExecutionInterceptOutcome>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_tool_execution_intercept_raw(
-                name,
-                priority,
-                typed_tool_execution_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(self.host, status, user_data, "tool execution intercept")
-    }
-
-    /// Registers a typed LLM sanitize-request guardrail.
-    pub fn register_llm_sanitize_request_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: for<'ctx> Fn(LlmRequest, LlmSanitizeRequestContext<'ctx>) -> Option<LlmRequest>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_llm_sanitize_request_guardrail_raw(
-                name,
-                priority,
-                typed_llm_sanitize_request_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "llm sanitize request guardrail",
-        )
-    }
-
-    /// Registers a typed LLM sanitize-response guardrail.
-    pub fn register_llm_sanitize_response_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: for<'ctx> Fn(Json, LlmSanitizeResponseContext<'ctx>) -> Option<Json>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_llm_sanitize_response_guardrail_raw(
-                name,
-                priority,
-                typed_llm_sanitize_response_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "llm sanitize response guardrail",
-        )
-    }
-
-    /// Registers a typed LLM conditional-execution guardrail.
-    pub fn register_llm_conditional_execution_guardrail<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_llm_conditional_execution_guardrail_raw(
-                name,
-                priority,
-                typed_llm_conditional_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "llm conditional execution guardrail",
-        )
-    }
-
-    /// Registers a typed LLM request intercept.
-    pub fn register_llm_request_intercept<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        break_chain: bool,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_llm_request_intercept_raw(
-                name,
-                priority,
-                break_chain,
-                typed_llm_request_intercept_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(self.host, status, user_data, "llm request intercept")
-    }
-
-    /// Registers a typed LLM execution intercept.
-    pub fn register_llm_execution_intercept<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: for<'next> Fn(&str, LlmRequest, LlmNext<'next>) -> Result<Json> + Send + Sync + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_llm_execution_intercept_raw(
-                name,
-                priority,
-                typed_llm_execution_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(self.host, status, user_data, "llm execution intercept")
-    }
-
-    /// Registers a typed LLM stream execution intercept.
-    ///
-    /// Native ABI v2 represents stream execution as one JSON result. The host
-    /// wraps that result as a one-chunk stream.
-    pub fn register_llm_stream_execution_intercept<F>(
-        &mut self,
-        name: &str,
-        priority: i32,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: for<'next> Fn(&str, LlmRequest, LlmStreamNext<'next>) -> Result<LlmJsonStream>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let user_data = typed_callback_user_data(self.host, callback);
-        let status = unsafe {
-            self.register_llm_stream_execution_intercept_raw(
-                name,
-                priority,
-                typed_llm_stream_execution_trampoline::<F>,
-                user_data,
-                Some(drop_typed_callback::<F>),
-            )
-        };
-        finish_typed_registration::<F>(
-            self.host,
-            status,
-            user_data,
-            "llm stream execution intercept",
-        )
+        finish_typed_registration(self.host, status, user_data, "subscriber")
     }
 
     /// Registers a raw event subscriber callback.
@@ -2232,7 +1945,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_subscriber)(self.raw, name, cb, user_data, free_fn)
         })
     }
@@ -2251,7 +1964,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_mark_sanitize_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2272,7 +1985,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_scope_sanitize_start_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2293,7 +2006,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_scope_sanitize_end_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2314,7 +2027,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_sanitize_request_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2335,7 +2048,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_sanitize_response_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2356,7 +2069,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_conditional_execution_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2378,7 +2091,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_request_intercept)(
                 self.raw,
                 name,
@@ -2405,7 +2118,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_tool_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2426,7 +2139,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_sanitize_request_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2447,7 +2160,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_sanitize_response_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2468,7 +2181,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_conditional_execution_guardrail)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2490,7 +2203,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_request_intercept)(
                 self.raw,
                 name,
@@ -2517,7 +2230,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2538,7 +2251,7 @@ impl<'a> PluginContext<'a> {
         user_data: *mut c_void,
         free_fn: NemoRelayNativeFreeFn,
     ) -> NemoRelayStatus {
-        self.with_name(name, |host, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |host, name| unsafe {
             (host.plugin_context_register_llm_stream_execution_intercept)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
@@ -2553,7 +2266,8 @@ impl<'a> PluginContext<'a> {
     ///
     /// # Safety
     /// `cb`, `user_data`, and `free_fn` must remain valid until the host
-    /// deregisters the callback or invokes `free_fn`. A callback returning
+    /// deregisters the callback or invokes `free_fn`. This call consumes the
+    /// `user_data` ownership even when it rejects the host ABI. A callback returning
     /// `Pending` must settle and release its completion/next references.
     /// [`NemoRelayNativeAsyncMiddlewareKind::LlmStreamExecutionIntercept`] is
     /// rejected; use [`Self::register_async_stream_middleware_raw`] instead.
@@ -2571,10 +2285,13 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
             return NemoRelayStatus::InvalidArg;
         }
         let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
-        self.with_name(name, |_, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |_, name| unsafe {
             (host.plugin_context_register_async_middleware)(
                 self.raw,
                 kind as u32,
@@ -2592,13 +2309,13 @@ impl<'a> PluginContext<'a> {
     ///
     /// # Safety
     /// The callback and user data must remain valid until deregistration or
-    /// `free_fn`; callback-owned `next` and `stream` handles must each be
+    /// `free_fn`; this call consumes `user_data` even when it rejects the host
+    /// ABI. Callback-owned `next` and `stream` handles must each be
     /// released exactly once. Stream pushes and rejection are nonblocking:
-    /// `Internal` with a host last-error containing `backpressured` means the
-    /// bounded queue is full and the operation may be retried. The output
-    /// stream owns the callback lifetime. `next` may be invoked repeatedly or
-    /// concurrently until that stream settles; Relay then rejects or cancels
-    /// unfinished and later calls.
+    /// Retry only [`NemoRelayStatus::Backpressured`] operations. The output
+    /// stream owns the callback lifetime. `next` may be invoked
+    /// repeatedly or concurrently until that stream settles; Relay then
+    /// rejects or cancels unfinished and later calls.
     pub unsafe fn register_async_stream_middleware_raw(
         &mut self,
         name: &str,
@@ -2610,24 +2327,34 @@ impl<'a> PluginContext<'a> {
         if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
             return NemoRelayStatus::InvalidArg;
         }
         let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
-        self.with_name(name, |_, name| unsafe {
+        self.with_name_and_callback(name, user_data, free_fn, |_, name| unsafe {
             (host.plugin_context_register_async_stream_middleware)(
                 self.raw, name, priority, cb, user_data, free_fn,
             )
         })
     }
 
-    fn with_name(
+    fn with_name_and_callback(
         &self,
         name: &str,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
         f: impl FnOnce(&NemoRelayNativeHostApiV1, *const NemoRelayNativeString) -> NemoRelayStatus,
     ) -> NemoRelayStatus {
         let name = match HostString::try_new(self.host, name) {
             Ok(name) => name,
-            Err(status) => return status,
+            Err(status) => {
+                if let Some(free_fn) = free_fn {
+                    unsafe { free_fn(user_data) };
+                }
+                return status;
+            }
         };
         f(self.host, name.as_ptr())
     }
@@ -2655,16 +2382,16 @@ unsafe extern "C" fn drop_typed_callback<F>(user_data: *mut c_void) {
     }
 }
 
-fn finish_typed_registration<F>(
+fn finish_typed_registration(
     host: &NemoRelayNativeHostApiV1,
     status: NemoRelayStatus,
     user_data: *mut c_void,
     label: &str,
 ) -> Result<()> {
+    let _ = user_data;
     if status == NemoRelayStatus::Ok {
         Ok(())
     } else {
-        unsafe { drop_typed_callback::<F>(user_data) };
         Err(status_error(host, status, label))
     }
 }
@@ -2673,11 +2400,6 @@ fn status_error(host: &NemoRelayNativeHostApiV1, status: NemoRelayStatus, label:
     debug_assert_ne!(status, NemoRelayStatus::Ok);
     set_last_error(host, &format!("{label} failed: {status:?}"));
     format!("{label} failed: {status:?}")
-}
-
-fn callback_error(host: &NemoRelayNativeHostApiV1, message: String) -> NemoRelayStatus {
-    set_last_error(host, &message);
-    NemoRelayStatus::Internal
 }
 
 fn callback_panic(host: &NemoRelayNativeHostApiV1, label: &str) -> NemoRelayStatus {
@@ -2708,505 +2430,11 @@ where
     }
 }
 
-unsafe extern "C" fn typed_event_sanitize_trampoline<F>(
-    user_data: *mut c_void,
-    event_json: *const NemoRelayNativeString,
-    fields_json: *const NemoRelayNativeString,
-    out_fields_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: Fn(&Event, EventSanitizeFields) -> EventSanitizeFields + Send + Sync + 'static,
-{
-    if user_data.is_null() || out_fields_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_fields_json = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let event: Event = read_json_value(&state.host, event_json, "event")?;
-        let fields: EventSanitizeFields =
-            read_json_value(&state.host, fields_json, "event sanitize fields")?;
-        let output = (state.callback)(&event, fields);
-        Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_fields_json))
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "event sanitize callback"),
-    }
-}
-
-unsafe extern "C" fn typed_tool_sanitize_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    payload_json: *const NemoRelayNativeString,
-    out_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: Fn(&str, Json) -> Json + Send + Sync + 'static,
-{
-    if user_data.is_null() || out_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_json = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "tool name")?;
-        let payload: Json = read_json_value(&state.host, payload_json, "tool payload")?;
-        let output = (state.callback)(&name, payload);
-        Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json))
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "tool sanitize callback"),
-    }
-}
-
-unsafe extern "C" fn typed_tool_intercept_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    payload_json: *const NemoRelayNativeString,
-    out_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: Fn(&str, Json) -> Result<Json> + Send + Sync + 'static,
-{
-    if user_data.is_null() || out_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_json = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "tool name")?;
-        let payload: Json = read_json_value(&state.host, payload_json, "tool payload")?;
-        match (state.callback)(&name, payload) {
-            Ok(output) => Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json)),
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "tool intercept callback"),
-    }
-}
-
-unsafe extern "C" fn typed_tool_conditional_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    args_json: *const NemoRelayNativeString,
-    out_reason: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: Fn(&str, &Json) -> Result<Option<String>> + Send + Sync + 'static,
-{
-    if user_data.is_null() || out_reason.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_reason = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "tool name")?;
-        let args: Json = read_json_value(&state.host, args_json, "tool args")?;
-        match (state.callback)(&name, &args) {
-            Ok(Some(reason)) => {
-                let reason =
-                    HostString::new(&state.host, &reason).ok_or(NemoRelayStatus::Internal)?;
-                unsafe { *out_reason = reason.ptr };
-                std::mem::forget(reason);
-                Ok(NemoRelayStatus::Ok)
-            }
-            Ok(None) => {
-                unsafe { *out_reason = ptr::null_mut() };
-                Ok(NemoRelayStatus::Ok)
-            }
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "tool conditional callback"),
-    }
-}
-
-unsafe extern "C" fn typed_tool_execution_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    args_json: *const NemoRelayNativeString,
-    next_fn: NemoRelayNativeToolNextFn,
-    next_ctx: *mut c_void,
-    out_outcome_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: for<'next> Fn(&str, Json, ToolNext<'next>) -> Result<ToolExecutionInterceptOutcome>
-        + Send
-        + Sync
-        + 'static,
-{
-    if user_data.is_null() || out_outcome_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_outcome_json = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "tool name")?;
-        let args: Json = read_json_value(&state.host, args_json, "tool args")?;
-        let next = ToolNext {
-            host: &state.host,
-            next_fn,
-            next_ctx,
-        };
-        match (state.callback)(&name, args, next) {
-            Ok(outcome) => {
-                let Some(outcome) = HostString::from_json(&state.host, &outcome) else {
-                    set_last_error(&state.host, "failed to allocate tool execution outcome");
-                    return Ok(NemoRelayStatus::Internal);
-                };
-                unsafe { *out_outcome_json = outcome.ptr };
-                std::mem::forget(outcome);
-                Ok(NemoRelayStatus::Ok)
-            }
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "tool execution callback"),
-    }
-}
-
-unsafe extern "C" fn typed_llm_sanitize_request_trampoline<F>(
-    user_data: *mut c_void,
-    request_json: *const NemoRelayNativeString,
-    context: NemoRelayNativeLlmSanitizeRequestContext,
-    out_request_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: for<'a> Fn(LlmRequest, LlmSanitizeRequestContext<'a>) -> Option<LlmRequest>
-        + Send
-        + Sync
-        + 'static,
-{
-    if user_data.is_null() || out_request_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_request_json = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let context = llm_sanitize_request_context_from_native(&state.host, context)?;
-        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
-        match (state.callback)(request, context) {
-            Some(output) => {
-                Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_request_json))
-            }
-            None => Ok(NemoRelayStatus::Ok),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM sanitize request callback"),
-    }
-}
-
-unsafe extern "C" fn typed_llm_sanitize_response_trampoline<F>(
-    user_data: *mut c_void,
-    payload_json: *const NemoRelayNativeString,
-    context: NemoRelayNativeLlmSanitizeResponseContext,
-    out_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: for<'a> Fn(Json, LlmSanitizeResponseContext<'a>) -> Option<Json> + Send + Sync + 'static,
-{
-    if user_data.is_null() || out_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_json = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let context = llm_sanitize_response_context_from_native(&state.host, context)?;
-        let payload: Json = read_json_value(&state.host, payload_json, "LLM response")?;
-        match (state.callback)(payload, context) {
-            Some(output) => Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json)),
-            None => Ok(NemoRelayStatus::Ok),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM sanitize response callback"),
-    }
-}
-
-unsafe extern "C" fn typed_llm_conditional_trampoline<F>(
-    user_data: *mut c_void,
-    request_json: *const NemoRelayNativeString,
-    out_reason: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: Fn(&LlmRequest) -> Result<Option<String>> + Send + Sync + 'static,
-{
-    if user_data.is_null() || out_reason.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_reason = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
-        match (state.callback)(&request) {
-            Ok(Some(reason)) => {
-                let reason =
-                    HostString::new(&state.host, &reason).ok_or(NemoRelayStatus::Internal)?;
-                unsafe { *out_reason = reason.ptr };
-                std::mem::forget(reason);
-                Ok(NemoRelayStatus::Ok)
-            }
-            Ok(None) => {
-                unsafe { *out_reason = ptr::null_mut() };
-                Ok(NemoRelayStatus::Ok)
-            }
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM conditional callback"),
-    }
-}
-
-unsafe extern "C" fn typed_llm_request_intercept_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    request_json: *const NemoRelayNativeString,
-    annotated_json: *const NemoRelayNativeString,
-    out_outcome_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: Fn(&str, LlmRequest, Option<AnnotatedLlmRequest>) -> Result<LlmRequestInterceptOutcome>
-        + Send
-        + Sync
-        + 'static,
-{
-    if user_data.is_null() || out_outcome_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe {
-        *out_outcome_json = ptr::null_mut();
-    }
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "LLM name")?;
-        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
-        let annotated: Option<AnnotatedLlmRequest> =
-            read_optional_json_value(&state.host, annotated_json, "annotated LLM request")?;
-        match (state.callback)(&name, request, annotated) {
-            Ok(outcome) => {
-                let Some(outcome) = HostString::from_json(&state.host, &outcome) else {
-                    set_last_error(&state.host, "failed to allocate LLM request outcome");
-                    return Ok(NemoRelayStatus::Internal);
-                };
-                unsafe {
-                    *out_outcome_json = outcome.ptr;
-                }
-                std::mem::forget(outcome);
-                Ok(NemoRelayStatus::Ok)
-            }
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM request intercept callback"),
-    }
-}
-
-unsafe extern "C" fn typed_llm_execution_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    request_json: *const NemoRelayNativeString,
-    next_fn: NemoRelayNativeLlmNextFn,
-    next_ctx: *mut c_void,
-    out_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus
-where
-    F: for<'next> Fn(&str, LlmRequest, LlmNext<'next>) -> Result<Json> + Send + Sync + 'static,
-{
-    if user_data.is_null() || out_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_json = ptr::null_mut() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "LLM name")?;
-        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
-        let next = LlmNext {
-            host: &state.host,
-            next_fn,
-            next_ctx,
-        };
-        match (state.callback)(&name, request, next) {
-            Ok(output) => Ok::<_, NemoRelayStatus>(write_json(&state.host, &output, out_json)),
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM execution callback"),
-    }
-}
-
-struct TypedLlmJsonStream {
-    host: NemoRelayNativeHostApiV1,
-    state: Mutex<TypedLlmJsonStreamState>,
-}
-
-struct TypedLlmJsonStreamState {
-    iter: LlmJsonStream,
-    finished: bool,
-}
-
-fn native_stream_from_iter(
-    host: &NemoRelayNativeHostApiV1,
-    iter: LlmJsonStream,
-) -> NemoRelayNativeLlmStreamV1 {
-    let state = Box::new(TypedLlmJsonStream {
-        host: *host,
-        state: Mutex::new(TypedLlmJsonStreamState {
-            iter,
-            finished: false,
-        }),
-    });
-    NemoRelayNativeLlmStreamV1 {
-        struct_size: std::mem::size_of::<NemoRelayNativeLlmStreamV1>(),
-        user_data: Box::into_raw(state).cast(),
-        next: Some(poll_typed_llm_json_stream),
-        cancel: Some(cancel_typed_llm_json_stream),
-        drop: Some(drop_typed_llm_json_stream),
-    }
-}
-
-unsafe extern "C" fn poll_typed_llm_json_stream(
-    user_data: *mut c_void,
-    out_json: *mut *mut NemoRelayNativeString,
-) -> NemoRelayStatus {
-    if user_data.is_null() || out_json.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_json = ptr::null_mut() };
-    let stream = unsafe { &*(user_data as *const TypedLlmJsonStream) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut state = match stream.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                set_last_error(&stream.host, "native plugin stream state lock poisoned");
-                return NemoRelayStatus::Internal;
-            }
-        };
-        if state.finished {
-            return NemoRelayStatus::StreamEnd;
-        }
-        match state.iter.next() {
-            Some(Ok(chunk)) => {
-                let status = write_json(&stream.host, &chunk, out_json);
-                if status != NemoRelayStatus::Ok {
-                    state.finished = true;
-                }
-                status
-            }
-            Some(Err(message)) => {
-                state.finished = true;
-                callback_error(&stream.host, message)
-            }
-            None => {
-                state.finished = true;
-                NemoRelayStatus::StreamEnd
-            }
-        }
-    }));
-    result.unwrap_or_else(|_| callback_panic(&stream.host, "LLM stream callback"))
-}
-
-unsafe extern "C" fn cancel_typed_llm_json_stream(user_data: *mut c_void) -> NemoRelayStatus {
-    if user_data.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    let stream = unsafe { &*(user_data as *const TypedLlmJsonStream) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let mut state = match stream.state.lock() {
-            Ok(state) => state,
-            Err(_) => {
-                set_last_error(&stream.host, "native plugin stream state lock poisoned");
-                return NemoRelayStatus::Internal;
-            }
-        };
-        state.finished = true;
-        NemoRelayStatus::Ok
-    }));
-    result.unwrap_or_else(|_| callback_panic(&stream.host, "LLM stream cancel callback"))
-}
-
-unsafe extern "C" fn drop_typed_llm_json_stream(user_data: *mut c_void) {
-    if !user_data.is_null() {
-        let stream = unsafe { Box::from_raw(user_data as *mut TypedLlmJsonStream) };
-        let host = stream.host;
-        if catch_unwind(AssertUnwindSafe(|| drop(stream))).is_err() {
-            set_last_error(&host, "native plugin LLM stream state drop panicked");
-        }
-    }
-}
-
-unsafe extern "C" fn typed_llm_stream_execution_trampoline<F>(
-    user_data: *mut c_void,
-    name: *const NemoRelayNativeString,
-    request_json: *const NemoRelayNativeString,
-    next_fn: NemoRelayNativeLlmStreamNextFn,
-    next_ctx: *mut c_void,
-    out_stream: *mut NemoRelayNativeLlmStreamV1,
-) -> NemoRelayStatus
-where
-    F: for<'next> Fn(&str, LlmRequest, LlmStreamNext<'next>) -> Result<LlmJsonStream>
-        + Send
-        + Sync
-        + 'static,
-{
-    if user_data.is_null() || out_stream.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    unsafe { *out_stream = NemoRelayNativeLlmStreamV1::default() };
-    let state = unsafe { &*(user_data as *const TypedCallback<F>) };
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        let name = read_required_host_string(&state.host, name, "LLM name")?;
-        let request: LlmRequest = read_json_value(&state.host, request_json, "LLM request")?;
-        let next = LlmStreamNext {
-            host: &state.host,
-            next_fn,
-            next_ctx,
-        };
-        match (state.callback)(&name, request, next) {
-            Ok(stream) => {
-                unsafe { *out_stream = native_stream_from_iter(&state.host, stream) };
-                Ok::<_, NemoRelayStatus>(NemoRelayStatus::Ok)
-            }
-            Err(message) => Ok(callback_error(&state.host, message)),
-        }
-    }));
-    match result {
-        Ok(Ok(status)) => status,
-        Ok(Err(status)) => status,
-        Err(_) => callback_panic(&state.host, "LLM stream execution callback"),
-    }
-}
-
 struct HostString<'a> {
     host: &'a NemoRelayNativeHostApiV1,
     ptr: *mut NemoRelayNativeString,
 }
+unsafe impl Send for HostString<'_> {}
 
 impl<'a> HostString<'a> {
     fn try_new(
@@ -3291,11 +2519,16 @@ impl<'a> OptionalHostJson<'a> {
 enum OwnedHostApi {
     V1(NemoRelayNativeHostApiV1),
     V3(NemoRelayNativeHostApiV3),
+    V4(NemoRelayNativeHostApiV4),
 }
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>()
+        {
+            Self::V4(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) })
+        } else if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV3>()
         {
             Self::V3(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV3) })
@@ -3308,6 +2541,7 @@ impl OwnedHostApi {
         match self {
             Self::V1(host) => host,
             Self::V3(host) => &host.v1,
+            Self::V4(host) => &host.v3.v1,
         }
     }
 }
@@ -3374,13 +2608,26 @@ unsafe extern "C" fn register_trampoline<P: NativePlugin>(
             Ok(config) => config,
             Err(status) => return status,
         };
-        let mut ctx = unsafe { PluginContext::from_raw(host, ctx) };
         let mut plugin = match state.plugin.lock() {
             Ok(plugin) => plugin,
             Err(_) => {
                 set_last_error(host, "native plugin state lock poisoned");
                 return NemoRelayStatus::Internal;
             }
+        };
+        let executor_config = match plugin.executor_config_for_component(&config) {
+            Ok(config) => config,
+            Err(error) => {
+                set_last_error(host, &error);
+                return NemoRelayStatus::InvalidArg;
+            }
+        };
+        let mut ctx = unsafe {
+            PluginContext::from_raw_with_executor(
+                host,
+                ctx,
+                async_sdk::NativeExecutor::new(executor_config, plugin.plugin_kind()),
+            )
         };
         match plugin.register(&config, &mut ctx) {
             Ok(()) => NemoRelayStatus::Ok,
@@ -3420,73 +2667,6 @@ fn read_json_value<T: DeserializeOwned>(
         set_last_error(host, &format!("{label} was invalid JSON: {error}"));
         NemoRelayStatus::InvalidJson
     })
-}
-
-fn read_optional_json_value<T: DeserializeOwned>(
-    host: &NemoRelayNativeHostApiV1,
-    value: *const NemoRelayNativeString,
-    label: &str,
-) -> std::result::Result<Option<T>, NemoRelayStatus> {
-    if value.is_null() {
-        Ok(None)
-    } else {
-        read_json_value(host, value, label).map(Some)
-    }
-}
-
-fn llm_codec_identity_from_native(
-    host: &NemoRelayNativeHostApiV1,
-    codec_kind: NemoRelayNativeLlmCodecKind,
-    codec_id: *const NemoRelayNativeString,
-) -> std::result::Result<LlmCodecIdentity, NemoRelayStatus> {
-    let codec = match codec_kind {
-        NemoRelayNativeLlmCodecKind::None => LlmCodecIdentity::None,
-        NemoRelayNativeLlmCodecKind::Opaque => LlmCodecIdentity::Opaque,
-        NemoRelayNativeLlmCodecKind::BuiltIn => {
-            let id = read_required_host_string(host, codec_id, "LLM built-in codec ID")?;
-            let builtin = match id.as_str() {
-                "openai_chat" => BuiltinLlmCodec::OpenAiChat,
-                "openai_responses" => BuiltinLlmCodec::OpenAiResponses,
-                "anthropic_messages" => BuiltinLlmCodec::AnthropicMessages,
-                "gemini_generate_content" => BuiltinLlmCodec::GeminiGenerateContent,
-                _ => {
-                    set_last_error(host, &format!("unknown built-in LLM codec ID: {id}"));
-                    return Err(NemoRelayStatus::InvalidArg);
-                }
-            };
-            LlmCodecIdentity::BuiltIn(builtin)
-        }
-        NemoRelayNativeLlmCodecKind::Runtime => LlmCodecIdentity::Runtime(
-            read_required_host_string(host, codec_id, "LLM runtime codec ID")?,
-        ),
-    };
-    Ok(codec)
-}
-
-fn llm_sanitize_request_context_from_native<'a>(
-    host: &NemoRelayNativeHostApiV1,
-    context: NemoRelayNativeLlmSanitizeRequestContext,
-) -> std::result::Result<LlmSanitizeRequestContext<'a>, NemoRelayStatus> {
-    let codec = llm_codec_identity_from_native(host, context.codec_kind, context.codec_id)?;
-    let resolved = (!context.codec.is_null()).then_some(LlmSanitizeRequestCodec {
-        host: *host,
-        handle: context.codec,
-        _lifetime: PhantomData,
-    });
-    Ok(LlmSanitizeRequestContext { codec, resolved })
-}
-
-fn llm_sanitize_response_context_from_native<'a>(
-    host: &NemoRelayNativeHostApiV1,
-    context: NemoRelayNativeLlmSanitizeResponseContext,
-) -> std::result::Result<LlmSanitizeResponseContext<'a>, NemoRelayStatus> {
-    let codec = llm_codec_identity_from_native(host, context.codec_kind, context.codec_id)?;
-    let resolved = (!context.codec.is_null()).then_some(LlmSanitizeResponseCodec {
-        host: *host,
-        handle: context.codec,
-        _lifetime: PhantomData,
-    });
-    Ok(LlmSanitizeResponseContext { codec, resolved })
 }
 
 enum HostStringReadError {

@@ -36,6 +36,7 @@ mod convert_coverage_tests;
 #[path = "../coverage/error_tests.rs"]
 mod error_coverage_tests;
 mod plugin_activation_tests;
+mod scope_stack_coverage_tests;
 #[path = "../support/mod.rs"]
 mod test_support;
 #[path = "../unit/types_tests.rs"]
