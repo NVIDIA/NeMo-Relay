@@ -1434,12 +1434,12 @@ async fn collect_observability_skips_redis_response_cache_probe_offline() {
                                     "url": "redis://127.0.0.1:6379",
                                     "key_prefix": "doctor-test:"
                                 }
-                            }
-                        },
-                        "tools": {
-                            "enabled": true,
-                            "overrides": {
-                                "docs_*": { "cacheable": true }
+                            },
+                            "tools": {
+                                "enabled": true,
+                                "overrides": {
+                                    "docs_*": { "cacheable": true }
+                                }
                             }
                         }
                     }
