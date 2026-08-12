@@ -2217,6 +2217,14 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
             },
             {
                 "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "call-2",
+                    "content": "claude result"
+                }]
+            },
+            {
+                "role": "user",
                 "content": [
                     {
                         "type": "provider_native",
@@ -2269,6 +2277,14 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
                     "type": "tool_call_response",
                     "id": "call-1",
                     "response": "result"
+                }]
+            },
+            {
+                "role": "tool",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "id": "call-2",
+                    "response": "claude result"
                 }]
             },
             {
