@@ -125,7 +125,8 @@ class NemoRelayMiddleware(AgentMiddleware):
         codec = nemo_relay.typed.BestEffortAnyCodec()
         tool_name = request.tool_call["name"]
         tool_args = request.tool_call.get("args") or {}
-        return (parent, codec, tool_name, tool_args)
+        tool_call_id = request.tool_call.get("id")
+        return (parent, codec, tool_name, tool_args, tool_call_id)
 
     def wrap_tool_call(
         self,
@@ -134,7 +135,7 @@ class NemoRelayMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[Any]:
         """Wrap a sync LangChain agent tool call in NeMo Relay tool execution."""
 
-        (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
+        (parent, codec, tool_name, tool_args, tool_call_id) = self._prepare_tool_call(request)
 
         def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
             return nemo_relay.ToolExecutionResult(
@@ -143,7 +144,13 @@ class NemoRelayMiddleware(AgentMiddleware):
 
         return run_sync(
             nemo_relay.typed.tool_execute(
-                name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent
+                name=tool_name,
+                args=tool_args,
+                func=_call,
+                args_codec=codec,
+                result_codec=codec,
+                handle=parent,
+                tool_call_id=tool_call_id,
             )
         ).result
 
@@ -154,7 +161,7 @@ class NemoRelayMiddleware(AgentMiddleware):
     ) -> ToolMessage | Command[Any]:
         """Wrap an async LangChain agent tool call in NeMo Relay tool execution."""
 
-        (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
+        (parent, codec, tool_name, tool_args, tool_call_id) = self._prepare_tool_call(request)
 
         async def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
             return nemo_relay.ToolExecutionResult(
@@ -169,5 +176,6 @@ class NemoRelayMiddleware(AgentMiddleware):
                 args_codec=codec,
                 result_codec=codec,
                 handle=parent,
+                tool_call_id=tool_call_id,
             )
         ).result

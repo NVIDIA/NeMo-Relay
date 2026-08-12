@@ -874,6 +874,7 @@ fn tool_call_end(
 ///     metadata: Optional JSON-serializable metadata.
 ///         End events receive ``otel.status_code = "OK"`` on success, or
 ///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
+///     tool_call_id: Optional provider-specific tool-call correlation ID.
 /// Returns:
 ///     An awaitable that resolves to the tool result after execution
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
@@ -887,8 +888,9 @@ fn tool_call_end(
     handle: "ScopeHandle | None"=None,
     attributes: "ToolAttributes | None"=None,
     data: "object | None"=None,
-    metadata: "object | None"=None
-) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None) -> object")]
+    metadata: "object | None"=None,
+    tool_call_id: "str | None"=None
+) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn tool_call_execute<'py>(
     py: Python<'py>,
@@ -899,6 +901,7 @@ fn tool_call_execute<'py>(
     attributes: Option<PyToolAttributes>,
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
+    tool_call_id: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let args_json = py_to_json(args)?;
     let attrs = attributes
@@ -928,6 +931,7 @@ fn tool_call_execute<'py>(
                             .attributes(attrs)
                             .data_opt(data_json)
                             .metadata_opt(metadata_json)
+                            .tool_call_id_opt(tool_call_id)
                             .build(),
                     )
                     .await

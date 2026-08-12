@@ -1727,7 +1727,12 @@ def tool_call_execute(
     name: str,
     args: _Json,
     func: Callable[[_Json], ToolExecutionResult[_Json] | Awaitable[ToolExecutionResult[_Json]]],
-    **kwargs: object,
+    *,
+    handle: ScopeHandle | None = None,
+    attributes: ToolAttributes | None = None,
+    data: _Json | None = None,
+    metadata: _Json | None = None,
+    tool_call_id: str | None = None,
 ) -> Awaitable[ToolExecutionResult[_Json]]:
     """Execute a tool through the managed native middleware pipeline.
 
@@ -1736,7 +1741,11 @@ def tool_call_execute(
         args: Initial JSON-compatible tool arguments.
         func: Synchronous or asynchronous tool implementation called with final
             arguments. It must return ``ToolExecutionResult``.
-        **kwargs: Optional parent handle, attributes, data, and metadata.
+        handle: Optional parent scope handle.
+        attributes: Optional tool attribute bitflags.
+        data: Optional JSON application payload stored on the managed handle.
+        metadata: Optional JSON metadata recorded on emitted events.
+        tool_call_id: Optional provider-specific tool-call correlation ID.
 
     Returns:
         Awaitable that resolves to the canonical tool result.

@@ -475,6 +475,7 @@ async def tool_execute(
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
+    tool_call_id: str | None = None,
 ) -> ToolExecutionResult[TResult]: ...
 
 
@@ -490,6 +491,7 @@ async def tool_execute(
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
+    tool_call_id: str | None = None,
 ) -> ToolExecutionResult[TResult]: ...
 
 
@@ -504,6 +506,7 @@ async def tool_execute(
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
+    tool_call_id: str | None = None,
 ) -> ToolExecutionResult[TResult]:
     """Run ``nemo_relay.tools.execute`` with typed arguments and results.
 
@@ -520,6 +523,8 @@ async def tool_execute(
         attributes: Optional native tool attributes attached to the start event.
         data: Optional JSON payload recorded on the emitted start event.
         metadata: Optional JSON metadata recorded on the emitted start event.
+        tool_call_id: Optional provider-specific tool call identifier recorded
+            on the emitted start and end events.
 
     Returns:
         ToolExecutionResult[TResult]: The decoded typed result and its opaque
@@ -574,6 +579,7 @@ async def tool_execute(
         attributes=attributes,
         data=data,
         metadata=metadata,
+        tool_call_id=tool_call_id,
     )
     return ToolExecutionResult(result_codec.from_json(json_result.result), json_result.annotation)
 

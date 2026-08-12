@@ -84,6 +84,115 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
 }
 
 #[test]
+fn test_ffi_tool_execute_v2_propagates_tool_call_id_and_legacy_omits_it() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let subscriber_name = cstring(&unique_name("ffi_tool_execute_id_subscriber"));
+        assert_status!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let args = cstring(r#"{"value":2}"#);
+        let managed_name = cstring("ffi_tool_execute_v2_id");
+        let legacy_name = cstring("ffi_tool_execute_legacy_id");
+        let tool_call_id = cstring("call_ffi_managed_123");
+        let mut out_json = ptr::null_mut();
+
+        assert_status!(
+            nemo_relay_tool_call_execute_v2(
+                managed_name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_cb,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                tool_call_id.as_ptr(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let _ = returned_json(out_json);
+
+        assert_status!(
+            nemo_relay_tool_call_execute(
+                legacy_name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_cb,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let _ = returned_json(out_json);
+
+        let invalid_utf8 = [0xff_u8, 0];
+        assert_status!(
+            nemo_relay_tool_call_execute_v2(
+                managed_name.as_ptr(),
+                args.as_ptr(),
+                tool_exec_cb,
+                ptr::null_mut(),
+                None,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                invalid_utf8.as_ptr().cast(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::InvalidUtf8
+        );
+
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+        let events = lock_unpoisoned(event_log()).clone();
+        for scope_category in ["start", "end"] {
+            let managed_event = events
+                .iter()
+                .find(|event| {
+                    event["json"]["kind"] == json!("scope")
+                        && event["json"]["name"] == json!("ffi_tool_execute_v2_id")
+                        && event["json"]["scope_category"] == json!(scope_category)
+                })
+                .unwrap_or_else(|| panic!("missing managed {scope_category} event"));
+            assert_eq!(managed_event["tool_call_id"], json!("call_ffi_managed_123"));
+
+            let legacy_event = events
+                .iter()
+                .find(|event| {
+                    event["json"]["kind"] == json!("scope")
+                        && event["json"]["name"] == json!("ffi_tool_execute_legacy_id")
+                        && event["json"]["scope_category"] == json!(scope_category)
+                })
+                .unwrap_or_else(|| panic!("missing legacy {scope_category} event"));
+            assert!(legacy_event["tool_call_id"].is_null());
+        }
+
+        assert_status!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
 fn test_ffi_llm_execute_codec_parent_and_error_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();
