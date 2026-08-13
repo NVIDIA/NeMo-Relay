@@ -19,6 +19,7 @@ env:
   NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
+  UV_PYTHON_PREFERENCE: only-system
 
 jobs:
   Test:

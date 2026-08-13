@@ -64,6 +64,7 @@ jobs:
     env:
       NEMO_RELAY_CI_WORKSPACE: ${{ github.workspace }}/source-checkout
       UV_PYTHON_DOWNLOADS: never
+      UV_PYTHON_PREFERENCE: only-system
     steps:
       - name: Checkout source branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -103,11 +104,10 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - name: Install managed Python
-        working-directory: source-checkout
-        run: |
-          set -euo pipefail
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
@@ -192,6 +192,7 @@ jobs:
       contents: read
     env:
       UV_PYTHON_DOWNLOADS: never
+      UV_PYTHON_PREFERENCE: only-system
     steps:
       - name: Checkout source branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -248,6 +249,7 @@ jobs:
     env:
       NEMO_RELAY_CI_WORKSPACE: ${{ github.workspace }}/source-checkout
       UV_PYTHON_DOWNLOADS: never
+      UV_PYTHON_PREFERENCE: only-system
     steps:
       - name: Checkout source branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -287,11 +289,10 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - name: Install managed Python
-        working-directory: source-checkout
-        run: |
-          set -euo pipefail
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
@@ -377,6 +378,7 @@ jobs:
     env:
       NEMO_RELAY_CI_WORKSPACE: ${{ github.workspace }}/source-checkout
       UV_PYTHON_DOWNLOADS: never
+      UV_PYTHON_PREFERENCE: only-system
     steps:
       - name: Determine version tag
         id: version
@@ -442,11 +444,10 @@ jobs:
           cache-bin: false
           save-if: false
 
-      - name: Install managed Python
-        working-directory: source-checkout
-        run: |
-          set -euo pipefail
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Install just
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
