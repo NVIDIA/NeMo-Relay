@@ -193,7 +193,7 @@ while (-not (Test-Path -LiteralPath $args[1])) {
         .stderr(std::process::Stdio::null());
     let mut child = SupervisedChild::spawn(&mut command).await.unwrap();
 
-    let publish_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let publish_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let descendant_pid = loop {
         if let Some(process_id) = read_windows_process_id(&descendant_pid_path) {
             break process_id;
