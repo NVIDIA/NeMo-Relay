@@ -65,7 +65,9 @@ use crate::observability::otel_metrics::{
     MetricTemporality, OpenTelemetryMetricConfig as CoreOpenTelemetryMetricConfig,
     OpenTelemetryMetricSubscriber, resolve_http_metric_endpoint,
 };
-use crate::observability::otel_signal::{MetricMarkClassification, classify_metric_mark};
+use crate::observability::otel_signal::{
+    MetricMarkClassification, classify_metric_mark, validate_signal_headers,
+};
 use crate::observability::{
     MarkProjection, OpenTelemetryType, OtlpAttributeMapping, default_mark_exclude_names,
     validate_attribute_mappings,
@@ -1957,6 +1959,11 @@ fn resolve_signal_headers(
         }
         headers.insert(key.clone(), value);
     }
+    validate_signal_headers(&headers).map_err(|error| {
+        PluginError::InvalidConfig(format!(
+            "OpenTelemetry {signal}.endpoints[{index}] has invalid headers: {error}"
+        ))
+    })?;
     Ok(headers)
 }
 
@@ -3320,13 +3327,22 @@ fn validate_observability_section_values(
     }
     if let Some(section) = &config.opentelemetry {
         validate_opentelemetry_section(diagnostics, &config.policy, section);
-        if config.version == 3 && (section.logs.is_some() || section.metrics.is_some()) {
+        let signal_field = if section.logs.is_some() {
+            Some("logs")
+        } else if section.metrics.is_some() {
+            Some("metrics")
+        } else {
+            None
+        };
+        if config.version == 3
+            && let Some(signal_field) = signal_field
+        {
             push_policy_diag(
                 diagnostics,
                 UnsupportedBehavior::Error,
                 "observability.unsupported_value",
                 Some("opentelemetry".to_string()),
-                Some("logs".to_string()),
+                Some(signal_field.to_string()),
                 "observability config version 3 is trace-only; use version 4 for OpenTelemetry logs or metrics"
                     .to_string(),
             );

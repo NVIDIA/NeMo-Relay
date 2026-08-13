@@ -2693,6 +2693,21 @@ fn metric_schema_marks_are_not_projected_to_direct_traces() {
     processor.process(&Event::Mark(MarkEvent::new(
         BaseEvent::builder()
             .parent_uuid(root_uuid)
+            .name("future-metric")
+            .data(json!({"measurements": []}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version("999")
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
             .name("invalid-metric")
             .data(json!({"measurements": []}))
             .data_schema(
@@ -2719,7 +2734,7 @@ fn metric_schema_marks_are_not_projected_to_direct_traces() {
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].events.events.len(), 1);
     assert_eq!(spans[0].events.events[0].name.as_ref(), "routing-decision");
-    assert_eq!(processor.invalid_metric_count, 1);
+    assert_eq!(processor.invalid_metric_count, 2);
 }
 
 #[test]

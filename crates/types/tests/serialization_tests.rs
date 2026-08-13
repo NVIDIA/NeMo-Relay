@@ -189,6 +189,14 @@ fn metric_validation_enforces_attribute_and_descriptor_contracts() {
     }
 
     let first = measurement(MetricKind::Counter, MetricValueType::U64, json!(1));
+    let mut repeated = measurement(MetricKind::Counter, MetricValueType::U64, json!(2));
+    repeated.name = "EXAMPLE.METRIC".into();
+    MetricEnvelope {
+        measurements: vec![first.clone(), repeated],
+    }
+    .validate()
+    .unwrap();
+
     let mut conflicting = measurement(MetricKind::Gauge, MetricValueType::U64, json!(2));
     conflicting.name = "EXAMPLE.METRIC".into();
     assert!(

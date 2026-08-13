@@ -128,6 +128,20 @@ where
 pub(super) fn validate_signal_headers(headers: &HashMap<String, String>) -> Result<()> {
     let mut normalized = HashSet::new();
     for (key, value) in headers {
+        if key.trim().is_empty() || key.trim() != key {
+            return Err(OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: "header name must be nonblank and have no surrounding whitespace"
+                    .to_string(),
+            });
+        }
+        if value.trim().is_empty() || value.trim() != value {
+            return Err(OpenTelemetryError::InvalidHeader {
+                key: key.clone(),
+                message: "header value must be nonblank and have no surrounding whitespace"
+                    .to_string(),
+            });
+        }
         if !normalized.insert(key.to_ascii_lowercase()) {
             return Err(OpenTelemetryError::InvalidHeader {
                 key: key.clone(),

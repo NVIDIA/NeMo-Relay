@@ -445,6 +445,24 @@ fn observability_v3_remains_trace_only_and_v4_accepts_signal_sections() {
             && diagnostic.message.contains("version 3 is trace-only")
     }));
 
+    let version_three_metrics = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "gen_ai",
+                "endpoint": "https://collector.example/v1/traces"
+            }],
+            "metrics": {"enabled": false}
+        }
+    }));
+    let report = validate_plugin_config(&version_three_metrics);
+    assert!(report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("metrics")
+            && diagnostic.message.contains("version 3 is trace-only")
+    }));
+
     let version_four = plugin_config(json!({
         "version": 4,
         "opentelemetry": {
@@ -921,6 +939,40 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         mark_projection: MarkProjection::default(),
         mark_exclude_names: default_mark_exclude_names(),
         attribute_mappings: Vec::new(),
+    }
+}
+
+fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
+    OpenTelemetrySignalEndpointConfig {
+        endpoint: "http://localhost:4318/v1/logs".to_string(),
+        transport: default_otlp_transport(),
+        headers: HashMap::new(),
+        header_env: HashMap::new(),
+        resource_attributes: HashMap::new(),
+        service_name: default_otel_service_name(),
+        service_namespace: None,
+        service_version: None,
+        instrumentation_scope: default_otel_instrumentation_scope(),
+        timeout_millis: default_timeout_millis(),
+    }
+}
+
+#[test]
+fn signal_header_activation_rejects_blank_and_padded_inline_headers() {
+    for (key, value) in [
+        ("", "token"),
+        (" authorization", "token"),
+        ("authorization", ""),
+        ("authorization", " token "),
+    ] {
+        let mut endpoint = test_signal_endpoint();
+        endpoint.headers.insert(key.to_string(), value.to_string());
+        let error = resolve_signal_headers("logs", 2, &endpoint).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("OpenTelemetry logs.endpoints[2] has invalid headers")
+        );
     }
 }
 
@@ -3767,6 +3819,116 @@ fn log_only_plugin_reports_invalid_reserved_metric_marks_once() {
     );
 
     clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn plugin_signal_rejections_record_runtime_diagnostics() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "logs": {
+                "enabled": true,
+                "endpoints": [{
+                    "endpoint": "http://127.0.0.1:1/v1/logs",
+                    "timeout_millis": 50
+                }]
+            },
+            "metrics": {
+                "enabled": true,
+                "max_instruments": 1,
+                "cardinality_limit": 1,
+                "endpoints": [{
+                    "endpoint": "http://127.0.0.1:1/v1/metrics",
+                    "timeout_millis": 50
+                }]
+            }
+        }
+    }));
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("invalid-log-severity")
+            .metadata(json!({"nemo_relay.log.severity": "notice"}))
+            .build(),
+    )
+    .unwrap();
+    for data in [
+        json!({"measurements": [{
+            "name": "example.one",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "attributes": {"model": "one"}
+        }]}),
+        json!({"measurements": [{
+            "name": "example.one",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "attributes": {"model": "two"}
+        }]}),
+        json!({"measurements": [{
+            "name": "example.two",
+            "kind": "gauge",
+            "value_type": "i64",
+            "value": 1
+        }]}),
+        json!({"measurements": [{
+            "name": "example.one",
+            "kind": "gauge",
+            "value_type": "i64",
+            "value": 1
+        }]}),
+    ] {
+        crate::api::scope::event(
+            crate::api::scope::EmitMarkEventParams::builder()
+                .name("metric-rejection")
+                .data(data)
+                .data_schema(
+                    DataSchema::builder()
+                        .name(METRIC_DATA_SCHEMA_NAME)
+                        .version(METRIC_DATA_SCHEMA_VERSION)
+                        .build(),
+                )
+                .build(),
+        )
+        .unwrap();
+    }
+    flush_subscribers().unwrap();
+
+    let report = crate::plugin::active_plugin_report().unwrap();
+    for (code, field) in [
+        (
+            "otel.log_mark_invalid_severity",
+            "opentelemetry.logs.endpoints[0].endpoint",
+        ),
+        (
+            "otel.metric_cardinality_limit",
+            "opentelemetry.metrics.endpoints[0].endpoint",
+        ),
+        (
+            "otel.metric_instrument_limit",
+            "opentelemetry.metrics.endpoints[0].endpoint",
+        ),
+        (
+            "otel.metric_descriptor_conflict",
+            "opentelemetry.metrics.endpoints[0].endpoint",
+        ),
+    ] {
+        assert!(
+            report.runtime_diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == code && diagnostic.field.as_deref() == Some(field)
+            }),
+            "missing {code} diagnostic: {:?}",
+            report.runtime_diagnostics
+        );
+    }
+
+    assert!(clear_plugin_configuration().is_err());
 }
 
 #[test]

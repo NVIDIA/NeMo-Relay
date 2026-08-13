@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, DataSchema, METRIC_DATA_SCHEMA_NAME, MarkEvent, ScopeCategory, ScopeEvent,
+    BaseEvent, DataSchema, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent,
+    ScopeCategory, ScopeEvent,
 };
 use crate::api::scope::ScopeType;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
@@ -88,6 +89,22 @@ fn log_config_rejects_zero_timeout() {
         .unwrap_err();
 
     assert!(error.to_string().contains("timeout must be greater than 0"));
+}
+
+#[test]
+fn log_config_rejects_blank_and_padded_headers() {
+    for (key, value) in [
+        ("", "token"),
+        (" authorization", "token"),
+        ("authorization", ""),
+        ("authorization", " token "),
+    ] {
+        let error = OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
+            .with_header(key, value)
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("surrounding whitespace"));
+    }
 }
 
 #[test]
@@ -180,6 +197,7 @@ fn non_metric_mark_maps_structured_body_attributes_and_scope_context() {
     assert!(record.observed_timestamp().is_some());
     let context = record.trace_context().expect("containing scope context");
     assert_eq!(context.span_id, relay_span_id(parent_uuid));
+    assert_eq!(context.trace_id, relay_trace_id(parent_uuid));
     assert!(matches!(record.body(), Some(AnyValue::Map(_))));
     let attributes = record
         .attributes_iter()
@@ -197,6 +215,15 @@ fn non_metric_mark_maps_structured_body_attributes_and_scope_context() {
         attributes.get(&Key::new("nemo_relay.mark.parent_uuid")),
         Some(&AnyValue::from(parent_uuid.to_string()))
     );
+    let Some(AnyValue::Map(metadata)) = attributes.get(&Key::new("nemo_relay.mark.metadata"))
+    else {
+        panic!("metadata attribute must be a map");
+    };
+    assert_eq!(
+        metadata.get(&Key::new("tenant")),
+        Some(&AnyValue::from("demo"))
+    );
+    assert!(!metadata.contains_key(&Key::new(LOG_SEVERITY_METADATA_KEY)));
 }
 
 #[test]
@@ -218,6 +245,23 @@ fn routing_and_severity_filtering_drop_without_fallback() {
             DataSchema::builder()
                 .name(METRIC_DATA_SCHEMA_NAME)
                 .version("999")
+                .build(),
+        ),
+        Some(json!({LOG_SEVERITY_METADATA_KEY: "error"})),
+    ));
+    processor.process(&mark(
+        None,
+        "valid-metric",
+        Some(json!({"measurements": [{
+            "name": "example.valid",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1
+        }]})),
+        Some(
+            DataSchema::builder()
+                .name(METRIC_DATA_SCHEMA_NAME)
+                .version(METRIC_DATA_SCHEMA_VERSION)
                 .build(),
         ),
         Some(json!({LOG_SEVERITY_METADATA_KEY: "error"})),

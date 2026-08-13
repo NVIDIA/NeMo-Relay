@@ -20,6 +20,7 @@ use opentelemetry_proto::tonic::collector::metrics::v1::metrics_service_server::
 use opentelemetry_proto::tonic::collector::metrics::v1::{
     ExportMetricsServiceRequest, ExportMetricsServiceResponse,
 };
+use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader};
 use prost::Message;
 use serde_json::json;
@@ -160,6 +161,22 @@ fn metric_config_rejects_zero_timeout() {
 }
 
 #[test]
+fn metric_config_rejects_blank_and_padded_headers() {
+    for (key, value) in [
+        ("", "token"),
+        (" authorization", "token"),
+        ("authorization", ""),
+        ("authorization", " token "),
+    ] {
+        let error = OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+            .with_header(key, value)
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("surrounding whitespace"));
+    }
+}
+
+#[test]
 fn metric_delivery_state_survives_exporter_error_wrapping() {
     let diagnostics = MetricDeliveryDiagnostics::new(
         "https://collector.example/v1/metrics".to_string(),
@@ -216,6 +233,47 @@ fn valid_envelope_records_counter_gauge_and_negative_histogram() {
     assert!(names.contains(&"example.tokens.saved"));
     assert!(names.contains(&"example.temperature"));
     assert!(names.contains(&"example.active"));
+
+    let metrics = batches
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .collect::<Vec<_>>();
+    let counter = metrics
+        .iter()
+        .find(|metric| metric.name() == "example.tokens.saved")
+        .unwrap();
+    assert_eq!(counter.unit(), "{token}");
+    let AggregatedMetrics::U64(MetricData::Sum(sum)) = counter.data() else {
+        panic!("counter must export as a u64 sum");
+    };
+    let point = sum.data_points().next().unwrap();
+    assert_eq!(point.value(), 42);
+    assert!(
+        point
+            .attributes()
+            .any(|attribute| attribute == &KeyValue::new("model", "example-model"))
+    );
+
+    let gauge = metrics
+        .iter()
+        .find(|metric| metric.name() == "example.active")
+        .unwrap();
+    let AggregatedMetrics::I64(MetricData::Gauge(gauge)) = gauge.data() else {
+        panic!("gauge must export as an i64 gauge");
+    };
+    assert_eq!(gauge.data_points().next().unwrap().value(), -2);
+
+    let histogram = metrics
+        .iter()
+        .find(|metric| metric.name() == "example.temperature")
+        .unwrap();
+    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = histogram.data() else {
+        panic!("histogram must export as an f64 histogram");
+    };
+    let point = histogram.data_points().next().unwrap();
+    assert_eq!(point.count(), 1);
+    assert_eq!(point.sum(), -1.25);
 }
 
 #[test]
@@ -357,54 +415,63 @@ struct CapturedRequest {
     body: Vec<u8>,
 }
 
-fn capture_one_request(listener: TcpListener) -> mpsc::Receiver<CapturedRequest> {
+fn capture_requests(
+    listener: TcpListener,
+    expected_requests: usize,
+) -> mpsc::Receiver<CapturedRequest> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut bytes = Vec::new();
-        let mut buffer = [0_u8; 4_096];
-        let (header_end, content_length) = loop {
-            let count = stream.read(&mut buffer).unwrap();
-            assert!(count > 0, "collector closed before request headers");
-            bytes.extend_from_slice(&buffer[..count]);
-            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-                let header_end = offset + 4;
-                let headers = String::from_utf8_lossy(&bytes[..header_end]);
-                let content_length = headers
-                    .lines()
-                    .find_map(|line| {
-                        let (name, value) = line.split_once(':')?;
-                        name.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse::<usize>().ok())
-                            .flatten()
-                    })
-                    .unwrap_or(0);
-                break (header_end, content_length);
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            let (header_end, content_length) = loop {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0, "collector closed before request headers");
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    let header_end = offset + 4;
+                    let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                        .unwrap_or(0);
+                    break (header_end, content_length);
+                }
+            };
+            while bytes.len() < header_end + content_length {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0, "collector closed before request body");
+                bytes.extend_from_slice(&buffer[..count]);
             }
-        };
-        while bytes.len() < header_end + content_length {
-            let count = stream.read(&mut buffer).unwrap();
-            assert!(count > 0, "collector closed before request body");
-            bytes.extend_from_slice(&buffer[..count]);
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let path = headers
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .unwrap()
+                .to_string();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+            sender
+                .send(CapturedRequest {
+                    path,
+                    body: bytes[header_end..header_end + content_length].to_vec(),
+                })
+                .unwrap();
         }
-        let headers = String::from_utf8_lossy(&bytes[..header_end]);
-        let path = headers
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .unwrap()
-            .to_string();
-        stream
-            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-            .unwrap();
-        sender
-            .send(CapturedRequest {
-                path,
-                body: bytes[header_end..header_end + content_length].to_vec(),
-            })
-            .unwrap();
     });
     receiver
+}
+
+fn capture_one_request(listener: TcpListener) -> mpsc::Receiver<CapturedRequest> {
+    capture_requests(listener, 1)
 }
 
 #[test]
@@ -441,7 +508,7 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
     assert_ne!(records[0].observed_time_unix_nano, 0);
 
     let metric_listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let metric_receiver = capture_one_request(metric_listener.try_clone().unwrap());
+    let metric_receiver = capture_requests(metric_listener.try_clone().unwrap(), 2);
     let metric_endpoint = format!("http://{}", metric_listener.local_addr().unwrap());
     drop(metric_listener);
     let metric_subscriber = OpenTelemetryMetricSubscriber::new(
@@ -472,6 +539,12 @@ fn direct_http_subscribers_emit_decodable_signal_payloads() {
         metrics.resource_metrics[0].scope_metrics[0].metrics[0].name,
         "example.tokens.saved"
     );
+
+    log_subscriber.shutdown().unwrap();
+    metric_subscriber.shutdown().unwrap();
+    metric_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
 }
 
 #[derive(Clone)]
@@ -564,8 +637,14 @@ async fn direct_grpc_subscribers_export_both_services_and_metadata() {
         })
         .unwrap(),
     ));
-    log_subscriber.force_flush().unwrap();
-    metric_subscriber.force_flush().unwrap();
+    let flush_log = log_subscriber.clone();
+    let flush_metric = metric_subscriber.clone();
+    tokio::task::spawn_blocking(move || {
+        flush_log.force_flush().unwrap();
+        flush_metric.force_flush().unwrap();
+    })
+    .await
+    .unwrap();
 
     let (logs, log_project) = tokio::time::timeout(Duration::from_secs(5), logs_receiver.recv())
         .await
@@ -587,7 +666,11 @@ async fn direct_grpc_subscribers_export_both_services_and_metadata() {
         "grpc.metric"
     );
 
-    log_subscriber.shutdown().unwrap();
-    metric_subscriber.shutdown().unwrap();
+    tokio::task::spawn_blocking(move || {
+        log_subscriber.shutdown().unwrap();
+        metric_subscriber.shutdown().unwrap();
+    })
+    .await
+    .unwrap();
     server.abort();
 }
