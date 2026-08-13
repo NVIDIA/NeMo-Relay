@@ -10,11 +10,11 @@ const OBSERVABILITY_PLUGIN_KIND = 'observability';
 /**
  * Create a default observability component config.
  *
- * @returns {object} The minimal observability config with schema version 3.
+ * @returns {object} The minimal observability config with schema version 4.
  */
 function defaultConfig() {
   return {
-    version: 3,
+    version: 4,
   };
 }
 
@@ -76,6 +76,65 @@ function openTelemetryEndpoint(config) {
 }
 
 /**
+ * Create one signal-specific OpenTelemetry endpoint for logs or metrics.
+ *
+ * @param {object} config - Endpoint settings including required `endpoint`.
+ * @returns {object} A normalized signal endpoint config object.
+ */
+function openTelemetrySignalEndpoint(config) {
+  if (!config || typeof config !== 'object') {
+    throw new TypeError('OpenTelemetry signal endpoint config is required');
+  }
+  if (typeof config.endpoint !== 'string' || config.endpoint.trim() === '') {
+    throw new TypeError('OpenTelemetry signal endpoint must be a nonblank string');
+  }
+  return {
+    transport: 'http_binary',
+    headers: {},
+    header_env: {},
+    resource_attributes: {},
+    service_name: 'unknown_service',
+    instrumentation_scope: 'opentelemetry',
+    timeout_millis: 3000,
+    ...config,
+  };
+}
+
+/**
+ * Create OTLP log pipeline settings with defaults applied.
+ *
+ * @param {object} [config={}] - Partial log pipeline settings.
+ * @returns {object} A normalized OpenTelemetry log section.
+ */
+function openTelemetryLogConfig(config = {}) {
+  return {
+    enabled: false,
+    minimum_severity: 'info',
+    max_queue_size: 2048,
+    max_export_batch_size: 512,
+    scheduled_delay_millis: 1000,
+    ...config,
+  };
+}
+
+/**
+ * Create OTLP metric pipeline settings with defaults applied.
+ *
+ * @param {object} [config={}] - Partial metric pipeline settings.
+ * @returns {object} A normalized OpenTelemetry metric section.
+ */
+function openTelemetryMetricConfig(config = {}) {
+  return {
+    enabled: false,
+    export_interval_millis: 60000,
+    temporality: 'cumulative',
+    max_instruments: 256,
+    cardinality_limit: 2000,
+    ...config,
+  };
+}
+
+/**
  * Create multi-endpoint OpenTelemetry settings.
  *
  * @param {object} [config={}] - Partial section settings.
@@ -108,6 +167,9 @@ module.exports = {
   atofConfig,
   atifConfig,
   openTelemetryEndpoint,
+  openTelemetrySignalEndpoint,
+  openTelemetryLogConfig,
+  openTelemetryMetricConfig,
   openTelemetryConfig,
   ComponentSpec,
 };
