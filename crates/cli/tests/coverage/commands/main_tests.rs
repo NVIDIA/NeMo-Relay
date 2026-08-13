@@ -592,7 +592,7 @@ async fn run_command_install_requires_a_valid_bootstrap_key_except_dry_runs() {
             .unwrap(),
         ExitCode::SUCCESS
     );
-    assert_eq!(std::fs::metadata(key_path).unwrap().len(), 31);
+    assert_eq!(std::fs::read(key_path).unwrap(), [0_u8; 31]);
 }
 
 #[test]
