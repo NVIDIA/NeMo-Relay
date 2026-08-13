@@ -32,7 +32,7 @@ use nemo_relay_worker_proto::v1::{
     ToolExecutionInterceptResult, ToolExecutionResultResponse, ToolNextRequest, ValidateRequest,
     ValidateResponse, WorkerAck,
 };
-use nemo_relay_worker_proto::{decode_tool_execution_result, json_envelope};
+use nemo_relay_worker_proto::{decode_json_value, json_envelope};
 use serde_json::json;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -705,7 +705,7 @@ async fn callback_helpers_cover_worker_response_edges() {
                     outcome: Some(ProtoToolExecutionInterceptOutcome {
                         result: None,
                         annotation: None,
-                        pending_marks: Vec::new(),
+                        pending_marks: None,
                     }),
                 })),
             },
@@ -716,7 +716,7 @@ async fn callback_helpers_cover_worker_response_edges() {
                             json: b"{".to_vec(),
                         }),
                         annotation: None,
-                        pending_marks: Vec::new(),
+                        pending_marks: None,
                     }),
                 })),
             },
@@ -829,7 +829,7 @@ async fn callback_helpers_cover_worker_response_edges() {
     assert!(
         error
             .to_string()
-            .contains("tool execution intercept outcome.result is missing")
+            .contains("tool execution intercept outcome result is missing")
     );
 
     let error = callback
@@ -844,7 +844,7 @@ async fn callback_helpers_cover_worker_response_edges() {
     assert!(
         error
             .to_string()
-            .contains("invalid JSON in tool execution intercept outcome.result")
+            .contains("invalid worker tool execution result JSON")
     );
 
     let error = callback
@@ -2641,7 +2641,7 @@ async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
             .into_inner()
             .value
             .expect("tool next should return a value");
-        decode_tool_execution_result(value).unwrap().result
+        decode_json_value::<Json>(value.result.as_ref().expect("tool next result")).unwrap()
     };
 
     assert_eq!(decode(first.unwrap()), json!(expected[0]));

@@ -28,11 +28,12 @@ use nemo_relay_worker_proto::v1::{
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
     Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
-    ToolExecutionResultResponse, ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
+    ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_tool_execution_intercept_outcome,
-    encode_tool_execution_result, json_envelope,
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -1568,7 +1569,7 @@ impl WorkerPluginCallback {
                 let outcome = result.outcome.ok_or_else(|| {
                     FlowError::Internal("worker tool execution intercept outcome is missing".into())
                 })?;
-                decode_tool_execution_intercept_outcome(outcome).map_err(|err| {
+                tool_execution_intercept_outcome_from_proto(outcome).map_err(|err| {
                     FlowError::Internal(format!(
                         "worker returned invalid tool execution intercept outcome: {err}"
                     ))
@@ -3075,7 +3076,7 @@ fn tool_execution_result_response(
     result: FlowResult<ToolExecutionResult>,
 ) -> ToolExecutionResultResponse {
     match result {
-        Ok(value) => match encode_tool_execution_result(&value) {
+        Ok(value) => match tool_execution_result_to_proto(value) {
             Ok(value) => ToolExecutionResultResponse {
                 value: Some(value),
                 error: None,
@@ -3092,6 +3093,54 @@ fn tool_execution_result_response(
             error: Some(flow_error_to_worker(err)),
         },
     }
+}
+
+fn tool_execution_result_to_proto(
+    value: ToolExecutionResult,
+) -> std::result::Result<ProtoToolExecutionResult, serde_json::Error> {
+    Ok(ProtoToolExecutionResult {
+        result: Some(json_value(&value.result)?),
+        annotation: value
+            .annotation
+            .as_ref()
+            .filter(|value| !value.is_null())
+            .map(json_value)
+            .transpose()?,
+    })
+}
+
+fn tool_execution_intercept_outcome_from_proto(
+    value: ProtoToolExecutionInterceptOutcome,
+) -> FlowResult<ToolExecutionInterceptOutcome> {
+    let result = value.result.ok_or_else(|| {
+        FlowError::Internal("worker tool execution intercept outcome result is missing".into())
+    })?;
+    let result = decode_json_value(&result).map_err(|err| {
+        FlowError::Internal(format!("invalid worker tool execution result JSON: {err}"))
+    })?;
+    let annotation = value
+        .annotation
+        .as_ref()
+        .map(decode_json_value)
+        .transpose()
+        .map_err(|err| {
+            FlowError::Internal(format!(
+                "invalid worker tool execution annotation JSON: {err}"
+            ))
+        })?
+        .filter(|value: &Json| !value.is_null());
+    let pending_marks = value
+        .pending_marks
+        .as_ref()
+        .map(decode_json_value)
+        .transpose()
+        .map_err(|err| FlowError::Internal(format!("invalid worker pending marks JSON: {err}")))?
+        .unwrap_or_default();
+    Ok(ToolExecutionInterceptOutcome {
+        result,
+        annotation,
+        pending_marks,
+    })
 }
 
 fn flow_error_to_worker(err: FlowError) -> WorkerError {

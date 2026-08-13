@@ -20,9 +20,9 @@ use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
     ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome,
-    ToolExecutionResult, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin,
-    serve_plugin_arc, serve_plugin_arc_with_config,
+    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
+    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
+    serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -34,12 +34,12 @@ use nemo_relay_worker_proto::v1::{
     InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
     LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
     RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
 use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_tool_execution_intercept_outcome,
-    encode_tool_execution_result, json_envelope,
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
 };
 use serde_json::json;
 #[cfg(unix)]
@@ -2194,11 +2194,12 @@ impl RelayHostRuntime for MockHost {
                 annotation: None,
             }
         } else {
-            encode_tool_execution_result(&ToolExecutionResult::annotated(
-                json!({"next": "tool"}),
-                json!({"source": "host"}),
-            ))
-            .expect("encode tool result")
+            ProtoToolExecutionResult {
+                result: Some(json_value(&json!({"next": "tool"})).expect("encode tool result")),
+                annotation: Some(
+                    json_value(&json!({"source": "host"})).expect("encode annotation"),
+                ),
+            }
         };
         Ok(Response::new(ToolExecutionResultResponse {
             value: Some(value),
@@ -2754,9 +2755,7 @@ async fn invoke_json(client: &mut PluginWorkerClient<Channel>, request: InvokeRe
             decode_json_envelope(&result.value.expect("json value")).expect("decode JSON result")
         }
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
-            decode_tool_execution_intercept_outcome(result.outcome.expect("tool execution outcome"))
-                .expect("decode tool execution outcome")
-                .result
+            decode_tool_execution_outcome(result.outcome.expect("tool execution outcome")).result
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }
@@ -2774,9 +2773,32 @@ async fn invoke_tool_execution(
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
             let outcome = result.outcome.expect("tool execution outcome");
-            decode_tool_execution_intercept_outcome(outcome).expect("decode tool execution outcome")
+            decode_tool_execution_outcome(outcome)
         }
         other => panic!("unexpected invoke result: {other:?}"),
+    }
+}
+
+fn decode_tool_execution_outcome(
+    outcome: ProtoToolExecutionInterceptOutcome,
+) -> ToolExecutionInterceptOutcome {
+    ToolExecutionInterceptOutcome {
+        result: decode_json_value(outcome.result.as_ref().expect("tool execution result"))
+            .expect("decode tool execution result"),
+        annotation: outcome
+            .annotation
+            .as_ref()
+            .map(decode_json_value)
+            .transpose()
+            .expect("decode tool execution annotation")
+            .filter(|value: &Json| !value.is_null()),
+        pending_marks: outcome
+            .pending_marks
+            .as_ref()
+            .map(decode_json_value)
+            .transpose()
+            .expect("decode pending marks")
+            .unwrap_or_default(),
     }
 }
 

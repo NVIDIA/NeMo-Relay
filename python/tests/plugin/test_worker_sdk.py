@@ -180,17 +180,15 @@ def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks():
 
     assert _decode_json_value(message.result, "result") == [{"text": "ok"}, None]
     assert _decode_json_value(message.annotation, "annotation") == {"source": ["worker", 1]}
-    assert len(message.pending_marks) == 1
-    mark = message.pending_marks[0]
-    assert mark.name == "worker.mark"
-    assert mark.HasField("category")
-    assert mark.category == "tool"
-    assert _decode_json_value(mark.category_profile, "category profile") == {
-        "subtype": "checkpoint",
-        "nested": {"ok": True},
-    }
-    assert _decode_json_value(mark.data, "data") is False
-    assert _decode_json_value(mark.metadata, "metadata") == 0
+    assert _decode_json_value(message.pending_marks, "pending marks") == [
+        {
+            "name": "worker.mark",
+            "category": "tool",
+            "category_profile": {"subtype": "checkpoint", "nested": {"ok": True}},
+            "data": False,
+            "metadata": 0,
+        }
+    ]
 
 
 def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fields():
@@ -201,20 +199,16 @@ def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fi
     assert message.HasField("result")
     assert _decode_json_value(message.result, "result") is None
     assert not message.HasField("annotation")
-    mark = message.pending_marks[0]
-    assert not mark.HasField("category")
-    for field_name in ("category_profile", "data", "metadata"):
-        assert not mark.HasField(field_name)
-
-
-def test_tool_execution_outcome_proto_rejects_non_object_mark_category_profile():
-    with pytest.raises(WorkerSdkError, match="category_profile must be a JSON object or None"):
-        _tool_execution_intercept_outcome_to_proto(
-            ToolExecutionInterceptOutcome(
-                result={"ok": True},
-                pending_marks=[PendingMarkSpec("worker.mark", category_profile=["not", "an", "object"])],
-            )
-        )
+    assert message.HasField("pending_marks")
+    assert _decode_json_value(message.pending_marks, "pending marks") == [
+        {
+            "name": "worker.mark",
+            "category": None,
+            "category_profile": None,
+            "data": None,
+            "metadata": None,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -616,15 +610,11 @@ def test_generated_proto_matches_worker_contract():
     assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
     assert tool_result["annotation"].number == 2
     assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
-    pending_mark = pb.PendingMarkSpec.DESCRIPTOR.fields_by_name
-    assert pending_mark["name"].number == 1
-    assert pending_mark["category"].number == 2
-    assert pending_mark["category"].has_presence
     tool_outcome = pb.ToolExecutionInterceptOutcome.DESCRIPTOR.fields_by_name
     assert tool_outcome["result"].number == 1
     assert tool_outcome["annotation"].number == 2
     assert tool_outcome["pending_marks"].number == 3
-    assert tool_outcome["pending_marks"].message_type.full_name == "nemo.relay.worker.v1.PendingMarkSpec"
+    assert tool_outcome["pending_marks"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
     outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
     assert outcome.number == 1
     assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"

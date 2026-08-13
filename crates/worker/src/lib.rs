@@ -57,12 +57,14 @@ use nemo_relay_worker_proto::v1::{
     LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
     LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolExecutionResultResponse,
-    ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck, WorkerError,
+    ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionInterceptResult, ToolExecutionResult as ProtoToolExecutionResult,
+    ToolExecutionResultResponse, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
+    WorkerError,
 };
 use nemo_relay_worker_proto::{
-    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_tool_execution_result,
-    encode_tool_execution_intercept_outcome, json_envelope,
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
 };
 use tokio::net::TcpListener;
 #[cfg(unix)]
@@ -2256,10 +2258,7 @@ fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<Inv
         result: Some(
             nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
                 ToolExecutionInterceptResult {
-                    outcome: Some(
-                        encode_tool_execution_intercept_outcome(&outcome)
-                            .map_err(|err| WorkerSdkError::Callback(err.to_string()))?,
-                    ),
+                    outcome: Some(tool_execution_outcome_to_proto(outcome)?),
                 },
             ),
         ),
@@ -2275,7 +2274,42 @@ fn tool_execution_result_to_sdk(
     let value = result
         .value
         .ok_or_else(|| WorkerSdkError::InvalidInput("tool execution result is missing".into()))?;
-    decode_tool_execution_result(value).map_err(|err| WorkerSdkError::InvalidInput(err.to_string()))
+    tool_execution_result_from_proto(value)
+}
+
+fn tool_execution_outcome_to_proto(
+    outcome: ToolExecutionInterceptOutcome,
+) -> Result<ProtoToolExecutionInterceptOutcome> {
+    Ok(ProtoToolExecutionInterceptOutcome {
+        result: Some(json_value(&outcome.result)?),
+        annotation: outcome
+            .annotation
+            .as_ref()
+            .filter(|value| !value.is_null())
+            .map(json_value)
+            .transpose()?,
+        pending_marks: (!outcome.pending_marks.is_empty())
+            .then(|| json_value(&outcome.pending_marks))
+            .transpose()?,
+    })
+}
+
+fn tool_execution_result_from_proto(
+    value: ProtoToolExecutionResult,
+) -> Result<ToolExecutionResult> {
+    let result = value.result.ok_or_else(|| {
+        WorkerSdkError::InvalidInput("tool execution result.result is missing".into())
+    })?;
+    let annotation = value
+        .annotation
+        .as_ref()
+        .map(decode_json_value)
+        .transpose()?
+        .filter(|value: &Json| !value.is_null());
+    Ok(ToolExecutionResult {
+        result: decode_json_value(&result)?,
+        annotation,
+    })
 }
 
 fn stream_chunk_to_json(chunk: StreamChunk) -> Result<Json> {

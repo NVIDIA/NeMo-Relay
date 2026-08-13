@@ -168,10 +168,10 @@ The following protobuf types are normative for canonical tool results:
 | `InvokeResponse.tool_execution.outcome` | `ToolExecutionInterceptOutcome` |
 
 `ToolExecutionResult` contains a required `result` and optional `annotation`.
-`ToolExecutionInterceptOutcome` adds Relay-owned `pending_marks`. Each opaque
-JSON leaf uses `JsonValue`, whose bytes contain exactly one JSON value. This
-preserves arbitrary JSON and integer precision while generated protobuf clients
-enforce the surrounding result, annotation, and pending-mark structure.
+`ToolExecutionInterceptOutcome` adds Relay-owned `pending_marks` as one JSON
+array. Each opaque JSON value uses `JsonValue`, whose bytes contain exactly one
+JSON value. This preserves arbitrary JSON and integer precision while generated
+protobuf clients enforce the surrounding result and annotation structure.
 
 These are deliberate protobuf type changes under the Relay 0.8 `grpc-v1`
 baseline. The package and RPC method names remain v1, but workers must
@@ -212,8 +212,8 @@ message JsonEnvelope {
 
 Use `JsonEnvelope` for open Relay DTOs that the protocol does not model
 directly. Canonical tool results are the exception: protobuf defines their
-wrapper and pending-mark structure, and `JsonValue` carries each arbitrary JSON
-leaf losslessly.
+wrapper, and `JsonValue` carries the application result, annotation, and
+pending-mark array losslessly.
 
 ## Activation and Shutdown
 

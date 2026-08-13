@@ -53,8 +53,8 @@ typed `ToolExecutionInterceptOutcome`. Rebuild every worker against the Relay
   clients, servers, services, and messages.
 - **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
   serializing Relay DTOs into protocol payloads.
-- **Tool-result conversion helpers**: Encode and decode the shared
-  `nemo-relay-types` tool-result DTOs through their structural protobuf forms.
+- **JSON value helpers**: `json_value` and `decode_json_value` for the opaque
+  application values inside structural tool-result messages.
 
 ## Structural Tool Result Contract
 
@@ -66,11 +66,11 @@ The `grpc-v1` tool-result boundary uses these generated message types:
 | `ToolExecutionInterceptResult.outcome` | `ToolExecutionInterceptOutcome` |
 
 Both messages define `result` and optional `annotation` fields. Intercept
-outcomes also define ordered `pending_marks`. Arbitrary JSON values use
-`JsonValue`, whose bytes contain exactly one JSON value; this preserves JSON
-integers and other application data without the numeric coercion of
-`google.protobuf.Value`. Hosts and SDKs reject a missing required `result` or
-invalid JSON bytes. JSON null annotations normalize to absence.
+outcomes also carry their ordered `pending_marks` as one JSON array. Arbitrary
+JSON values use `JsonValue`, whose bytes contain exactly one JSON value; this
+preserves JSON integers and other application data without the numeric coercion
+of `google.protobuf.Value`. Hosts and SDKs reject a missing required `result`
+or invalid JSON bytes. JSON null annotations normalize to absence.
 
 ## Installation
 

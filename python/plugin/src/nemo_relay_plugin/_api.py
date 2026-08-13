@@ -339,6 +339,8 @@ class PendingMarkSpec:
         """Convert this pending mark to its canonical JSON object."""
         if not isinstance(self.name, str):
             raise WorkerSdkError("pending mark name must be a string")
+        if self.category is not None and not isinstance(self.category, str):
+            raise WorkerSdkError("pending mark category must be a string or None")
         return asdict(self)
 
 
@@ -2271,34 +2273,15 @@ def _tool_execution_result_from_proto(value: Any) -> ToolExecutionResult:
     )
 
 
-def _pending_mark_to_proto(mark: PendingMarkSpec) -> Any:
-    if not isinstance(mark.name, str):
-        raise WorkerSdkError("pending mark name must be a string")
-    if mark.category is not None and not isinstance(mark.category, str):
-        raise WorkerSdkError("pending mark category must be a string or None")
-    if mark.category_profile is not None and not isinstance(mark.category_profile, dict):
-        raise WorkerSdkError("pending mark category_profile must be a JSON object or None")
-    fields: dict[str, Any] = {"name": mark.name}
-    if mark.category is not None:
-        fields["category"] = mark.category
-    for name in ("category_profile", "data", "metadata"):
-        value = getattr(mark, name)
-        if value is not None:
-            fields[name] = _json_value(value)
-    return pb.PendingMarkSpec(**fields)
-
-
 def _tool_execution_intercept_outcome_to_proto(value: ToolExecutionInterceptOutcome) -> Any:
+    payload = value.to_json()
     fields: dict[str, Any] = {
-        "result": _json_value(value.result),
-        "pending_marks": [],
+        "result": _json_value(payload["result"]),
     }
-    if value.annotation is not None:
-        fields["annotation"] = _json_value(value.annotation)
-    for mark in value.pending_marks:
-        if not isinstance(mark, PendingMarkSpec):
-            raise WorkerSdkError("tool execution intercept outcome pending_marks must contain PendingMarkSpec values")
-        fields["pending_marks"].append(_pending_mark_to_proto(mark))
+    if "annotation" in payload:
+        fields["annotation"] = _json_value(payload["annotation"])
+    if payload["pending_marks"]:
+        fields["pending_marks"] = _json_value(payload["pending_marks"])
     return pb.ToolExecutionInterceptOutcome(**fields)
 
 
