@@ -159,11 +159,13 @@ jobs:
           - &package-linux-musl-amd64
             platform: linux-musl-amd64
             architecture: x86_64
+            rust_target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
             container_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
           - &package-linux-musl-arm64
             platform: linux-musl-arm64
             architecture: aarch64
+            rust_target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
             container_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
 
@@ -321,36 +323,29 @@ jobs:
           set -euo pipefail
           mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"
 
-      - name: Build musllinux wheel
+      - name: Stage musllinux packaging source
         if: ${{ contains(matrix.platform, 'musl') }}
-        env:
-          MUSLLINUX_IMAGE: ${{ matrix.container_image }}
-          MUSLLINUX_INTERPRETER: /opt/python/cp311-cp311/bin/python
-          MUSLLINUX_WHEEL_DIRECTORY: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
-          NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
-          docker run --rm \
-            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
-            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
-            --env MUSLLINUX_INTERPRETER \
-            --env MUSLLINUX_WHEEL_DIRECTORY \
-            --env NEMO_RELAY_MATURIN_VERSION \
-            --env NEMO_RELAY_PACKAGE_VERSION \
-            --env NEMO_RELAY_RUST_VERSION \
-            "$MUSLLINUX_IMAGE" \
-            /bin/sh -ec '
-              apk add --no-cache curl
-              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
-                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
-              export PATH="$HOME/.cargo/bin:$PATH"
-              "$MUSLLINUX_INTERPRETER" -m pip install --no-cache-dir "maturin==$NEMO_RELAY_MATURIN_VERSION"
-              export PATH="$(dirname "$MUSLLINUX_INTERPRETER"):$PATH"
-              "$MUSLLINUX_INTERPRETER" scripts/package_python_musllinux.py \
-                --version "$NEMO_RELAY_PACKAGE_VERSION" \
-                --out "$MUSLLINUX_WHEEL_DIRECTORY" \
-                --interpreter "$MUSLLINUX_INTERPRETER"
-            '
+          python3 scripts/package_python_musllinux.py \
+            --version "$NEMO_RELAY_PACKAGE_VERSION" \
+            --source-out "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-source"
+
+      - name: Build musllinux wheel
+        if: ${{ contains(matrix.platform, 'musl') }}
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v${{ env.NEMO_RELAY_MATURIN_VERSION }}
+          manylinux: musllinux_1_2
+          container: ${{ matrix.container_image }}
+          target: ${{ matrix.rust_target }}
+          rust-toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          working-directory: tmp/musllinux-source
+          args: >-
+            --locked --release --compatibility musllinux_1_2
+            --interpreter /opt/python/cp311-cp311/bin/python
+            --out ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
 
       - name: Verify musllinux wheel platform tag
         if: ${{ contains(matrix.platform, 'musl') }}
