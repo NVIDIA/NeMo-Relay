@@ -154,6 +154,7 @@ fn implementation_declares_each_safe_worker_surface() {
 #[test]
 fn manifest_uses_the_rust_worker_load_contract() {
     let manifest = include_str!("../relay-plugin.toml");
+    assert!(manifest.contains("relay = \">=0.6,<1.0\""));
     assert!(manifest.contains("worker_protocol = \"grpc-v1\""));
     assert!(manifest.contains("runtime = \"rust\""));
     assert!(manifest.contains("entrypoint = \"target/debug/<platform-worker-file>\""));
