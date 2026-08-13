@@ -518,13 +518,11 @@ dependencies = [
 name = "nemo-relay-worker-proto"
 version = "0.8.0"
 dependencies = [
- "nemo-relay-types",
  "prost",
  "prost-build",
  "protoc-bin-vendored",
  "serde",
  "serde_json",
- "thiserror",
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
