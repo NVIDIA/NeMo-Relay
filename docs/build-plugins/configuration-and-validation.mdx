@@ -77,10 +77,10 @@ arbitrary third-party JSON object; implement and test that behavior in the plugi
 
 ## Publish the Component Schema with the Package
 
-The following complete schema is shared by the Python and Rust worker examples. The
-native example adds an `executor` object because only the typed native SDK owns a Tokio
-executor. `additionalProperties: false` is repeated inside each object so a misspelled
-control fails package validation at the exact nesting level where it appears.
+The following strict schema is used by the Python worker and native examples. The native
+example adds an `executor` object because only the typed native SDK owns a Tokio executor.
+`additionalProperties: false` is repeated inside each object so a misspelled control fails
+at the exact nesting level where it appears.
 
 ```json
 {
@@ -162,6 +162,12 @@ not insert them into the component object. The implementation must merge the sam
 defaults before it validates and registers behavior. Keeping one checked default value
 beside each typed configuration structure prevents the schema, validator, and runtime
 from silently interpreting omitted fields differently.
+
+The Rust worker intentionally uses a permissive schema with
+`additionalProperties: true`, then reports unknown keys from its validation hook as
+warnings. This demonstrates a warning-based migration policy. Do not copy the strict
+schema into that worker unless unknown keys should become activation errors; the schema
+and validator must express the same operator contract.
 
 ## Write Diagnostics for the Operator
 

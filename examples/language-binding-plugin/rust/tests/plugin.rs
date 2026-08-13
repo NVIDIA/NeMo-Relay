@@ -24,32 +24,37 @@ use tokio::sync::{Mutex, MutexGuard};
 
 static PLUGIN_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
-struct ActivePlugin {
-    report: ConfigReport,
+struct RegisteredPlugin {
     _lock: MutexGuard<'static, ()>,
 }
 
-impl Drop for ActivePlugin {
+impl Drop for RegisteredPlugin {
     fn drop(&mut self) {
         let _ = clear_plugin_configuration();
         deregister_plugin("documentation-plugin");
     }
 }
 
-async fn activate_with(plugin_config: nemo_relay::plugin::PluginConfig) -> ActivePlugin {
+struct ActivePlugin {
+    report: ConfigReport,
+    _registration: RegisteredPlugin,
+}
+
+async fn register_only() -> RegisteredPlugin {
     let lock = PLUGIN_TEST_LOCK.lock().await;
     reset_observed_events();
     register_plugin(Arc::new(DocumentationPlugin)).expect("plugin registration should succeed");
-    let report = match initialize_plugins_exact(plugin_config).await {
-        Ok(report) => report,
-        Err(error) => {
-            deregister_plugin("documentation-plugin");
-            panic!("plugin activation should succeed: {error}");
-        }
-    };
+    RegisteredPlugin { _lock: lock }
+}
+
+async fn activate_with(plugin_config: nemo_relay::plugin::PluginConfig) -> ActivePlugin {
+    let registration = register_only().await;
+    let report = initialize_plugins_exact(plugin_config)
+        .await
+        .unwrap_or_else(|error| panic!("plugin activation should succeed: {error}"));
     ActivePlugin {
         report,
-        _lock: lock,
+        _registration: registration,
     }
 }
 
@@ -88,7 +93,11 @@ fn validation_rejects_wrong_type() {
 #[test]
 fn validation_reports_each_empty_required_string_at_its_field() {
     for (configuration, code, field) in [
-        (json!({ "tag": "" }), "documentation-plugin.invalid_tag", "tag"),
+        (
+            json!({ "tag": "" }),
+            "documentation-plugin.invalid_tag",
+            "tag",
+        ),
         (
             json!({ "requests": { "header_name": "" } }),
             "documentation-plugin.invalid_header",
@@ -120,10 +129,37 @@ fn validation_warns_about_unknown_field() {
     assert_eq!(diagnostics[0].field.as_deref(), Some("unexpected"));
 }
 
+#[test]
+fn implementation_registers_each_safe_plugin_surface() {
+    let source = include_str!("../src/lib.rs");
+    assert_eq!(
+        [
+            "register_subscriber",
+            "register_mark_sanitize_guardrail",
+            "register_scope_sanitize_start_guardrail",
+            "register_scope_sanitize_end_guardrail",
+            "register_tool_sanitize_request_guardrail",
+            "register_tool_sanitize_response_guardrail",
+            "register_tool_conditional_execution_guardrail",
+            "register_tool_request_intercept",
+            "register_tool_execution_intercept",
+            "register_llm_sanitize_request_guardrail",
+            "register_llm_sanitize_response_guardrail",
+            "register_llm_conditional_execution_guardrail",
+            "register_llm_request_intercept",
+            "register_llm_execution_intercept",
+            "register_llm_stream_execution_intercept",
+        ]
+        .iter()
+        .filter(|method| source.contains(**method))
+        .count(),
+        15
+    );
+}
+
 #[tokio::test]
 async fn registration_rejects_a_duplicate_kind_and_missing_deregistration_is_false() {
-    let _lock = PLUGIN_TEST_LOCK.lock().await;
-    register_plugin(Arc::new(DocumentationPlugin)).expect("first registration should succeed");
+    let _registered = register_only().await;
     assert!(register_plugin(Arc::new(DocumentationPlugin)).is_err());
     assert!(!deregister_plugin("missing-documentation-plugin"));
     assert!(deregister_plugin("documentation-plugin"));
@@ -131,8 +167,7 @@ async fn registration_rejects_a_duplicate_kind_and_missing_deregistration_is_fal
 
 #[tokio::test]
 async fn disabled_component_is_still_validated() {
-    let _lock = PLUGIN_TEST_LOCK.lock().await;
-    register_plugin(Arc::new(DocumentationPlugin)).expect("plugin registration should succeed");
+    let _registered = register_only().await;
     let report = validate_plugin_config(&config_with_enabled("invalid", false));
     assert!(deregister_plugin("documentation-plugin"));
 
@@ -309,13 +344,20 @@ async fn configuration_controls_redaction_pending_marks_and_isolated_scope_event
         .iter()
         .find(|event| event.name() == "documentation-plugin.request")
         .expect("configured runtime mark should be delivered");
-    assert_eq!(runtime_mark.data().expect("mark data")["secret"], "[REDACTED]");
-    assert!(events
-        .iter()
-        .any(|event| event.name() == "documentation-plugin.tool-complete"));
-    assert!(events
-        .iter()
-        .any(|event| event.name() == "documentation-plugin.isolated"));
+    assert_eq!(
+        runtime_mark.data().expect("mark data")["secret"],
+        "[REDACTED]"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.name() == "documentation-plugin.tool-complete")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.name() == "documentation-plugin.isolated")
+    );
 }
 
 #[tokio::test]
@@ -335,9 +377,11 @@ async fn runtime_events_do_not_depend_on_request_rewriting() {
     .expect("tool call should succeed");
     flush_subscribers().expect("subscriber flush should succeed");
 
-    assert!(observed_events()
-        .iter()
-        .any(|event| event.name() == "documentation-plugin.request"));
+    assert!(
+        observed_events()
+            .iter()
+            .any(|event| event.name() == "documentation-plugin.request")
+    );
 }
 
 #[tokio::test]
@@ -357,15 +401,16 @@ async fn runtime_events_are_not_stopped_by_request_break_chain() {
     .expect("tool call should succeed");
     flush_subscribers().expect("subscriber flush should succeed");
 
-    assert!(observed_events()
-        .iter()
-        .any(|event| event.name() == "documentation-plugin.request"));
+    assert!(
+        observed_events()
+            .iter()
+            .any(|event| event.name() == "documentation-plugin.request")
+    );
 }
 
 #[tokio::test]
 async fn teardown_removes_plugin_kind() {
-    let _lock = PLUGIN_TEST_LOCK.lock().await;
-    register_plugin(Arc::new(DocumentationPlugin)).expect("plugin registration should succeed");
+    let _registered = register_only().await;
     initialize_plugins_exact(config("enforce"))
         .await
         .expect("plugin activation should succeed");

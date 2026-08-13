@@ -208,10 +208,10 @@ optimization accounting.
 ## Continuation Behavior
 
 When the example enables `repeat_downstream`, it starts two concurrent downstream calls
-and returns the first successful response only after both calls complete successfully.
-The second call is intentional demonstration code: it can still consume provider
-capacity, incur cost, and cause provider-side effects even though Relay does not expose
-its result to the application. A failure from either call fails the wrapper.
+and returns the first response after both calls settle. The first call alone determines
+whether the wrapper succeeds. The second call is intentional demonstration code: it can
+still consume provider capacity, incur cost, and cause provider-side effects even though
+Relay does not expose its result to the application. Its failure is deliberately ignored.
 
 `ToolNext`, `LlmNext`, and `LlmStreamNext` are host proxies identified by an opaque
 continuation ID. Calling one issues a host-runtime RPC under the scope snapshot captured
@@ -255,7 +255,10 @@ async def llm_execution(_name, request, next_call):
         first, _second = await asyncio.gather(
             next_call.call(request),
             next_call.call(request),
+            return_exceptions=True,
         )
+        if isinstance(first, BaseException):
+            raise first
         return first
     return await next_call.call(request)
 
@@ -311,13 +314,11 @@ context.register_llm_execution_intercept(
             .unwrap_or(false)
         {
             let repeated = next.clone();
-            let (first, second) = tokio::join!(
+            let (first, _second) = tokio::join!(
                 repeated.call(request.clone()),
                 next.call(request),
             );
-            let response = first?;
-            second?;
-            Ok(response)
+            first
         } else {
             next.call(request).await
         }

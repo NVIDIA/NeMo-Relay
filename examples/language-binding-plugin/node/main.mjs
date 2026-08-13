@@ -72,6 +72,32 @@ function normalizedConfig(config) {
   return settings;
 }
 
+function redactJson(value, redactKeys) {
+  if (Array.isArray(value)) return value.map((item) => redactJson(item, redactKeys));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        redactKeys.includes(key) ? '[REDACTED]' : redactJson(item, redactKeys),
+      ]),
+    );
+  }
+  return value;
+}
+
+function emitRuntimeEvents(runtime, tag) {
+  if (runtime.emit_marks) {
+    relay.event('documentation-plugin.request', null, { tag, secret: 'application-value' });
+  }
+  if (runtime.emit_isolated_scope) {
+    const isolatedStack = relay.createScopeStack();
+    relay.withScopeStack(isolatedStack, () => {
+      const scope = relay.pushScope('documentation-plugin.isolated', relay.ScopeType.Custom);
+      relay.popScope(scope);
+    });
+  }
+}
+
 function validateDocumentationConfig(config) {
   const diagnostics = [];
   if (config === null || typeof config !== 'object' || Array.isArray(config)) {
@@ -157,22 +183,39 @@ export const documentationPlugin = {
   },
   register(config, context) {
     const settings = normalizedConfig(config);
-    const { observe, requests, execution } = settings;
+    const { observe, requests, execution, runtime } = settings;
     if (observe.enabled) {
       context.registerSubscriber('events', (event) => documentationPlugin.events.push(event.name));
-      context.registerMarkSanitizeGuardrail('marks', 10, (_event, fields) => ({
-        ...fields,
-        metadata: { ...(fields.metadata ?? {}), plugin_tag: settings.tag },
+      const sanitizeEvent = (_event, fields) => ({
+        data: redactJson(fields.data, observe.redact_keys),
+        categoryProfile: redactJson(fields.categoryProfile, observe.redact_keys),
+        metadata: { ...(redactJson(fields.metadata, observe.redact_keys) ?? {}), plugin_tag: settings.tag },
+      });
+      context.registerMarkSanitizeGuardrail('mark-sanitizer', 10, sanitizeEvent);
+      context.registerScopeSanitizeStartGuardrail('scope-start-sanitizer', 10, sanitizeEvent);
+      context.registerScopeSanitizeEndGuardrail('scope-end-sanitizer', 10, sanitizeEvent);
+      context.registerToolSanitizeRequestGuardrail('tool-request-sanitizer', 10, (_name, value) =>
+        redactJson(value, observe.redact_keys),
+      );
+      context.registerToolSanitizeResponseGuardrail('tool-response-sanitizer', 10, (_name, value) =>
+        redactJson(value, observe.redact_keys),
+      );
+      context.registerLlmSanitizeRequestGuardrail('llm-request-sanitizer', 10, (request) => ({
+        ...request,
+        content: redactJson(request.content, observe.redact_keys),
       }));
+      context.registerLlmSanitizeResponseGuardrail('llm-response-sanitizer', 10, (response) =>
+        redactJson(response, observe.redact_keys),
+      );
     }
     if (requests.enabled) {
       context.registerToolConditionalExecutionGuardrail('tool-policy', 10, (name) =>
         requests.mode === 'enforce' && requests.blocked_tools.includes(name) ? `tool '${name}' is blocked` : null,
       );
-      context.registerToolRequestIntercept('tool-request', requests.priority, requests.break_chain, (_name, args) => ({
-        ...args,
-        plugin_tag: settings.tag,
-      }));
+      context.registerToolRequestIntercept('tool-request', requests.priority, requests.break_chain, (_name, args) => {
+        emitRuntimeEvents(runtime, settings.tag);
+        return { ...args, plugin_tag: settings.tag };
+      });
       context.registerLlmConditionalExecutionGuardrail('llm-policy', 10, (request) => {
         const model = request?.content?.model;
         return requests.mode === 'enforce' && requests.blocked_models.includes(model)
@@ -196,6 +239,11 @@ export const documentationPlugin = {
       );
     }
     if (execution.enabled) {
+      context.registerToolExecutionIntercept('tool-execution', execution.priority, async (args, next) => ({
+        result: await next(args),
+        pendingMarks: execution.emit_pending_marks ? [{ name: 'documentation-plugin.tool-complete' }] : [],
+      }));
+      context.registerLlmExecutionIntercept('llm-execution', execution.priority, async (request, next) => next(request));
       context.registerLlmStreamExecutionIntercept('llm-stream', execution.priority, async (request, next) =>
         (await next(request)).map((chunk) => ({ ...chunk, plugin_stream: true })),
       );

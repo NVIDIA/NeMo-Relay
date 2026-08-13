@@ -267,11 +267,9 @@ fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
                 .unwrap_or(false)
             {
                 let repeated = next.clone();
-                let (first, second) =
+                let (first, _second) =
                     tokio::join!(repeated.call(request.clone()), next.call(request));
-                let response = first?;
-                second?;
-                Ok(response)
+                first
             } else {
                 next.call(request).await
             }

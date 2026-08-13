@@ -14,5 +14,7 @@ Run `cargo test` and `cargo build` from this directory. The tests are
 order-independent and each asserts one configuration, schema, or manifest
 contract. Copy
 `relay-plugin.toml` to `relay-plugin.local.toml`, replace the platform worker
-placeholder with the built executable name, and replace the digest placeholder
-with `shasum -a 256`, `sha256sum`, or `Get-FileHash` output for that executable.
+placeholder with the built executable name, and replace only `<artifact-sha256>`
+with the lowercase hexadecimal digest of the built executable. The manifest value
+keeps its `sha256:` prefix; omit the filename column printed by `shasum -a 256`,
+`sha256sum`, or `Get-FileHash`.

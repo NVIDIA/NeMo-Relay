@@ -5,17 +5,17 @@ mod config;
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use futures::{StreamExt, stream};
+use nemo_relay::api::event::{Event, EventSanitizeFields, PendingMarkSpec};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmRequestInterceptOutcome, LlmStreamCallExecuteParams,
     llm_call_execute, llm_stream_call_execute,
 };
-use nemo_relay::api::event::{Event, EventSanitizeFields, PendingMarkSpec};
-use nemo_relay::api::runtime::{create_scope_stack, with_scope_stack};
 use nemo_relay::api::runtime::callbacks::LlmJsonStream;
+use nemo_relay::api::runtime::{create_scope_stack, with_scope_stack};
 use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
@@ -82,6 +82,75 @@ impl Plugin for DocumentationPlugin {
                         move |_event, fields| {
                             let redact_keys = redact_keys.clone();
                             Box::pin(async move { Ok(redact_event_fields(fields, &redact_keys)) })
+                        }
+                    }),
+                )?;
+                context.register_scope_sanitize_start_guardrail(
+                    "scope-start-redaction",
+                    10,
+                    Arc::new({
+                        let redact_keys = settings.observe.redact_keys.clone();
+                        move |_event, fields| {
+                            let redact_keys = redact_keys.clone();
+                            Box::pin(async move { Ok(redact_event_fields(fields, &redact_keys)) })
+                        }
+                    }),
+                )?;
+                context.register_scope_sanitize_end_guardrail(
+                    "scope-end-redaction",
+                    10,
+                    Arc::new({
+                        let redact_keys = settings.observe.redact_keys.clone();
+                        move |_event, fields| {
+                            let redact_keys = redact_keys.clone();
+                            Box::pin(async move { Ok(redact_event_fields(fields, &redact_keys)) })
+                        }
+                    }),
+                )?;
+                context.register_tool_sanitize_request_guardrail(
+                    "tool-request-redaction",
+                    10,
+                    Arc::new({
+                        let redact_keys = settings.observe.redact_keys.clone();
+                        move |_name, value| {
+                            let redact_keys = redact_keys.clone();
+                            Box::pin(async move { Ok(redact_json(value, &redact_keys)) })
+                        }
+                    }),
+                )?;
+                context.register_tool_sanitize_response_guardrail(
+                    "tool-response-redaction",
+                    10,
+                    Arc::new({
+                        let redact_keys = settings.observe.redact_keys.clone();
+                        move |_name, value| {
+                            let redact_keys = redact_keys.clone();
+                            Box::pin(async move { Ok(redact_json(value, &redact_keys)) })
+                        }
+                    }),
+                )?;
+                context.register_llm_sanitize_request_guardrail(
+                    "llm-request-redaction",
+                    10,
+                    Arc::new({
+                        let redact_keys = settings.observe.redact_keys.clone();
+                        move |mut request, _context| {
+                            let redact_keys = redact_keys.clone();
+                            Box::pin(async move {
+                                request.content = redact_json(request.content, &redact_keys);
+                                Ok(Some(request))
+                            })
+                        }
+                    }),
+                )?;
+                context.register_llm_sanitize_response_guardrail(
+                    "llm-response-redaction",
+                    10,
+                    Arc::new({
+                        let redact_keys = settings.observe.redact_keys.clone();
+                        move |response, _context| {
+                            let redact_keys = redact_keys.clone();
+                            Box::pin(async move { Ok(Some(redact_json(response, &redact_keys))) })
                         }
                     }),
                 )?;
@@ -204,6 +273,13 @@ impl Plugin for DocumentationPlugin {
                         }
                     }),
                 )?;
+                context.register_llm_execution_intercept(
+                    "llm-execution",
+                    settings.execution.priority,
+                    Arc::new(move |_name, request, next| {
+                        Box::pin(async move { next(request).await })
+                    }),
+                )?;
                 context.register_llm_stream_execution_intercept(
                     "llm-stream",
                     settings.execution.priority,
@@ -278,7 +354,10 @@ pub fn observed_events() -> Vec<Event> {
         .clone()
 }
 
-fn redact_event_fields(mut fields: EventSanitizeFields, redact_keys: &[String]) -> EventSanitizeFields {
+fn redact_event_fields(
+    mut fields: EventSanitizeFields,
+    redact_keys: &[String],
+) -> EventSanitizeFields {
     fields.data = fields.data.map(|value| redact_json(value, redact_keys));
     fields.metadata = fields.metadata.map(|value| redact_json(value, redact_keys));
     fields
@@ -313,8 +392,7 @@ fn emit_runtime_events(tag: &str, runtime: &config::Runtime) -> nemo_relay::erro
                 .name("documentation-plugin.request")
                 .data(json!({ "tag": tag, "secret": "application-value" }))
                 .build(),
-        )
-        ?;
+        )?;
     }
     if runtime.emit_isolated_scope {
         let isolated_stack = create_scope_stack();
@@ -332,7 +410,7 @@ fn emit_runtime_events(tag: &str, runtime: &config::Runtime) -> nemo_relay::erro
 }
 
 pub async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
-    OBSERVED_EVENTS.store(0, Ordering::Relaxed);
+    reset_observed_events();
     register_plugin(Arc::new(DocumentationPlugin))?;
     println!("registered: {:?}", list_plugin_kinds());
     let invalid = validate_plugin_config(&config("invalid"));

@@ -1,9 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay_rust_grpc_worker_plugin_example::{
-    default_example_config, validate_example_config,
-};
+use nemo_relay_rust_grpc_worker_plugin_example::{default_example_config, validate_example_config};
 use serde_json::{Value as Json, json};
 
 #[test]
@@ -67,7 +65,10 @@ fn wrong_types_are_rejected() {
 #[test]
 fn empty_headers_are_reported_at_their_individual_fields() {
     for (config, field) in [
-        (json!({ "requests": { "header_name": "" } }), "requests.header_name"),
+        (
+            json!({ "requests": { "header_name": "" } }),
+            "requests.header_name",
+        ),
         (
             json!({ "requests": { "header_value": "" } }),
             "requests.header_value",

@@ -23,6 +23,22 @@ class ActivatedExample:
     report: dict[str, Any]
 
 
+class RecordingContext:
+    """Records one registration per context method without touching global state."""
+
+    def __init__(self) -> None:
+        self.registrations: list[str] = []
+
+    def __getattr__(self, name: str):
+        if not name.startswith("register_"):
+            raise AttributeError(name)
+
+        def register(_registration_name: str, *_args: Any) -> None:
+            self.registrations.append(name)
+
+        return register
+
+
 @pytest_asyncio.fixture
 async def active_plugin(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[ActivatedExample]:
     """Activate a fresh component and remove every owned registration afterward."""
@@ -84,6 +100,39 @@ def test_validation_warns_about_unknown_field() -> None:
 
     assert diagnostics[0]["level"] == "warning"
     assert diagnostics[0]["field"] == "unexpected"
+
+
+def test_disabled_invalid_component_is_still_validated() -> None:
+    plugin.register("documentation-plugin", DocumentationPlugin())
+    try:
+        report = plugin.validate(component("invalid", enabled=False))
+        assert report["diagnostics"][0]["code"] == "documentation-plugin.unsupported_mode"
+    finally:
+        plugin.deregister("documentation-plugin")
+
+
+def test_registers_each_safe_plugin_surface() -> None:
+    context = RecordingContext()
+
+    DocumentationPlugin().register(component("enforce").components[0].config, context)  # type: ignore[arg-type]
+
+    assert set(context.registrations) == {
+        "register_subscriber",
+        "register_mark_sanitize_guardrail",
+        "register_scope_sanitize_start_guardrail",
+        "register_scope_sanitize_end_guardrail",
+        "register_tool_sanitize_request_guardrail",
+        "register_tool_sanitize_response_guardrail",
+        "register_tool_conditional_execution_guardrail",
+        "register_tool_request_intercept",
+        "register_tool_execution_intercept",
+        "register_llm_sanitize_request_guardrail",
+        "register_llm_sanitize_response_guardrail",
+        "register_llm_conditional_execution_guardrail",
+        "register_llm_request_intercept",
+        "register_llm_execution_intercept",
+        "register_llm_stream_execution_intercept",
+    }
 
 
 async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample) -> None:

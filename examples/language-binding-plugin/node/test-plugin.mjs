@@ -20,16 +20,19 @@ function registeredCallbacks() {
   return callbacks;
 }
 
-async function withActivePlugin(run) {
+async function withActivePlugin(run, pluginConfig = config('enforce')) {
   const restoreEnvironment = isolateExampleEnvironment();
   documentationPlugin.events.length = 0;
   try {
     plugin.register('documentation-plugin', documentationPlugin);
-    const preflight = plugin.validate(config('enforce'));
+    const preflight = plugin.validate(pluginConfig);
     assert.deepEqual(preflight.diagnostics, []);
-    const report = await plugin.initialize(config('enforce'));
+    const report = await plugin.initialize(pluginConfig);
     return await run(report);
   } finally {
+    // Scope-end sanitizers run in Relay's queued publication path. Drain that
+    // work before removing the callbacks that the active component owns.
+    await relay.flushSubscribers();
     plugin.clear();
     plugin.deregister('documentation-plugin');
     restoreEnvironment();
@@ -76,6 +79,41 @@ test('validation warns about an unknown field', () => {
 
   assert.equal(diagnostics[0].level, 'warning');
   assert.equal(diagnostics[0].field, 'unexpected');
+});
+
+test('disabled invalid configuration is still validated', () => {
+  const restoreEnvironment = isolateExampleEnvironment();
+  plugin.register('documentation-plugin', documentationPlugin);
+  try {
+    const report = plugin.validate(config('invalid', false));
+
+    assert.equal(report.diagnostics[0].code, 'documentation-plugin.unsupported_mode');
+  } finally {
+    plugin.deregister('documentation-plugin');
+    restoreEnvironment();
+  }
+});
+
+test('registers every safe plugin surface', () => {
+  const registrations = registeredCallbacks();
+
+  assert.deepEqual([...registrations.keys()].sort(), [
+    'registerLlmConditionalExecutionGuardrail',
+    'registerLlmExecutionIntercept',
+    'registerLlmRequestIntercept',
+    'registerLlmSanitizeRequestGuardrail',
+    'registerLlmSanitizeResponseGuardrail',
+    'registerLlmStreamExecutionIntercept',
+    'registerMarkSanitizeGuardrail',
+    'registerScopeSanitizeEndGuardrail',
+    'registerScopeSanitizeStartGuardrail',
+    'registerSubscriber',
+    'registerToolConditionalExecutionGuardrail',
+    'registerToolExecutionIntercept',
+    'registerToolRequestIntercept',
+    'registerToolSanitizeRequestGuardrail',
+    'registerToolSanitizeResponseGuardrail',
+  ]);
 });
 
 test('activation reports no diagnostics', async () => {
@@ -137,6 +175,26 @@ test('subscriber observes an emitted event', async () => {
 
     assert.ok(documentationPlugin.events.includes('documentation-event'));
   });
+});
+
+test('runtime controls emit a mark and an isolated scope only when enabled', async () => {
+  await withActivePlugin(async () => {
+    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    await relay.flushSubscribers();
+
+    assert.ok(documentationPlugin.events.includes('documentation-plugin.request'));
+    assert.ok(documentationPlugin.events.includes('documentation-plugin.isolated'));
+  });
+
+  const runtimeDisabled = config('enforce');
+  runtimeDisabled.components[0].config.runtime = { emit_marks: false, emit_isolated_scope: false };
+  await withActivePlugin(async () => {
+    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    await relay.flushSubscribers();
+
+    assert.ok(!documentationPlugin.events.includes('documentation-plugin.request'));
+    assert.ok(!documentationPlugin.events.includes('documentation-plugin.isolated'));
+  }, runtimeDisabled);
 });
 
 test('teardown removes the plugin kind', async () => {

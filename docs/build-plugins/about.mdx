@@ -11,62 +11,22 @@ observe Relay events, remove sensitive fields from observability records, reject
 rewrite tool and model requests, wrap real execution, or combine those responsibilities
 when one configuration contract genuinely controls them.
 
-The smallest useful plugin has four visible stages: define the implementation, register
-its kind, activate one configured component, and clear the owned behavior. The following
-Python program is a complete application-owned example. Its tool request intercept adds
-`plugin_tag` to the real tool arguments, so the final assertion proves that activation
-changed execution rather than only producing a successful report.
+The smallest useful plugin has four visible stages:
 
-```python
-import asyncio
+1. Define the implementation.
+2. Register its stable kind.
+3. Activate one configured component.
+4. Clear the behavior owned by that component.
 
-from nemo_relay import plugin, tools
-
-
-class AddTagPlugin:
-    def validate(self, config):
-        if not isinstance(config.get("tag", "documentation"), str):
-            return [{
-                "level": "error",
-                "code": "add-tag.invalid_tag",
-                "component": "add-tag",
-                "field": "tag",
-                "message": "tag must be a string",
-            }]
-        return []
-
-    def register(self, config, context):
-        tag = config.get("tag", "documentation")
-        context.register_tool_request_intercept(
-            "add-tag",
-            20,
-            False,
-            lambda _name, args: {**args, "plugin_tag": tag},
-        )
-
-
-async def run():
-    plugin.register("add-tag", AddTagPlugin())
-    config = plugin.PluginConfig(components=[
-        plugin.ComponentSpec(kind="add-tag", config={"tag": "documentation"})
-    ])
-    try:
-        report = await plugin.initialize(config)
-        assert report["diagnostics"] == []
-        result = await tools.execute("lookup", {"query": "Relay"}, lambda args: args)
-        assert result["plugin_tag"] == "documentation"
-    finally:
-        await plugin.clear_async()
-        assert plugin.deregister("add-tag")
-
-
-asyncio.run(run())
-```
+The complete [language-binding quickstart](/build-plugins/language-binding/about) shows
+this application-owned example in Python, Node.js, and Rust. In every version, the tool
+request intercept adds `plugin_tag` to the real tool arguments, so the final assertion
+proves that activation changed execution rather than only producing a successful report.
 
 The implementation object is not middleware by itself. Relay calls `register` only for
 an enabled, valid component and owns every callback installed through the supplied
-context. That ownership is what lets `clear_async` remove the intercept before the kind
-is deregistered.
+context. That ownership lets cleanup remove the intercept before the kind is
+deregistered.
 
 The first design decision is where the plugin should run. That choice determines how
 quickly callbacks execute, what must be packaged, which failures can affect the host,

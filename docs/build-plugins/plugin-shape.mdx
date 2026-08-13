@@ -26,6 +26,45 @@ all validate `tag` and install one component-owned subscriber. The callback spel
 different, but the identity, validation, and ownership rules are the same.
 
 <Tabs>
+<Tab title="Python" language="python">
+```python
+class AuditPlugin:
+    def validate(self, config):
+        tag = config.get("tag", "documentation")
+        if isinstance(tag, str):
+            return []
+        return [{
+            "level": "error",
+            "code": "audit.invalid_tag",
+            "component": "audit",
+            "field": "tag",
+            "message": "tag must be a string",
+        }]
+
+    def register(self, _config, context):
+        context.register_subscriber("events", lambda event: print(event.name))
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+const auditPlugin = {
+  validate(config) {
+    if (config.tag === undefined || typeof config.tag === 'string') return [];
+    return [{
+      level: 'error',
+      code: 'audit.invalid_tag',
+      component: 'audit',
+      field: 'tag',
+      message: 'tag must be a string',
+    }];
+  },
+
+  register(_config, context) {
+    context.registerSubscriber('events', (event) => console.log(event.name));
+  },
+};
+```
+</Tab>
 <Tab title="Rust" language="rust">
 ```rust
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -70,45 +109,6 @@ impl Plugin for AuditPlugin {
         })
     }
 }
-```
-</Tab>
-<Tab title="Python" language="python">
-```python
-class AuditPlugin:
-    def validate(self, config):
-        tag = config.get("tag", "documentation")
-        if isinstance(tag, str):
-            return []
-        return [{
-            "level": "error",
-            "code": "audit.invalid_tag",
-            "component": "audit",
-            "field": "tag",
-            "message": "tag must be a string",
-        }]
-
-    def register(self, _config, context):
-        context.register_subscriber("events", lambda event: print(event.name))
-```
-</Tab>
-<Tab title="Node.js" language="node">
-```js
-const auditPlugin = {
-  validate(config) {
-    if (config.tag === undefined || typeof config.tag === 'string') return [];
-    return [{
-      level: 'error',
-      code: 'audit.invalid_tag',
-      component: 'audit',
-      field: 'tag',
-      message: 'tag must be a string',
-    }];
-  },
-
-  register(_config, context) {
-    context.registerSubscriber('events', (event) => console.log(event.name));
-  },
-};
 ```
 </Tab>
 </Tabs>

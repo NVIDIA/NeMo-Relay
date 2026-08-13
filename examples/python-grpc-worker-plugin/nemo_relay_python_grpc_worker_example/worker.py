@@ -244,7 +244,11 @@ class ExamplePythonWorker(WorkerPlugin):
             content = request.get("content")
             repeat = isinstance(content, dict) and content.get("repeat_downstream") is True
             if repeat:
-                first, _second = await asyncio.gather(next_call.call(request), next_call.call(request))
+                first, _second = await asyncio.gather(
+                    next_call.call(request), next_call.call(request), return_exceptions=True
+                )
+                if isinstance(first, BaseException):
+                    raise first
                 return first
             return await next_call.call(request)
 
@@ -273,7 +277,7 @@ def validate_config(config: Json) -> list[ConfigDiagnostic]:
     diagnostics: list[ConfigDiagnostic] = []
     allowed_top = {"tag", *GROUP_FIELDS}
     for key in config.keys() - allowed_top:
-        diagnostics.append(_diagnostic(DiagnosticLevel.WARNING, "unknown_field", key, f"unknown field '{key}'"))
+        diagnostics.append(_diagnostic(DiagnosticLevel.ERROR, "unknown_field", key, f"unknown field '{key}'"))
     if "tag" in config and (not isinstance(config["tag"], str) or not config["tag"]):
         diagnostics.append(_diagnostic(DiagnosticLevel.ERROR, "invalid_tag", "tag", "tag must be a non-empty string"))
 
@@ -285,9 +289,7 @@ def validate_config(config: Json) -> list[ConfigDiagnostic]:
         if isinstance(value, dict):
             for key in value.keys() - fields:
                 path = f"{group}.{key}"
-                diagnostics.append(
-                    _diagnostic(DiagnosticLevel.WARNING, "unknown_field", path, f"unknown field '{path}'")
-                )
+                diagnostics.append(_diagnostic(DiagnosticLevel.ERROR, "unknown_field", path, f"unknown field '{path}'"))
 
     settings = normalized_config(config)
     for path in (

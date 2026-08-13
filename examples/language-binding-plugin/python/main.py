@@ -75,6 +75,16 @@ def normalized_config(config: dict[str, Any]) -> dict[str, Any]:
     return settings
 
 
+def redact_json(value: Any, redact_keys: list[str]) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]" if key in redact_keys else redact_json(item, redact_keys) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_json(item, redact_keys) for item in value]
+    return value
+
+
 def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]]:
     diagnostics: list[dict[str, str]] = []
     allowed_top_level = {"tag", *GROUP_FIELDS}
@@ -190,6 +200,34 @@ class DocumentationPlugin:
         execution = settings["execution"]
         if observe["enabled"]:
             context.register_subscriber("events", lambda event: self.events.append(event.name))
+
+            def sanitize_event(_event, fields):
+                return {
+                    "data": redact_json(fields["data"], observe["redact_keys"]),
+                    "category_profile": redact_json(fields["category_profile"], observe["redact_keys"]),
+                    "metadata": {
+                        **(redact_json(fields["metadata"], observe["redact_keys"]) or {}),
+                        "plugin_tag": tag,
+                    },
+                }
+
+            context.register_mark_sanitize_guardrail("mark-sanitizer", 10, sanitize_event)
+            context.register_scope_sanitize_start_guardrail("scope-start-sanitizer", 10, sanitize_event)
+            context.register_scope_sanitize_end_guardrail("scope-end-sanitizer", 10, sanitize_event)
+            context.register_tool_sanitize_request_guardrail(
+                "tool-request-sanitizer", 10, lambda _name, value: redact_json(value, observe["redact_keys"])
+            )
+            context.register_tool_sanitize_response_guardrail(
+                "tool-response-sanitizer", 10, lambda _name, value: redact_json(value, observe["redact_keys"])
+            )
+
+            def sanitize_llm_request(request, _codec_context):
+                return nemo_relay.LLMRequest(request.headers, redact_json(request.content, observe["redact_keys"]))
+
+            context.register_llm_sanitize_request_guardrail("llm-request-sanitizer", 10, sanitize_llm_request)
+            context.register_llm_sanitize_response_guardrail(
+                "llm-response-sanitizer", 10, lambda value, _codec_context: redact_json(value, observe["redact_keys"])
+            )
         if requests["enabled"]:
             context.register_tool_conditional_execution_guardrail(
                 "tool-policy",
@@ -236,6 +274,22 @@ class DocumentationPlugin:
                 yield {**chunk, "plugin_stream": True}
 
         if execution["enabled"]:
+
+            async def tool_execution(_name, args, next_call):
+                result = await next_call(args)
+                marks = (
+                    [nemo_relay.PendingMarkSpec("documentation-plugin.tool-complete")]
+                    if execution["emit_pending_marks"]
+                    else []
+                )
+                return nemo_relay.ToolExecutionInterceptOutcome(result, marks)
+
+            context.register_tool_execution_intercept("tool-execution", execution["priority"], tool_execution)
+
+            async def llm_execution(_name, request, next_call):
+                return await next_call(request)
+
+            context.register_llm_execution_intercept("llm-execution", execution["priority"], llm_execution)
             context.register_llm_stream_execution_intercept(
                 "llm-stream",
                 execution["priority"],

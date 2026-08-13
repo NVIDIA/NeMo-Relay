@@ -151,10 +151,12 @@ def test_wrong_type_is_rejected(example: Any) -> None:
     assert any(item.code == "examples.python_grpc_worker.invalid_type" for item in diagnostics)
 
 
-def test_unknown_field_produces_warning(example: Any) -> None:
+def test_unknown_field_is_rejected(example: Any) -> None:
     diagnostics = example.ExamplePythonWorker().validate({"requests": {"unknown": True}})
 
-    assert any(item.code == "examples.python_grpc_worker.unknown_field" for item in diagnostics)
+    assert any(
+        item.code == "examples.python_grpc_worker.unknown_field" and item.level.name == "ERROR" for item in diagnostics
+    )
 
 
 def test_register_rejects_invalid_configuration(example: Any) -> None:
@@ -375,19 +377,19 @@ async def test_llm_execution_can_repeat_continuation(example: Any) -> None:
     assert next_call.call.await_count == 2
 
 
-async def test_repeated_llm_continuation_propagates_the_second_failure(example: Any) -> None:
+async def test_repeated_llm_continuation_ignores_the_second_failure(example: Any) -> None:
     context, _runtime = register_example(example)
     intercept = callback(context, "register_llm_execution_intercept")
     next_call = MagicMock()
     next_call.call = AsyncMock(side_effect=[{"choice": 1}, RuntimeError("second call failed")])
 
-    with pytest.raises(RuntimeError, match="second call failed"):
-        await intercept(
-            "allowed-model",
-            {"headers": {}, "content": {"repeat_downstream": True}},
-            next_call,
-        )
+    result = await intercept(
+        "allowed-model",
+        {"headers": {}, "content": {"repeat_downstream": True}},
+        next_call,
+    )
 
+    assert result == {"choice": 1}
     assert next_call.call.await_count == 2
 
 

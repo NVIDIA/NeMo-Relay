@@ -38,6 +38,39 @@ same library; a worker loader either starts the compiled program or imports the 
 entrypoint from the managed environment.
 
 <Tabs>
+<Tab title="Python Worker" language="toml">
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.python_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.6,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+manifest_root = "."
+artifact = "nemo_relay_python_grpc_worker_example/worker.py"
+
+[integrity]
+sha256 = "sha256:<worker-source-sha256>"
+
+[load]
+runtime = "python"
+entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
+```
+</Tab>
 <Tab title="Native Rust" language="toml">
 ```toml
 manifest_version = 1
@@ -70,39 +103,6 @@ library = "target/debug/<platform-library-file>"
 symbol = "nemo_relay_register_plugin"
 ```
 </Tab>
-<Tab title="Python Worker" language="toml">
-```toml
-manifest_version = 1
-
-[plugin]
-id = "examples.python_grpc_worker"
-kind = "worker"
-
-[compat]
-relay = ">=0.5,<1.0"
-worker_protocol = "grpc-v1"
-
-[defaults]
-enabled = false
-
-[capabilities]
-items = ["plugin_worker", "config_schema"]
-
-[config_schema]
-path = "config.schema.json"
-
-[source]
-manifest_root = "."
-artifact = "nemo_relay_python_grpc_worker_example/worker.py"
-
-[integrity]
-sha256 = "sha256:<worker-source-sha256>"
-
-[load]
-runtime = "python"
-entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
-```
-</Tab>
 <Tab title="Rust Worker" language="toml">
 ```toml
 manifest_version = 1
@@ -112,7 +112,7 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.5,<1.0"
+relay = ">=0.6,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]

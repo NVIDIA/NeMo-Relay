@@ -72,39 +72,14 @@ Run and inspect the Node.js host as follows:
    `annotated`, and stream output preserves chunk order. The host uses the public
    `nemo-relay-node/typed` stream wrapper, which owns the native stream bridge; plugin
    callbacks receive an array of downstream chunks rather than a lazy downstream stream.
+   Before it clears the component, it awaits `relay.flushSubscribers()` so queued scope-end
+   sanitizers finish before their callbacks are deregistered.
 
-The host registers one implementation object and keeps it registered for the complete
-lifecycle. A direct preflight and asynchronous initialization both invoke the same
-`validate` callback, and initialization invokes `register` only after validation succeeds:
+## Compare the Host Output
 
-```js
-plugin.register('documentation-plugin', documentationPlugin);
-
-const preflight = plugin.validate(config('enforce'));
-if (preflight.diagnostics.some((item) => item.level === 'error')) {
-  throw new Error(JSON.stringify(preflight.diagnostics));
-}
-
-try {
-  const report = await plugin.initialize(config('enforce'));
-  const toolResult = await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
-  console.log('active:', report, 'tool:', toolResult);
-} finally {
-  plugin.clear();
-  plugin.deregister('documentation-plugin');
-}
-```
-
-The callback remains owned by the registered plugin kind until deregistration. You do
-not need to replace the plugin between preflight and activation, and doing so would make
-the preflight exercise a different implementation from the one that becomes active.
-
-Success again means invalid input is inert, the valid activation produces matching tool,
-LLM, stream, and event evidence, `clear()` removes active behavior, and `deregister()`
-removes the kind from future lookup.
-
-The three hosts intentionally share behavior instead of showcasing unrelated language
-tricks. Use them to compare API spelling and async mechanics while relying on the shared
+The three hosts intentionally share the complete safe plugin surface instead of
+showcasing unrelated language tricks. Use them to compare API spelling and async
+mechanics while relying on the shared
 [PluginContext](/build-plugins/fundamentals/plugin-context) contract for semantics.
 
 All three hosts print the same evidence with binding-specific report formatting. The

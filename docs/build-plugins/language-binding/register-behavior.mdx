@@ -18,6 +18,106 @@ event observation, tool policy, execution wrappers, and streaming verification a
 this common center.
 
 <Tabs>
+<Tab title="Python" language="python">
+```python
+settings = normalized_config(config)
+tag = settings["tag"]
+observe = settings["observe"]
+requests = settings["requests"]
+execution = settings["execution"]
+
+if observe["enabled"]:
+    context.register_subscriber(
+        "events", lambda event: self.events.append(event.name)
+    )
+
+def tool_policy(name, _args):
+    if requests["mode"] == "enforce" and name in requests["blocked_tools"]:
+        return f"tool '{name}' is blocked"
+    return None
+
+context.register_tool_conditional_execution_guardrail(
+    "tool-policy", 10, tool_policy
+)
+context.register_tool_request_intercept(
+    "tool-request",
+    requests["priority"],
+    requests["break_chain"],
+    lambda _name, args: {**args, "plugin_tag": tag},
+)
+
+def add_header(name, request, annotated):
+    headers = dict(request.headers)
+    headers[requests["header_name"]] = requests["header_value"]
+    return LLMRequestInterceptOutcome(
+        request=LLMRequest(headers=headers, content=request.content),
+        annotated_request=annotated,
+    )
+
+context.register_llm_request_intercept(
+    "documentation-header",
+    requests["priority"],
+    requests["break_chain"],
+    add_header,
+)
+
+async def stream_request(request, next_call):
+    async for chunk in await next_call(request):
+        yield {**chunk, "plugin_stream": True}
+
+context.register_llm_stream_execution_intercept(
+    "documentation-stream", execution["priority"], stream_request
+)
+```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+const settings = normalizedConfig(config);
+const { observe, requests, execution } = settings;
+
+if (observe.enabled) {
+  context.registerSubscriber(
+    'events', (event) => documentationPlugin.events.push(event.name),
+  );
+}
+
+context.registerToolConditionalExecutionGuardrail('tool-policy', 10, (name) => (
+  requests.mode === 'enforce' && requests.blocked_tools.includes(name)
+    ? `tool '${name}' is blocked`
+    : null
+));
+context.registerToolRequestIntercept(
+  'tool-request', requests.priority, requests.break_chain, (_name, args) => ({
+    ...args,
+    plugin_tag: settings.tag,
+  }),
+);
+
+context.registerLlmRequestIntercept(
+  'documentation-header',
+  requests.priority,
+  requests.break_chain,
+  ({ request, annotated }) => ({
+    request: {
+      ...request,
+      headers: {
+        ...request.headers,
+        [requests.header_name]: requests.header_value,
+      },
+    },
+    annotated,
+  }),
+);
+
+context.registerLlmStreamExecutionIntercept(
+  'documentation-stream',
+  execution.priority,
+  async (request, next) => (
+    (await next(request)).map((chunk) => ({ ...chunk, plugin_stream: true }))
+  ),
+);
+```
+</Tab>
 <Tab title="Rust" language="rust">
 ```rust
 let tag = config.tag.clone();
@@ -92,106 +192,6 @@ ctx.register_llm_stream_execution_intercept(
         })
     }),
 )?;
-```
-</Tab>
-<Tab title="Python" language="python">
-```python
-settings = normalized_config(config)
-tag = settings["tag"]
-observe = settings["observe"]
-requests = settings["requests"]
-execution = settings["execution"]
-
-if observe["enabled"]:
-    context.register_subscriber(
-        "events", lambda event: self.events.append(event.name)
-    )
-
-def tool_policy(name, _args):
-    if requests["mode"] == "enforce" and name in requests["blocked_tools"]:
-        return f"tool '{name}' is blocked"
-    return None
-
-context.register_tool_conditional_execution_guardrail(
-    "tool-policy", 10, tool_policy
-)
-context.register_tool_request_intercept(
-    "tool-request",
-    requests["priority"],
-    requests["break_chain"],
-    lambda _name, args: {**args, "plugin_tag": tag},
-)
-
-def add_header(name, request, annotated):
-    headers = dict(request.headers)
-    headers[requests["header_name"]] = requests["header_value"]
-    return LLMRequestInterceptOutcome(
-        request=LLMRequest(headers=headers, content=request.content),
-        annotated=annotated,
-    )
-
-context.register_llm_request_intercept(
-    "documentation-header",
-    requests["priority"],
-    requests["break_chain"],
-    add_header,
-)
-
-async def stream_request(request, next_call):
-    async for chunk in await next_call(request):
-        yield {**chunk, "plugin_stream": True}
-
-context.register_llm_stream_execution_intercept(
-    "documentation-stream", execution["priority"], stream_request
-)
-```
-</Tab>
-<Tab title="Node.js" language="node">
-```js
-const settings = normalizedConfig(config);
-const { observe, requests, execution } = settings;
-
-if (observe.enabled) {
-  context.registerSubscriber(
-    'events', (event) => documentationPlugin.events.push(event.name),
-  );
-}
-
-context.registerToolConditionalExecutionGuardrail('tool-policy', 10, (name) => (
-  requests.mode === 'enforce' && requests.blocked_tools.includes(name)
-    ? `tool '${name}' is blocked`
-    : null
-));
-context.registerToolRequestIntercept(
-  'tool-request', requests.priority, requests.break_chain, (_name, args) => ({
-    ...args,
-    plugin_tag: settings.tag,
-  }),
-);
-
-context.registerLlmRequestIntercept(
-  'documentation-header',
-  requests.priority,
-  requests.break_chain,
-  ({ request, annotated }) => ({
-    request: {
-      ...request,
-      headers: {
-        ...request.headers,
-        [requests.header_name]: requests.header_value,
-      },
-    },
-    annotated,
-  }),
-);
-
-context.registerLlmStreamExecutionIntercept(
-  'documentation-stream',
-  execution.priority,
-  async (request, next) => (
-    (await next(request)).map((chunk) => ({ ...chunk, plugin_stream: true }))
-  ),
-);
 ```
 </Tab>
 </Tabs>
