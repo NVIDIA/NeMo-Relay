@@ -219,6 +219,41 @@ fn valid_envelope_records_counter_gauge_and_negative_histogram() {
 }
 
 #[test]
+fn case_equivalent_measurements_use_a_deterministic_lowercase_instrument_name() {
+    for names in [
+        ["Example.Tokens", "example.tokens"],
+        ["example.tokens", "Example.Tokens"],
+    ] {
+        let (mut processor, exporter, provider) = processor();
+        for (value, name) in names.into_iter().enumerate() {
+            processor.process(&metric_event(
+                METRIC_DATA_SCHEMA_VERSION,
+                serde_json::to_value(MetricEnvelope {
+                    measurements: vec![measurement(
+                        name,
+                        MetricKind::Counter,
+                        MetricValueType::U64,
+                        json!(value + 1),
+                    )],
+                })
+                .unwrap(),
+            ));
+        }
+        provider.force_flush().unwrap();
+
+        let batches = exporter.get_finished_metrics().unwrap();
+        let names = batches
+            .iter()
+            .flat_map(|batch| batch.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .map(|metric| metric.name().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(processor.instruments.len(), 1);
+        assert_eq!(names, vec!["example.tokens"]);
+    }
+}
+
+#[test]
 fn invalid_envelopes_are_atomic_and_reserved_versions_do_not_reinterpret() {
     let (mut processor, exporter, provider) = processor();
     let good = measurement(

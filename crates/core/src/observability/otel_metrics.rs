@@ -637,7 +637,7 @@ impl MetricEventProcessor {
 
         for (key, (measurement, descriptor)) in proposed {
             if !self.instruments.contains_key(&key) {
-                let instrument = build_instrument(&self.meter, measurement, &descriptor);
+                let instrument = build_instrument(&self.meter, &key, measurement, &descriptor);
                 self.instruments.insert(
                     key,
                     InstrumentEntry {
@@ -737,14 +737,15 @@ impl MetricRecordError {
 
 fn build_instrument(
     meter: &Meter,
+    name: &str,
     measurement: &MetricMeasurement,
     descriptor: &MetricDescriptor,
 ) -> CachedInstrument {
     match measurement.kind {
-        MetricKind::Counter => build_counter(meter, measurement, descriptor),
-        MetricKind::UpDownCounter => build_up_down_counter(meter, measurement, descriptor),
-        MetricKind::Gauge => build_gauge(meter, measurement, descriptor),
-        MetricKind::Histogram => build_histogram(meter, measurement, descriptor),
+        MetricKind::Counter => build_counter(meter, name, measurement, descriptor),
+        MetricKind::UpDownCounter => build_up_down_counter(meter, name, measurement, descriptor),
+        MetricKind::Gauge => build_gauge(meter, name, measurement, descriptor),
+        MetricKind::Histogram => build_histogram(meter, name, measurement, descriptor),
     }
 }
 
@@ -763,15 +764,16 @@ macro_rules! configured_instrument {
 
 fn build_counter(
     meter: &Meter,
+    name: &str,
     measurement: &MetricMeasurement,
     descriptor: &MetricDescriptor,
 ) -> CachedInstrument {
     match measurement.value_type {
         MetricValueType::U64 => CachedInstrument::U64Counter(
-            configured_instrument!(meter.u64_counter(measurement.name.clone()), descriptor).build(),
+            configured_instrument!(meter.u64_counter(name.to_string()), descriptor).build(),
         ),
         MetricValueType::F64 => CachedInstrument::F64Counter(
-            configured_instrument!(meter.f64_counter(measurement.name.clone()), descriptor).build(),
+            configured_instrument!(meter.f64_counter(name.to_string()), descriptor).build(),
         ),
         MetricValueType::I64 => unreachable!("counter validation rejected i64"),
     }
@@ -779,23 +781,16 @@ fn build_counter(
 
 fn build_up_down_counter(
     meter: &Meter,
+    name: &str,
     measurement: &MetricMeasurement,
     descriptor: &MetricDescriptor,
 ) -> CachedInstrument {
     match measurement.value_type {
         MetricValueType::I64 => CachedInstrument::I64UpDownCounter(
-            configured_instrument!(
-                meter.i64_up_down_counter(measurement.name.clone()),
-                descriptor
-            )
-            .build(),
+            configured_instrument!(meter.i64_up_down_counter(name.to_string()), descriptor).build(),
         ),
         MetricValueType::F64 => CachedInstrument::F64UpDownCounter(
-            configured_instrument!(
-                meter.f64_up_down_counter(measurement.name.clone()),
-                descriptor
-            )
-            .build(),
+            configured_instrument!(meter.f64_up_down_counter(name.to_string()), descriptor).build(),
         ),
         MetricValueType::U64 => unreachable!("up/down counter validation rejected u64"),
     }
@@ -803,31 +798,33 @@ fn build_up_down_counter(
 
 fn build_gauge(
     meter: &Meter,
+    name: &str,
     measurement: &MetricMeasurement,
     descriptor: &MetricDescriptor,
 ) -> CachedInstrument {
     match measurement.value_type {
         MetricValueType::U64 => CachedInstrument::U64Gauge(
-            configured_instrument!(meter.u64_gauge(measurement.name.clone()), descriptor).build(),
+            configured_instrument!(meter.u64_gauge(name.to_string()), descriptor).build(),
         ),
         MetricValueType::I64 => CachedInstrument::I64Gauge(
-            configured_instrument!(meter.i64_gauge(measurement.name.clone()), descriptor).build(),
+            configured_instrument!(meter.i64_gauge(name.to_string()), descriptor).build(),
         ),
         MetricValueType::F64 => CachedInstrument::F64Gauge(
-            configured_instrument!(meter.f64_gauge(measurement.name.clone()), descriptor).build(),
+            configured_instrument!(meter.f64_gauge(name.to_string()), descriptor).build(),
         ),
     }
 }
 
 fn build_histogram(
     meter: &Meter,
+    name: &str,
     measurement: &MetricMeasurement,
     descriptor: &MetricDescriptor,
 ) -> CachedInstrument {
     match measurement.value_type {
         MetricValueType::U64 => {
             let mut builder =
-                configured_instrument!(meter.u64_histogram(measurement.name.clone()), descriptor);
+                configured_instrument!(meter.u64_histogram(name.to_string()), descriptor);
             if let Some(boundaries) = descriptor.boundaries.clone() {
                 builder = builder.with_boundaries(boundaries);
             }
@@ -835,7 +832,7 @@ fn build_histogram(
         }
         MetricValueType::F64 => {
             let mut builder =
-                configured_instrument!(meter.f64_histogram(measurement.name.clone()), descriptor);
+                configured_instrument!(meter.f64_histogram(name.to_string()), descriptor);
             if let Some(boundaries) = descriptor.boundaries.clone() {
                 builder = builder.with_boundaries(boundaries);
             }
