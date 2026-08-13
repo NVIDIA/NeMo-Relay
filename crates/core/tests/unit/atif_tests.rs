@@ -6,8 +6,7 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, llm_attributes_to_strings, scope_attributes_to_strings,
-    tool_attributes_to_strings,
+    llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
 };
 use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
@@ -681,10 +680,7 @@ fn test_exporter_preserves_annotation_when_tool_result_is_null() {
         .scope_type(ScopeType::Tool)
         .tool_call_id("call_123")
         .build();
-    end.category_profile_mut().unwrap().extra.insert(
-        TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(),
-        annotation.clone(),
-    );
+    end.category_profile_mut().unwrap().tool_result_annotation = Some(annotation.clone());
 
     {
         let mut state = exporter.state.lock().unwrap();
@@ -696,7 +692,7 @@ fn test_exporter_preserves_annotation_when_tool_result_is_null() {
 
     assert_eq!(result.content, None);
     assert_eq!(
-        result.extra.as_ref().unwrap()[TOOL_RESULT_ANNOTATION_PROFILE_KEY],
+        result.extra.as_ref().unwrap()["tool_result_annotation"],
         annotation
     );
     assert!(result.extra.as_ref().unwrap().get("tool_result").is_none());

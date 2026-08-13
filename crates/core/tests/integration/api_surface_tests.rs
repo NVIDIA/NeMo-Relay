@@ -12,9 +12,7 @@ use test_support::ready;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::StreamExt;
-use nemo_relay::api::event::{
-    CategoryProfile, Event, ScopeCategory, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
-};
+use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_call_end,
@@ -379,7 +377,7 @@ fn manual_tool_result_annotation_is_projected_on_the_end_event() {
         .unwrap();
     assert_eq!(end.data(), Some(&json!({"output": true})));
     assert_eq!(
-        end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY],
+        end.tool_result_annotation().unwrap(),
         json!({"opaque": ["manual", 1]})
     );
 

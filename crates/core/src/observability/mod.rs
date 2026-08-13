@@ -380,7 +380,7 @@ pub(crate) fn push_tool_result_annotation_attribute(
     let Some(annotation) = tool_result_annotation(event) else {
         return;
     };
-    if let Ok(value) = serde_json::to_string(annotation) {
+    if let Ok(value) = serde_json::to_string(&annotation) {
         attributes.push(opentelemetry::KeyValue::new(
             "nemo_relay.tool.result.annotation",
             value,
@@ -390,8 +390,8 @@ pub(crate) fn push_tool_result_annotation_attribute(
 
 pub(crate) fn tool_result_annotation(
     event: &crate::api::event::Event,
-) -> Option<&crate::json::Json> {
-    event.category_profile()?.tool_result_annotation()
+) -> Option<crate::json::Json> {
+    event.tool_result_annotation()
 }
 
 /// Adds canonical session-correlation attributes from event metadata and the

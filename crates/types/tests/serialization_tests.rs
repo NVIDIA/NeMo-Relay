@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use nemo_relay_types::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory, ScopeEvent,
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, llm_attributes_to_strings,
+    llm_attributes_to_strings,
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
@@ -329,22 +329,43 @@ fn tool_execution_null_annotations_have_stable_equality_and_round_trips() {
 }
 
 #[test]
-fn category_profile_exposes_non_null_tool_result_annotation() {
-    let mut profile = CategoryProfile::default();
-    assert_eq!(profile.tool_result_annotation(), None);
-    profile.extra.insert(
-        TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(),
-        json!({"opaque": true}),
+fn category_profile_serializes_non_null_tool_result_annotation() {
+    let mut profile = CategoryProfile::builder()
+        .tool_result_annotation(json!({"opaque": true}))
+        .build();
+    assert_eq!(
+        profile.tool_result_annotation,
+        Some(json!({"opaque": true}))
     );
     assert_eq!(
-        profile.tool_result_annotation(),
-        Some(&json!({"opaque": true}))
+        serde_json::to_value(&profile).unwrap()["tool_result_annotation"],
+        json!({"opaque": true})
     );
-    profile.extra.insert(
-        TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(),
-        serde_json::Value::Null,
+    profile.tool_result_annotation = Some(serde_json::Value::Null);
+    assert!(
+        serde_json::to_value(profile)
+            .unwrap()
+            .get("tool_result_annotation")
+            .is_none()
     );
-    assert_eq!(profile.tool_result_annotation(), None);
+}
+
+#[test]
+fn event_returns_an_owned_tool_result_annotation() {
+    let annotation = json!({"opaque": true});
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("tool").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::tool(),
+        Some(
+            CategoryProfile::builder()
+                .tool_result_annotation(annotation.clone())
+                .build(),
+        ),
+    ));
+
+    assert_eq!(event.tool_result_annotation(), Some(annotation));
 }
 
 #[test]

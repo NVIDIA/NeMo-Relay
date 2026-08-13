@@ -9,9 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use nemo_relay::api::event::{
-    CategoryProfile, Event, ScopeCategory, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
-};
+use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
@@ -189,14 +187,12 @@ impl CompiledBuiltinBackend {
     }
 
     fn sanitize_tool_result_annotation(&self, profile: &mut CategoryProfile) {
-        let Some(annotation) = profile.extra.remove(TOOL_RESULT_ANNOTATION_PROFILE_KEY) else {
+        let Some(annotation) = profile.tool_result_annotation.take() else {
             return;
         };
         let sanitized = self.sanitize_json_preorder_dfs(annotation);
         if !sanitized.is_null() {
-            profile
-                .extra
-                .insert(TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(), sanitized);
+            profile.tool_result_annotation = Some(sanitized);
         }
     }
 

@@ -6,7 +6,7 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, tool_attributes_to_strings,
+    tool_attributes_to_strings,
 };
 use crate::api::runtime::{
     NemoRelayContextState, PropagationContext, ThreadScopeStackBinding,
@@ -3438,11 +3438,10 @@ fn assert_otel_tool_attribute_branches() {
         Some(&"true".to_string())
     );
 
-    let mut tool_end_profile = CategoryProfile::builder().tool_call_id("call-456").build();
-    tool_end_profile.extra.insert(
-        TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(),
-        json!({"opaque": {"rank": 1}}),
-    );
+    let tool_end_profile = CategoryProfile::builder()
+        .tool_call_id("call-456")
+        .tool_result_annotation(json!({"opaque": {"rank": 1}}))
+        .build();
     let tool_end_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("lookup")
@@ -3464,11 +3463,9 @@ fn assert_otel_tool_attribute_branches() {
         Some(&r#"{"opaque":{"rank":1}}"#.to_string())
     );
 
-    let mut llm_profile = CategoryProfile::default();
-    llm_profile.extra.insert(
-        TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(),
-        json!({"must_not_project": true}),
-    );
+    let llm_profile = CategoryProfile::builder()
+        .tool_result_annotation(json!({"must_not_project": true}))
+        .build();
     let llm_end_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder().name("chat").build(),
         ScopeCategory::End,

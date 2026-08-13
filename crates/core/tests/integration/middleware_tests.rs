@@ -23,7 +23,6 @@ use test_support::{ready, ready_result};
 use futures::StreamExt;
 use nemo_relay::api::event::{
     CategoryProfile, DataSchema, Event, EventCategory, PendingMarkSpec, ScopeCategory,
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY,
 };
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
@@ -817,10 +816,7 @@ async fn mcp_error_result_remains_successful_and_distinct_from_relay_annotation(
         .unwrap();
     assert_eq!(end.data(), Some(&mcp_result));
     assert_eq!(end.metadata().unwrap()["otel.status_code"], "OK");
-    assert_eq!(
-        end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY],
-        relay_annotation
-    );
+    assert_eq!(end.tool_result_annotation().unwrap(), relay_annotation);
 
     deregister_subscriber("mcp-tool-result-observer").unwrap();
 }
@@ -847,9 +843,7 @@ async fn tool_result_annotation_uses_the_event_sanitizer_chain() {
                     && let Some(annotation) = fields
                         .category_profile
                         .as_mut()
-                        .and_then(|profile| {
-                            profile.extra.get_mut(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
-                        })
+                        .and_then(|profile| profile.tool_result_annotation.as_mut())
                         .and_then(Json::as_object_mut)
                 {
                     annotation.insert("secret".into(), json!("[redacted]"));
@@ -897,7 +891,7 @@ async fn tool_result_annotation_uses_the_event_sanitizer_chain() {
         })
         .unwrap();
     assert_eq!(
-        end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY]["secret"],
+        end.tool_result_annotation().unwrap()["secret"],
         "[redacted]"
     );
     assert_eq!(end.data().unwrap(), &json!({"raw": "[redacted]"}));
@@ -1327,7 +1321,7 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     let tool_end = &captured[tool_end_index];
     let mark = &captured[mark_index];
     assert_eq!(
-        tool_end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY],
+        tool_end.tool_result_annotation().unwrap(),
         json!({"opaque": {"rank": 1}})
     );
     assert_eq!(mark.parent_uuid(), Some(tool_end.uuid()));
@@ -1339,8 +1333,7 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
         step.observation.as_ref().is_some_and(|observation| {
             observation.results.iter().any(|result| {
                 result.extra.as_ref().is_some_and(|extra| {
-                    extra.get(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
-                        == Some(&json!({"opaque": {"rank": 1}}))
+                    extra.get("tool_result_annotation") == Some(&json!({"opaque": {"rank": 1}}))
                 })
             })
         })
@@ -1503,11 +1496,11 @@ async fn test_tool_execution_error_discards_downstream_pending_marks() {
                 && event.scope_category() == Some(ScopeCategory::End)
         })
         .unwrap();
-    assert!(error_end.category_profile().is_none_or(|profile| {
-        !profile
-            .extra
-            .contains_key(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
-    }));
+    assert!(
+        error_end
+            .category_profile()
+            .is_none_or(|profile| profile.tool_result_annotation.is_none_or(Json::is_null))
+    );
     drop(captured);
 
     deregister_tool_execution_intercept("error_after_outcome").unwrap();
@@ -2376,11 +2369,11 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
             event.name() == "cancelled-tool" && event.scope_category() == Some(ScopeCategory::End)
         })
         .unwrap();
-    assert!(cancelled_end.category_profile().is_none_or(|profile| {
-        !profile
-            .extra
-            .contains_key(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
-    }));
+    assert!(
+        cancelled_end
+            .category_profile()
+            .is_none_or(|profile| profile.tool_result_annotation.is_none_or(Json::is_null))
+    );
     drop(events);
 
     deregister_tool_execution_intercept("pending_tool_execution").unwrap();
@@ -2461,11 +2454,10 @@ async fn cancelled_tool_end_uses_the_originating_scope_sanitizer() {
         })
         .expect("cancelled tool should emit an end event");
     assert_eq!(end.data(), Some(&json!({"secret": "[redacted]"})));
-    assert!(end.category_profile().is_none_or(|profile| {
-        !profile
-            .extra
-            .contains_key(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
-    }));
+    assert!(
+        end.category_profile()
+            .is_none_or(|profile| profile.tool_result_annotation.is_none_or(Json::is_null))
+    );
 
     set_thread_scope_stack(originating_stack);
     deregister_tool_execution_intercept("pending_tool_cross_scope").unwrap();
@@ -5048,7 +5040,7 @@ async fn test_managed_tool_payload_sanitizers_are_queued_off_execution_path() {
         .expect("managed tool END event should be published after flush");
     assert_eq!(end.data().unwrap()["sanitized"], true);
     assert_eq!(
-        end.category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY],
+        end.tool_result_annotation().unwrap(),
         json!({"opaque": "caller-visible"})
     );
     drop(events);

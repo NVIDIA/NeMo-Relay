@@ -3,9 +3,7 @@
 
 use serde_json::json;
 
-use crate::api::event::{
-    BaseEvent, Event, MarkEvent, PendingMarkSpec, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
-};
+use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -619,9 +617,7 @@ fn attach_tool_result_annotation(event: &mut Event, annotation: Option<Json>) {
         return;
     };
     if let Some(profile) = event.category_profile_mut() {
-        profile
-            .extra
-            .insert(TOOL_RESULT_ANNOTATION_PROFILE_KEY.into(), annotation);
+        profile.tool_result_annotation = Some(annotation);
     }
 }
 

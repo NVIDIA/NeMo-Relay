@@ -7,7 +7,7 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, EventSanitizeFields, MarkEvent,
-    ScopeCategory, ScopeEvent, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
+    ScopeCategory, ScopeEvent,
 };
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams, llm_call,
@@ -4335,7 +4335,7 @@ fn builtin_tool_output_sanitizes_annotation_as_an_independent_json_boundary() {
         }))
     );
     assert_eq!(
-        captured_events[1].category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY],
+        captured_events[1].tool_result_annotation().unwrap(),
         json!({
             "contact": "a****@example.com",
             "outside": "alice@example.com"
@@ -4389,7 +4389,7 @@ fn builtin_disabled_tool_output_preserves_tool_result_annotation() {
     let captured_events = captured_events_snapshot(&events);
     assert_eq!(captured_events.len(), 2);
     assert_eq!(
-        captured_events[1].category_profile().unwrap().extra[TOOL_RESULT_ANNOTATION_PROFILE_KEY],
+        captured_events[1].tool_result_annotation().unwrap(),
         annotation
     );
 
@@ -4439,13 +4439,7 @@ fn builtin_root_remove_drops_tool_result_annotation() {
     let captured_events = captured_events_snapshot(&events);
     assert_eq!(captured_events.len(), 2);
     assert_eq!(captured_events[1].tool_call_id(), Some("provider-call-123"));
-    assert!(
-        !captured_events[1]
-            .category_profile()
-            .unwrap()
-            .extra
-            .contains_key(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
-    );
+    assert!(captured_events[1].tool_result_annotation().is_none());
 
     deregister_subscriber("pii-redaction-remove-tool-annotation-events").unwrap();
     clear_plugin_configuration().unwrap();
