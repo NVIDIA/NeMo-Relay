@@ -132,6 +132,7 @@ fn build_cdylib() -> (TempDir, PathBuf) {
 
 fn write_manifest(directory: &Path, library: &Path) -> PathBuf {
     let digest = digest(library);
+    let library = toml_basic_string(&library.to_string_lossy());
     let manifest = directory.join("relay-plugin.toml");
     std::fs::write(
         &manifest,
@@ -156,14 +157,25 @@ items = ["plugin_native"]
 sha256 = "{digest}"
 
 [load]
-library = "{}"
+library = {library}
 symbol = "nemo_relay_register_plugin"
 "#,
-            library.display()
         ),
     )
     .expect("materialized manifest should write");
     manifest
+}
+
+fn toml_basic_string(value: &str) -> String {
+    format!("{value:?}")
+}
+
+#[test]
+fn toml_basic_string_escapes_windows_library_paths() {
+    assert_eq!(
+        toml_basic_string(r"C:\Users\relay\plugin.dll"),
+        r#""C:\\Users\\relay\\plugin.dll""#
+    );
 }
 
 fn library_name() -> &'static str {
