@@ -132,6 +132,7 @@ fn build_worker() -> (TempDir, PathBuf) {
 
 fn write_manifest(directory: &Path, worker: &Path) -> PathBuf {
     let digest = digest(worker);
+    let worker = toml_basic_string(&worker.to_string_lossy());
     let manifest = directory.join("relay-plugin.toml");
     std::fs::write(
         &manifest,
@@ -157,13 +158,24 @@ sha256 = "{digest}"
 
 [load]
 runtime = "rust"
-entrypoint = "{}"
+entrypoint = {worker}
 "#,
-            worker.display()
         ),
     )
     .expect("materialized manifest should write");
     manifest
+}
+
+fn toml_basic_string(value: &str) -> String {
+    format!("{value:?}")
+}
+
+#[test]
+fn toml_basic_string_escapes_windows_worker_paths() {
+    assert_eq!(
+        toml_basic_string(r"C:\Users\relay\worker.exe"),
+        r#""C:\\Users\\relay\\worker.exe""#
+    );
 }
 
 fn digest(path: &Path) -> String {
