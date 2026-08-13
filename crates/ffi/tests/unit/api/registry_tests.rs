@@ -697,6 +697,108 @@ fn test_ffi_open_telemetry_subscriber_lifecycle_and_errors() {
 }
 
 #[test]
+fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = cstring("http://localhost:4318/v1/traces");
+        let invalid = cstring("invalid");
+        let mut log_subscriber: *mut types::FfiOpenTelemetryLogSubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                invalid.as_ptr(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!log_subscriber.is_null());
+        assert_status!(
+            nemo_relay_otel_log_subscriber_force_flush(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
+
+        let mut metric_subscriber: *mut types::FfiOpenTelemetryMetricSubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                invalid.as_ptr(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!metric_subscriber.is_null());
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
+    }
+}
+
+#[test]
 fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

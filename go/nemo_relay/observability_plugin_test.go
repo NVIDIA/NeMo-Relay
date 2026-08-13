@@ -28,8 +28,8 @@ const (
 
 func TestObservabilityConfigHelpers(t *testing.T) {
 	config := NewObservabilityConfig()
-	if config.Version != 3 {
-		t.Fatalf("expected version 3, got %d", config.Version)
+	if config.Version != 4 {
+		t.Fatalf("expected version 4, got %d", config.Version)
 	}
 	if config.EnableFullPayloads {
 		t.Fatal("full payloads should be disabled by default")
@@ -80,6 +80,16 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	otel.Endpoints[0].MaxQueueSize = &maxQueueSize
 	otel.Endpoints[0].MaxExportBatchSize = &maxExportBatchSize
 	otel.Endpoints[0].ScheduledDelayMillis = &scheduledDelayMillis
+	logs := NewObservabilityOpenTelemetryLogConfig()
+	logs.Enabled = true
+	metrics := NewObservabilityOpenTelemetryMetricConfig()
+	metrics.Enabled = true
+	metricEndpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("https://collector.example/custom/metrics")
+	metricEndpoint.Headers["x-nv-project"] = "observability-dev"
+	metricEndpoint.ResourceAttributes["nv.project"] = "observability-dev"
+	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(metricEndpoint)
+	otel.Logs = &logs
+	otel.Metrics = &metrics
 
 	config.Atof = &atof
 	config.Atif = &atif
@@ -155,6 +165,43 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 		otelEndpoints[0].(map[string]any)["max_export_batch_size"] != float64(256) ||
 		otelEndpoints[0].(map[string]any)["scheduled_delay_millis"] != float64(750) {
 		t.Fatalf("expected OpenTelemetry batch settings in serialized config: %#v", wrapped.Config)
+	}
+	otelConfig := wrapped.Config["opentelemetry"].(map[string]any)
+	logs := otelConfig["logs"].(map[string]any)
+	if logs["minimum_severity"] != "info" || logs["max_queue_size"] != float64(2048) {
+		t.Fatalf("expected OpenTelemetry log defaults in serialized config: %#v", logs)
+	}
+	if _, explicit := logs["endpoints"]; explicit {
+		t.Fatalf("derived log endpoints should remain omitted: %#v", logs)
+	}
+	metrics := otelConfig["metrics"].(map[string]any)
+	metricEndpoints := metrics["endpoints"].([]any)
+	metricEndpoint := metricEndpoints[0].(map[string]any)
+	if metrics["temporality"] != "cumulative" || metrics["cardinality_limit"] != float64(2000) ||
+		metricEndpoint["endpoint"] != "https://collector.example/custom/metrics" ||
+		metricEndpoint["headers"].(map[string]any)["x-nv-project"] != "observability-dev" ||
+		metricEndpoint["resource_attributes"].(map[string]any)["nv.project"] != "observability-dev" {
+		t.Fatalf("expected OpenTelemetry metric settings in serialized config: %#v", metrics)
+	}
+}
+
+func TestObservabilitySignalEndpointOmittedVersusExplicitEmpty(t *testing.T) {
+	logs := NewObservabilityOpenTelemetryLogConfig()
+	logs.Enabled = true
+	omitted, err := json.Marshal(logs)
+	if err != nil {
+		t.Fatalf("marshal omitted endpoints: %v", err)
+	}
+	if strings.Contains(string(omitted), `"endpoints"`) {
+		t.Fatalf("omitted endpoint list should derive from traces: %s", omitted)
+	}
+	logs.Endpoints = ObservabilityOpenTelemetrySignalEndpoints()
+	explicitEmpty, err := json.Marshal(logs)
+	if err != nil {
+		t.Fatalf("marshal explicit empty endpoints: %v", err)
+	}
+	if !strings.Contains(string(explicitEmpty), `"endpoints":[]`) {
+		t.Fatalf("explicit empty endpoint list must be preserved: %s", explicitEmpty)
 	}
 }
 

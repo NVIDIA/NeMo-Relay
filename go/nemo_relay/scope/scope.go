@@ -4,7 +4,7 @@
 // Package scope provides shorthand access to NeMo Relay scope operations.
 //
 // It re-exports the core scope management functions (GetHandle, PushScope,
-// PopScope, EmitEvent) under shorter names for convenience.
+// PopScope, EmitEvent, EmitMetric) under shorter names for convenience.
 //
 // Example usage:
 //
@@ -80,6 +80,12 @@ func Pop(handle *nemo_relay.ScopeHandle, opts ...nemo_relay.ScopeEndOption) erro
 // [nemo_relay.WithEventTimestamp], are forwarded to [nemo_relay.EmitEvent].
 func Event(name string, opts ...nemo_relay.EventOption) error {
 	return nemo_relay.EmitEvent(name, opts...)
+}
+
+// Metric emits an atomically validated metric mark within the current scope.
+// This is a shorthand for [nemo_relay.EmitMetric].
+func Metric(name string, measurements []nemo_relay.MetricMeasurement, opts ...nemo_relay.MetricOption) error {
+	return nemo_relay.EmitMetric(name, measurements, opts...)
 }
 
 // WithScope pushes a new scope and returns a cleanup function that pops it.
