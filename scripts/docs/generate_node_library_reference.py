@@ -145,42 +145,7 @@ def _parse_jsdoc(raw_lines: list[str]) -> JsDoc:
                 body_lines.append("")
             continue
 
-        param_match = re.match(r"@param\s+(?P<name>[^\s-]+)\s*-?\s*(?P<text>.*)$", line)
-        if param_match is not None:
-            params.append(
-                ParamDoc(
-                    name=param_match.group("name"),
-                    text=_escape_text(_collapse_words(param_match.group("text"))),
-                )
-            )
-            current_tag = ("param", len(params) - 1)
-            continue
-
-        returns_match = re.match(r"@returns?\s*-?\s*(?P<text>.*)$", line)
-        if returns_match is not None:
-            returns_lines.append(returns_match.group("text"))
-            current_tag = ("returns", None)
-            continue
-
-        remarks_match = re.match(r"@remarks\s*-?\s*(?P<text>.*)$", line)
-        if remarks_match is not None:
-            remarks_lines.append(remarks_match.group("text"))
-            current_tag = ("remarks", None)
-            continue
-
-        if line.startswith("@example"):
-            current_tag = None
-            continue
-
-        if current_tag is None:
-            body_lines.append(line)
-        elif current_tag[0] == "param" and current_tag[1] is not None:
-            param = params[current_tag[1]]
-            param.text = _escape_text(_collapse_words(f"{param.text} {line}"))
-        elif current_tag[0] == "returns":
-            returns_lines.append(line)
-        elif current_tag[0] == "remarks":
-            remarks_lines.append(line)
+        current_tag = _parse_jsdoc_line(line, body_lines, params, returns_lines, remarks_lines, current_tag)
 
     return JsDoc(
         body=_paragraphs(body_lines),
@@ -188,6 +153,35 @@ def _parse_jsdoc(raw_lines: list[str]) -> JsDoc:
         returns=_escape_text(_collapse_words(" ".join(returns_lines))) if returns_lines else "",
         remarks=_paragraphs(remarks_lines),
     )
+
+
+def _parse_jsdoc_line(
+    line: str,
+    body_lines: list[str],
+    params: list[ParamDoc],
+    returns_lines: list[str],
+    remarks_lines: list[str],
+    current_tag: tuple[str, int | None] | None,
+) -> tuple[str, int | None] | None:
+    if match := re.match(r"@param\s+(?P<name>[^\s-]+)\s*-?\s*(?P<text>.*)$", line):
+        params.append(ParamDoc(name=match.group("name"), text=_escape_text(_collapse_words(match.group("text")))))
+        return "param", len(params) - 1
+    for tag, target in (("returns", returns_lines), ("remarks", remarks_lines)):
+        if match := re.match(rf"@{tag}?\s*-?\s*(?P<text>.*)$", line):
+            target.append(match.group("text"))
+            return tag, None
+    if line.startswith("@example"):
+        return None
+    if current_tag is None:
+        body_lines.append(line)
+    elif current_tag[0] == "param" and current_tag[1] is not None:
+        param = params[current_tag[1]]
+        param.text = _escape_text(_collapse_words(f"{param.text} {line}"))
+    elif current_tag[0] == "returns":
+        returns_lines.append(line)
+    else:
+        remarks_lines.append(line)
+    return current_tag
 
 
 def _collect_jsdoc(lines: list[str], start: int) -> tuple[JsDoc, int]:
@@ -293,44 +287,41 @@ def _parse_declaration_file(path: Path, import_path: str) -> ModuleDoc:
     index = 0
 
     while index < len(lines):
-        stripped = lines[index].strip()
-
-        if stripped.startswith("/**"):
-            pending_doc, index = _collect_jsdoc(lines, index)
-            continue
-
-        if not stripped or stripped.startswith("//") or stripped.startswith("import "):
-            if pending_doc.summary and module_doc is None and not module.items:
-                module_doc = pending_doc
-            pending_doc = JsDoc()
-            index += 1
-            continue
-
-        if stripped.startswith("export {"):
-            declaration, index = _collect_statement_declaration(lines, index, "reexport")
-            module.reexports.extend(_parse_reexport_names(declaration))
-            pending_doc = JsDoc()
-            continue
-
-        match = EXPORT_RE.match(stripped)
-        if match is None:
-            pending_doc = JsDoc()
-            index += 1
-            continue
-
-        kind = match.group("kind")
-        if kind == "enum" and match.group("const_enum"):
-            kind = "enum"
-        name = match.group("name")
-        declaration, index = _collect_declaration(lines, index, kind)
-        if _is_public_name(name):
-            module.items.append(ApiItem(name=name, kind=kind, declaration=declaration, doc=pending_doc))
-        pending_doc = JsDoc()
+        line_result = _parse_declaration_line(lines, index, pending_doc, module_doc, module)
+        if line_result is None:
+            break
+        pending_doc, module_doc, index = line_result
 
     if module_doc is not None and module_doc.summary:
         module.description = module_doc.summary
     module.reexports = sorted(set(module.reexports))
     return module
+
+
+def _parse_declaration_line(
+    lines: list[str], index: int, pending_doc: JsDoc, module_doc: JsDoc | None, module: ModuleDoc
+) -> tuple[JsDoc, JsDoc | None, int] | None:
+    stripped = lines[index].strip()
+    if stripped.startswith("/**"):
+        doc, next_index = _collect_jsdoc(lines, index)
+        return doc, module_doc, next_index
+    if not stripped or stripped.startswith("//") or stripped.startswith("import "):
+        if pending_doc.summary and module_doc is None and not module.items:
+            module_doc = pending_doc
+        return JsDoc(), module_doc, index + 1
+    if stripped.startswith("export {"):
+        declaration, next_index = _collect_statement_declaration(lines, index, "reexport")
+        module.reexports.extend(_parse_reexport_names(declaration))
+        return JsDoc(), module_doc, next_index
+    match = EXPORT_RE.match(stripped)
+    if match is None:
+        return JsDoc(), module_doc, index + 1
+    kind = "enum" if match.group("kind") == "enum" and match.group("const_enum") else match.group("kind")
+    declaration, next_index = _collect_declaration(lines, index, kind)
+    name = match.group("name")
+    if _is_public_name(name):
+        module.items.append(ApiItem(name=name, kind=kind, declaration=declaration, doc=pending_doc))
+    return JsDoc(), module_doc, next_index
 
 
 def _package_exports(package_json: Path) -> list[tuple[str, Path]]:
