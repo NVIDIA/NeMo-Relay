@@ -545,6 +545,18 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
         "https://collector.example/prefix/v1/metrics?tenant=observability-dev"
     );
 
+    let mut root_trace = test_opentelemetry_endpoint();
+    root_trace.endpoint = "https://collector.example/".to_string();
+    assert_eq!(
+        resolve_signal_endpoints("logs", None, std::slice::from_ref(&root_trace)).unwrap()[0]
+            .endpoint,
+        "https://collector.example/v1/logs"
+    );
+    assert_eq!(
+        resolve_signal_endpoints("metrics", None, &[root_trace]).unwrap()[0].endpoint,
+        "https://collector.example/v1/metrics"
+    );
+
     let custom = vec![OpenTelemetrySignalEndpointConfig {
         endpoint: "https://collector.example/custom/metric-intake".to_string(),
         transport: default_otlp_transport(),

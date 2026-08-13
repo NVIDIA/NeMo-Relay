@@ -169,14 +169,7 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
         return Cow::Borrowed(endpoint);
     };
 
-    let has_explicit_root_path = endpoint
-        .split(['?', '#'])
-        .next()
-        .is_some_and(|url| url.ends_with('/'));
-    if !matches!(parsed.scheme(), "http" | "https")
-        || parsed.path() != "/"
-        || has_explicit_root_path
-    {
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.path() != "/" {
         return Cow::Borrowed(endpoint);
     }
     parsed.set_path("/v1/traces");

@@ -127,6 +127,10 @@ fn metric_endpoint_resolution_replaces_terminal_trace_path() {
             "https://collector.example/team/v1/metrics?project=dev",
         ),
         (
+            "https://collector.example/",
+            "https://collector.example/v1/metrics",
+        ),
+        (
             "https://collector.example/custom",
             "https://collector.example/custom",
         ),

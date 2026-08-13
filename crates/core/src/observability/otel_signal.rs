@@ -183,13 +183,6 @@ pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) 
 
     let path = parsed.path();
     if path == "/" {
-        let has_explicit_root = endpoint
-            .split(['?', '#'])
-            .next()
-            .is_some_and(|value| value.ends_with('/'));
-        if has_explicit_root {
-            return Cow::Borrowed(endpoint);
-        }
         parsed.set_path(&format!("/v1/{signal}"));
         return Cow::Owned(parsed.into());
     }

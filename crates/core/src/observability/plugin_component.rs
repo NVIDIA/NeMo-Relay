@@ -1705,11 +1705,7 @@ fn derive_http_signal_endpoint(signal: &str, index: usize, endpoint: &str) -> Pl
         )));
     }
     let path = parsed.path();
-    let is_bare_authority = path == "/"
-        && !trimmed
-            .split(['?', '#'])
-            .next()
-            .is_some_and(|value| value.ends_with('/'));
+    let is_bare_authority = path == "/";
     if is_bare_authority || path.ends_with("/v1/traces") {
         let derived = match signal {
             "logs" => resolve_http_log_endpoint(trimmed),

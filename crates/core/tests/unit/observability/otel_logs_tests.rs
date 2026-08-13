@@ -146,7 +146,10 @@ fn signal_endpoint_resolution_replaces_trace_suffix_without_nested_paths() {
             "https://collector.example/custom",
             "https://collector.example/custom",
         ),
-        ("https://collector.example/", "https://collector.example/"),
+        (
+            "https://collector.example/",
+            "https://collector.example/v1/logs",
+        ),
     ] {
         let resolved = resolve_http_log_endpoint(input);
         assert_eq!(resolved, expected);
