@@ -77,11 +77,11 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 
 ## Enums
 
-- [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay-plugin/enum-builtinllmcodec): Built-in LLM codec identities available to native plugins.
+- [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay-plugin/enum-builtinllmcodec): Relay's built-in LLM codec identities.
 - [DiagnosticLevel](/reference/api/rust-library-reference/nemo-relay-plugin/enum-diagnosticlevel): Diagnostic severity returned by plugin validation.
 - [Event](/reference/api/rust-library-reference/nemo-relay-plugin/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
 - [HandleAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/enum-handleattributes): Attribute bitflags attached to a concrete handle kind.
-- [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmcodecidentity): Per-call LLM codec identity delivered to native plugins.
+- [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmcodecidentity): Per-call LLM codec identity supplied to sanitizer and SDK callbacks.
 - [LlmOptimizationEvidenceQuality](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmoptimizationevidencequality): Whether token evidence was observed directly or estimated.
 - [LlmOptimizationSummaryStatus](/reference/api/rust-library-reference/nemo-relay-plugin/enum-llmoptimizationsummarystatus): Completeness of close-time optimization accounting.
 - [NemoRelayNativeAsyncCallbackState](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativeasynccallbackstate): Indicates whether an asynchronous native callback settled before returning.

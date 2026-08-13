@@ -13,10 +13,8 @@ Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime sta
 
 ## Re-exports
 
-- `pub use callbacks::BuiltinLlmCodec;`
 - `pub use callbacks::EventSanitizeFn;`
 - `pub use callbacks::EventSubscriberFn;`
-- `pub use callbacks::LlmCodecIdentity;`
 - `pub use callbacks::LlmCollectorFn;`
 - `pub use callbacks::LlmConditionalFn;`
 - `pub use callbacks::LlmExecutionFn;`
@@ -70,3 +68,8 @@ Advanced runtime state, callbacks, and scope-stack helpers. Advanced runtime sta
 - [scope_stack](/reference/api/rust-library-reference/nemo-relay/api/runtime/scope_stack): Scope stack storage and propagation helpers.
 - [state](/reference/api/rust-library-reference/nemo-relay/api/runtime/state): Process-global runtime state and middleware-chain builders.
 - [subscriber_dispatcher](/reference/api/rust-library-reference/nemo-relay/api/runtime/subscriber_dispatcher): Asynchronous subscriber delivery for native targets.
+
+## Enums
+
+- [BuiltinLlmCodec](/reference/api/rust-library-reference/nemo-relay/api/runtime/enum-builtinllmcodec): Relay's built-in LLM codec identities.
+- [LlmCodecIdentity](/reference/api/rust-library-reference/nemo-relay/api/runtime/enum-llmcodecidentity): Per-call LLM codec identity supplied to sanitizer and SDK callbacks.

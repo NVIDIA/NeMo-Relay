@@ -2,7 +2,7 @@
 title: "Struct LlmSanitize Response Context"
 sidebar-title: "LlmSanitizeResponseContext"
 description: "Per-call codec context for LLM response sanitize guardrails."
-position: 14
+position: 12
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -25,7 +25,7 @@ The context distinguishes no codec, Relay built-ins, runtime-registered codecs, 
 
 #### `with_identity`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_identity(codec: <a href=\"enum-llmcodecidentity\">LlmCodecIdentity</a>) -&gt; Self"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_identity(codec: <a href=\"../enum-llmcodecidentity\">LlmCodecIdentity</a>) -&gt; Self"}} /></pre>
 
 Construct a context that carries only a codec identity.
 
@@ -39,7 +39,7 @@ Construct response-sanitizer context from the active response codec.
 
 #### `codec`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn codec(&amp;self) -&gt; &amp;<a href=\"enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn codec(&amp;self) -&gt; &amp;<a href=\"../enum-llmcodecidentity\">LlmCodecIdentity</a>"}} /></pre>
 
 Return the identity of the codec active for this payload direction.
 
