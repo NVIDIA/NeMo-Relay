@@ -20,7 +20,13 @@ Tool lifecycle helpers and managed execution entry points.
 - [ToolCallExecuteParams](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolcallexecuteparams): Builder parameters for [`tool_call_execute`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call-execute).
 - [ToolCallParams](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolcallparams): Builder parameters for [`tool_call`](/reference/api/rust-library-reference/nemo-relay/api/tool/fn-tool-call).
 - [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolexecutioninterceptoutcome): Canonical result returned by a tool execution intercept.
+- [ToolExecutionResult](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolexecutionresult): Canonical application-visible result of tool execution.
 - [ToolHandle](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolhandle): Runtime-owned handle identifying an active or completed tool call.
+
+## Constants
+
+- [TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA](/reference/api/rust-library-reference/nemo-relay/api/tool/constant-tool-execution-intercept-outcome-schema): Versioned native-plugin JSON envelope schema for [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolexecutioninterceptoutcome).
+- [TOOL_EXECUTION_RESULT_SCHEMA](/reference/api/rust-library-reference/nemo-relay/api/tool/constant-tool-execution-result-schema): Versioned native-plugin JSON envelope schema for [`ToolExecutionResult`](/reference/api/rust-library-reference/nemo-relay/api/tool/struct-toolexecutionresult).
 
 ## Functions
 

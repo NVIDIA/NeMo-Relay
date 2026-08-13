@@ -18,7 +18,7 @@ This emits a tool End event after applying sanitize-response guardrails to the o
 ## Parameters
 
 - `handle`: The tool handle from `nemo_relay_tool_call`.
-- `result_json`: Tool result as a null-terminated JSON C string. This result becomes the end-event data after sanitize-response guardrails unless it sanitizes to JSON null.
+- `result_json`: Serialized `ToolExecutionResult` as a null-terminated JSON C string with required `result` and optional `annotation` fields. Its `result` becomes the end-event data after sanitize-response guardrails unless it sanitizes to JSON null.
 - `data_json`: Optional null-terminated JSON data used when the sanitized result is JSON null, or null.
 - `metadata_json`: Optional null-terminated JSON metadata recorded on the end event, or null.
 - `timestamp_unix_micros`: Optional Unix microseconds timestamp for the end event, or null to use the runtime default end timestamp.

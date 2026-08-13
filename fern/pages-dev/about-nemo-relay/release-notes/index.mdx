@@ -35,10 +35,17 @@ rebuild them with `nemo-relay-plugin` 0.8.0 and declare
 `compat.relay = ">=0.8.0,<1.0"`.
 
 Native ABI v4 adds completion-scoped codec operations and pull-based LLM
-stream continuations. Relay still accepts existing raw ABI v2 and v3 binaries,
-and native subscribers remain synchronous. Follow the [native Rust migration
+stream continuations. Relay also negotiates the frozen ABI v3 and v2 table
+layouts for Relay 0.8-built plugins that target them, and native subscribers
+remain synchronous. Follow the [native Rust migration
 guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08)
 for callback and executor changes.
+
+Managed and manual tool execution now uses the canonical
+`ToolExecutionResult` shape across Rust, Python, Node.js, Go, the public C
+surface, native plugins, and `grpc-v1` workers. The required `result` remains
+application-owned, while an optional opaque `annotation` travels beside it and
+is projected consistently into sanitized observability.
 
 ### Highlights
 
@@ -48,6 +55,11 @@ The following updates expand native Rust plugin capabilities:
   continuations, and downstream LLM streams on an SDK-owned executor.
 - Native ABI v4 provides completion-scoped codec operations and pull-based LLM
   stream continuations.
+- Tool callbacks and execution-intercept continuations share one canonical
+  result contract with an optional opaque annotation.
+- ATOF, ATIF, and the `full` and `openinference` OpenTelemetry projections
+  preserve sanitized tool result annotations without flattening their
+  application-defined schemas.
 
 ### Support Matrix and Compatibility Updates
 
@@ -64,6 +76,18 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
 - Typed native Rust middleware callbacks now return futures and receive owned
   arguments. Native subscribers and raw synchronous ABI entry points are
   unchanged.
+- Managed tool callbacks, execution-intercept continuations, execute-helper
+  returns, and manual tool end APIs now use `ToolExecutionResult` instead of a
+  raw JSON result. Applications that need the original business payload must
+  read its `result` field. Refer to the
+  [tool result migration guide](/reference/migration-guides#return-canonical-tool-execution-results).
+- Relay 0.8 resets native API 1 and the `grpc-v1` tool-result contract to the
+  canonical `ToolExecutionResult` shape. Rebuild every native and worker plugin
+  and declare a `compat.relay` range that excludes Relay versions before 0.8.
+  The native ABI v4 table remains unchanged. The worker package and RPC method
+  names remain `nemo.relay.worker.v1`, but the `ToolNext` response and
+  tool-execution outcome field now use structured protobuf messages. Regenerate
+  custom worker bindings before rebuilding.
 - Repository-local `.nemo-relay/config.toml`, `plugins.toml`, and
   `.dynamic-plugins.json` files are no longer discovered or activated. Runtime
   resolution is explicit-or-user followed by higher-precedence system policy.

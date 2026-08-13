@@ -30,7 +30,7 @@ id = "acme.native_policy"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.5,<1.0"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -55,10 +55,18 @@ Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"1"`, and
 from the manifest. The exported symbol must return a descriptor whose
 `plugin_kind` matches `plugin.id` exactly.
 
-Typed native middleware requires `compat.relay = ">=0.8.0,<1.0"`. Relay rejects
-its registration when the manifest admits a host that predates the SDK-owned
-executor and native ABI v4. Plugins that use only synchronous registrations,
-such as this example, should retain `compat.relay = ">=0.5,<1.0"`.
+Relay 0.8 establishes the canonical `ToolExecutionResult` JSON contract as the
+native API 1 baseline. It preserves opaque result annotations through
+synchronous and asynchronous tool intercepts. Every native plugin must be
+rebuilt and declare a `compat.relay` range that excludes Relay versions before
+0.8. The recommended range is `>=0.8.0,<1.0`; open-ended ranges such as
+`>=0.8.0` are also valid. `compat.relay` is the plugin author's compatibility
+assertion, not proof that an artifact was rebuilt.
+
+The application JSON contract is independent of the negotiated native host
+table. Relay retains the native ABI v4 C-compatible layouts and callback
+signatures. Future incompatible native JSON semantic changes must increment
+`compat.native_api`.
 
 ## Create a Native Plugin
 
@@ -74,7 +82,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-nemo-relay-plugin = "0.5.0"
+nemo-relay-plugin = "0.8.0"
 serde_json = "1"
 ```
 

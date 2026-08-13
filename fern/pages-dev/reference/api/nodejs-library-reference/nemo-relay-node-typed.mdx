@@ -32,6 +32,17 @@ A JSON array with recursively JSON-serializable values.
 export interface JsonArray extends Array<JsonValue> {}
 ```
 
+### `ToolExecutionResult`
+
+Canonical application-visible result of tool execution.
+
+```ts
+export interface ToolExecutionResult<TResult> {
+  result: TResult;
+  annotation?: JsonValue;
+}
+```
+
 ### `LlmRequestShape`
 
 Canonical JSON shape for an opaque LLM request payload.
@@ -171,7 +182,7 @@ export declare class JsonPassthrough implements Codec<JsonValue> {
 
 Execute a typed tool call through the JSON middleware pipeline.
 
-Converts `args` to JSON, runs the native tool execution lifecycle, and decodes the final JSON result back into the caller's typed result shape.
+Converts `args` to JSON, runs the native tool execution lifecycle, and decodes only `result` back into the caller's typed result shape while preserving `annotation` unchanged.
 
 **Parameters**
 
@@ -184,7 +195,7 @@ Converts `args` to JSON, runs the native tool execution lifecycle, and decodes t
 
 **Returns**
 
-A promise resolving to the decoded typed tool result.
+A promise resolving to the decoded typed result and opaque annotation.
 
 **Remarks**
 
@@ -194,11 +205,11 @@ The wrapper accepts both synchronous and promise-returning tool implementations;
 export declare function typedToolExecute<TArgs, TResult>(
   name: string,
   args: TArgs,
-  func: (args: TArgs, signal: AbortSignal) => TResult | Promise<TResult>,
+  func: (args: TArgs, signal: AbortSignal) => ToolExecutionResult<TResult> | Promise<ToolExecutionResult<TResult>>,
   argsCodec: Codec<TArgs>,
   resultCodec: Codec<TResult>,
   options?: TypedToolExecuteOptions,
-): Promise<TResult>;
+): Promise<ToolExecutionResult<TResult>>;
 ```
 
 ### `typedLlmExecute`

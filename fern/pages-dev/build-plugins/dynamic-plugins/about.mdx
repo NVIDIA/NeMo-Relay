@@ -13,7 +13,7 @@ two execution lanes:
 
 | Lane | Use when | Stable boundary |
 | --- | --- | --- |
-| `rust_dynamic` | Behavior must run in the Relay process. | Native ABI v2 |
+| `rust_dynamic` | Behavior must run in the Relay process. | Versioned native ABI (v2–v4) |
 | `worker` | Behavior should run in a separate local process. | `grpc-v1` |
 
 The manifest describes compatibility, capabilities, artifact integrity, and the
@@ -37,7 +37,7 @@ id = "acme.example"
 kind = "worker"
 
 [compat]
-relay = ">=0.5,<1.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -58,18 +58,17 @@ runtime = "python"
 entrypoint = "acme_example.worker:main"
 ```
 
-`compat.relay` is a normal SemVer requirement. Use `>=0.5,<1.0` unless your
-plugin requires a narrower Relay version. Keep `defaults.enabled = false`:
+`compat.relay` is a normal SemVer requirement. Dynamic plugins on the Relay
+0.8 canonical result baseline must exclude earlier Relay versions; use
+`>=0.8.0,<1.0` unless you deliberately need a narrower or open-ended
+0.8-or-newer range. The manifest is the plugin author's compatibility
+assertion; it does not attest how an artifact was built. The [0.8 migration
+guide](/reference/migration-guides#return-canonical-tool-execution-results)
+describes the required rebuild. Keep
+`defaults.enabled = false`:
 operators must enable a registered dynamic plugin explicitly. Declare only the
 capabilities the plugin needs. Add `config_schema.path` only with the
 `config_schema` capability.
-
-<Warning>
-Dynamic plugins that register an LLM request intercept consume the versioned
-request annotation contract. For Relay 0.6 request intercepts, set
-`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. Relay
-rejects the registration when the manifest still admits Relay 0.5.
-</Warning>
 
 The following requirements vary by execution lane:
 
@@ -80,6 +79,13 @@ The following requirements vary by execution lane:
 | `capabilities.items` | Includes `plugin_native` | Includes `plugin_worker` |
 | `load` | `library` and `symbol` | `runtime` and `entrypoint` |
 | `source.manifest_root` | Optional | Required for `runtime = "python"`; `nemo-relay plugins add` uses it to create and retain the managed worker environment. |
+
+Relay 0.8 retains the native API 1 and `grpc-v1` identifiers while establishing
+the canonical `ToolExecutionResult` contract. Native application JSON semantics
+and worker protobuf tool-result types change; see the [0.8 migration
+guide](/reference/migration-guides#return-canonical-tool-execution-results).
+Future incompatible contract changes must increment the corresponding native
+API or worker protocol version.
 
 Use `runtime = "python"` for a `module:function` entrypoint, `runtime =
 "rust"` for a Rust executable, or `runtime = "command"` for another local

@@ -1,0 +1,122 @@
+---
+title: "Struct Tool Execution Result"
+sidebar-title: "ToolExecutionResult"
+description: "Canonical application-visible result of tool execution."
+position: 23
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ToolExecutionResult &#123;\n    pub result: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>,\n    pub annotation: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt;,\n&#125;"}} /></pre>
+
+Canonical application-visible result of tool execution.
+
+Relay transports `result` and `annotation` without interpreting either value. The annotation is an adjacent metadata channel and does not impose a schema on the application-owned result.
+
+## Fields
+
+### `result: Value`
+
+Application-owned tool result.
+
+### `annotation: Option<Value>`
+
+Optional opaque metadata associated with the result.
+
+## Implementations
+
+### `impl ToolExecutionResult`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(result: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+Create a result without an annotation.
+
+#### `annotated`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn annotated(result: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>, annotation: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+Create a result with an opaque annotation.
+
+#### `with_annotation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_annotation(self, annotation: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+Replace the opaque annotation while preserving the application result.
+
+#### `without_annotation`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn without_annotation(self) -&gt; <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+Remove the annotation while preserving the application result.
+
+## Trait Implementations
+
+### `impl Clone for ToolExecutionResult`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for ToolExecutionResult`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>, <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Error.html\">Error</a>&gt;"}} /></pre>
+
+### `impl<'de> Deserialize<'de> for ToolExecutionResult`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl&lt;'de&gt; <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html\">Deserialize</a>&lt;'de&gt; for <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `deserialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserialize.html#tymethod.deserialize\">deserialize</a>&lt;__D&gt;(\n    __deserializer: __D,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;<a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>, &lt;__D as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html#associatedtype.Error\">Error</a>&gt;where\n    __D: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/de/trait.Deserializer.html\">Deserializer</a>&lt;'de&gt;,"}} /></pre>
+
+### `impl From<ToolExecutionResult> for ToolExecutionInterceptOutcome`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>&gt; for <a href=\"struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(result: <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>) -&gt; <a href=\"struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>"}} /></pre>
+
+### `impl From<Value> for ToolExecutionResult`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html\">From</a>&lt;<a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>&gt; for <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.From.html#tymethod.from\">from</a>(result: <a href=\"https://docs.rs/serde_json/1.0.149/serde_json/value/enum.Value.html\">Value</a>) -&gt; <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+### `impl PartialEq for ToolExecutionResult`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html\">PartialEq</a> for <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `eq`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#tymethod.eq\">eq</a>(&amp;self, other: &amp;<a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+#### `ne`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/cmp/trait.PartialEq.html#method.ne\">ne</a>(&amp;self, other: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.reference.html\">&amp;Rhs</a>) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>"}} /></pre>
+
+### `impl Serialize for ToolExecutionResult`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html\">Serialize</a> for <a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>"}} /></pre>
+
+#### `serialize`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serialize.html#tymethod.serialize\">serialize</a>&lt;__S&gt;(\n    &amp;self,\n    __serializer: __S,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/result/enum.Result.html\">Result</a>&lt;&lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Ok\">Ok</a>, &lt;__S as <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>&gt;::<a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html#associatedtype.Error\">Error</a>&gt;where\n    __S: <a href=\"https://docs.rs/serde_core/1.0.228/serde_core/ser/trait.Serializer.html\">Serializer</a>,"}} /></pre>

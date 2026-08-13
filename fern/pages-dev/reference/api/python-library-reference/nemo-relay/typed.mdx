@@ -146,19 +146,19 @@ Reconstruct a Python value from its tagged JSON representation.
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], Awaitable[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> TResult
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> ToolExecutionResult[TResult]
 ```
 
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], TResult], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> TResult
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> ToolExecutionResult[TResult]
 ```
 
 ### `tool_execute`
 
 ```python
-async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], TResult] | Callable[[TArgs], Awaitable[TResult]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> TResult
+async def tool_execute(name: str, args: TArgs, func: Callable[[TArgs], ToolExecutionResult[TResult]] | Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]], args_codec: Codec[TArgs], result_codec: Codec[TResult], *, handle: ScopeHandle | None = None, attributes: int | None = None, data: Json | None = None, metadata: Json | None = None) -> ToolExecutionResult[TResult]
 ```
 
 Run `nemo_relay.tools.execute` with typed arguments and results.

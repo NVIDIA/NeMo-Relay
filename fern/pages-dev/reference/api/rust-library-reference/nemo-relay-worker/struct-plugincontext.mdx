@@ -93,7 +93,7 @@ Registers a tool request intercept.
 
 Registers a tool execution intercept.
 
-The callback returns a [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolexecutioninterceptoutcome). Calling [`ToolNext::call`](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolnext) continues the chain and returns only the raw downstream result JSON; Relay retains downstream pending marks. `ToolNext` may be called repeatedly or concurrently while the callback is active. Each call snapshots its visible worker scope stack, and Relay rejects late calls or cancels unfinished calls when the callback settles.
+The callback returns a [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolexecutioninterceptoutcome). Calling [`ToolNext::call`](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolnext) continues the chain and returns the downstream [`ToolExecutionResult`](/reference/api/rust-library-reference/nemo-relay-worker/struct-toolexecutionresult); Relay retains downstream pending marks. `ToolNext` may be called repeatedly or concurrently while the callback is active. Each call snapshots its visible worker scope stack, and Relay rejects late calls or cancels unfinished calls when the callback settles.
 
 #### `register_llm_sanitize_request_guardrail`
 

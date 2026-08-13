@@ -273,6 +273,28 @@ def to_json() -> dict[str, Json]
 
 Convert this outcome to the canonical worker-envelope payload.
 
+### `ToolExecutionResult`
+
+Canonical application-visible result of tool execution.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, Json]
+```
+
+Convert this result to its canonical JSON representation.
+
+##### `from_json`
+
+```python
+def from_json(value: Json) -> 'ToolExecutionResult'
+```
+
+Decode and validate a canonical JSON representation.
+
 ### `ToolExecutionInterceptOutcome`
 
 Canonical result returned by a Python worker tool execution intercept.
@@ -285,7 +307,7 @@ Canonical result returned by a Python worker tool execution intercept.
 def to_json() -> dict[str, Json]
 ```
 
-Convert this outcome to the canonical worker-envelope payload.
+Convert this outcome to its canonical JSON representation.
 
 ### `ScopeType(str, Enum)`
 
@@ -558,7 +580,7 @@ Create an instance.
 ##### `call`
 
 ```python
-async def call(value: Json) -> Json
+async def call(value: Json) -> ToolExecutionResult
 ```
 
 Call the remaining tool execution chain with replacement arguments.
@@ -637,7 +659,6 @@ Run a local `grpc-v1` worker until the Relay host shuts it down.
 - `LlmStreamExecutionCallback`
 - `PLUGIN_DIAGNOSTICS_SCHEMA`
 - `SubscriberCallback`
-- `TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA`
 - `ToolConditionalCallback`
 - `ToolExecutionCallback`
 - `ToolRequestCallback`

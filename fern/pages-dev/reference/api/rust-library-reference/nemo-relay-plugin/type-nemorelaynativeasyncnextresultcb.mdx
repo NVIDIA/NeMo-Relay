@@ -2,7 +2,7 @@
 title: "Type Alias Nemo Relay Native Async Next Result Cb"
 sidebar-title: "NemoRelayNativeAsyncNextResultCb"
 description: "Receives one completion from a unary execution-continuation invocation."
-position: 90
+position: 93
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -13,4 +13,4 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Receives one completion from a unary execution-continuation invocation.
 
-Exactly one of `value_json` and `error` is non-null. The callback owns its `user_data` and is invoked exactly once after a successful `async_next_invoke_result` call, including when the owning interceptor settles and cancels unfinished downstream work.
+Exactly one of `value_json` and `error` is non-null. The callback owns its `user_data` and is invoked exactly once after a successful `async_next_invoke_result` call, including when the owning interceptor settles and cancels unfinished downstream work. For a tool continuation, `value_json` contains canonical [`ToolExecutionResult`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutionresult) JSON.

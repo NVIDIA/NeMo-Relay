@@ -24,7 +24,7 @@ Execute a tool call end-to-end: run conditional-execution guardrails (on raw arg
 - `attributes`: Bitfield of tool attributes.
 - `data_json`: Optional JSON data, or null.
 - `metadata_json`: Optional JSON metadata, or null.
-- `out`: On success, receives the result as a JSON C string. Caller must free with `nemo_relay_string_free`.
+- `out`: On success, receives a serialized `ToolExecutionResult` as a JSON C string. Caller must free it with `nemo_relay_string_free`.
 
 ## Safety
 

@@ -101,6 +101,19 @@ export interface JsLlmCodecIdentity {
 }
 ```
 
+### `ToolExecutionResult`
+
+Canonical application-visible result of tool execution.
+
+`result` is application-owned JSON. `annotation` is optional opaque adjacent metadata that Relay transports without interpretation.
+
+```ts
+export interface ToolExecutionResult {
+  result: Json
+  annotation?: Json
+}
+```
+
 ### `EventSanitizeFields`
 
 Observability fields returned by mark and scope event sanitizers.
@@ -718,7 +731,7 @@ End a manual tool call lifecycle span.
 Signals that the tool call identified by `handle` has completed with the given `result`. Sanitize-response guardrails are applied to the emitted end-event payload; response intercepts run only through `toolCallExecute`. Optional `data` is used when the sanitized result is JSON null, and optional `metadata` is recorded on the end event. Optional `timestamp` is a Unix timestamp in microseconds recorded on the end event. It must be a safe integer number; omit it to use the runtime default end timestamp.
 
 ```ts
-export declare function toolCallEnd(handle: ToolHandle, result: Json, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
+export declare function toolCallEnd(handle: ToolHandle, result: ToolExecutionResult, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
 ```
 
 ### `toolCallExecute`
@@ -728,7 +741,7 @@ Execute a tool call end-to-end with full lifecycle management.
 Runs conditional-execution guardrails (on raw args) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Returns the final execution result; sanitize guardrails do not rewrite the caller-visible value.
 
 ```ts
-export declare function toolCallExecute(name: string, args: Json, func: (arg: Json) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<unknown>
+export declare function toolCallExecute(name: string, args: Json, func: (arg: Json) => ToolExecutionResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolCallExecuteAsync`
@@ -740,7 +753,7 @@ Same lifecycle as `toolCallExecute` (guardrails -> intercepts -> func -> respons
 Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a promise-aware wrapper with access to `Env`.
 
 ```ts
-export declare function toolCallExecuteAsync(name: string, args: Json, func: (...args: any[]) => any, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<unknown>
+export declare function toolCallExecuteAsync(name: string, args: Json, func: (arg: Json, signal: AbortSignal) => ToolExecutionResult | Promise<ToolExecutionResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `llmCall`
@@ -930,7 +943,7 @@ Register a tool execution intercept following the middleware chain pattern.
 The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
+export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
 ```
 
 ### `deregisterToolExecutionIntercept`
@@ -1232,7 +1245,7 @@ Register a scope-local tool execution intercept following the middleware chain p
 The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
+export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
 ```
 
 ### `scopeDeregisterToolExecutionIntercept`

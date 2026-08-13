@@ -2,18 +2,20 @@
 title: "Struct Tool Execution Intercept Result"
 sidebar-title: "ToolExecutionInterceptResult"
 description: "API documentation for the Rust `ToolExecutionInterceptResult` struct in crate `nemo_relay_worker_proto`."
-position: 44
+position: 46
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ToolExecutionInterceptResult &#123;\n    pub outcome: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-jsonenvelope\">JsonEnvelope</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct ToolExecutionInterceptResult &#123;\n    pub outcome: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-toolexecutioninterceptoutcome\">ToolExecutionInterceptOutcome</a>&gt;,\n&#125;"}} /></pre>
 
 ## Fields
 
-### `outcome: Option<JsonEnvelope>`
+### `outcome: Option<ToolExecutionInterceptOutcome>`
+
+Required.
 
 ## Trait Implementations
 

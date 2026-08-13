@@ -2,14 +2,14 @@
 title: "Function tool_call_execute"
 sidebar-title: "tool_call_execute"
 description: "Execute a tool call through the managed middleware pipeline."
-position: 11
+position: 14
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn tool_call_execute(params: <a href=\"struct-toolcallexecuteparams\">ToolCallExecuteParams</a>) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"../../json/type-json\">Json</a>&gt;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub async fn tool_call_execute(\n    params: <a href=\"struct-toolcallexecuteparams\">ToolCallExecuteParams</a>,\n) -&gt; <a href=\"../../error/type-result\">Result</a>&lt;<a href=\"struct-toolexecutionresult\">ToolExecutionResult</a>&gt;"}} /></pre>
 
 Execute a tool call through the managed middleware pipeline.
 
@@ -27,7 +27,7 @@ This runs conditional-execution guardrails, request intercepts, sanitize-request
 
 ## Returns
 
-A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the raw tool result returned by the callback or an execution intercept.
+A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result) containing the application result and optional opaque annotation returned by the callback or an execution intercept.
 
 ## Errors
 

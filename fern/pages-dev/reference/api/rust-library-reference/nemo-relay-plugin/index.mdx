@@ -73,6 +73,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [ThreadScopeStackGuard](/reference/api/rust-library-reference/nemo-relay-plugin/struct-threadscopestackguard): RAII guard that restores the previous thread-local scope stack on drop.
 - [ToolAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolattributes): Bitflags that modify tool-call behavior and observability.
 - [ToolExecutionInterceptOutcome](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome): Canonical result returned by a tool execution intercept.
+- [ToolExecutionResult](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutionresult): Canonical application-visible result of tool execution.
 - [ToolNext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolnext): Cloneable asynchronous tool execution continuation.
 
 ## Enums
@@ -98,6 +99,8 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-async-middleware): ABI version that introduced completion-based asynchronous middleware.
 - [NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-legacy): Legacy native plugin ABI accepted by Relay hosts for compatibility.
 - [NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC](/reference/api/rust-library-reference/nemo-relay-plugin/constant-nemo-relay-native-abi-version-typed-async): ABI version that introduced typed async middleware capabilities.
+- [TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA](/reference/api/rust-library-reference/nemo-relay-plugin/constant-tool-execution-intercept-outcome-schema): Versioned native-plugin JSON envelope schema for [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome).
+- [TOOL_EXECUTION_RESULT_SCHEMA](/reference/api/rust-library-reference/nemo-relay-plugin/constant-tool-execution-result-schema): Versioned native-plugin JSON envelope schema for [`ToolExecutionResult`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutionresult).
 
 ## Traits
 

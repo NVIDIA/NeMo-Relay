@@ -519,6 +519,13 @@ the rest of the documentation can use them consistently.
   operation. Managed tool calls emit start and end events, run tool middleware,
   and can carry an optional provider-specific `tool_call_id`.
 
+**Tool Execution Result**
+: A tool execution result is the canonical `{result, annotation?}` value
+  returned by managed tool callbacks, execution-intercept continuations, and
+  execute helpers. `result` is the application-owned payload. `annotation` is
+  optional opaque JSON metadata that Relay transports without interpreting its
+  schema.
+
 **Tool Parallelism**
 : Tool parallelism is adaptive guidance about which tool calls can run
   concurrently or be scheduled differently based on observed dependency

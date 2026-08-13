@@ -25,6 +25,8 @@ Compatibility prefix for ABI-v1/v2 plugins.
 
 Resolves an async callback completion with a JSON value.
 
+Tool-execution middleware must supply canonical [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome) JSON.
+
 ### `async_completion_reject: unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion, message: *const NemoRelayNativeString) -> NemoRelayStatus`
 
 Rejects an async callback completion with a UTF-8 message.
@@ -41,7 +43,7 @@ Releases the callback-owned reference after a pending completion settles.
 
 Invokes an execution continuation and settles a supplied completion.
 
-Cancellation of that completion aborts an in-flight continuation. This legacy convenience hook is one-shot because its result settles the middleware completion; use `async_next_invoke_result` for repeated or concurrent calls.
+Cancellation of that completion aborts an in-flight continuation. This legacy convenience hook is one-shot because its result settles the middleware completion; use `async_next_invoke_result` for repeated or concurrent calls. For a tool continuation, the host resolves the completion with canonical [`ToolExecutionInterceptOutcome`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutioninterceptoutcome) JSON.
 
 ### `async_next_release: unsafe extern "C" fn(next: *const NemoRelayNativeAsyncNext)`
 
@@ -93,7 +95,7 @@ Registers an incremental asynchronous LLM stream intercept.
 
 Invokes a unary execution continuation with an independent result sink.
 
-Unlike the legacy completion-coupled `async_next_invoke`, this hook may be called repeatedly or concurrently with distinct `user_data`.
+Unlike the legacy completion-coupled `async_next_invoke`, this hook may be called repeatedly or concurrently with distinct `user_data`. For a tool continuation, the result callback receives canonical [`ToolExecutionResult`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-toolexecutionresult) JSON.
 
 ## Trait Implementations
 
