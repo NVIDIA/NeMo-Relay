@@ -162,6 +162,11 @@ impl OpenTelemetryLogConfig {
                 "endpoint must be a nonblank string".to_string(),
             ));
         }
+        if self.timeout.is_zero() {
+            return Err(OpenTelemetryError::ExporterBuild(
+                "timeout must be greater than 0".to_string(),
+            ));
+        }
         if self.max_queue_size == 0 {
             return Err(OpenTelemetryError::ExporterBuild(
                 "max_queue_size must be greater than 0".to_string(),

@@ -150,6 +150,16 @@ fn metric_config_rejects_cardinality_limit_that_the_sdk_cannot_build() {
 }
 
 #[test]
+fn metric_config_rejects_zero_timeout() {
+    let error = OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+        .with_timeout(Duration::ZERO)
+        .validate()
+        .unwrap_err();
+
+    assert!(error.to_string().contains("timeout must be greater than 0"));
+}
+
+#[test]
 fn metric_delivery_state_survives_exporter_error_wrapping() {
     let diagnostics = MetricDeliveryDiagnostics::new(
         "https://collector.example/v1/metrics".to_string(),

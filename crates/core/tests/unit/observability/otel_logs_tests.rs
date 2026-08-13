@@ -12,6 +12,7 @@ use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
 use serde_json::json;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
+use std::time::Duration;
 
 fn mark(
     parent_uuid: Option<Uuid>,
@@ -77,6 +78,16 @@ fn scope_lineage_bounds_active_contexts() {
     assert!(!lineage.active.contains_key(&active));
     assert!(!lineage.active_order.contains(&active));
     assert!(lineage.completed.contains_key(&active));
+}
+
+#[test]
+fn log_config_rejects_zero_timeout() {
+    let error = OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
+        .with_timeout(Duration::ZERO)
+        .validate()
+        .unwrap_err();
+
+    assert!(error.to_string().contains("timeout must be greater than 0"));
 }
 
 #[test]

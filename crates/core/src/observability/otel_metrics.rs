@@ -206,6 +206,11 @@ impl OpenTelemetryMetricConfig {
                 "endpoint must be a nonblank string".to_string(),
             ));
         }
+        if self.timeout.is_zero() {
+            return Err(OpenTelemetryError::ExporterBuild(
+                "timeout must be greater than 0".to_string(),
+            ));
+        }
         if self.export_interval.is_zero() {
             return Err(OpenTelemetryError::ExporterBuild(
                 "export_interval must be greater than 0".to_string(),
