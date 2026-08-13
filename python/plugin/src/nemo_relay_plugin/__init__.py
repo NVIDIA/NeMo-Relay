@@ -5,7 +5,7 @@
 
 Use :class:`WorkerPlugin` and :class:`PluginContext` to define plugin behavior,
 then pass the implementation to :func:`serve_plugin`. The SDK owns the
-``grpc-v2`` transport, host authentication, JSON envelopes, continuation calls,
+``grpc-v1`` transport, host authentication, JSON envelopes, continuation calls,
 and task-local scope-stack propagation.
 
 The worker can keep multiple RPCs in flight, but callback execution is
@@ -66,7 +66,7 @@ Public authoring types:
     LlmStreamNext: Continuation for a streaming LLM execution intercept.
 
 Public functions:
-    serve_plugin: Run a local ``grpc-v2`` worker until host shutdown.
+    serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
 """
 
 from ._api import (

@@ -51,9 +51,8 @@ registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
 mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
-native API 2 plugins, and `grpc-v2` workers reject legacy raw tool callback and
-intercept returns. The native API 1 compatibility adapter described below is
-the only legacy exception and cannot carry annotations.
+native API 1 plugins, and `grpc-v1` workers require canonical tool callback and
+intercept returns. Relay 0.8 does not provide a legacy raw-result adapter.
 
 ## Event and Exporter Projection
 
@@ -104,25 +103,28 @@ result in their native type or object shape:
 Execution intercepts add lifecycle-owned pending marks to that shape:
 
 - Python callbacks return `ToolExecutionInterceptOutcome`.
-- Rust callbacks and native API 2 plugins return
+- Rust callbacks and native API 1 plugins return
   `ToolExecutionInterceptOutcome`.
 - Go callbacks return `ToolExecutionInterceptOutcome`.
 - Node.js callbacks return `{ result, annotation?, pendingMarks? }`, where
   JavaScript pending-mark DTOs use `categoryProfile`.
 - Public C intercept callbacks return canonical JSON with `result`, optional
   `annotation`, and optional `pending_marks`.
-- `grpc-v2` worker SDKs exchange the result in a `JsonEnvelope` with schema
+- `grpc-v1` worker SDKs exchange the result in a `JsonEnvelope` with schema
   `nemo.relay.ToolExecutionResult@1` and the intercept outcome with schema
   `nemo.relay.ToolExecutionInterceptOutcome@2`.
 
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
 
-The native ABI remains v4. The manifest's independent
-`compat.native_api = "2"` selects the canonical tool result semantics. Relay
-continues to accept native API 1 plugins through a compatibility adapter, but
-that legacy raw-result boundary cannot carry annotations. New or rebuilt native
-plugins should use native API 2.
+Relay 0.8 establishes this canonical result as the native API 1 and `grpc-v1`
+baseline. Rebuild every dynamic plugin and declare a `compat.relay` range that
+excludes Relay versions before 0.8. The recommended range is
+`>=0.8.0,<1.0`; open-ended ranges such as `>=0.8.0` are valid. The native ABI
+remains v4, and the `nemo.relay.worker.v1` protobuf transport layout remains
+unchanged. These stable binary and transport layouts are independent of the
+breaking application JSON semantic change. Future incompatible JSON contract
+changes must increment the corresponding native API or worker protocol version.
 
 ## Migration
 

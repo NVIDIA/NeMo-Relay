@@ -7,7 +7,7 @@
 //!
 //! # Invocation cancellation
 //!
-//! The `grpc-v2` service tracks active unary and streaming callbacks by the
+//! The `grpc-v1` service tracks active unary and streaming callbacks by the
 //! host-provided invocation ID. Relay sends `CancelInvocation` when a managed
 //! caller is cancelled, an invocation times out, or a host stream is abandoned.
 //! The SDK aborts the matching async callback task and reports
@@ -63,7 +63,7 @@ use nemo_relay_worker_proto::v1::{
     ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
     ValidateResponse, WorkerAck, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -1205,7 +1205,7 @@ impl PluginWorker for WorkerService {
             plugin_id: self.plugin.plugin_id().into(),
             plugin_kind: self.plugin.plugin_id().into(),
             allows_multiple_components: self.plugin.allows_multiple_components(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             sdk_name: "nemo-relay-worker".into(),
             sdk_version: env!("CARGO_PKG_VERSION").into(),
             runtime_name: "rust".into(),
@@ -1227,7 +1227,7 @@ impl PluginWorker for WorkerService {
             ok: true,
             message: "ready".into(),
             plugin_id: self.plugin.plugin_id().into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             sdk_name: "nemo-relay-worker".into(),
             sdk_version: env!("CARGO_PKG_VERSION").into(),
             runtime_name: "rust".into(),

@@ -79,7 +79,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ${tomlString(`=${relayVersion}`)}
-native_api = "2"
+native_api = "1"
 
 [defaults]
 enabled = false
@@ -109,7 +109,7 @@ kind = "worker"
 
 [compat]
 relay = ${tomlString(`=${relayVersion}`)}
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false

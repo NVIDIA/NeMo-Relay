@@ -18,8 +18,12 @@ SPDX-License-Identifier: Apache-2.0
 
 `nemo-relay-plugin` is the Python authoring SDK for NeMo Relay out-of-process
 dynamic worker plugins. Use it when plugin code should run in its own Python
-process and communicate with Relay through the versioned `grpc-v2` worker
+process and communicate with Relay through the versioned `grpc-v1` worker
 protocol.
+
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline.
+Workers built for an earlier Relay release must be rebuilt with this SDK and
+declare a `compat.relay` range beginning at `0.8.0` or later.
 
 ## Why Use It?
 
@@ -162,10 +166,9 @@ task cancellation. A blocking synchronous callback can delay both the
 cancellation RPC and all other worker RPCs, so offload blocking work and make
 its own cancellation behavior explicit.
 
-`grpc-v2` workers are expected to implement this best-effort cancellation
-contract. Relay remains compatible with older workers that return
-`accepted = false`; in that case it still drops the transport request, but it
-cannot guarantee worker-side interruption.
+`grpc-v1` workers are expected to implement this best-effort cancellation
+contract. When a worker returns `accepted = false`, Relay still drops the
+transport request, but it cannot guarantee worker-side interruption.
 
 Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and

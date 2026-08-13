@@ -1385,7 +1385,7 @@ kind = "worker"
 
 [compat]
 relay = "={version}"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [capabilities]
 items = ["plugin_worker"]

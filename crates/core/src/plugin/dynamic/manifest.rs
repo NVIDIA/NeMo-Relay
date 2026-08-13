@@ -16,10 +16,11 @@ use super::{
     DynamicPluginRustLoadContract, DynamicPluginSource, DynamicPluginSpec, DynamicPluginStatus,
     DynamicPluginValidationStatus, DynamicPluginWorkerCompatibility,
     DynamicPluginWorkerLoadContract, WorkerRuntime, current_timestamp,
+    validate_dynamic_plugin_relay_baseline,
 };
 use crate::plugin::{PluginError, Result};
 
-const SUPPORTED_WORKER_PROTOCOL: &str = "grpc-v2";
+const SUPPORTED_WORKER_PROTOCOL: &str = "grpc-v1";
 
 /// Authored `relay-plugin.toml` manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -329,7 +330,7 @@ impl DynamicPluginManifest {
             "integrity.signature",
         )?;
 
-        required_trimmed_string(self.compat.relay.as_deref(), "compat.relay")?;
+        validate_dynamic_plugin_relay_baseline(self.compat.relay.as_deref(), "dynamic")?;
         if self.capabilities.items.is_empty() {
             return Err(PluginError::InvalidConfig(
                 "capabilities.items must declare at least one capability".into(),
@@ -670,9 +671,9 @@ fn validate_compat_shape(
         DynamicPluginKind::RustDynamic => {
             let native_api =
                 required_trimmed_string(compat.native_api.as_deref(), "compat.native_api")?;
-            if !matches!(native_api.trim(), "1" | "2") {
+            if native_api.trim() != "1" {
                 return Err(PluginError::InvalidConfig(
-                    "rust_dynamic plugins must declare compat.native_api = \"1\" or \"2\"".into(),
+                    "rust_dynamic plugins must declare compat.native_api = \"1\"".into(),
                 ));
             }
             if compat.worker_protocol.is_some() {

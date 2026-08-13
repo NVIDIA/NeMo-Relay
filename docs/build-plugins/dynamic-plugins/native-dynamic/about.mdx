@@ -31,7 +31,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-native_api = "2"
+native_api = "1"
 
 [defaults]
 enabled = false
@@ -50,18 +50,23 @@ library = "target/release/libacme_native_policy.dylib"
 symbol = "nemo_relay_register_plugin"
 ```
 
-Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"2"`, and
+Set `plugin.kind` to `rust_dynamic`, `compat.native_api` to `"1"`, and
 `capabilities.items` to include `plugin_native`. Relay resolves relative paths
 from the manifest. The exported symbol must return a descriptor whose
 `plugin_kind` matches `plugin.id` exactly.
 
-Native API 2 requires `compat.relay = ">=0.8.0,<1.0"`. It uses
-`ToolExecutionResult` for tool continuations and preserves opaque result
-annotations through synchronous and asynchronous tool intercepts. This JSON
-contract is independent of the negotiated native ABI table version. The current
-Rust SDK uses ABI v4, while custom ABI v2 and v3 plugins can also declare native
-API 2. Relay still accepts `native_api = "1"` for existing ABI v2, v3, and v4
-plugins, but that legacy raw-JSON boundary drops tool-result annotations.
+Relay 0.8 establishes the canonical `ToolExecutionResult` JSON contract as the
+native API 1 baseline. It preserves opaque result annotations through
+synchronous and asynchronous tool intercepts. Every native plugin must be
+rebuilt and declare a `compat.relay` range that excludes Relay versions before
+0.8. The recommended range is `>=0.8.0,<1.0`; open-ended ranges such as
+`>=0.8.0` are also valid. `compat.relay` is the plugin author's compatibility
+assertion, not proof that an artifact was rebuilt.
+
+The application JSON contract is independent of the negotiated native host
+table. Relay retains the native ABI v4 C-compatible layouts and callback
+signatures. Future incompatible native JSON semantic changes must increment
+`compat.native_api`.
 
 ## Create a Native Plugin
 

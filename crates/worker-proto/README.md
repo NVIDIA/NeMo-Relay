@@ -25,9 +25,15 @@ Use `nemo-relay-worker` to author Rust workers. Depend on this crate directly
 only when implementing another worker SDK, a custom host, or protocol-level
 tooling.
 
+Relay 0.8 establishes the canonical tool-result contract as the `grpc-v1`
+baseline. Workers built for an earlier Relay release must be rebuilt, and their
+manifests must declare a `compat.relay` range beginning at `0.8.0` or later.
+The protobuf package, RPCs, field numbers, and generated module remain `v1`;
+the required application DTOs are identified by their JSON-envelope schemas.
+
 ## Why Use It?
 
-- **Share the stable transport contract**: Use the `grpc-v2` service and
+- **Share the stable transport contract**: Use the `grpc-v1` service and
   message definitions accepted by Relay worker manifests.
 - **Use generated Tonic bindings**: Access versioned client and server types
   from `v1` without generating protobuf code in a consumer project.
@@ -36,14 +42,25 @@ tooling.
 
 ## What You Get
 
-- **`WORKER_PROTOCOL_GRPC_V2`**: The stable `grpc-v2` protocol identifier.
-- **`WORKER_PROTOCOL_GRPC_V1`**: The legacy identifier, retained so consumers
-  can diagnose and reject old manifests and handshakes explicitly.
+- **`WORKER_PROTOCOL_GRPC_V1`**: The stable `grpc-v1` protocol identifier.
 - **`v1` module**: Generated `PluginWorker` and `RelayHostRuntime` gRPC
   clients, servers, services, and messages. The module name is the protobuf
-  package version; it does not track the `grpc-v2` protocol identifier.
+  package version; it does not track application DTO schema versions carried
+  by JSON envelopes.
 - **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
   serializing Relay DTOs into protocol payloads.
+
+## Tool Result Envelopes
+
+The `grpc-v1` tool-result boundary requires these exact envelope schemas:
+
+| Protocol location | Required schema |
+| --- | --- |
+| Successful `RelayHostRuntime.ToolNext` `JsonResult.value` | `nemo.relay.ToolExecutionResult@1` |
+| `ToolExecutionInterceptResult.outcome` | `nemo.relay.ToolExecutionInterceptOutcome@2` |
+
+Hosts and SDKs enforce these tags, and custom workers must emit and accept the
+same contract. Raw or differently tagged JSON is rejected at these locations.
 
 ## Installation
 
@@ -58,14 +75,14 @@ cargo add nemo-relay-worker-proto
 Use the shared protocol identifier and JSON envelope helpers:
 
 ```rust
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use serde_json::{Value, json};
 
 fn main() -> Result<(), serde_json::Error> {
     let envelope = json_envelope("example.Payload@1", &json!({"ok": true}))?;
     let payload: Value = decode_json_envelope(&envelope)?;
 
-    assert_eq!(WORKER_PROTOCOL_GRPC_V2, "grpc-v2");
+    assert_eq!(WORKER_PROTOCOL_GRPC_V1, "grpc-v1");
     assert_eq!(payload["ok"], true);
     Ok(())
 }

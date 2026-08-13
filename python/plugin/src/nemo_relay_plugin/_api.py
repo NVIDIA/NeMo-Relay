@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""High-level Python API for NeMo Relay ``grpc-v2`` worker plugins.
+"""High-level Python API for NeMo Relay ``grpc-v1`` worker plugins.
 
 The module exposes the authoring contract for out-of-process Python plugins.
 Callbacks can be synchronous or asynchronous unless a method documents a more
@@ -52,7 +52,7 @@ Public callback aliases used in registration annotations:
     LlmStreamExecutionCallback: Streaming LLM execution intercept callback.
 
 Public functions:
-    serve_plugin: Run a local ``grpc-v2`` worker until host shutdown.
+    serve_plugin: Run a local ``grpc-v1`` worker until host shutdown.
 """
 
 from __future__ import annotations
@@ -203,7 +203,7 @@ def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
     return context.codec_capability_id if context is not None and context.HasField("codec_capability_id") else None
 
 
-WORKER_PROTOCOL = "grpc-v2"
+WORKER_PROTOCOL = "grpc-v1"
 JSON_SCHEMA = "nemo.relay.Json@1"
 EVENT_SCHEMA = "nemo.relay.Event@1"
 LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
@@ -1773,7 +1773,7 @@ class LlmStreamNext:
 
 
 async def serve_plugin(plugin: _SupportsWorkerPlugin) -> None:
-    """Run a local ``grpc-v2`` worker until the Relay host shuts it down.
+    """Run a local ``grpc-v1`` worker until the Relay host shuts it down.
 
     Args:
         plugin: Plugin implementation with a non-empty ``plugin_id`` plus

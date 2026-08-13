@@ -37,7 +37,7 @@ use nemo_relay_worker_proto::v1::{
     RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use serde_json::json;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -76,7 +76,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
             relay_version: "0.8.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: "bad-token".into(),
             host_endpoint: "http://127.0.0.1:9".into(),
         }))
@@ -89,7 +89,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             activation_id: "wrong-activation".into(),
             plugin_id: PLUGIN_ID.into(),
             relay_version: "0.8.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
         }))
@@ -102,7 +102,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
             relay_version: "0.8.0".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
         }))
@@ -110,6 +110,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .expect("handshake succeeds")
         .into_inner();
     assert_eq!(handshake.plugin_id, PLUGIN_ID);
+    assert_eq!(handshake.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
     assert!(
         handshake
             .supported_surfaces
@@ -136,7 +137,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert!(health.ok);
     assert_eq!(health.message, "ready");
     assert_eq!(health.plugin_id, PLUGIN_ID);
-    assert_eq!(health.worker_protocol, WORKER_PROTOCOL_GRPC_V2);
+    assert_eq!(health.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
     assert_eq!(health.sdk_name, "nemo-relay-worker");
     assert_eq!(health.runtime_name, "rust");
 

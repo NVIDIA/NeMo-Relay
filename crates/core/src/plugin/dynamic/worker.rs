@@ -30,8 +30,7 @@ use nemo_relay_worker_proto::v1::{
     Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V2, decode_json_envelope, json_envelope};
-use semver::{Version, VersionReq};
+use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -87,7 +86,7 @@ use crate::plugin::{
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
-    validate_annotated_request_consumer_compatibility,
+    validate_annotated_request_consumer_compatibility, validate_dynamic_plugin_relay_compatibility,
 };
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
@@ -560,7 +559,7 @@ fn load_one_worker_plugin(
             activation_id: activation_id.clone(),
             plugin_id: spec.plugin_id.clone(),
             relay_version: env!("CARGO_PKG_VERSION").into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: auth_token.clone(),
             host_endpoint: host_advertise.clone(),
         }))),
@@ -3189,7 +3188,7 @@ fn validate_worker_handshake(
             handshake.plugin_id, handshake.plugin_kind, expected_plugin_id
         )));
     }
-    if handshake.worker_protocol != WORKER_PROTOCOL_GRPC_V2 {
+    if handshake.worker_protocol != WORKER_PROTOCOL_GRPC_V1 {
         return Err(PluginError::InvalidConfig(format!(
             "unsupported worker_protocol '{}'",
             handshake.worker_protocol
@@ -3199,22 +3198,7 @@ fn validate_worker_handshake(
 }
 
 fn validate_relay_compatibility(relay: Option<&str>) -> crate::plugin::Result<()> {
-    let relay = relay
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| PluginError::InvalidConfig("compat.relay is required".into()))?;
-    let req = VersionReq::parse(relay).map_err(|err| {
-        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {err}"))
-    })?;
-    let version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|err| PluginError::Internal(format!("failed to parse host version: {err}")))?;
-    if req.matches(&version) {
-        Ok(())
-    } else {
-        Err(PluginError::InvalidConfig(format!(
-            "worker plugin requires relay '{relay}' but host version is {version}"
-        )))
-    }
+    validate_dynamic_plugin_relay_compatibility(relay, "worker")
 }
 
 fn resolve_manifest_relative_path(manifest_path: &Path, value: &str) -> PathBuf {

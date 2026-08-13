@@ -516,7 +516,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_tool_outcome_errors(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn nemo_relay_fixture_abi_v2_api2(
+pub unsafe extern "C" fn nemo_relay_fixture_abi_v2_api1(
     host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus {
@@ -533,7 +533,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_abi_v2_api2(
             "fixture_native",
             None,
             None,
-            Some(raw_register_api2_tool_outcome),
+            Some(raw_register_canonical_tool_outcome),
         )
     }
 }
@@ -663,7 +663,7 @@ unsafe extern "C" fn raw_register_tool_outcome_errors(
     status
 }
 
-unsafe extern "C" fn raw_register_api2_tool_outcome(
+unsafe extern "C" fn raw_register_canonical_tool_outcome(
     user_data: *mut c_void,
     _plugin_config_json: *const NemoRelayNativeString,
     ctx: *mut NemoRelayNativePluginContext,
@@ -671,7 +671,7 @@ unsafe extern "C" fn raw_register_api2_tool_outcome(
     let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
         return NemoRelayStatus::NullPointer;
     };
-    let name = unsafe { raw_host_string(host, "fixture_abi_v2_api2") };
+    let name = unsafe { raw_host_string(host, "fixture_abi_v2_api1") };
     if name.is_null() {
         return NemoRelayStatus::Internal;
     }
@@ -680,7 +680,7 @@ unsafe extern "C" fn raw_register_api2_tool_outcome(
             ctx,
             name,
             0,
-            raw_api2_tool_outcome_callback,
+            raw_canonical_tool_outcome_callback,
             user_data,
             None,
         )
@@ -1267,7 +1267,7 @@ unsafe extern "C" fn raw_tool_outcome_callback(
     }
 }
 
-unsafe extern "C" fn raw_api2_tool_outcome_callback(
+unsafe extern "C" fn raw_canonical_tool_outcome_callback(
     user_data: *mut c_void,
     _name: *const NemoRelayNativeString,
     args_json: *const NemoRelayNativeString,

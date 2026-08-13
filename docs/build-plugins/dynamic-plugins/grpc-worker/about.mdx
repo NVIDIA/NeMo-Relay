@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Worker dynamic plugins run outside the Relay process and install subscribers,
-guardrails, and intercepts through the stable `grpc-v2` protocol. The host
+guardrails, and intercepts through the stable `grpc-v1` protocol. The host
 starts the local worker, validates its component configuration, receives a
 declarative registration plan, and installs proxy callbacks.
 
@@ -21,7 +21,7 @@ Choose the runtime that matches the artifact you distribute:
   add` so Relay can create and retain the required environment.
 - Use `rust` for a manifest-relative or absolute Rust executable.
 - Use `command` for another manifest-relative or absolute local executable that
-  implements `grpc-v2`.
+  implements `grpc-v1`.
 
 All worker runtimes receive the same local endpoint and activation credentials.
 The process boundary isolates crashes and dependencies, but it does not create a
@@ -40,7 +40,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -60,13 +60,15 @@ runtime = "python"
 entrypoint = "acme_policy.worker:main"
 ```
 
-Set `compat.worker_protocol` to `grpc-v2` and include `plugin_worker` in the
+Set `compat.worker_protocol` to `grpc-v1` and include `plugin_worker` in the
 capability list. Refer to [Choose a Worker Runtime](#choose-a-worker-runtime)
 for the runtime-specific `load` and `source` requirements.
 
-The `grpc-v2` protocol requires `compat.relay = ">=0.8.0,<1.0"`. It carries
-canonical annotated tool results and the versioned LLM request annotation
-contract.
+Relay 0.8 establishes canonical annotated tool results as the `grpc-v1`
+baseline. Every worker must be rebuilt and declare a `compat.relay` range that
+excludes Relay versions before 0.8. Use `>=0.8.0,<1.0` unless you deliberately
+need a narrower or open-ended 0.8-or-newer range. `compat.relay` is the plugin
+author's compatibility assertion, not proof that an artifact was rebuilt.
 
 The worker receives its activation ID, plugin ID, worker and host endpoints,
 and a local activation token through environment variables. Do not start the
@@ -89,4 +91,4 @@ operator-side lifecycle and validation flow.
   or [gRPC Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about)
   for complete language-specific authoring workflows.
 - Refer to [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
-  when you implement `grpc-v2` without an SDK.
+  when you implement `grpc-v1` without an SDK.

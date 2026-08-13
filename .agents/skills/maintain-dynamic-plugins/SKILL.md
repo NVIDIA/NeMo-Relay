@@ -20,7 +20,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 ## Rules
 
 - Keep the stable boundary explicit: native plugins cross a C ABI; worker
-  plugins cross `grpc-v2`.
+  plugins cross `grpc-v1`.
 - Do not pass Rust runtime types, trait objects, futures, or allocator-owned
   strings across the native dynamic-library boundary.
 - Typed native middleware futures run on the SDK-owned Tokio executor. Keep
@@ -30,9 +30,15 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 - Keep `relay-plugin.toml` dynamic records separate from generic runtime
   components. Enabled dynamic records may synthesize internal component specs;
   disabled records stay inspectable but unloaded.
-- Treat plugin Relay compatibility as normal SemVer. Native API 2 and `grpc-v2`
-  examples require `>=0.8.0,<1.0` unless a plugin intentionally declares a
-  narrower range.
+- Relay 0.8 establishes the native API 1 and `grpc-v1` canonical
+  `ToolExecutionResult` baseline. Require every dynamic plugin to rebuild and
+  declare a `compat.relay` range that excludes versions before 0.8. Recommend
+  `>=0.8.0,<1.0`; open-ended or narrower 0.8-or-newer ranges are valid.
+- Treat `compat.relay` as the plugin author's compatibility assertion, not
+  proof that an artifact was rebuilt. Do not add a legacy raw-result adapter.
+- Keep native ABI v4 and the `nemo.relay.worker.v1` protobuf transport layout
+  separate from their application JSON contracts. Future incompatible JSON
+  semantic changes must bump `native_api` or `worker_protocol`.
 - Do not add tests under `src`; Rust tests belong in crate `tests/` trees and
   Python SDK tests belong under `python/tests`.
 - Native and worker plugins are trusted extensions. Document that native plugins
@@ -55,7 +61,7 @@ Use this skill for `plugin.kind = "rust_dynamic"`, `plugin.kind = "worker"`,
 - [ ] Top-level `doctor` reports resolved dynamic plugin and host configuration
       status.
 - [ ] When detailed dynamic plugin guides exist, they keep Rust native, Python
-      worker, and `grpc-v2` protocol details on separate pages.
+      worker, and `grpc-v1` protocol details on separate pages.
 - [ ] `justfile`, Codecov, and CI package/test workflows include new plugin
       crates and packages.
 

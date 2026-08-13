@@ -998,7 +998,7 @@ fn unsupported_worker_relay_requirement_reports_compatibility_error() {
 }
 
 #[test]
-fn worker_request_intercept_rejects_manifest_that_admits_relay_0_5() {
+fn worker_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) =
@@ -1012,11 +1012,14 @@ fn worker_request_intercept_rejects_manifest_that_admits_relay_0_5() {
     }]) {
         Ok(activation) => {
             activation.clear();
-            panic!("the request-intercept registration should reject Relay 0.5 compatibility");
+            panic!("the worker loader should reject pre-0.8 Relay compatibility");
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains(">=0.6,<1.0"), "{error}");
+    assert!(
+        error.contains("excludes Relay versions before 0.8"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1376,7 +1379,7 @@ kind = "worker"
 
 [compat]
 relay = {relay}
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false

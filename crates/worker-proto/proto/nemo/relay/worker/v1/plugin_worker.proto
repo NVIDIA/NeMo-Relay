@@ -22,6 +22,8 @@ service RelayHostRuntime {
   rpc PopScope(PopScopeRequest) returns (HostAck);
   rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
   rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
+  // Successful responses MUST set JsonResult.value to a JsonEnvelope whose
+  // schema is "nemo.relay.ToolExecutionResult@1".
   rpc ToolNext(ToolNextRequest) returns (JsonResult);
   rpc LlmNext(LlmNextRequest) returns (JsonResult);
   rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
@@ -222,6 +224,8 @@ message LlmRequestInterceptResult {
 }
 
 message ToolExecutionInterceptResult {
+  // MUST be present and use the
+  // "nemo.relay.ToolExecutionInterceptOutcome@2" schema.
   JsonEnvelope outcome = 1;
 }
 

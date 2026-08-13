@@ -104,7 +104,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -507,7 +507,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false

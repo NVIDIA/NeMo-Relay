@@ -7,7 +7,7 @@ use super::{
     DynamicPluginAttestationMode, DynamicPluginCheckState, DynamicPluginFailure, DynamicPluginId,
     DynamicPluginManifest, DynamicPluginMetadata, DynamicPluginRecord, DynamicPluginRuntimeStatus,
     DynamicPluginStartupClass, DynamicPluginValidationStatus, bump_generation,
-    stamp_creation_metadata,
+    stamp_creation_metadata, validate_dynamic_plugin_relay_baseline,
 };
 use crate::plugin::{PluginError, Result};
 
@@ -273,9 +273,10 @@ fn validate_rust_dynamic_record(record: &DynamicPluginRecord) -> Result<()> {
         ));
     };
     validate_relay_compatibility(&compatibility.relay)?;
-    if compatibility.native_api.trim().is_empty() {
+    if compatibility.native_api.trim() != "1" {
         return Err(PluginError::InvalidConfig(
-            "dynamic rust_dynamic record has invalid compatibility shape".into(),
+            "dynamic rust_dynamic record has invalid compatibility shape; expected native_api = \"1\""
+                .into(),
         ));
     }
     let valid_load = matches!(
@@ -299,9 +300,10 @@ fn validate_worker_record(record: &DynamicPluginRecord) -> Result<()> {
         ));
     };
     validate_relay_compatibility(&compatibility.relay)?;
-    if compatibility.worker_protocol.trim().is_empty() {
+    if compatibility.worker_protocol.trim() != "grpc-v1" {
         return Err(PluginError::InvalidConfig(
-            "dynamic worker record has invalid compatibility shape".into(),
+            "dynamic worker record has invalid compatibility shape; expected worker_protocol = \"grpc-v1\""
+                .into(),
         ));
     }
     let valid_load = matches!(
@@ -318,11 +320,5 @@ fn validate_worker_record(record: &DynamicPluginRecord) -> Result<()> {
 }
 
 fn validate_relay_compatibility(relay: &str) -> Result<()> {
-    if relay.trim().is_empty() {
-        Err(PluginError::InvalidConfig(
-            "dynamic plugin record must declare compat.relay".into(),
-        ))
-    } else {
-        Ok(())
-    }
+    validate_dynamic_plugin_relay_baseline(Some(relay), "dynamic")
 }

@@ -583,12 +583,12 @@ fn relay_compatibility_and_blocking_helpers_cover_local_edges() {
 }
 
 #[test]
-fn worker_handshake_validation_rejects_grpc_v1_response() {
-    let handshake = HandshakeResponse {
+fn worker_handshake_validation_accepts_v1_and_rejects_v2() {
+    let mut handshake = HandshakeResponse {
         plugin_id: "fixture_worker".into(),
         plugin_kind: "fixture_worker".into(),
         allows_multiple_components: false,
-        worker_protocol: "grpc-v1".into(),
+        worker_protocol: "grpc-v2".into(),
         sdk_name: "unit".into(),
         sdk_version: "0".into(),
         runtime_name: "unit".into(),
@@ -597,12 +597,16 @@ fn worker_handshake_validation_rejects_grpc_v1_response() {
     };
 
     let error = validate_worker_handshake("fixture_worker", &handshake)
-        .expect_err("a grpc-v1 handshake response must be rejected");
+        .expect_err("a grpc-v2 handshake response must be rejected");
     assert!(
         error
             .to_string()
-            .contains("unsupported worker_protocol 'grpc-v1'")
+            .contains("unsupported worker_protocol 'grpc-v2'")
     );
+
+    handshake.worker_protocol = WORKER_PROTOCOL_GRPC_V1.into();
+    validate_worker_handshake("fixture_worker", &handshake)
+        .expect("a grpc-v1 handshake response should be accepted");
 }
 
 #[test]
@@ -807,7 +811,7 @@ async fn callback_helpers_cover_worker_response_edges() {
             Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
         )
         .await
-        .expect_err("grpc-v1 tool outcome schema should fail");
+        .expect_err("legacy tool outcome schema should fail");
     assert!(
         error
             .to_string()
@@ -2850,7 +2854,7 @@ impl PluginWorker for FakePluginWorker {
             plugin_id: "fixture_worker".into(),
             plugin_kind: "fixture_worker".into(),
             allows_multiple_components: false,
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             sdk_name: "unit".into(),
             sdk_version: "0".into(),
             runtime_name: "unit".into(),
@@ -2867,7 +2871,7 @@ impl PluginWorker for FakePluginWorker {
             ok: true,
             message: String::new(),
             plugin_id: "fixture_worker".into(),
-            worker_protocol: WORKER_PROTOCOL_GRPC_V2.into(),
+            worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             sdk_name: "unit".into(),
             sdk_version: "0".into(),
             runtime_name: "unit".into(),

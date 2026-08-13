@@ -90,7 +90,7 @@ def native_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
 
             [compat]
             relay = "={_relay_version()}"
-            native_api = "2"
+            native_api = "1"
 
             [defaults]
             enabled = false
@@ -126,7 +126,7 @@ def worker_dynamic_plugin(tmp_path_factory: pytest.TempPathFactory) -> _BuiltPlu
 
             [compat]
             relay = "={_relay_version()}"
-            worker_protocol = "grpc-v2"
+            worker_protocol = "grpc-v1"
 
             [defaults]
             enabled = false

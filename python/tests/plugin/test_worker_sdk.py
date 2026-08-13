@@ -429,6 +429,7 @@ def service_fixture(host_stub: RecordingHostStub) -> _WorkerService:
 
 
 def test_generated_proto_matches_worker_contract():
+    assert WORKER_PROTOCOL == "grpc-v1"
     methods = {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods}
     assert methods == {
         "Handshake",
@@ -450,6 +451,13 @@ def test_generated_proto_matches_worker_contract():
     assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
     assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
     assert pb.CUSTOM == 10
+
+    host_runtime = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"]
+    tool_next = host_runtime.methods_by_name["ToolNext"]
+    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.JsonResult"
+    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
+    assert outcome.number == 1
+    assert outcome.message_type.full_name == "nemo.relay.worker.v1.JsonEnvelope"
 
 
 async def test_health_handshake_validate_register_and_all_surfaces(service: _WorkerService):
@@ -2718,7 +2726,7 @@ def _handshake_request() -> Any:
     return pb.HandshakeRequest(
         activation_id=ACTIVATION_ID,
         plugin_id="tests.python_worker",
-        relay_version="0.5.0",
+        relay_version="0.8.0",
         worker_protocol=WORKER_PROTOCOL,
         auth_token=AUTH_TOKEN,
         host_endpoint="http://127.0.0.1:9",

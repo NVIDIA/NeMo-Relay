@@ -38,13 +38,10 @@ type RawToolExecutionNextFn =
     Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
 
 fn canonical_tool_next(next: RawToolExecutionNextFn) -> NativeAsyncNextInner {
-    NativeAsyncNextInner::Tool {
-        next: Arc::new(move |value| {
-            let future = next(value);
-            Box::pin(async move { future.await.map(ToolExecutionResult::from) })
-        }),
-        contract: NativeToolResultContract::Canonical,
-    }
+    NativeAsyncNextInner::Tool(Arc::new(move |value| {
+        let future = next(value);
+        Box::pin(async move { future.await.map(ToolExecutionResult::from) })
+    }))
 }
 
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
@@ -505,8 +502,7 @@ fn native_test_adapter(
         allows_multiple_components: false,
         instance: Arc::new(NativePluginInstance {
             plugin_kind: "test.native.adapter".into(),
-            relay_compat: "^0.7".into(),
-            tool_result_contract: NativeToolResultContract::Canonical,
+            relay_compat: "^0.8".into(),
             allows_multiple_components: false,
             plugin: Mutex::new(plugin),
             _library: libloading::os::unix::Library::this().into(),
@@ -1241,10 +1237,7 @@ async fn native_async_result_entrypoint_reports_provider_errors_and_panics() {
         }) as ToolExecutionNextFn,
     ] {
         let next = Arc::new(NativeAsyncNext::new(
-            NativeAsyncNextInner::Tool {
-                next: next_fn,
-                contract: NativeToolResultContract::Canonical,
-            },
+            NativeAsyncNextInner::Tool(next_fn),
             tokio::runtime::Handle::current(),
             None,
         ));
@@ -2359,7 +2352,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
 }
 
 #[test]
-fn native_legacy_next_preserves_runtime_context_for_unary_and_stream_continuations() {
+fn native_sync_next_preserves_runtime_context_for_unary_and_stream_continuations() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2397,17 +2390,14 @@ fn native_legacy_next_preserves_runtime_context_for_unary_and_stream_continuatio
                                     ))
                                 })
                             });
-                            let unary_next = NativeToolNextContext {
-                                next: unary_next,
-                                contract: NativeToolResultContract::LegacyRaw,
-                            };
+                            let unary_next = unary_next;
                             let invocation = native_string_from_json(&Json::Null).unwrap();
                             let mut output = ptr::null_mut();
                             assert_eq!(
                                 unsafe {
                                     native_tool_next(
                                         invocation,
-                                        (&unary_next as *const NativeToolNextContext)
+                                        (&unary_next as *const ToolExecutionNextFn)
                                             .cast_mut()
                                             .cast(),
                                         &mut output,
@@ -2417,7 +2407,7 @@ fn native_legacy_next_preserves_runtime_context_for_unary_and_stream_continuatio
                             );
                             let observed: Json =
                                 serde_json::from_str(&read_native_string(output).unwrap()).unwrap();
-                            assert_eq!(observed, expected);
+                            assert_eq!(observed, json!({"result": expected}));
                             unsafe {
                                 native_string_free(invocation);
                                 native_string_free(output);
@@ -4614,7 +4604,6 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
     let instance = Arc::new(NativePluginInstance {
         plugin_kind: "test.native".into(),
         relay_compat: "^0.8".into(),
-        tool_result_contract: NativeToolResultContract::Canonical,
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -5051,7 +5040,6 @@ fn assert_async_request_registration_rejects_legacy_relay_contract() {
     let instance = Arc::new(NativePluginInstance {
         plugin_kind: "test.native.legacy".into(),
         relay_compat: "^0.5".into(),
-        tool_result_contract: NativeToolResultContract::Canonical,
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -5100,8 +5088,7 @@ unsafe extern "C" fn resolve_async_static_json(
 async fn native_async_wrappers_validate_callback_result_shapes() {
     let instance = Arc::new(NativePluginInstance {
         plugin_kind: "test.native.async".into(),
-        relay_compat: "^0.7".into(),
-        tool_result_contract: NativeToolResultContract::Canonical,
+        relay_compat: "^0.8".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -5966,8 +5953,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
 async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
     let instance = Arc::new(NativePluginInstance {
         plugin_kind: "test.native.callback-errors".into(),
-        relay_compat: "^0.7".into(),
-        tool_result_contract: NativeToolResultContract::Canonical,
+        relay_compat: "^0.8".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -6281,10 +6267,7 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         unsafe { native_tool_next(args, ptr::null_mut(), &mut out) },
         NemoRelayStatus::NullPointer
     );
-    let next = Box::into_raw(Box::new(NativeToolNextContext {
-        next: tool_next(Ok(json!({"result": 2}))),
-        contract: NativeToolResultContract::Canonical,
-    })) as *mut c_void;
+    let next = Box::into_raw(Box::new(tool_next(Ok(json!({"result": 2}))))) as *mut c_void;
     assert_eq!(
         unsafe { native_tool_next(args, next, &mut out) },
         NemoRelayStatus::Ok
@@ -6293,31 +6276,27 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
         take_json_from_native_string(out, "unused").unwrap(),
         json!({"result": {"result": 2}})
     );
-    unsafe { drop(Box::from_raw(next as *mut NativeToolNextContext)) };
+    unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
 
-    let next = Box::into_raw(Box::new(NativeToolNextContext {
-        next: tool_next(Err(FlowError::NotFound("missing".into()))),
-        contract: NativeToolResultContract::Canonical,
-    })) as *mut c_void;
+    let next = Box::into_raw(Box::new(tool_next(Err(FlowError::NotFound(
+        "missing".into(),
+    ))))) as *mut c_void;
     out = ptr::null_mut();
     assert_eq!(
         unsafe { native_tool_next(args, next, &mut out) },
         NemoRelayStatus::NotFound
     );
-    unsafe { drop(Box::from_raw(next as *mut NativeToolNextContext)) };
+    unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
 
     let panicking_next: ToolExecutionNextFn =
         Arc::new(|_| Box::pin(async { panic!("tool next panic") }));
-    let next = Box::into_raw(Box::new(NativeToolNextContext {
-        next: panicking_next,
-        contract: NativeToolResultContract::Canonical,
-    })) as *mut c_void;
+    let next = Box::into_raw(Box::new(panicking_next)) as *mut c_void;
     assert_eq!(
         unsafe { native_tool_next(args, next, &mut out) },
         NemoRelayStatus::Internal
     );
     assert_last_error_contains("native tool next panicked");
-    unsafe { drop(Box::from_raw(next as *mut NativeToolNextContext)) };
+    unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
     unsafe { native_string_free(args) };
 
     let request = LlmRequest {

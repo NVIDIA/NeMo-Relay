@@ -270,7 +270,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -363,7 +363,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -600,7 +600,7 @@ id = "{plugin_id}"
 kind = "rust_dynamic"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -752,7 +752,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -907,7 +907,7 @@ id = "acme.external-native-closure"
 kind = "rust_dynamic"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]

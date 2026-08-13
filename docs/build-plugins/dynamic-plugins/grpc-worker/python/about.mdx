@@ -178,7 +178,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -314,6 +314,6 @@ rm -rf "$relay_tmp"
 ```
 
 Refer to [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol) for the
-shared `grpc-v2` contract and
+shared `grpc-v1` contract and
 [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins) for
 host trust and lifecycle policies.

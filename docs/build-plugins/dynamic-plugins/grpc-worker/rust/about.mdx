@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use the `nemo-relay-worker` crate to build an out-of-process Rust plugin. The
-SDK implements the `grpc-v2` service, exchanges JSON envelopes with Relay,
+SDK implements the `grpc-v1` service, exchanges JSON envelopes with Relay,
 handles cancellation, and provides typed registration and host-runtime helpers.
 Refer to [gRPC Worker Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about)
 to compare the Rust, Python, and command worker runtimes.
@@ -82,7 +82,7 @@ kind = "worker"
 
 [compat]
 relay = ">=0.8.0,<1.0"
-worker_protocol = "grpc-v2"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false

@@ -99,10 +99,18 @@ Forwarding intercepts must preserve both fields. Rust can use
 C callbacks return their binding-specific canonical outcome with `result` and
 `annotation`. Legacy raw callback and intercept returns are rejected.
 
-For native plugins, set `compat.native_api = "2"` to select this result
-contract. Relay can still load native API 1 plugins through a raw-result
-compatibility adapter, but annotations do not cross that legacy boundary. This
-semantic version is independent of the negotiated native ABI v4 table.
+Relay 0.8 establishes this result contract as the native API 1 and `grpc-v1`
+baseline. Set `compat.native_api = "1"` or `compat.worker_protocol = "grpc-v1"`,
+rebuild every dynamic plugin, and declare a `compat.relay` range that excludes
+Relay versions before 0.8. Use `>=0.8.0,<1.0` unless you deliberately need a
+narrower or open-ended 0.8-or-newer range. The manifest is the plugin author's
+compatibility assertion, not proof that an artifact was rebuilt.
+
+The native ABI remains v4. Workers continue to use the
+`nemo.relay.worker.v1` protobuf package with unchanged services, RPCs, fields,
+and field numbers. Those binary and transport layouts are independent of the
+breaking application JSON semantic change. Future incompatible JSON contract
+changes must increment the corresponding native API or worker protocol version.
 
 Manual tool end helpers also require the canonical wrapper. For example, pass
 `nemo_relay.ToolExecutionResult(payload)` to Python `tools.call_end`,
@@ -169,13 +177,14 @@ Set new typed async native plugin manifests to:
 ```toml
 [compat]
 relay = ">=0.8.0,<1.0"
-native_api = "2"
+native_api = "1"
 ```
 
-Relay 0.8 prefers native ABI v4 and falls back to frozen v3 and v2 tables for
-old binaries. ABI v4 adds completion-scoped codec operations and pull-based
-downstream LLM streams. `native_api = "2"` selects the canonical
-`ToolExecutionResult` contract without changing the ABI v4 table layout.
+Relay 0.8 prefers native ABI v4 and falls back to frozen v3 and v2 tables. ABI
+v4 adds completion-scoped codec operations and pull-based downstream LLM
+streams. `native_api = "1"` uses the canonical `ToolExecutionResult` contract
+without changing the ABI v4 table layout. Rebuild all native plugin artifacts;
+support for frozen table layouts does not preserve the pre-0.8 JSON semantics.
 
 ### Move Project Configuration to a Supported Location
 

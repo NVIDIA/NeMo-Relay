@@ -9,7 +9,7 @@
 //! one file as the feature grows.
 
 use chrono::Utc;
-use semver::{Version, VersionReq};
+use semver::{Comparator, Op, Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use strum::{Display, IntoStaticStr};
 
@@ -103,6 +103,104 @@ pub(super) fn validate_annotated_request_consumer_compatibility(
     if requirement.matches(&Version::new(0, 5, u64::MAX)) {
         return Err(PluginError::InvalidConfig(format!(
             "dynamic plugin '{plugin_kind}' registers an LLM request intercept and must declare compat.relay = \">=0.6,<1.0\" or another range that excludes Relay 0.5"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_dynamic_plugin_relay_requirement<'a>(
+    relay: Option<&'a str>,
+    plugin_type: &str,
+) -> crate::plugin::Result<(&'a str, VersionReq)> {
+    let relay = relay
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| PluginError::InvalidConfig("compat.relay is required".into()))?;
+    let requirement = VersionReq::parse(relay).map_err(|error| {
+        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {error}"))
+    })?;
+    let minimum = Version::new(0, 8, 0);
+    let declares_minimum = requirement
+        .comparators
+        .iter()
+        .filter_map(comparator_minimum)
+        .any(|candidate| candidate >= minimum);
+    if !declares_minimum {
+        return Err(PluginError::InvalidConfig(format!(
+            "{plugin_type} plugins must declare compat.relay = \">=0.8.0\" or another range that excludes Relay versions before 0.8; found '{relay}'"
+        )));
+    }
+    Ok((relay, requirement))
+}
+
+fn comparator_minimum(comparator: &Comparator) -> Option<Version> {
+    let mut version = Version::new(
+        comparator.major,
+        comparator.minor.unwrap_or(0),
+        comparator.patch.unwrap_or(0),
+    );
+    version.pre = comparator.pre.clone();
+
+    match comparator.op {
+        Op::Exact | Op::GreaterEq | Op::Tilde | Op::Caret | Op::Wildcard => Some(version),
+        Op::Greater if !comparator.pre.is_empty() => Some(version),
+        Op::Greater => {
+            if comparator.minor.is_none() {
+                increment_major(&mut version);
+            } else if comparator.patch.is_none() {
+                increment_minor(&mut version);
+            } else {
+                increment_patch(&mut version);
+            }
+            Some(version)
+        }
+        Op::Less | Op::LessEq => None,
+        _ => None,
+    }
+}
+
+fn increment_major(version: &mut Version) {
+    if let Some(major) = version.major.checked_add(1) {
+        version.major = major;
+        version.minor = 0;
+        version.patch = 0;
+    }
+}
+
+fn increment_minor(version: &mut Version) {
+    if let Some(minor) = version.minor.checked_add(1) {
+        version.minor = minor;
+        version.patch = 0;
+    } else {
+        increment_major(version);
+    }
+}
+
+fn increment_patch(version: &mut Version) {
+    if let Some(patch) = version.patch.checked_add(1) {
+        version.patch = patch;
+    } else {
+        increment_minor(version);
+    }
+}
+
+pub(super) fn validate_dynamic_plugin_relay_baseline(
+    relay: Option<&str>,
+    plugin_type: &str,
+) -> crate::plugin::Result<()> {
+    parse_dynamic_plugin_relay_requirement(relay, plugin_type).map(|_| ())
+}
+
+pub(super) fn validate_dynamic_plugin_relay_compatibility(
+    relay: Option<&str>,
+    plugin_type: &str,
+) -> crate::plugin::Result<()> {
+    let (relay, requirement) = parse_dynamic_plugin_relay_requirement(relay, plugin_type)?;
+    let host_version = Version::parse(env!("CARGO_PKG_VERSION"))
+        .map_err(|error| PluginError::Internal(format!("failed to parse host version: {error}")))?;
+    if !requirement.matches(&host_version) {
+        return Err(PluginError::InvalidConfig(format!(
+            "{plugin_type} plugin requires relay '{relay}' but host version is {host_version}"
         )));
     }
     Ok(())

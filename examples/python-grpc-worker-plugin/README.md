@@ -9,6 +9,9 @@ This example shows a Python worker plugin using the `nemo-relay-plugin` SDK. It
 registers a tool request intercept, emits a mark event through the host runtime,
 and returns a mutated JSON tool request.
 
+The example targets Relay 0.8 or later and the canonical `grpc-v1` tool-result
+contract declared in `relay-plugin.toml`.
+
 ## Register With Relay
 
 Run the following commands from this directory:

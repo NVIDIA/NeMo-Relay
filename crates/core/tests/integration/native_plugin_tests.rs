@@ -887,9 +887,9 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref =
-        write_legacy_manifest_with_symbol(&fixture, "nemo_relay_fixture_tool_outcome_errors");
+        write_manifest_with_symbol(&fixture, "nemo_relay_fixture_tool_outcome_errors");
     let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("raw native outcome fixture should load");
+        .expect("native outcome fixture should load");
     let mut cleanup = NativePluginTestCleanup::new();
 
     let mut plugin_config = PluginConfig::default();
@@ -900,7 +900,7 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
     });
     initialize_plugins_exact(plugin_config)
         .await
-        .expect("raw native outcome fixture should initialize");
+        .expect("native outcome fixture should initialize");
     cleanup.mark_plugin_configuration_active();
 
     for (name, expected) in [
@@ -935,38 +935,17 @@ async fn native_tool_execution_rejects_null_malformed_and_error_outcomes() {
         );
     }
 
-    let result = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("fixture-valid-outcome")
-            .args(json!({ "input": true }))
-            .func(Arc::new(|args| {
-                Box::pin(async move {
-                    Ok(ToolExecutionResult::annotated(
-                        args,
-                        json!({"source": "provider"}),
-                    ))
-                })
-            }))
-            .build(),
-    )
-    .await
-    .expect("native loader should remain usable after rejected outcomes");
-    assert_eq!(result.result["raw_tool_outcome"], true);
-    assert_eq!(result.result["downstream"], json!({"input": true}));
-    assert!(result.result.get("pending_marks").is_none());
-    assert_eq!(result.annotation, None);
-
     drop(cleanup);
     activation.clear();
 }
 
 #[tokio::test]
-async fn native_api_two_preserves_results_after_abi_v2_negotiation() {
+async fn native_api_one_preserves_results_after_abi_v2_negotiation() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
-    let manifest_ref = write_manifest_with_symbol(&fixture, "nemo_relay_fixture_abi_v2_api2");
+    let manifest_ref = write_manifest_with_symbol(&fixture, "nemo_relay_fixture_abi_v2_api1");
     let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("native API 2 plugin should negotiate the ABI v2 host table");
+        .expect("native API 1 plugin should negotiate the ABI v2 host table");
     let mut cleanup = NativePluginTestCleanup::new();
 
     let mut plugin_config = PluginConfig::default();
@@ -977,12 +956,12 @@ async fn native_api_two_preserves_results_after_abi_v2_negotiation() {
     });
     initialize_plugins_exact(plugin_config)
         .await
-        .expect("ABI v2 native API 2 fixture should initialize");
+        .expect("ABI v2 native API 1 fixture should initialize");
     cleanup.mark_plugin_configuration_active();
 
     let result = tool_call_execute(
         ToolCallExecuteParams::builder()
-            .name("fixture-abi-v2-api2")
+            .name("fixture-abi-v2-api1")
             .args(json!({"input": true}))
             .func(Arc::new(|args| {
                 Box::pin(async move {
@@ -995,7 +974,7 @@ async fn native_api_two_preserves_results_after_abi_v2_negotiation() {
             .build(),
     )
     .await
-    .expect("ABI v2 callback should use the native API 2 result contract");
+    .expect("ABI v2 callback should use the canonical native API 1 result contract");
     assert_eq!(result.result, json!({"input": true}));
     assert_eq!(result.annotation, Some(json!({"source": "provider"})));
 
@@ -1102,7 +1081,7 @@ fn native_activation_clear_deregisters_plugin_kind() {
 }
 
 #[tokio::test]
-async fn native_request_intercept_rejects_manifest_that_admits_relay_0_5() {
+async fn native_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_plugin();
     let manifest_ref = write_manifest_text(ManifestOptions {
@@ -1113,26 +1092,14 @@ async fn native_request_intercept_rejects_manifest_that_admits_relay_0_5() {
         symbol: "nemo_relay_fixture_native_plugin",
         integrity: None,
     });
-    let activation = load_native_plugins([load_spec("fixture_native", &manifest_ref)])
-        .expect("the host version is in the broad manifest range");
-
-    let mut plugin_config = PluginConfig::default();
-    plugin_config.components.push(PluginComponentSpec {
-        kind: "fixture_native".into(),
-        enabled: true,
-        config: Map::new(),
-    });
-    let error = initialize_plugins_exact(plugin_config)
-        .await
-        .expect_err("the request-intercept registration should reject Relay 0.5 compatibility")
-        .to_string();
+    let error = expect_native_load_error_from_specs(
+        [load_spec("fixture_native", &manifest_ref)],
+        "the native loader should reject pre-0.8 Relay compatibility",
+    );
     assert!(
-        error.contains("LLM request intercept failed: InvalidArg"),
+        error.contains("excludes Relay versions before 0.8"),
         "{error}"
     );
-
-    clear_plugin_configuration().expect("failed initialization state should clear");
-    activation.clear();
 }
 
 #[test]
@@ -1282,10 +1249,7 @@ fn native_loader_rejects_manifest_contract_errors_before_loading_library() {
         },
         "unsupported native API should fail",
     );
-    assert!(
-        error.contains("compat.native_api = \"1\" or \"2\""),
-        "{error}"
-    );
+    assert!(error.contains("compat.native_api = \"1\""), "{error}");
 
     let worker_manifest = write_raw_manifest(
         manifest_dir.path(),
@@ -1297,8 +1261,8 @@ id = "fixture_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.5,<1.0"
-worker_protocol = "grpc-v2"
+relay = ">=0.8,<1.0"
+worker_protocol = "grpc-v1"
 
 [defaults]
 enabled = false
@@ -2167,19 +2131,6 @@ fn write_manifest_with_symbol(fixture: &BuiltFixture, symbol: &str) -> PathBuf {
     })
 }
 
-fn write_legacy_manifest_with_symbol(fixture: &BuiltFixture, symbol: &str) -> PathBuf {
-    write_raw_manifest(
-        fixture.manifest_dir.path(),
-        &native_manifest_text(
-            "fixture_native",
-            &format!("={}", env!("CARGO_PKG_VERSION")),
-            "1",
-            &fixture.library_path.to_string_lossy(),
-            symbol,
-        ),
-    )
-}
-
 fn write_manifest_with_plugin_id_and_symbol(
     fixture: &BuiltFixture,
     plugin_id: &str,
@@ -2246,7 +2197,7 @@ kind = "rust_dynamic"
 
 [compat]
 relay = {relay}
-native_api = "2"
+native_api = "1"
 
 [defaults]
 enabled = false
