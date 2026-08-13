@@ -56,7 +56,7 @@ navigation:
   - section: "Build Plugins"
     slug: build-plugins
     contents:
-      - page: "Overview"
+      - page: "About"
         path: ./build-plugins/about.mdx
         slug: about
       - section: "Plugin Fundamentals"
@@ -74,7 +74,7 @@ navigation:
       - section: "Language Binding Plugins"
         slug: language-binding
         contents:
-          - page: "Overview"
+          - page: "About"
             path: ./build-plugins/language-binding/about.mdx
             slug: about
           - page: "Validate Configuration"
@@ -95,7 +95,7 @@ navigation:
       - section: "Native Dynamic Plugins"
         slug: native
         contents:
-          - page: "Overview"
+          - page: "About"
             path: ./build-plugins/native/about.mdx
             slug: about
           - page: "Build and Package"
@@ -119,7 +119,7 @@ navigation:
       - section: "gRPC Worker Plugins"
         slug: workers
         contents:
-          - page: "Overview"
+          - page: "About"
             path: ./build-plugins/workers/about.mdx
             slug: about
           - page: "Python Worker"
