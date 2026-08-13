@@ -38,6 +38,7 @@ env:
   NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
+  UV_PYTHON_PREFERENCE: only-system
 
 jobs:
   Test:
@@ -52,18 +53,28 @@ jobs:
         include:
           - &linux-amd64
             platform: linux-amd64
+            node_build_strategy: zig
+            node_target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
           - &linux-arm64
             platform: linux-arm64
+            node_build_strategy: zig
+            node_target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
           - &macos-arm64
             platform: macos-arm64
+            node_build_strategy: native
+            node_target: ""
             runner: macos-15
           - &windows-amd64
             platform: windows-amd64
+            node_build_strategy: native
+            node_target: ""
             runner: windows-2022
           - &windows-arm64
             platform: windows-arm64
+            node_build_strategy: native
+            node_target: ""
             runner: windows-11-arm
 
     steps:
@@ -88,10 +99,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
@@ -139,12 +151,16 @@ jobs:
           - *windows-arm64
           - &package-linux-musl-amd64
             node_arch: x64
+            node_build_strategy: zig
+            node_target: x86_64-unknown-linux-musl
             platform: linux-musl-amd64
             runner: ubuntu-latest
             container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
             package_name: nemo-relay-node-linux-x64-musl
           - &package-linux-musl-arm64
             node_arch: arm64
+            node_build_strategy: zig
+            node_target: aarch64-unknown-linux-musl
             platform: linux-musl-arm64
             runner: ubuntu-24.04-arm
             container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
@@ -166,48 +182,42 @@ jobs:
         uses: ./.github/actions/load-ci-tool-versions
 
       - uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606 # v1.15.4
-        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           cache: false
           toolchain: ${{ steps.ci-config.outputs.rust_version }}
 
+      - name: Install Node Rust target
+        if: ${{ startsWith(matrix.platform, 'linux-') }}
+        run: rustup target add ${{ matrix.node_target }}
+
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
-        if: ${{ startsWith(matrix.platform, 'linux-') && !contains(matrix.platform, 'musl') }}
+        if: ${{ startsWith(matrix.platform, 'linux-') }}
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
-      - name: Install managed Python for Zig packaging
-        if: ${{ startsWith(matrix.platform, 'linux-') && !contains(matrix.platform, 'musl') }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
-
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: ${{ steps.ci-config.outputs.node_version }}
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        if: ${{ !contains(matrix.platform, 'musl') }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
-        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           tool: just@${{ steps.ci-config.outputs.just_version }}
 
       - name: Create packaging output directory
-        if: ${{ !contains(matrix.platform, 'musl') }}
         run: |
           set -e
           mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm"
@@ -226,7 +236,6 @@ jobs:
           printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
       - name: Package Node
-        if: ${{ !contains(matrix.platform, 'musl') }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
@@ -234,48 +243,16 @@ jobs:
             --set ci true \
             --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
             --set node_platform "${{ matrix.platform }}" \
+            --set node_target "${{ matrix.node_target }}" \
+            --set node_build_strategy "${{ matrix.node_build_strategy }}" \
             --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
             package-node
 
       - name: Upload split Node npm package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        if: ${{ !contains(matrix.platform, 'musl') }}
         with:
           name: node-npm-package-${{ matrix.platform }}
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm/*.tgz
-          if-no-files-found: error
-
-      - name: Build musllinux Node package
-        if: ${{ contains(matrix.platform, 'musl') }}
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -euo pipefail
-          output_dir="${NEMO_RELAY_CI_WORKSPACE_TMP}/npm-musllinux"
-          mkdir -p "$output_dir"
-          docker run --rm \
-            --volume "${NEMO_RELAY_CI_WORKSPACE}:${NEMO_RELAY_CI_WORKSPACE}" \
-            --workdir "${NEMO_RELAY_CI_WORKSPACE}" \
-            --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
-            --env NEMO_RELAY_NODE_OUTPUT_DIR="$output_dir" \
-            --env NEMO_RELAY_NODE_VERSION="${NEMO_RELAY_PACKAGE_VERSION}" \
-            --env NEMO_RELAY_NODE_PLATFORM="${{ matrix.platform }}" \
-            "${{ matrix.container_image }}" \
-            sh -ceu '
-              apk add --no-cache build-base cmake curl python3
-              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
-              export PATH="$HOME/.cargo/bin:$PATH"
-              node scripts/package_node_musllinux.mjs \
-                --version "$NEMO_RELAY_NODE_VERSION" \
-                --platform "$NEMO_RELAY_NODE_PLATFORM" \
-                --out "$NEMO_RELAY_NODE_OUTPUT_DIR"
-            '
-
-      - name: Upload musllinux Node npm package artifact
-        if: ${{ contains(matrix.platform, 'musl') }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: node-npm-package-${{ matrix.platform }}
-          path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm-musllinux/*.tgz
           if-no-files-found: error
 
   PackageOpenClaw:
@@ -300,7 +277,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false

@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Build a musllinux wheel without modifying the checked-out source tree."""
+"""Stage a versioned source tree for a musllinux wheel build."""
 
 from __future__ import annotations
 
 import argparse
 import re
 import shutil
-import subprocess
-import tempfile
 from pathlib import Path
 
 VERSION_PATTERN = re.compile(
@@ -65,39 +63,14 @@ def copy_source(source: Path, destination: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Raw SemVer release version")
-    parser.add_argument("--out", required=True, type=Path, help="Directory for the built wheel")
-    parser.add_argument("--interpreter", required=True, help="CPython executable used to build the ABI3 wheel")
+    parser.add_argument("--source-out", required=True, type=Path, help="Directory for the staged source tree")
     args = parser.parse_args()
 
     source = Path.cwd().resolve()
-    output = args.out.resolve()
-    output.mkdir(parents=True, exist_ok=True)
+    build_source = args.source_out.resolve()
     version = semver_to_pep440(args.version)
-
-    with tempfile.TemporaryDirectory(prefix="nemo-relay-musllinux-") as temporary_directory:
-        build_source = Path(temporary_directory) / "source"
-        copy_source(source, build_source)
-        materialize_python_version(build_source, version)
-        subprocess.run(
-            [
-                "maturin",
-                "build",
-                "--locked",
-                "--release",
-                "--compatibility",
-                "musllinux_1_2",
-                "--interpreter",
-                args.interpreter,
-                "--out",
-                str(output),
-            ],
-            check=True,
-            cwd=build_source,
-        )
-
-    wheels = list(output.glob("*.whl"))
-    if len(wheels) != 1:
-        raise RuntimeError(f"Expected one musllinux wheel in {output}, found {len(wheels)}")
+    copy_source(source, build_source)
+    materialize_python_version(build_source, version)
 
 
 if __name__ == "__main__":

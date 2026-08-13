@@ -4067,7 +4067,8 @@ delay_after_continue = False
 
 def handle_continue(_signal, _frame):
     if delay_after_continue:
-        os.write(sys.stdout.fileno(), b"AGENT_BG_DELAY\n")
+        with open(os.environ["NEMO_RELAY_TEST_DELAY_MARKER"], "w") as marker:
+            marker.write("AGENT_BG_DELAY\n")
         time.sleep(1.5)
 
 signal.signal(signal.SIGCONT, handle_continue)
@@ -4112,6 +4113,7 @@ import termios
 import time
 
 relay, config, home, xdg, runtime = sys.argv[1:]
+delay_marker = os.path.join(runtime, "agent-bg-delay")
 pid, master = pty.fork()
 if pid == 0:
     env = os.environ.copy()
@@ -4120,6 +4122,7 @@ if pid == 0:
         "XDG_CONFIG_HOME": xdg,
         "XDG_RUNTIME_DIR": runtime,
         "NEMO_RELAY_PLUGIN_IDLE_TIMEOUT_SECS": "1",
+        "NEMO_RELAY_TEST_DELAY_MARKER": delay_marker,
         "PS1": "RELAY_SHELL> ",
         "ENV": "/dev/null",
         "BASH_ENV": "/dev/null",
@@ -4162,20 +4165,13 @@ def read_until(token, timeout=10):
         buffer.extend(chunk)
     raise AssertionError(f"did not observe {token!r}; output={buffer.decode(errors='replace')!r}")
 
-def wait_until_present(token, timeout=10):
+def wait_until_path(path, timeout=10):
     deadline = time.monotonic() + timeout
-    expected = token.encode()
     while time.monotonic() < deadline:
-        if expected in buffer:
+        if os.path.exists(path):
             return
-        ready, _, _ = select.select([master], [], [], 0.1)
-        if not ready:
-            continue
-        chunk = os.read(master, 4096)
-        if not chunk:
-            break
-        buffer.extend(chunk)
-    raise AssertionError(f"did not observe {token!r}; output={buffer.decode(errors='replace')!r}")
+        time.sleep(0.1)
+    raise AssertionError(f"did not observe marker {path!r}; output={buffer.decode(errors='replace')!r}")
 
 def safe_kill_group(process_group):
     if process_group is None or process_group <= 0 or process_group == pid:
@@ -4234,7 +4230,7 @@ try:
     os.write(master, b"\x1a")
     read_until("RELAY_SHELL> ")
     os.killpg(relay_group, signal.SIGCONT)
-    wait_until_present("AGENT_BG_DELAY")
+    wait_until_path(delay_marker)
     assert os.tcgetpgrp(master) == pid, (os.tcgetpgrp(master), pid, buffer)
     os.write(master, b"fg\n")
     os.write(master, b"third-line\n")

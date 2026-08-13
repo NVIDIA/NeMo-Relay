@@ -10,16 +10,16 @@ mod snapshots;
 
 #[cfg(test)]
 pub(crate) use atomic::fail_next_atomic_write;
+#[cfg(all(test, windows))]
+pub(crate) use atomic::windows_wide;
 pub(crate) use atomic::{
     atomic_write, atomic_write_private, atomic_write_system_readable, atomic_write_with_permissions,
 };
 #[cfg(windows)]
 pub(crate) use atomic::{
     atomic_write_with_windows_dacl, open_private_windows_file, protect_private_windows_path,
-    read_windows_dacl,
+    read_windows_dacl, windows_path_is_private,
 };
-#[cfg(all(test, windows))]
-pub(crate) use atomic::{windows_path_is_private, windows_wide};
 #[cfg(all(test, windows))]
 pub(crate) use locks::normalize_lock_attempt;
 pub(crate) use locks::{LockAttempt, try_lock_exclusive, try_lock_shared, unlock_file};

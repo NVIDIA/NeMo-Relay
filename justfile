@@ -15,6 +15,8 @@ ref_name := ""
 linux_glibc_version := "2.17"
 # Supported Node package platform key. CI sets this from its package matrix.
 node_platform := ""
+node_target := ""
+node_build_strategy := "native"
 
 bash_helpers := '''
 set -euo pipefail
@@ -1673,6 +1675,8 @@ package-node:
     # If `ref_name` is set, write it as the exact package version before packing.
     linux_glibc_version="{{ linux_glibc_version }}"
     node_platform="{{ node_platform }}"
+    node_target="{{ node_target }}"
+    node_build_strategy="{{ node_build_strategy }}"
     python_executable="python"
     if ! command -v "$python_executable" >/dev/null 2>&1; then
         python_executable="python3"
@@ -1693,14 +1697,26 @@ package-node:
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     fi
-    build_args=(build)
-    if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
+    build_args=(build --)
+    if [[ -n "$node_target" ]]; then
+        build_args+=(--target "$node_target")
+    fi
+    if [[ "$node_build_strategy" == "zig" ]]; then
         # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI
         # Zig version pin aligned with that lockfile version.
         uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
         activate_project_venv
         prepend_ziglang_to_path "$(project_python_executable)"
-        build_args+=(-- --zig --zig-abi-suffix "$linux_glibc_version")
+        build_args+=(--zig)
+        if [[ "$node_target" == *-unknown-linux-gnu ]]; then
+            build_args+=(--zig-abi-suffix "$linux_glibc_version")
+        fi
+    elif is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
+        # Preserve the local CI-style build behavior when no cross target is set.
+        uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
+        activate_project_venv
+        prepend_ziglang_to_path "$(project_python_executable)"
+        build_args+=(--zig --zig-abi-suffix "$linux_glibc_version")
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     npm run --workspace=nemo-relay-node "${build_args[@]}"
