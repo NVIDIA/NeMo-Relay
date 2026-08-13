@@ -272,10 +272,23 @@ impl OpenTelemetryLogSubscriber {
             diagnostic_field,
         )));
         let callback_processor = Arc::clone(&processor);
+        let callback_recovery_warned = Arc::new(AtomicBool::new(false));
+        let callback_recovery_warned_for_callback = Arc::clone(&callback_recovery_warned);
         let subscriber: EventSubscriberFn = Arc::new(move |event| {
-            if let Ok(mut processor) = callback_processor.lock() {
-                processor.process(event);
-            }
+            let mut processor = match callback_processor.lock() {
+                Ok(processor) => processor,
+                Err(poisoned) => {
+                    if !callback_recovery_warned_for_callback.swap(true, Ordering::Relaxed) {
+                        log::warn!(
+                            target: "nemo_relay.observability",
+                            event = "otel_log_processor_lock_recovered";
+                            "OpenTelemetry log subscriber recovered a poisoned processor lock"
+                        );
+                    }
+                    poisoned.into_inner()
+                }
+            };
+            processor.process(event);
         });
         Ok(Self {
             inner: Arc::new(LogSubscriberInner {

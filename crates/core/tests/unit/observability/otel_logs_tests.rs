@@ -10,6 +10,8 @@ use crate::api::event::{
 use crate::api::scope::ScopeType;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
 use serde_json::json;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
 
 fn mark(
     parent_uuid: Option<Uuid>,
@@ -54,6 +56,30 @@ fn processor(
         exporter,
         provider,
     )
+}
+
+#[test]
+fn direct_log_subscriber_recovers_a_poisoned_processor_lock() {
+    let subscriber =
+        OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new("http://127.0.0.1:4318"))
+            .unwrap();
+    let processor = Arc::clone(&subscriber.inner._processor);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _guard = processor.lock().unwrap();
+            panic!("poison log processor");
+        }))
+        .is_err()
+    );
+
+    let uuid = Uuid::now_v7();
+    (subscriber.subscriber())(&scope(uuid, ScopeCategory::Start));
+
+    let Err(poisoned) = processor.lock() else {
+        panic!("log processor lock should remain poisoned after recovery");
+    };
+    let processor = poisoned.into_inner();
+    assert!(processor.lineage.active.contains_key(&uuid));
 }
 
 #[test]

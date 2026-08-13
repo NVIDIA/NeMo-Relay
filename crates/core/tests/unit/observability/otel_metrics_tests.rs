@@ -25,6 +25,8 @@ use prost::Message;
 use serde_json::json;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -79,6 +81,37 @@ fn processor() -> (
         exporter,
         provider,
     )
+}
+
+#[test]
+fn direct_metric_subscriber_recovers_a_poisoned_processor_lock() {
+    let subscriber =
+        OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new("http://127.0.0.1:4318"))
+            .unwrap();
+    let processor = Arc::clone(&subscriber.inner._processor);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            let _guard = processor.lock().unwrap();
+            panic!("poison metric processor");
+        }))
+        .is_err()
+    );
+
+    (subscriber.subscriber())(&metric_event(
+        "1",
+        json!({"measurements": [{
+            "name": "example.recovered",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1
+        }]}),
+    ));
+
+    let Err(poisoned) = processor.lock() else {
+        panic!("metric processor lock should remain poisoned after recovery");
+    };
+    let processor = poisoned.into_inner();
+    assert!(processor.instruments.contains_key("example.recovered"));
 }
 
 #[test]

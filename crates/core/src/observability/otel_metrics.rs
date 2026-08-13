@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -292,10 +292,23 @@ impl OpenTelemetryMetricSubscriber {
             cardinality_limit,
         )));
         let callback_processor = Arc::clone(&processor);
+        let callback_recovery_warned = Arc::new(AtomicBool::new(false));
+        let callback_recovery_warned_for_callback = Arc::clone(&callback_recovery_warned);
         let subscriber: EventSubscriberFn = Arc::new(move |event| {
-            if let Ok(mut processor) = callback_processor.lock() {
-                processor.process(event);
-            }
+            let mut processor = match callback_processor.lock() {
+                Ok(processor) => processor,
+                Err(poisoned) => {
+                    if !callback_recovery_warned_for_callback.swap(true, Ordering::Relaxed) {
+                        log::warn!(
+                            target: "nemo_relay.observability",
+                            event = "otel_metric_processor_lock_recovered";
+                            "OpenTelemetry metric subscriber recovered a poisoned processor lock"
+                        );
+                    }
+                    poisoned.into_inner()
+                }
+            };
+            processor.process(event);
         });
         Ok(Self {
             inner: Arc::new(MetricSubscriberInner {
