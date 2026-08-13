@@ -44,6 +44,9 @@ pub(crate) mod manual;
 pub(crate) mod openinference;
 pub mod otel;
 mod otel_genai;
+pub mod otel_logs;
+pub mod otel_metrics;
+mod otel_signal;
 pub mod plugin_component;
 
 /// Return the provider-independent input total used by semantic observability

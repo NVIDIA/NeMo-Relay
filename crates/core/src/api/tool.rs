@@ -15,7 +15,7 @@ use crate::api::runtime::{
     EventSubscriberFn, ScopeStackHandle, ToolExecutionNextFn, with_active_event_uuid,
 };
 use crate::api::scope::event;
-use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
+use crate::api::scope::{EmitMarkEventParams, ScopeHandle, metadata_with_log_severity};
 use crate::api::shared::{
     ensure_runtime_owner, metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
     snapshot_event_sanitizers, snapshot_event_subscribers,
@@ -553,22 +553,24 @@ async fn tool_call_end_with_pending_marks(
     let marks = pending_marks
         .into_iter()
         .enumerate()
-        .map(|(index, mark)| {
+        .map(|(index, mark)| -> Result<Event> {
             let timestamp = *event.timestamp()
                 + TimeDelta::microseconds(i64::try_from(index).unwrap_or_default() + 1);
-            Event::Mark(MarkEvent::new(
+            let metadata = metadata_with_log_severity(mark.metadata, mark.severity)?;
+            Ok(Event::Mark(MarkEvent::new(
                 BaseEvent::builder()
                     .name(mark.name)
                     .parent_uuid(params.handle.uuid)
                     .timestamp(timestamp)
                     .data_opt(mark.data)
-                    .metadata_opt(mark.metadata)
+                    .data_schema_opt(mark.data_schema)
+                    .metadata_opt(metadata)
                     .build(),
                 mark.category,
                 mark.category_profile,
-            ))
+            )))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     let tool_name = params.handle.name.clone();
     let result = params.result;

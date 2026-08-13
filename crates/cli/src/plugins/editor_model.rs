@@ -1020,14 +1020,7 @@ pub(super) fn merge_known_editor_object(
 }
 
 pub(super) fn observability_editor_fields_with_version() -> Vec<&'static str> {
-    let mut keys = vec!["version"];
-    keys.extend(
-        ObservabilityConfig::editor_schema()
-            .fields
-            .iter()
-            .map(|field| field.name),
-    );
-    keys
+    nested_editor_keys(ObservabilityConfig::editor_schema())
 }
 
 pub(super) fn nested_editor_keys(

@@ -133,7 +133,9 @@ impl From<JsPendingMarkSpec> for PendingMarkSpec {
             category: mark.category,
             category_profile: mark.category_profile,
             data: mark.data,
+            data_schema: None,
             metadata: mark.metadata,
+            severity: None,
         }
     }
 }

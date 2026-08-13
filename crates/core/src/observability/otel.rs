@@ -1599,7 +1599,7 @@ fn local_parent_span_context(span_context: &SpanContext) -> SpanContext {
     )
 }
 
-fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
+pub(super) fn to_system_time(timestamp: DateTime<Utc>) -> SystemTime {
     let seconds = timestamp.timestamp();
     let nanos = timestamp.timestamp_subsec_nanos();
     if seconds >= 0 {

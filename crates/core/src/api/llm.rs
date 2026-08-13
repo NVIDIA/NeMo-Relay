@@ -32,7 +32,7 @@ use crate::api::runtime::{
 };
 use crate::api::runtime::{ScopeStackHandle, capture_traceparent, current_scope_stack};
 use crate::api::scope::event;
-use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
+use crate::api::scope::{EmitMarkEventParams, ScopeHandle, metadata_with_log_severity};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, inject_traceparent, inject_traceparent_value,
     metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
@@ -629,13 +629,15 @@ async fn emit_pending_request_marks(
     ensure_runtime_owner()?;
     let timestamp = handle.started_at + TimeDelta::microseconds(1);
     for mark in marks {
+        let metadata = metadata_with_log_severity(mark.metadata, mark.severity)?;
         let event = Event::Mark(MarkEvent::new(
             BaseEvent::builder()
                 .name(mark.name)
                 .parent_uuid(handle.uuid)
                 .timestamp(timestamp)
                 .data_opt(mark.data)
-                .metadata_opt(mark.metadata)
+                .data_schema_opt(mark.data_schema)
+                .metadata_opt(metadata)
                 .build(),
             mark.category,
             mark.category_profile,

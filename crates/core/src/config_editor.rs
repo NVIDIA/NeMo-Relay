@@ -20,7 +20,7 @@ pub enum EditorFieldKind {
     Integer,
     /// Floating-point number value.
     Float,
-    /// String enum with a fixed set of allowed values.
+    /// Value selected from a fixed set of allowed choices.
     Enum,
     /// Object with string keys and string values.
     StringMap,
@@ -43,7 +43,7 @@ pub struct EditorFieldSpec {
     pub label: &'static str,
     /// Editor control shape.
     pub kind: EditorFieldKind,
-    /// Allowed string enum values, when [`EditorFieldKind::Enum`] is used.
+    /// Allowed display choices, when [`EditorFieldKind::Enum`] is used.
     pub enum_values: &'static [&'static str],
     /// Whether the field is represented as an `Option<T>` in Rust.
     pub optional: bool,

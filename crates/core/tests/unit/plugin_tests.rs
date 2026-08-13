@@ -635,7 +635,13 @@ fn test_layer_config_concatenates_nested_observability_lists() {
                     "sinks": [{"type": "file", "output_directory": "/system"}]
                 },
                 "opentelemetry": {
-                    "endpoints": [{"type": "full", "endpoint": "http://system:4318/v1/traces"}]
+                    "endpoints": [{"type": "full", "endpoint": "http://system:4318/v1/traces"}],
+                    "logs": {
+                        "endpoints": [{"endpoint": "http://system:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "endpoints": [{"endpoint": "http://system:4318/v1/metrics"}]
+                    }
                 },
                 "atif": {
                     "storage": [{"type": "http", "endpoint": "http://system/trajectory"}]
@@ -657,7 +663,13 @@ fn test_layer_config_concatenates_nested_observability_lists() {
                     "endpoints": [
                         {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
                         {"type": "openinference", "endpoint": "http://user:4319/v1/traces"}
-                    ]
+                    ],
+                    "logs": {
+                        "endpoints": [{"endpoint": "http://user:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "endpoints": [{"endpoint": "http://user:4318/v1/metrics"}]
+                    }
                 },
                 "atif": {
                     "storage": [{"type": "http", "endpoint": "http://user/trajectory"}]
@@ -689,6 +701,20 @@ fn test_layer_config_concatenates_nested_observability_lists() {
         ])
     );
     assert_eq!(
+        config["opentelemetry"]["logs"]["endpoints"],
+        json!([
+            {"endpoint": "http://user:4318/v1/logs"},
+            {"endpoint": "http://system:4318/v1/logs"}
+        ])
+    );
+    assert_eq!(
+        config["opentelemetry"]["metrics"]["endpoints"],
+        json!([
+            {"endpoint": "http://user:4318/v1/metrics"},
+            {"endpoint": "http://system:4318/v1/metrics"}
+        ])
+    );
+    assert_eq!(
         config["atif"]["storage"],
         json!([
             {"type": "http", "endpoint": "http://user/trajectory"},
@@ -703,13 +729,65 @@ fn test_layer_config_concatenates_nested_observability_lists() {
 }
 
 #[test]
+fn test_layer_config_preserves_signal_endpoint_option_semantics() {
+    let lower = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "opentelemetry": {
+                    "logs": {
+                        "enabled": true,
+                        "endpoints": [{"endpoint": "http://system:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "enabled": true,
+                        "endpoints": [{"endpoint": "http://system:4318/v1/metrics"}]
+                    }
+                }
+            }
+        }]
+    });
+    let higher = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "opentelemetry": {
+                    "logs": {"minimum_severity": "warn"},
+                    "metrics": {"endpoints": []}
+                }
+            }
+        }]
+    });
+
+    let mut merged = lower;
+    layer_config(&mut merged, higher);
+    let opentelemetry = &merged["components"][0]["config"]["opentelemetry"];
+
+    assert_eq!(
+        opentelemetry["logs"]["endpoints"],
+        json!([{"endpoint": "http://system:4318/v1/logs"}]),
+        "an omitted higher-precedence list preserves the explicit lower-precedence list"
+    );
+    assert_eq!(opentelemetry["logs"]["minimum_severity"], json!("warn"));
+    assert_eq!(
+        opentelemetry["metrics"]["endpoints"],
+        json!([]),
+        "an explicit empty higher-precedence list remains explicit and empty"
+    );
+}
+
+#[test]
 fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
     let mut merged = json!({
         "components": [{
             "kind": "third.party",
             "config": {
                 "atof": {"sinks": ["base"]},
-                "opentelemetry": {"endpoints": ["base"]},
+                "opentelemetry": {
+                    "endpoints": ["base"],
+                    "logs": {"endpoints": ["base"]},
+                    "metrics": {"endpoints": ["base"]}
+                },
                 "atif": {"storage": ["base"]}
             }
         }]
@@ -721,7 +799,11 @@ fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins
                 "kind": "third.party",
                 "config": {
                     "atof": {"sinks": ["overlay"]},
-                    "opentelemetry": {"endpoints": ["overlay"]},
+                    "opentelemetry": {
+                        "endpoints": ["overlay"],
+                        "logs": {"endpoints": ["overlay"]},
+                        "metrics": {"endpoints": ["overlay"]}
+                    },
                     "atif": {"storage": ["overlay"]}
                 }
             }]
@@ -731,6 +813,14 @@ fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins
     let config = &merged["components"][0]["config"];
     assert_eq!(config["atof"]["sinks"], json!(["overlay"]));
     assert_eq!(config["opentelemetry"]["endpoints"], json!(["overlay"]));
+    assert_eq!(
+        config["opentelemetry"]["logs"]["endpoints"],
+        json!(["overlay"])
+    );
+    assert_eq!(
+        config["opentelemetry"]["metrics"]["endpoints"],
+        json!(["overlay"])
+    );
     assert_eq!(config["atif"]["storage"], json!(["overlay"]));
 }
 

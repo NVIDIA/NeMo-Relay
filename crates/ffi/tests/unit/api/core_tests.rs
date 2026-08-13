@@ -250,7 +250,7 @@ fn test_ffi_observability_plugin_file_sinks() {
             nemo_relay_observability_default_config_json(&mut default_config_json),
             NemoRelayStatus::Ok
         );
-        assert_eq!(returned_json(default_config_json)["version"], json!(3));
+        assert_eq!(returned_json(default_config_json)["version"], json!(4));
         let mut component_json = ptr::null_mut();
         assert_status!(
             nemo_relay_observability_component_spec_json(ptr::null(), true, &mut component_json),

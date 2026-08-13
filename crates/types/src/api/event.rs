@@ -16,6 +16,8 @@
 //! Event types for Agent Trajectory Observability Format (ATOF) runtime events.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -32,6 +34,463 @@ use crate::codec::response::AnnotatedLlmResponse;
 
 /// Agent Trajectory Observability Format (ATOF) protocol version emitted by this runtime.
 pub const ATOF_VERSION: &str = "0.1";
+
+/// Reserved metadata key carrying the canonical severity of a mark exported as a log.
+pub const LOG_SEVERITY_METADATA_KEY: &str = "nemo_relay.log.severity";
+
+/// Relay-owned schema name for mark payloads containing metric measurements.
+pub const METRIC_DATA_SCHEMA_NAME: &str = "nemo.relay.metric_measurements";
+
+/// Current Relay-owned metric measurement schema version.
+pub const METRIC_DATA_SCHEMA_VERSION: &str = "1";
+
+/// Severity attached to a mark that may be projected as an OpenTelemetry log.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum LogSeverity {
+    /// Fine-grained tracing information.
+    Trace,
+    /// Diagnostic information useful during development.
+    Debug,
+    /// Normal informational event.
+    #[default]
+    Info,
+    /// Potential problem that did not prevent the operation from continuing.
+    Warn,
+    /// Failure or error condition.
+    Error,
+}
+
+impl LogSeverity {
+    /// Return the canonical lowercase wire value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trace => "trace",
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl fmt::Display for LogSeverity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Error returned when parsing an unsupported log severity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseLogSeverityError {
+    value: String,
+}
+
+impl fmt::Display for ParseLogSeverityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "invalid log severity {:?}; expected trace, debug, info, warn, warning, or error",
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for ParseLogSeverityError {}
+
+impl FromStr for LogSeverity {
+    type Err = ParseLogSeverityError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "trace" => Ok(Self::Trace),
+            "debug" => Ok(Self::Debug),
+            "info" => Ok(Self::Info),
+            "warn" | "warning" => Ok(Self::Warn),
+            "error" => Ok(Self::Error),
+            _ => Err(ParseLogSeverityError {
+                value: value.to_string(),
+            }),
+        }
+    }
+}
+
+impl Serialize for LogSeverity {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for LogSeverity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// OpenTelemetry instrument kind represented by a metric measurement mark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricKind {
+    /// Monotonic additive value.
+    Counter,
+    /// Additive value that may increase or decrease.
+    UpDownCounter,
+    /// Current sampled value.
+    Gauge,
+    /// Distribution sample.
+    Histogram,
+}
+
+impl MetricKind {
+    /// Return the canonical lowercase wire value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Counter => "counter",
+            Self::UpDownCounter => "up_down_counter",
+            Self::Gauge => "gauge",
+            Self::Histogram => "histogram",
+        }
+    }
+}
+
+impl fmt::Display for MetricKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Numeric representation used by a metric measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MetricValueType {
+    /// Unsigned 64-bit integer, restricted to values representable as `i64` on export.
+    U64,
+    /// Signed 64-bit integer.
+    I64,
+    /// Finite IEEE 754 double-precision value.
+    F64,
+}
+
+impl MetricValueType {
+    /// Return the canonical lowercase wire value.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::U64 => "u64",
+            Self::I64 => "i64",
+            Self::F64 => "f64",
+        }
+    }
+}
+
+impl fmt::Display for MetricValueType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// One recording operation in a Relay metric mark.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[serde(deny_unknown_fields)]
+#[builder(field_defaults(setter(into, strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
+pub struct MetricMeasurement {
+    /// OpenTelemetry instrument name.
+    pub name: String,
+    /// Instrument kind used to record the value.
+    pub kind: MetricKind,
+    /// Explicit numeric representation of `value`.
+    pub value_type: MetricValueType,
+    /// Numeric recording value.
+    pub value: Json,
+    /// Optional OpenTelemetry instrument unit.
+    #[builder(default)]
+    pub unit: Option<String>,
+    /// Optional OpenTelemetry instrument description.
+    #[builder(default)]
+    pub description: Option<String>,
+    /// Optional low-cardinality OpenTelemetry attributes object.
+    #[builder(default)]
+    pub attributes: Option<Json>,
+    /// Optional explicit histogram bucket boundaries.
+    #[builder(default)]
+    pub boundaries: Option<Vec<f64>>,
+}
+
+/// Payload stored in a mark using [`METRIC_DATA_SCHEMA_NAME`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[serde(deny_unknown_fields)]
+#[builder(field_defaults(setter(into)))]
+pub struct MetricEnvelope {
+    /// Metric recording operations that must be accepted or rejected atomically.
+    pub measurements: Vec<MetricMeasurement>,
+}
+
+impl MetricEnvelope {
+    /// Validate every measurement and their shared instrument descriptors.
+    ///
+    /// # Errors
+    /// Returns a [`MetricValidationError`] when any field violates the Relay
+    /// metric schema. The complete envelope must be rejected on error.
+    pub fn validate(&self) -> Result<(), MetricValidationError> {
+        validate_metric_measurements(&self.measurements)
+    }
+}
+
+/// Validation error for a Relay metric envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetricValidationError {
+    message: String,
+}
+
+impl MetricValidationError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Return the detailed validation message.
+    pub fn message(&self) -> &str {
+        self.message.as_str()
+    }
+}
+
+impl fmt::Display for MetricValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for MetricValidationError {}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttributeValueKind {
+    String,
+    Bool,
+    I64,
+    F64,
+}
+
+fn validate_attribute_value(
+    value: &Json,
+    path: &str,
+) -> Result<AttributeValueKind, MetricValidationError> {
+    match value {
+        Json::String(_) => Ok(AttributeValueKind::String),
+        Json::Bool(_) => Ok(AttributeValueKind::Bool),
+        Json::Number(number) if number.as_i64().is_some() => Ok(AttributeValueKind::I64),
+        Json::Number(number) if number.as_u64().is_some() => Err(MetricValidationError::new(
+            format!("{path} exceeds the maximum signed 64-bit attribute value"),
+        )),
+        Json::Number(number) => match number.as_f64() {
+            Some(value) if value.is_finite() => Ok(AttributeValueKind::F64),
+            _ => Err(MetricValidationError::new(format!(
+                "{path} must be a finite number"
+            ))),
+        },
+        Json::Null => Err(MetricValidationError::new(format!(
+            "{path} must not be null"
+        ))),
+        Json::Array(_) | Json::Object(_) => Err(MetricValidationError::new(format!(
+            "{path} must be a primitive value"
+        ))),
+    }
+}
+
+fn validate_attributes(
+    attributes: &Json,
+    measurement_index: usize,
+) -> Result<(), MetricValidationError> {
+    let path = format!("measurements[{measurement_index}].attributes");
+    let object = attributes
+        .as_object()
+        .ok_or_else(|| MetricValidationError::new(format!("{path} must be a JSON object")))?;
+    for (key, value) in object {
+        if key.trim().is_empty() {
+            return Err(MetricValidationError::new(format!(
+                "{path} contains a blank attribute key"
+            )));
+        }
+        let value_path = format!("{path}.{key}");
+        if let Json::Array(values) = value {
+            let Some(first) = values.first() else {
+                return Err(MetricValidationError::new(format!(
+                    "{value_path} must not be an empty untyped array"
+                )));
+            };
+            let expected = validate_attribute_value(first, &format!("{value_path}[0]"))?;
+            for (index, value) in values.iter().enumerate().skip(1) {
+                let actual = validate_attribute_value(value, &format!("{value_path}[{index}]"))?;
+                if actual != expected {
+                    return Err(MetricValidationError::new(format!(
+                        "{value_path} must contain values of one primitive type"
+                    )));
+                }
+            }
+        } else {
+            validate_attribute_value(value, &value_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_measurement_value(
+    measurement: &MetricMeasurement,
+    index: usize,
+) -> Result<(), MetricValidationError> {
+    let path = format!("measurements[{index}].value");
+    let combination_allowed = matches!(
+        (measurement.kind, measurement.value_type),
+        (
+            MetricKind::Counter,
+            MetricValueType::U64 | MetricValueType::F64
+        ) | (
+            MetricKind::UpDownCounter,
+            MetricValueType::I64 | MetricValueType::F64
+        ) | (MetricKind::Gauge, _)
+            | (
+                MetricKind::Histogram,
+                MetricValueType::U64 | MetricValueType::F64
+            )
+    );
+    if !combination_allowed {
+        return Err(MetricValidationError::new(format!(
+            "measurements[{index}] kind {} does not support value_type {}",
+            measurement.kind, measurement.value_type
+        )));
+    }
+
+    match measurement.value_type {
+        MetricValueType::U64 => {
+            let value = measurement.value.as_u64().ok_or_else(|| {
+                MetricValidationError::new(format!("{path} must be an unsigned integer"))
+            })?;
+            if value > i64::MAX as u64 {
+                return Err(MetricValidationError::new(format!(
+                    "{path} must not exceed i64::MAX"
+                )));
+            }
+        }
+        MetricValueType::I64 => {
+            measurement.value.as_i64().ok_or_else(|| {
+                MetricValidationError::new(format!("{path} must be a signed integer"))
+            })?;
+        }
+        MetricValueType::F64 => {
+            let value = measurement
+                .value
+                .as_f64()
+                .ok_or_else(|| MetricValidationError::new(format!("{path} must be a number")))?;
+            if !value.is_finite() {
+                return Err(MetricValidationError::new(format!("{path} must be finite")));
+            }
+            if measurement.kind == MetricKind::Counter && value < 0.0 {
+                return Err(MetricValidationError::new(format!(
+                    "{path} must be nonnegative for {} measurements",
+                    measurement.kind
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_histogram_boundaries(
+    measurement: &MetricMeasurement,
+    index: usize,
+) -> Result<(), MetricValidationError> {
+    let Some(boundaries) = measurement.boundaries.as_ref() else {
+        return Ok(());
+    };
+    if measurement.kind != MetricKind::Histogram {
+        return Err(MetricValidationError::new(format!(
+            "measurements[{index}].boundaries is only valid for histogram measurements"
+        )));
+    }
+    if boundaries.len() > 64 {
+        return Err(MetricValidationError::new(format!(
+            "measurements[{index}].boundaries must contain at most 64 entries"
+        )));
+    }
+    for (boundary_index, boundary) in boundaries.iter().enumerate() {
+        if !boundary.is_finite() {
+            return Err(MetricValidationError::new(format!(
+                "measurements[{index}].boundaries[{boundary_index}] must be finite"
+            )));
+        }
+        if boundary_index > 0 && *boundary <= boundaries[boundary_index - 1] {
+            return Err(MetricValidationError::new(format!(
+                "measurements[{index}].boundaries must be strictly increasing without duplicates"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Validate a complete list of metric measurements atomically.
+///
+/// # Errors
+/// Returns a [`MetricValidationError`] for the first schema violation. Callers
+/// must reject the entire list when validation fails.
+pub fn validate_metric_measurements(
+    measurements: &[MetricMeasurement],
+) -> Result<(), MetricValidationError> {
+    if measurements.is_empty() {
+        return Err(MetricValidationError::new(
+            "measurements must contain at least one entry",
+        ));
+    }
+
+    let mut descriptors = BTreeMap::<String, usize>::new();
+    for (index, measurement) in measurements.iter().enumerate() {
+        let name = measurement.name.as_bytes();
+        if name.is_empty()
+            || name.len() > 255
+            || !name[0].is_ascii_alphabetic()
+            || !name[1..].iter().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'/')
+            })
+        {
+            return Err(MetricValidationError::new(format!(
+                "measurements[{index}].name must be 1-255 ASCII bytes, start with a letter, and contain only letters, digits, '_', '.', '-', or '/'"
+            )));
+        }
+        validate_measurement_value(measurement, index)?;
+
+        if let Some(unit) = measurement.unit.as_ref()
+            && (!unit.is_ascii() || unit.len() > 63)
+        {
+            return Err(MetricValidationError::new(format!(
+                "measurements[{index}].unit must be ASCII and at most 63 bytes"
+            )));
+        }
+        validate_histogram_boundaries(measurement, index)?;
+        if let Some(attributes) = measurement.attributes.as_ref() {
+            validate_attributes(attributes, index)?;
+        }
+
+        let canonical_name = measurement.name.to_ascii_lowercase();
+        if let Some(previous_index) = descriptors.insert(canonical_name, index) {
+            let previous = &measurements[previous_index];
+            if previous.kind != measurement.kind
+                || previous.value_type != measurement.value_type
+                || previous.unit != measurement.unit
+                || previous.description != measurement.description
+                || previous.boundaries != measurement.boundaries
+            {
+                return Err(MetricValidationError::new(format!(
+                    "measurements[{index}] conflicts with the descriptor for measurements[{previous_index}]"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Identifier for the schema that describes an event's opaque `data` payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
@@ -400,9 +859,15 @@ pub struct PendingMarkSpec {
     /// Optional application payload attached to the mark.
     #[builder(default)]
     pub data: Option<Json>,
+    /// Optional schema identifier for the mark data.
+    #[builder(default)]
+    pub data_schema: Option<DataSchema>,
     /// Optional metadata attached to the mark.
     #[builder(default)]
     pub metadata: Option<Json>,
+    /// Optional typed log severity applied authoritatively to mark metadata.
+    #[builder(default)]
+    pub severity: Option<LogSeverity>,
 }
 
 impl MarkEvent {

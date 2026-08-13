@@ -758,6 +758,35 @@ fn parse_float_value(field: &EditorFieldSpec, value: &str) -> Result<Value, CliE
     Ok(json!(parsed))
 }
 
+fn editor_enum_default_index(field: &EditorFieldSpec, current: Option<&Value>) -> usize {
+    current
+        .map(display_value)
+        .and_then(|value| {
+            field
+                .enum_values
+                .iter()
+                .position(|candidate| *candidate == value)
+        })
+        .unwrap_or(0)
+}
+
+fn editor_enum_value(field: &EditorFieldSpec, selected: usize) -> Value {
+    let value = field.enum_values[selected];
+    if field
+        .enum_values
+        .iter()
+        .all(|candidate| candidate.parse::<i64>().is_ok())
+    {
+        json!(
+            value
+                .parse::<i64>()
+                .expect("numeric editor enum values were validated above")
+        )
+    } else {
+        json!(value)
+    }
+}
+
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/plugins_tests.rs"]
 mod tests;

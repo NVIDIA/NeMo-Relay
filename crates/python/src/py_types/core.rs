@@ -832,7 +832,9 @@ impl PyPendingMarkSpec {
                 category,
                 category_profile,
                 data: data.map(py_to_json).transpose()?,
+                data_schema: None,
                 metadata: metadata.map(py_to_json).transpose()?,
+                severity: None,
             },
         })
     }
