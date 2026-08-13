@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    tool_attributes_to_strings,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent, tool_attributes_to_strings,
 };
 use crate::api::runtime::{
     NemoRelayContextState, PropagationContext, ThreadScopeStackBinding,
@@ -2653,6 +2653,73 @@ fn records_span_start_mark_and_end() {
         attributes.get("nemo_relay.end.output.result"),
         Some(&"ok".to_string())
     );
+}
+
+#[test]
+fn metric_schema_marks_are_not_projected_to_direct_traces() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        None,
+    ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("tokens-saved")
+            .data(json!({
+                "measurements": [{
+                    "name": "example.tokens.saved",
+                    "kind": "counter",
+                    "value_type": "u64",
+                    "value": 42
+                }]
+            }))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("invalid-metric")
+            .data(json!({"measurements": []}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    processor.process(&make_mark_event(Some(root_uuid), "routing-decision", None));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        None,
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].events.events.len(), 1);
+    assert_eq!(spans[0].events.events[0].name.as_ref(), "routing-decision");
+    assert_eq!(processor.invalid_metric_count, 1);
 }
 
 #[test]

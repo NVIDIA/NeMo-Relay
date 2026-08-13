@@ -1426,15 +1426,14 @@ fn register_opentelemetry(
         .iter()
         .map(|subscriber| subscriber.subscriber())
         .collect::<Vec<_>>();
-    let mut signal_callbacks = log_subscribers
+    let log_callbacks = log_subscribers
         .iter()
         .map(|subscriber| subscriber.subscriber())
         .collect::<Vec<_>>();
-    signal_callbacks.extend(
-        metric_subscribers
-            .iter()
-            .map(|subscriber| subscriber.subscriber()),
-    );
+    let metric_callbacks = metric_subscribers
+        .iter()
+        .map(|subscriber| subscriber.subscriber())
+        .collect::<Vec<_>>();
     // Retain the subscribers as long as the registered fan-out callback exists.
     // Their providers and exporter runtimes must outlive event delivery.
     let delivery_trace_subscribers = trace_subscribers.clone();
@@ -1470,7 +1469,8 @@ fn register_opentelemetry(
             );
             deliver_opentelemetry_event(
                 &trace_callbacks,
-                &signal_callbacks,
+                &log_callbacks,
+                &metric_callbacks,
                 &rejected_metric_marks,
                 event,
             );
@@ -1512,15 +1512,27 @@ fn shutdown_all_opentelemetry_subscribers(
 
 fn deliver_opentelemetry_event(
     trace_callbacks: &[EventSubscriberFn],
-    signal_callbacks: &[EventSubscriberFn],
+    log_callbacks: &[EventSubscriberFn],
+    metric_callbacks: &[EventSubscriberFn],
     rejected_metric_marks: &AtomicU64,
     event: &Event,
 ) {
-    deliver_opentelemetry_callbacks(trace_callbacks, 0, event);
-    if !valid_opentelemetry_signal_event(event, rejected_metric_marks) {
-        return;
+    match classify_metric_mark(event) {
+        MetricMarkClassification::NotMetric => {
+            deliver_opentelemetry_callbacks(trace_callbacks, 0, event);
+            deliver_opentelemetry_callbacks(log_callbacks, trace_callbacks.len(), event);
+        }
+        MetricMarkClassification::Valid(_) => {
+            deliver_opentelemetry_callbacks(
+                metric_callbacks,
+                trace_callbacks.len() + log_callbacks.len(),
+                event,
+            );
+        }
+        MetricMarkClassification::Invalid(error) => {
+            reject_opentelemetry_metric_mark(event, rejected_metric_marks, &error);
+        }
     }
-    deliver_opentelemetry_callbacks(signal_callbacks, trace_callbacks.len(), event);
 }
 
 fn deliver_opentelemetry_callbacks(
@@ -1543,10 +1555,7 @@ fn deliver_opentelemetry_callbacks(
     }
 }
 
-fn valid_opentelemetry_signal_event(event: &Event, rejected_metric_marks: &AtomicU64) -> bool {
-    let MetricMarkClassification::Invalid(error) = classify_metric_mark(event) else {
-        return true;
-    };
+fn reject_opentelemetry_metric_mark(event: &Event, rejected_metric_marks: &AtomicU64, error: &str) {
     let rejection_count = rejected_metric_marks.fetch_add(1, Ordering::Relaxed) + 1;
     if rejection_count == 1 {
         log::warn!(
@@ -1565,7 +1574,6 @@ fn valid_opentelemetry_signal_event(event: &Event, rejected_metric_marks: &Atomi
         ),
         1,
     );
-    false
 }
 
 fn build_opentelemetry_subscribers(

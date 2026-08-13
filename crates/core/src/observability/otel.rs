@@ -5,8 +5,9 @@
 //!
 //! This crate adapts NeMo Relay lifecycle events into the selected `full`,
 //! `gen_ai`, or `openinference` OpenTelemetry trace projection. Scope start and
-//! end events open and close supported spans. Mark behavior is fixed by the
-//! selected projection.
+//! end events open and close supported spans. Non-metric mark behavior is fixed
+//! by the selected projection; reserved metric-schema marks are not projected
+//! into traces.
 //!
 //! The public API is intentionally small:
 //!
@@ -23,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::otel_signal::{MetricMarkClassification, classify_metric_mark};
 use super::{
     MarkProjection, OpenTelemetryType, OtlpAttributeMapping, apply_attribute_mappings,
     attribute_mapping_aliases, attribute_mapping_inputs, default_mark_exclude_names,
@@ -996,6 +998,7 @@ pub(super) struct OtelEventProcessor {
     mark_projection: MarkProjection,
     mark_exclude_names: Vec<String>,
     attribute_mappings: Vec<OtlpAttributeMapping>,
+    invalid_metric_count: u64,
 }
 
 impl OtelEventProcessor {
@@ -1102,6 +1105,7 @@ impl OtelEventProcessor {
             mark_projection,
             mark_exclude_names,
             attribute_mappings,
+            invalid_metric_count: 0,
         }
     }
 
@@ -1258,6 +1262,22 @@ impl OtelEventProcessor {
     }
 
     fn process_mark(&mut self, event: &Event) {
+        match classify_metric_mark(event) {
+            MetricMarkClassification::NotMetric => {}
+            MetricMarkClassification::Valid(_) => return,
+            MetricMarkClassification::Invalid(error) => {
+                self.invalid_metric_count = self.invalid_metric_count.saturating_add(1);
+                if self.invalid_metric_count == 1 {
+                    log::warn!(
+                        target: "nemo_relay.observability",
+                        event = "otel_metric_mark_rejected",
+                        mark_name = event.name();
+                        "OpenTelemetry metric mark was dropped atomically: {error}"
+                    );
+                }
+                return;
+            }
+        }
         if self.otel_type == OpenTelemetryType::GenAi {
             return;
         }

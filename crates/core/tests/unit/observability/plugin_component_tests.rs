@@ -5,7 +5,8 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME, MarkEvent, ScopeEvent,
+    BaseEvent, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION,
+    MarkEvent, ScopeEvent,
 };
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
@@ -3591,6 +3592,31 @@ fn metric_cardinality_limit_rejects_usize_max_in_plugin_validation() {
     }));
 }
 
+fn counting_callbacks(counter: &Arc<AtomicUsize>) -> Vec<crate::api::runtime::EventSubscriberFn> {
+    let counter = Arc::clone(counter);
+    vec![Arc::new(move |_| {
+        counter.fetch_add(1, Ordering::Relaxed);
+    })]
+}
+
+fn reserved_metric_mark(version: &str, data: serde_json::Value) -> crate::api::event::Event {
+    crate::api::event::Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("metric")
+            .data(data)
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(version)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ))
+}
+
 #[test]
 fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
     let delivered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -3610,56 +3636,80 @@ fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
         None,
     ));
 
-    deliver_opentelemetry_event(&callbacks, &[], &AtomicU64::new(0), &event);
+    deliver_opentelemetry_event(&callbacks, &[], &[], &AtomicU64::new(0), &event);
 
     assert!(delivered.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[test]
-fn invalid_reserved_metric_marks_are_rejected_before_log_only_signal_fanout() {
+fn opentelemetry_routes_marks_by_metric_schema() {
     let traced = Arc::new(AtomicUsize::new(0));
     let logged = Arc::new(AtomicUsize::new(0));
-    let trace_counter = Arc::clone(&traced);
-    let log_counter = Arc::clone(&logged);
-    let trace_callbacks: Vec<crate::api::runtime::EventSubscriberFn> = vec![Arc::new(move |_| {
-        trace_counter.fetch_add(1, Ordering::Relaxed);
-    })];
-    // This signal fan-out intentionally contains only a log callback: metrics
-    // are disabled, but reserved metric marks must still be validated once.
-    let signal_callbacks: Vec<crate::api::runtime::EventSubscriberFn> = vec![Arc::new(move |_| {
-        log_counter.fetch_add(1, Ordering::Relaxed);
-    })];
+    let metered = Arc::new(AtomicUsize::new(0));
+    let trace_callbacks = counting_callbacks(&traced);
+    let log_callbacks = counting_callbacks(&logged);
+    let metric_callbacks = counting_callbacks(&metered);
     let rejected_metric_marks = AtomicU64::new(0);
+
+    let ordinary_mark = crate::api::event::Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("routing-decision")
+            .build(),
+        None,
+        None,
+    ));
+    deliver_opentelemetry_event(
+        &trace_callbacks,
+        &log_callbacks,
+        &metric_callbacks,
+        &rejected_metric_marks,
+        &ordinary_mark,
+    );
+    assert_eq!(traced.load(Ordering::Relaxed), 1);
+    assert_eq!(logged.load(Ordering::Relaxed), 1);
+    assert_eq!(metered.load(Ordering::Relaxed), 0);
+
+    let valid_metric = reserved_metric_mark(
+        METRIC_DATA_SCHEMA_VERSION,
+        json!({
+            "measurements": [{
+                "name": "example.tokens.saved",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 42
+            }]
+        }),
+    );
+
+    deliver_opentelemetry_event(
+        &trace_callbacks,
+        &log_callbacks,
+        &metric_callbacks,
+        &rejected_metric_marks,
+        &valid_metric,
+    );
+    assert_eq!(traced.load(Ordering::Relaxed), 1);
+    assert_eq!(logged.load(Ordering::Relaxed), 1);
+    assert_eq!(metered.load(Ordering::Relaxed), 1);
+    assert_eq!(rejected_metric_marks.load(Ordering::Relaxed), 0);
 
     for (version, data) in [
         ("999", json!({"measurements": [{"name": "ignored"}]})),
         ("1", json!({"measurements": []})),
     ] {
-        let event = crate::api::event::Event::Mark(MarkEvent::new(
-            BaseEvent::builder()
-                .uuid(Uuid::now_v7())
-                .name("invalid-metric")
-                .data(data)
-                .data_schema(
-                    DataSchema::builder()
-                        .name(METRIC_DATA_SCHEMA_NAME)
-                        .version(version)
-                        .build(),
-                )
-                .build(),
-            None,
-            None,
-        ));
+        let event = reserved_metric_mark(version, data);
         deliver_opentelemetry_event(
             &trace_callbacks,
-            &signal_callbacks,
+            &log_callbacks,
+            &metric_callbacks,
             &rejected_metric_marks,
             &event,
         );
     }
-
-    assert_eq!(traced.load(Ordering::Relaxed), 2);
-    assert_eq!(logged.load(Ordering::Relaxed), 0);
+    assert_eq!(traced.load(Ordering::Relaxed), 1);
+    assert_eq!(logged.load(Ordering::Relaxed), 1);
+    assert_eq!(metered.load(Ordering::Relaxed), 1);
     assert_eq!(rejected_metric_marks.load(Ordering::Relaxed), 2);
 }
 
