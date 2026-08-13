@@ -628,8 +628,23 @@ async fn emit_pending_request_marks(
     }
     ensure_runtime_owner()?;
     let timestamp = handle.started_at + TimeDelta::microseconds(1);
-    for mark in marks {
-        let metadata = metadata_with_log_severity(mark.metadata, mark.severity)?;
+    for (index, mark) in marks.into_iter().enumerate() {
+        let metadata = match metadata_with_log_severity(mark.metadata, mark.severity) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let llm_uuid = handle.uuid.to_string();
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "llm_pending_mark_dropped",
+                    llm_name = handle.name.as_str(),
+                    llm_uuid = llm_uuid.as_str(),
+                    pending_mark_index = index,
+                    pending_mark_name = mark.name.as_str();
+                    "LLM pending mark was dropped because its severity metadata is invalid: {error}"
+                );
+                continue;
+            }
+        };
         let event = Event::Mark(MarkEvent::new(
             BaseEvent::builder()
                 .name(mark.name)

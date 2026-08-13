@@ -798,8 +798,15 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
                 Box::pin(async move {
                     let mut result = next(args).await?;
                     result["compressed"] = json!(true);
-                    Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                    Ok(ToolExecutionInterceptOutcome::new(result)
+                        .with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("tool.mark.invalid")
+                                .metadata(json!("not an object"))
+                                .severity(LogSeverity::Info)
+                                .build(),
+                        )
+                        .with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name("tool.mark.inner")
                                 .category(EventCategory::custom())
@@ -818,8 +825,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
                                 .metadata(json!({"source": "test"}))
                                 .severity(LogSeverity::Error)
                                 .build(),
-                        ),
-                    )
+                        ))
                 })
             }),
         )
@@ -855,6 +861,11 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         .iter()
         .position(|event| event.name() == "tool.mark.inner")
         .unwrap();
+    assert!(
+        captured
+            .iter()
+            .all(|event| event.name() != "tool.mark.invalid")
+    );
     let outer_index = captured
         .iter()
         .position(|event| event.name() == "tool.mark.outer")
@@ -4823,6 +4834,13 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
                 LlmRequestInterceptOutcome::new(request, annotated)
                     .with_pending_mark(
                         PendingMarkSpec::builder()
+                            .name("request.optimized.invalid")
+                            .metadata(json!("not an object"))
+                            .severity(LogSeverity::Info)
+                            .build(),
+                    )
+                    .with_pending_mark(
+                        PendingMarkSpec::builder()
                             .name("request.optimized")
                             .category(EventCategory::custom())
                             .category_profile(
@@ -4897,6 +4915,11 @@ async fn test_managed_llm_emits_pending_marks_under_started_scope() {
         .iter()
         .find(|event| event.name() == "request.optimized.second")
         .unwrap();
+    assert!(
+        captured
+            .iter()
+            .all(|event| event.name() != "request.optimized.invalid")
+    );
     let end = captured
         .iter()
         .find(|event| {
