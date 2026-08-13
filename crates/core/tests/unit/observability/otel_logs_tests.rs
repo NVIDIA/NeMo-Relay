@@ -59,6 +59,27 @@ fn processor(
 }
 
 #[test]
+fn scope_lineage_bounds_active_contexts() {
+    let mut lineage = ScopeLineage::new();
+    let first = Uuid::now_v7();
+    lineage.process_start(&scope(first, ScopeCategory::Start));
+    for _ in 0..COMPLETED_SPAN_CONTEXT_LIMIT {
+        lineage.process_start(&scope(Uuid::now_v7(), ScopeCategory::Start));
+    }
+
+    assert_eq!(lineage.active.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert_eq!(lineage.active_order.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert!(!lineage.active.contains_key(&first));
+    assert!(!lineage.active_order.contains(&first));
+
+    let active = *lineage.active_order.back().unwrap();
+    lineage.process_end(&scope(active, ScopeCategory::End));
+    assert!(!lineage.active.contains_key(&active));
+    assert!(!lineage.active_order.contains(&active));
+    assert!(lineage.completed.contains_key(&active));
+}
+
+#[test]
 fn direct_log_subscriber_recovers_a_poisoned_processor_lock() {
     let subscriber =
         OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new("http://127.0.0.1:4318"))

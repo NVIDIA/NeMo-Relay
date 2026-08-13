@@ -33,7 +33,7 @@ use crate::plugin::{
     record_active_plugin_runtime_diagnostic,
 };
 
-use super::otel::{OpenTelemetryError, OtlpTransport, Result};
+use super::otel::{COMPLETED_SPAN_CONTEXT_LIMIT, OpenTelemetryError, OtlpTransport, Result};
 use super::otel_signal::{
     MetricMarkClassification, SignalExporterRuntime, build_in_owned_runtime, classify_metric_mark,
     reject_signal_header_environment, signal_resource, validate_signal_headers,
@@ -42,7 +42,6 @@ use super::otel_signal::{
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
 const DEFAULT_MAX_EXPORT_BATCH_SIZE: usize = 512;
 const DEFAULT_SCHEDULED_DELAY: Duration = Duration::from_secs(1);
-const COMPLETED_SCOPE_CONTEXT_LIMIT: usize = 4_096;
 
 /// Configuration for an OTLP log subscriber.
 #[derive(Debug, Clone)]
@@ -587,6 +586,7 @@ pub(super) fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<M
 
 struct ScopeLineage {
     active: HashMap<Uuid, SpanContext>,
+    active_order: VecDeque<Uuid>,
     completed: HashMap<Uuid, SpanContext>,
     completed_order: VecDeque<Uuid>,
 }
@@ -595,6 +595,7 @@ impl ScopeLineage {
     fn new() -> Self {
         Self {
             active: HashMap::new(),
+            active_order: VecDeque::new(),
             completed: HashMap::new(),
             completed_order: VecDeque::new(),
         }
@@ -602,6 +603,7 @@ impl ScopeLineage {
 
     fn process_start(&mut self, event: &Event) {
         self.remove_completed(event.uuid());
+        self.remove_active(event.uuid());
         let parent = self.parent_context(event);
         let trace_id = parent
             .as_ref()
@@ -617,16 +619,24 @@ impl ScopeLineage {
                 TraceState::default(),
             ),
         );
+        self.active_order.push_back(event.uuid());
+        while self.active_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
+            if let Some(expired) = self.active_order.pop_front() {
+                self.active.remove(&expired);
+            }
+        }
     }
 
     fn process_end(&mut self, event: &Event) {
         let Some(context) = self.active.remove(&event.uuid()) else {
             return;
         };
+        self.active_order
+            .retain(|active_uuid| *active_uuid != event.uuid());
         if self.completed.insert(event.uuid(), context).is_none() {
             self.completed_order.push_back(event.uuid());
         }
-        while self.completed_order.len() > COMPLETED_SCOPE_CONTEXT_LIMIT {
+        while self.completed_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
             if let Some(expired) = self.completed_order.pop_front() {
                 self.completed.remove(&expired);
             }
@@ -657,6 +667,11 @@ impl ScopeLineage {
     fn remove_completed(&mut self, uuid: Uuid) {
         self.completed.remove(&uuid);
         self.completed_order.retain(|candidate| *candidate != uuid);
+    }
+
+    fn remove_active(&mut self, uuid: Uuid) {
+        self.active.remove(&uuid);
+        self.active_order.retain(|candidate| *candidate != uuid);
     }
 }
 
