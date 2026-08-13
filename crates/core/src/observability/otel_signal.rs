@@ -3,16 +3,19 @@
 
 //! Shared infrastructure for independently owned OTLP signal providers.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 use std::thread;
 
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::Resource;
+use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 
 use crate::api::event::{
     Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
 };
+use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 use super::otel::{OpenTelemetryError, Result};
 
@@ -154,6 +157,74 @@ pub(super) fn reject_signal_header_environment(signal_variable: &'static str) ->
         }
     }
     Ok(())
+}
+
+pub(super) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {
+    let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
+        return Cow::Borrowed(endpoint);
+    };
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Cow::Borrowed(endpoint);
+    }
+
+    let path = parsed.path();
+    if path == "/" {
+        let has_explicit_root = endpoint
+            .split(['?', '#'])
+            .next()
+            .is_some_and(|value| value.ends_with('/'));
+        if has_explicit_root {
+            return Cow::Borrowed(endpoint);
+        }
+        parsed.set_path(&format!("/v1/{signal}"));
+        return Cow::Owned(parsed.into());
+    }
+
+    if path == "/v1/traces" || path.ends_with("/v1/traces") {
+        let prefix = path.strip_suffix("/v1/traces").unwrap_or_default();
+        parsed.set_path(&format!("{prefix}/v1/{signal}"));
+        return Cow::Owned(parsed.into());
+    }
+    Cow::Borrowed(endpoint)
+}
+
+pub(super) fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {
+    let mut metadata = MetadataMap::new();
+    for (key, value) in headers {
+        let key = MetadataKey::from_bytes(key.as_bytes()).map_err(|error| {
+            OpenTelemetryError::InvalidGrpcHeader {
+                key: key.clone(),
+                message: error.to_string(),
+            }
+        })?;
+        let value = MetadataValue::try_from(value.as_str()).map_err(|error| {
+            OpenTelemetryError::InvalidGrpcHeader {
+                key: key.to_string(),
+                message: error.to_string(),
+            }
+        })?;
+        metadata.insert(key, value);
+    }
+    Ok(metadata)
+}
+
+pub(super) fn record_signal_runtime_diagnostic(
+    code: &str,
+    field: Option<String>,
+    message: String,
+    count: u64,
+) {
+    if field.is_none() {
+        return;
+    }
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: code.to_string(),
+        component: "observability".to_string(),
+        field,
+        message,
+        session_id: None,
+        count,
+    });
 }
 
 pub(super) fn signal_resource(

@@ -27,12 +27,10 @@ use crate::api::runtime::EventSubscriberFn;
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 
 use super::otel::{OpenTelemetryError, OtlpTransport, Result};
-use super::otel_logs::{
-    build_grpc_metadata, record_signal_runtime_diagnostic, resolve_http_signal_endpoint,
-};
 use super::otel_signal::{
-    MetricMarkClassification, SignalExporterRuntime, build_in_owned_runtime, classify_metric_mark,
-    reject_signal_header_environment, signal_resource, validate_signal_headers,
+    MetricMarkClassification, SignalExporterRuntime, build_grpc_metadata, build_in_owned_runtime,
+    classify_metric_mark, record_signal_runtime_diagnostic, reject_signal_header_environment,
+    resolve_http_signal_endpoint, signal_resource, validate_signal_headers,
 };
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(60);

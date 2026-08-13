@@ -21,22 +21,19 @@ use opentelemetry_sdk::logs::{
 };
 use opentelemetry_sdk::{Resource, error::OTelSdkResult};
 use serde_json::{Map, Value as Json};
-use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 use uuid::Uuid;
 
 use crate::api::event::{ATOF_VERSION, Event, LOG_SEVERITY_METADATA_KEY, LogSeverity};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
 use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use crate::observability::{relay_span_id, relay_trace_id};
-use crate::plugin::{
-    OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, RuntimeDiagnostic,
-    record_active_plugin_runtime_diagnostic,
-};
+use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 use super::otel::{COMPLETED_SPAN_CONTEXT_LIMIT, OpenTelemetryError, OtlpTransport, Result};
 use super::otel_signal::{
-    MetricMarkClassification, SignalExporterRuntime, build_in_owned_runtime, classify_metric_mark,
-    reject_signal_header_environment, signal_resource, validate_signal_headers,
+    MetricMarkClassification, SignalExporterRuntime, build_grpc_metadata, build_in_owned_runtime,
+    classify_metric_mark, record_signal_runtime_diagnostic, reject_signal_header_environment,
+    resolve_http_signal_endpoint, signal_resource, validate_signal_headers,
 };
 
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
@@ -189,35 +186,6 @@ impl OpenTelemetryLogConfig {
 /// Resolve an OTLP/HTTP endpoint for the logs signal.
 pub fn resolve_http_log_endpoint(endpoint: &str) -> Cow<'_, str> {
     resolve_http_signal_endpoint(endpoint, "logs")
-}
-
-pub(crate) fn resolve_http_signal_endpoint<'a>(endpoint: &'a str, signal: &str) -> Cow<'a, str> {
-    let Ok(mut parsed) = reqwest::Url::parse(endpoint) else {
-        return Cow::Borrowed(endpoint);
-    };
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Cow::Borrowed(endpoint);
-    }
-
-    let path = parsed.path();
-    if path == "/" {
-        let has_explicit_root = endpoint
-            .split(['?', '#'])
-            .next()
-            .is_some_and(|value| value.ends_with('/'));
-        if has_explicit_root {
-            return Cow::Borrowed(endpoint);
-        }
-        parsed.set_path(&format!("/v1/{signal}"));
-        return Cow::Owned(parsed.into());
-    }
-
-    if path == "/v1/traces" || path.ends_with("/v1/traces") {
-        let prefix = path.strip_suffix("/v1/traces").unwrap_or_default();
-        parsed.set_path(&format!("{prefix}/v1/{signal}"));
-        return Cow::Owned(parsed.into());
-    }
-    Cow::Borrowed(endpoint)
 }
 
 /// OpenTelemetry log-backed Relay event subscriber.
@@ -543,45 +511,6 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
     fn set_resource(&mut self, resource: &Resource) {
         self.inner.set_resource(resource);
     }
-}
-
-pub(super) fn record_signal_runtime_diagnostic(
-    code: &str,
-    field: Option<String>,
-    message: String,
-    count: u64,
-) {
-    if field.is_none() {
-        return;
-    }
-    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
-        code: code.to_string(),
-        component: "observability".to_string(),
-        field,
-        message,
-        session_id: None,
-        count,
-    });
-}
-
-pub(super) fn build_grpc_metadata(headers: &HashMap<String, String>) -> Result<MetadataMap> {
-    let mut metadata = MetadataMap::new();
-    for (key, value) in headers {
-        let key = MetadataKey::from_bytes(key.as_bytes()).map_err(|error| {
-            OpenTelemetryError::InvalidGrpcHeader {
-                key: key.clone(),
-                message: error.to_string(),
-            }
-        })?;
-        let value = MetadataValue::try_from(value.as_str()).map_err(|error| {
-            OpenTelemetryError::InvalidGrpcHeader {
-                key: key.to_string(),
-                message: error.to_string(),
-            }
-        })?;
-        metadata.insert(key, value);
-    }
-    Ok(metadata)
 }
 
 struct ScopeLineage {

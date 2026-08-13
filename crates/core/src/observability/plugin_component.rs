@@ -1565,7 +1565,7 @@ fn reject_opentelemetry_metric_mark(event: &Event, rejected_metric_marks: &Atomi
             "OpenTelemetry metric mark was dropped atomically: {error}"
         );
     }
-    crate::observability::otel_logs::record_signal_runtime_diagnostic(
+    crate::observability::otel_signal::record_signal_runtime_diagnostic(
         "otel.metric_mark_invalid",
         Some("opentelemetry.metrics".to_string()),
         format!(
