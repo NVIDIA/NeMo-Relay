@@ -533,6 +533,54 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
     );
 }
 
+#[tokio::test]
+async fn run_command_install_requires_a_valid_bootstrap_key_except_dry_runs() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let install_dir = temp.path().join("plugin-install");
+    let install_dir_arg = install_dir.to_string_lossy().to_string();
+    let key_path = temp
+        .path()
+        .join("xdg/nemo-relay/bootstrap/fingerprint-hmac.key");
+    std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+    std::fs::write(&key_path, [0_u8; 31]).unwrap();
+
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "install",
+        "codex",
+        "--install-dir",
+        install_dir_arg.as_str(),
+        "--skip-doctor",
+    ])
+    .unwrap();
+    let error = run_command(cli.command.unwrap(), &cli.server, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("bootstrap HMAC key"));
+    assert!(error.contains("invalid length 31"));
+    assert!(!install_dir.exists());
+
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "install",
+        "codex",
+        "--install-dir",
+        install_dir_arg.as_str(),
+        "--dry-run",
+        "--skip-doctor",
+    ])
+    .unwrap();
+    assert_eq!(
+        run_command(cli.command.unwrap(), &cli.server, None)
+            .await
+            .unwrap(),
+        ExitCode::SUCCESS
+    );
+    assert_eq!(std::fs::read(key_path).unwrap(), [0_u8; 31]);
+}
+
 #[test]
 fn pricing_validate_dispatch_covers_success_read_and_parse_errors() {
     let dir = tempfile::tempdir().unwrap();

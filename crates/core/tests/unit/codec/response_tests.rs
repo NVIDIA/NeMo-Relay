@@ -15,7 +15,7 @@ use crate::error::FlowError;
 use crate::json::Json;
 use crate::plugin::{
     DiagnosticLevel, PluginComponentSpec, PluginConfig, clear_plugin_configuration,
-    initialize_plugins, validate_plugin_config,
+    initialize_plugins_exact, validate_plugin_config,
 };
 use crate::plugins::model_pricing::register_pricing_component;
 
@@ -811,7 +811,7 @@ fn test_pricing_plugin_configures_process_resolver_and_clears_to_default() {
 
     tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(async { initialize_plugins(config).await.unwrap() });
+        .block_on(async { initialize_plugins_exact(config).await.unwrap() });
     let _clear_guard = ClearPluginConfigurationGuard;
     let usage = Usage {
         prompt_tokens: Some(1_000),
