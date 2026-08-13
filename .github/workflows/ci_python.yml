@@ -343,7 +343,7 @@ jobs:
           rust-toolchain: ${{ steps.ci-config.outputs.rust_version }}
           working-directory: tmp/musllinux-source
           args: >-
-            --locked --release --compatibility musllinux_1_2
+            --locked --release
             --interpreter /opt/python/cp311-cp311/bin/python
             --out ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
 
