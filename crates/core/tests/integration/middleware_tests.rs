@@ -1496,11 +1496,12 @@ async fn test_tool_execution_error_discards_downstream_pending_marks() {
                 && event.scope_category() == Some(ScopeCategory::End)
         })
         .unwrap();
-    assert!(
-        error_end
-            .category_profile()
-            .is_none_or(|profile| profile.tool_result_annotation.is_none_or(Json::is_null))
-    );
+    assert!(error_end.category_profile().is_none_or(|profile| {
+        profile
+            .tool_result_annotation
+            .as_ref()
+            .is_none_or(|value| value.is_null())
+    }));
     drop(captured);
 
     deregister_tool_execution_intercept("error_after_outcome").unwrap();
@@ -2369,11 +2370,12 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
             event.name() == "cancelled-tool" && event.scope_category() == Some(ScopeCategory::End)
         })
         .unwrap();
-    assert!(
-        cancelled_end
-            .category_profile()
-            .is_none_or(|profile| profile.tool_result_annotation.is_none_or(Json::is_null))
-    );
+    assert!(cancelled_end.category_profile().is_none_or(|profile| {
+        profile
+            .tool_result_annotation
+            .as_ref()
+            .is_none_or(|value| value.is_null())
+    }));
     drop(events);
 
     deregister_tool_execution_intercept("pending_tool_execution").unwrap();
@@ -2454,10 +2456,12 @@ async fn cancelled_tool_end_uses_the_originating_scope_sanitizer() {
         })
         .expect("cancelled tool should emit an end event");
     assert_eq!(end.data(), Some(&json!({"secret": "[redacted]"})));
-    assert!(
-        end.category_profile()
-            .is_none_or(|profile| profile.tool_result_annotation.is_none_or(Json::is_null))
-    );
+    assert!(end.category_profile().is_none_or(|profile| {
+        profile
+            .tool_result_annotation
+            .as_ref()
+            .is_none_or(|value| value.is_null())
+    }));
 
     set_thread_scope_stack(originating_stack);
     deregister_tool_execution_intercept("pending_tool_cross_scope").unwrap();
