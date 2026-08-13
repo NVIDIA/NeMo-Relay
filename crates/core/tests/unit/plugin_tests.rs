@@ -102,6 +102,39 @@ fn observability_destination_document(destination: &str) -> Json {
     })
 }
 
+#[test]
+fn plugin_configuration_helpers_preserve_defaults_and_error_detection() {
+    let component = PluginComponentSpec::new("coverage.plugin");
+    assert_eq!(component.kind, "coverage.plugin");
+    assert!(component.enabled);
+    assert!(component.config.is_empty());
+
+    let empty = ConfigReport::default();
+    assert!(!empty.has_errors());
+    let error = ConfigReport {
+        diagnostics: vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "coverage.error".into(),
+            component: None,
+            field: None,
+            message: "expected".into(),
+        }],
+        runtime_diagnostics: vec![],
+    };
+    assert!(error.has_errors());
+    assert!(matches!(
+        apply_global_config_policy(
+            ConfigPolicy::default(),
+            &ConfigPolicy {
+                unknown_component: UnsupportedBehavior::Error,
+                ..ConfigPolicy::default()
+            }
+        )
+        .unknown_component,
+        UnsupportedBehavior::Error
+    ));
+}
+
 fn programmatic_observability_config(config: Json) -> PluginConfig {
     serde_json::from_value(json!({
         "components": [{"kind": "observability", "config": config}]

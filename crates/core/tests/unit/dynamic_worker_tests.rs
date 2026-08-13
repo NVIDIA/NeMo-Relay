@@ -214,6 +214,38 @@ fn test_worker_error() -> WorkerError {
 }
 
 #[test]
+fn worker_protocol_error_and_json_helpers_preserve_failure_semantics() {
+    let error = test_worker_error();
+    assert!(matches!(
+        worker_error_to_flow(error.clone()),
+        FlowError::Internal(message) if message.contains("worker.failed")
+    ));
+    assert!(matches!(
+        worker_error_to_plugin(error, "fallback"),
+        PluginError::RegistrationFailed(message) if message.contains("worker.failed")
+    ));
+    assert_eq!(
+        json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Json(JsonResult {
+                value: Some(JsonEnvelope {
+                    schema: "test".into(),
+                    json: b"{\"ok\":true}".to_vec(),
+                }),
+                error: None,
+            })),
+        })
+        .unwrap(),
+        serde_json::json!({"ok": true})
+    );
+    assert!(
+        json_from_invoke_response(InvokeResponse {
+            result: Some(InvokeResult::Error(test_worker_error())),
+        })
+        .is_err()
+    );
+}
+
+#[test]
 fn response_helpers_cover_json_and_guardrail_error_shapes() {
     enable_operational_logs();
     let worker_error = test_worker_error();
@@ -2697,6 +2729,13 @@ fn registration(surface: RegistrationSurface, local_name: &str) -> Registration 
         priority: 0,
         break_chain: false,
     }
+}
+
+#[test]
+fn worker_loader_empty_input_returns_an_empty_activation() {
+    let activation = load_worker_plugins(Vec::<WorkerPluginLoadSpec>::new()).unwrap();
+    assert!(activation.is_empty());
+    activation.clear();
 }
 
 fn poison_mutex(f: impl FnOnce() + std::panic::UnwindSafe) {

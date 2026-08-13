@@ -104,6 +104,20 @@ async fn collect_offline_observability(gateway: &GatewayConfig) -> Vec<Check> {
     collect_observability(gateway, DoctorProbeMode::Offline).await
 }
 
+#[test]
+fn doctor_probe_mode_maps_the_cli_offline_flag_without_network_ambiguity() {
+    assert_eq!(
+        DoctorProbeMode::from_offline_flag(false),
+        DoctorProbeMode::Live
+    );
+    assert_eq!(
+        DoctorProbeMode::from_offline_flag(true),
+        DoctorProbeMode::Offline
+    );
+    assert!(!DoctorProbeMode::Live.is_offline());
+    assert!(DoctorProbeMode::Offline.is_offline());
+}
+
 async fn live_observability_http_exporter_checks(config: &serde_json::Value) -> Vec<Check> {
     observability_http_exporter_checks(config, DoctorProbeMode::Live).await
 }
@@ -2382,4 +2396,57 @@ fn format_agents_json_matches_doctor_agents_shape() {
     assert_eq!(parsed[0]["command"], "claude");
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
+}
+
+#[test]
+fn doctor_agent_status_helpers_cover_readiness_and_version_outcomes() {
+    assert_eq!(
+        agent_command_status(Some(std::path::Path::new("/bin/codex")), false, true),
+        Status::Warn
+    );
+    assert_eq!(
+        agent_command_status(Some(std::path::Path::new("/bin/codex")), true, false),
+        Status::Pass
+    );
+    assert_eq!(agent_command_status(None, true, false), Status::Fail);
+    assert_eq!(agent_command_status(None, false, true), Status::Fail);
+    assert_eq!(agent_command_status(None, false, false), Status::Info);
+    assert_eq!(
+        combine_status(Status::Pass, Status::Fail, false),
+        Status::Fail
+    );
+    assert_eq!(
+        combine_status(Status::Warn, Status::Pass, false),
+        Status::Warn
+    );
+    assert_eq!(
+        combine_status(Status::Pass, Status::Warn, true),
+        Status::Warn
+    );
+    assert_eq!(
+        combine_status(Status::Pass, Status::Warn, false),
+        Status::Pass
+    );
+
+    let details = agent_details(false, true, None, "codex", "hooks unavailable".into());
+    assert_eq!(details[0], "not configured; first run will launch setup");
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("command `codex` not found"))
+    );
+    assert!(details.iter().any(|detail| detail == "hooks unavailable"));
+
+    let mut status = Status::Pass;
+    let mut details = Vec::new();
+    apply_agent_version_status(
+        CodingAgent::Codex,
+        None,
+        true,
+        true,
+        &mut status,
+        &mut details,
+    );
+    assert_eq!(status, Status::Fail);
+    assert!(details[0].contains("could not determine version"));
 }

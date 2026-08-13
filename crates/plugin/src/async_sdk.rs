@@ -500,6 +500,10 @@ async fn invoke_unary_next<T: Serialize>(next: &NextInner, value: &T) -> Result<
         .map_err(|_| "native continuation callback was dropped".to_string())?
 }
 
+#[cfg(test)]
+#[path = "../tests/unit/async_sdk_tests.rs"]
+mod tests;
+
 type UnarySender = futures::channel::oneshot::Sender<Result<Json>>;
 struct UnaryState {
     sender: UnarySender,

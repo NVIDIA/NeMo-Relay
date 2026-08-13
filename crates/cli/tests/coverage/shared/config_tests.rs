@@ -31,6 +31,111 @@ use crate::plugins::policy::{
 };
 
 #[test]
+fn transparent_gateway_fingerprints_are_stable_and_url_scoped() {
+    let first = transparent_gateway_fingerprint("http://127.0.0.1:47632");
+    assert_eq!(
+        first,
+        transparent_gateway_fingerprint("http://127.0.0.1:47632")
+    );
+    assert_ne!(
+        first,
+        transparent_gateway_fingerprint("http://127.0.0.1:47633")
+    );
+    assert_eq!(
+        first,
+        "transparent-sha256:bb0bbeaad4270d196ff14af97fc00e330c9d1385224b0b26dfbba9e626c44717"
+    );
+    assert!(first.starts_with("transparent-sha256:"));
+}
+
+#[test]
+fn configuration_json_and_header_helpers_retain_only_valid_values() {
+    assert_eq!(
+        parse_json_option("metadata", r#"{"enabled":true}"#).unwrap(),
+        json!({"enabled": true})
+    );
+    assert!(
+        parse_json_option("metadata", "{")
+            .unwrap_err()
+            .to_string()
+            .contains("invalid metadata")
+    );
+
+    let mut headers = http::HeaderMap::new();
+    headers.insert("x-value", http::HeaderValue::from_static("text"));
+    headers.insert("x-json", http::HeaderValue::from_static(r#"{"ok":true}"#));
+    headers.insert("x-empty", http::HeaderValue::from_static(""));
+    assert_eq!(header_string(&headers, "x-value").as_deref(), Some("text"));
+    assert_eq!(header_string(&headers, "x-empty"), None);
+    assert_eq!(header_string(&headers, "missing"), None);
+    assert_eq!(header_json(&headers, "x-json"), Some(json!({"ok": true})));
+    assert_eq!(header_json(&headers, "x-value"), None);
+}
+
+#[test]
+fn configuration_legacy_observability_detection_reports_each_supported_section() {
+    assert!(legacy_observability_sections(&toml::Value::Table(toml::Table::new())).is_empty());
+    let value = toml::from_str(
+        r#"
+[exporters]
+[observability]
+[export.openinference]
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        legacy_observability_sections(&value),
+        vec!["[exporters]", "[observability]", "[export.openinference]"]
+    );
+}
+
+#[test]
+fn bounded_dynamic_manifest_loader_accepts_directories_and_rejects_invalid_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_path = dir.path().join(DYNAMIC_PLUGIN_MANIFEST_FILENAME);
+    std::fs::write(
+        &manifest_path,
+        r#"
+manifest_version = 1
+
+[plugin]
+id = "acme.coverage-worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.5,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[load]
+runtime = "python"
+entrypoint = "plugin:register"
+"#,
+    )
+    .unwrap();
+    let (manifest, normalized, bytes) =
+        load_bounded_dynamic_plugin_manifest_bytes(dir.path()).unwrap();
+    assert_eq!(manifest.plugin.id, "acme.coverage-worker");
+    assert!(normalized.ends_with(DYNAMIC_PLUGIN_MANIFEST_FILENAME));
+    assert!(!bytes.is_empty());
+    assert!(load_bounded_dynamic_plugin_manifest(dir.path()).is_ok());
+
+    let invalid = dir.path().join("invalid.toml");
+    std::fs::write(&invalid, [0xff_u8]).unwrap();
+    assert!(
+        load_bounded_dynamic_plugin_manifest_bytes(&invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("not UTF-8")
+    );
+}
+
+#[test]
 fn explicit_plugin_config_path_resolves_runtime_target() {
     let config = PathBuf::from("/managed/config.toml");
     let sibling = PathBuf::from("/managed/plugins.toml");

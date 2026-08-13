@@ -138,6 +138,31 @@ fn native_async_release_defers_library_guard_drop_to_host_reaper() {
     );
 }
 
+#[test]
+fn native_loader_empty_input_and_stream_context_drop_are_safe() {
+    let activation = load_native_plugins(Vec::<NativePluginLoadSpec>::new()).unwrap();
+    assert!(activation.plugins.is_empty());
+
+    let next: LlmStreamExecutionNextFn =
+        Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) }));
+    let raw = Box::into_raw(Box::new(next)).cast::<c_void>();
+    let context = NativeStreamNextContext::new(raw);
+    drop(context);
+}
+
+#[test]
+fn native_last_error_helpers_store_and_clear_messages() {
+    clear_native_last_error();
+    assert_eq!(native_last_error_message(), None);
+    set_native_last_error("native test error");
+    assert_eq!(
+        native_last_error_message().as_deref(),
+        Some("native test error")
+    );
+    clear_native_last_error();
+    assert_eq!(native_last_error_message(), None);
+}
+
 unsafe extern "C" fn complete_native_next_result(
     user_data: *mut c_void,
     value_json: *const NemoRelayNativeString,
@@ -531,6 +556,25 @@ fn native_loader_helpers_cover_compatibility_descriptor_and_digest_edges() {
     assert_native_descriptor_edges();
     assert_native_digest_edges();
     assert_native_host_api_versions();
+}
+
+#[test]
+fn native_status_helpers_keep_error_categories_stable() {
+    clear_native_last_error();
+    assert!(matches!(
+        flow_error_from_status(NemoRelayStatus::NotFound, "missing"),
+        FlowError::NotFound(message) if message.contains("missing")
+    ));
+    assert_eq!(
+        status_from_plugin_error(PluginError::InvalidConfig("bad".into())),
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        status_from_flow_error(FlowError::Internal("bad".into())),
+        NemoRelayStatus::Internal
+    );
+    assert_eq!(panic_payload_message(&"string panic"), "string panic");
+    clear_native_last_error();
 }
 
 fn assert_native_compatibility_edges() {
