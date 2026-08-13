@@ -65,10 +65,10 @@ capability list. Refer to [Choose a Worker Runtime](#choose-a-worker-runtime)
 for the runtime-specific `load` and `source` requirements.
 
 Relay 0.8 establishes canonical annotated tool results as the `grpc-v1`
-baseline. Every worker must be rebuilt and declare a `compat.relay` range that
-excludes Relay versions before 0.8. Use `>=0.8.0,<1.0` unless you deliberately
-need a narrower or open-ended 0.8-or-newer range. `compat.relay` is the plugin
-author's compatibility assertion, not proof that an artifact was rebuilt.
+baseline. Follow the [0.8 migration
+guide](/reference/migration-guides#return-canonical-tool-execution-results) to
+rebuild the worker and set its `compat.relay` range. `compat.relay` is the
+plugin author's compatibility assertion, not proof that an artifact was rebuilt.
 
 The worker receives its activation ID, plugin ID, worker and host endpoints,
 and a local activation token through environment variables. Do not start the

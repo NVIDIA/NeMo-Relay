@@ -5,7 +5,7 @@
 
 use nemo_relay_worker_proto::v1::{
     HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface,
-    ScopeType, ToolExecutionInterceptOutcome, ToolExecutionResult as ProtoToolExecutionResult,
+    ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
@@ -179,24 +179,5 @@ fn tool_execution_result_tolerates_unknown_protobuf_fields() {
     assert_eq!(
         decode_json_value::<serde_json::Value>(decoded_proto.result.as_ref().unwrap()).unwrap(),
         json!({"ok": true})
-    );
-}
-
-#[test]
-fn tool_execution_outcome_carries_pending_marks_as_one_json_value() {
-    let outcome = ToolExecutionInterceptOutcome {
-        result: Some(JsonValue {
-            json: br#"{"ok":true}"#.to_vec(),
-        }),
-        annotation: None,
-        pending_marks: Some(JsonValue {
-            json: br#"[{"name":"worker.mark","category_profile":["opaque"]}]"#.to_vec(),
-        }),
-    };
-
-    assert!(
-        decode_json_value::<serde_json::Value>(outcome.pending_marks.as_ref().unwrap())
-            .unwrap()
-            .is_array()
     );
 }

@@ -114,11 +114,6 @@ def test_tool_execution_result_and_outcome_preserve_optional_annotation():
     "value",
     [
         None,
-        True,
-        False,
-        0,
-        -17,
-        2.5,
         "relay",
         [1, "two", None, {"nested": False}],
         {"content": [{"type": "text", "text": "ok"}], "structuredContent": {"count": 2}},

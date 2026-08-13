@@ -58,12 +58,13 @@ runtime = "python"
 entrypoint = "acme_example.worker:main"
 ```
 
-`compat.relay` is a normal SemVer requirement. Relay 0.8 establishes the
-canonical tool-result contract for native API 1 and `grpc-v1`, so every dynamic
-plugin must be rebuilt and declare a range that excludes earlier Relay
-versions. Use `>=0.8.0,<1.0` unless you deliberately need a narrower or
-open-ended 0.8-or-newer range. The manifest is the plugin author's
-compatibility assertion; it does not attest how an artifact was built. Keep
+`compat.relay` is a normal SemVer requirement. Dynamic plugins on the Relay
+0.8 canonical result baseline must exclude earlier Relay versions; use
+`>=0.8.0,<1.0` unless you deliberately need a narrower or open-ended
+0.8-or-newer range. The manifest is the plugin author's compatibility
+assertion; it does not attest how an artifact was built. The [0.8 migration
+guide](/reference/migration-guides#return-canonical-tool-execution-results)
+describes the required rebuild. Keep
 `defaults.enabled = false`:
 operators must enable a registered dynamic plugin explicitly. Declare only the
 capabilities the plugin needs. Add `config_schema.path` only with the
@@ -80,11 +81,11 @@ The following requirements vary by execution lane:
 | `source.manifest_root` | Optional | Required for `runtime = "python"`; `nemo-relay plugins add` uses it to create and retain the managed worker environment. |
 
 Relay 0.8 retains the native API 1 and `grpc-v1` identifiers while establishing
-the canonical `ToolExecutionResult` contract. The native boundary changes its
-application JSON semantics. The worker boundary adds structured protobuf tool
-result and intercept-outcome messages. Rebuild plugins with the Relay 0.8 SDKs
-before updating `compat.relay`. Future incompatible contract changes must
-increment the corresponding native API or worker protocol version.
+the canonical `ToolExecutionResult` contract. Native application JSON semantics
+and worker protobuf tool-result types change; see the [0.8 migration
+guide](/reference/migration-guides#return-canonical-tool-execution-results).
+Future incompatible contract changes must increment the corresponding native
+API or worker protocol version.
 
 Use `runtime = "python"` for a `module:function` entrypoint, `runtime =
 "rust"` for a Rust executable, or `runtime = "command"` for another local

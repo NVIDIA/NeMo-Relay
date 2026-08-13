@@ -616,7 +616,13 @@ async fn worker_service_invokes_every_registration_surface() {
     )
     .await;
     assert_eq!(tool_outcome.pending_marks.len(), 1);
-    assert_eq!(tool_outcome.pending_marks[0].name, "worker.tool.execution");
+    assert_eq!(
+        tool_outcome.pending_marks[0],
+        PendingMarkSpec::builder()
+            .name("worker.tool.execution")
+            .data(json!({"checkpoint": true}))
+            .build()
+    );
     assert_eq!(tool_outcome.annotation, Some(json!({"source": "host"})));
     let tool_exec = tool_outcome.result;
     assert_json_field(tool_exec.clone(), "next", "tool");
@@ -1829,6 +1835,7 @@ impl WorkerPlugin for SurfacePlugin {
                     ToolExecutionInterceptOutcome::from(next_value).with_pending_mark(
                         PendingMarkSpec::builder()
                             .name("worker.tool.execution")
+                            .data(json!({"checkpoint": true}))
                             .build(),
                     ),
                 )
