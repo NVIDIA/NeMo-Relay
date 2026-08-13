@@ -8,20 +8,9 @@ use serde_json::json;
 
 #[test]
 fn builtin_codec_ids_round_trip() {
-    let cases = [
-        (BuiltinLlmCodec::OpenAiChat, "openai_chat"),
-        (BuiltinLlmCodec::OpenAiResponses, "openai_responses"),
-        (BuiltinLlmCodec::AnthropicMessages, "anthropic_messages"),
-        (BuiltinLlmCodec::OCIGenAI, "oci_genai"),
-        (
-            BuiltinLlmCodec::GeminiGenerateContent,
-            "gemini_generate_content",
-        ),
-    ];
-
-    for (codec, id) in cases {
-        assert_eq!(codec.id(), id);
-        assert_eq!(BuiltinLlmCodec::from_id(id), Some(codec));
+    for &codec in BuiltinLlmCodec::ALL {
+        assert_eq!(BuiltinLlmCodec::from_id(codec.id()), Some(codec));
+        assert_eq!(serde_json::to_value(codec).unwrap(), json!(codec.id()));
     }
 }
 
