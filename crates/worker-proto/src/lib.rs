@@ -64,20 +64,37 @@ pub fn decode_json_value<T: serde::de::DeserializeOwned>(
 
 /// Error produced while mapping the protobuf tool-result contract to shared
 /// Relay application types.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum ToolExecutionContractError {
     /// A semantically required protobuf message field was absent.
-    #[error("{0} is missing")]
     MissingField(&'static str),
     /// A JSON-bearing field could not be encoded or decoded.
-    #[error("invalid JSON in {field}: {source}")]
     InvalidJson {
         /// Fully qualified logical field name.
         field: &'static str,
         /// JSON codec failure, including invalid UTF-8 when decoding bytes.
-        #[source]
         source: serde_json::Error,
     },
+}
+
+impl std::fmt::Display for ToolExecutionContractError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingField(field) => write!(formatter, "{field} is missing"),
+            Self::InvalidJson { field, source } => {
+                write!(formatter, "invalid JSON in {field}: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ToolExecutionContractError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::MissingField(_) => None,
+            Self::InvalidJson { source, .. } => Some(source),
+        }
+    }
 }
 
 /// Encodes a shared tool execution result into its structural protobuf form.
