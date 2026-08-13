@@ -3002,22 +3002,11 @@ async def _invoke_tool_execution_async(
     outcome = response.tool_execution.outcome
     value = {
         "result": _decode_json_value(outcome.result, "tool execution outcome result"),
-        "pending_marks": [
-            {
-                "name": mark.name,
-                "category": mark.category if mark.HasField("category") else None,
-                "category_profile": (
-                    _decode_json_value(mark.category_profile, "pending mark category profile")
-                    if mark.HasField("category_profile")
-                    else None
-                ),
-                "data": _decode_json_value(mark.data, "pending mark data") if mark.HasField("data") else None,
-                "metadata": (
-                    _decode_json_value(mark.metadata, "pending mark metadata") if mark.HasField("metadata") else None
-                ),
-            }
-            for mark in outcome.pending_marks
-        ],
+        "pending_marks": (
+            _decode_json_value(outcome.pending_marks, "tool execution outcome pending marks")
+            if outcome.HasField("pending_marks")
+            else []
+        ),
     }
     if outcome.HasField("annotation"):
         annotation = _decode_json_value(outcome.annotation, "tool execution outcome annotation")
