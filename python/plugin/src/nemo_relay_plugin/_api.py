@@ -1932,25 +1932,8 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 queue.get_nowait()
             queue.put_nowait(pb.StreamChunk(error=_cancelled_worker_error(reason)))
 
-        async def produce() -> None:
-            try:
-                if request.surface != pb.LLM_STREAM_EXECUTION_INTERCEPT:
-                    raise WorkerSdkError("InvokeStream only supports LLM stream execution intercepts")
-                handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
-                payload = _require_payload(request, "llm")
-                llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
-                next_call = LlmStreamNext(self._runtime, request.continuation_id)
-                with _bind_invocation_scope(request):
-                    stream = await _maybe_await(handler(payload.model_name, llm_request, next_call))
-                    async for value in _as_async_iter(stream):
-                        await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
-                await queue.put(pb.StreamChunk(error=_sdk_error_to_worker(exc)))
-
         try:
-            active = self._start_invocation(request.invocation_id, produce())
+            active = self._start_invocation(request.invocation_id, self._produce_stream(request, queue))
             active.cancel_callback = cancel_stream
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
             yield pb.StreamChunk(error=_sdk_error_to_worker(exc))
@@ -1979,6 +1962,23 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 active.task.cancel()
             await asyncio.gather(active.task, return_exceptions=True)
             self._forget_invocation(request.invocation_id, active)
+
+    async def _produce_stream(self, request: Any, queue: asyncio.Queue[Any]) -> None:
+        try:
+            if request.surface != pb.LLM_STREAM_EXECUTION_INTERCEPT:
+                raise WorkerSdkError("InvokeStream only supports LLM stream execution intercepts")
+            handler = self._handler(self._handlers.llm_stream_executions, request.registration_name)
+            payload = _require_payload(request, "llm")
+            llm_request = _decode_required_envelope(payload.request, "llm request", LLM_REQUEST_SCHEMA)
+            next_call = LlmStreamNext(self._runtime, request.continuation_id)
+            with _bind_invocation_scope(request):
+                stream = await _maybe_await(handler(payload.model_name, llm_request, next_call))
+                async for value in _as_async_iter(stream):
+                    await queue.put(pb.StreamChunk(value=_json_envelope(JSON_SCHEMA, value)))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
+            await queue.put(pb.StreamChunk(error=_sdk_error_to_worker(exc)))
 
     async def CancelInvocation(self, request: Any, context: Any) -> Any:
         await self._authorize(request, context)

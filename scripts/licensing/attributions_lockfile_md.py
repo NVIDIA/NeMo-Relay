@@ -350,19 +350,25 @@ def _rust_license_files(crate: dict[str, Any]) -> list[tuple[str, str]]:
     if not manifest_path:
         return []
     package_dir = Path(manifest_path).parent
-    candidates: list[Path] = []
+    return _read_license_candidates(_rust_license_candidates(crate, package_dir), package_dir)
 
+
+def _rust_license_candidates(crate: dict[str, Any], package_dir: Path) -> list[Path]:
+    candidates: list[Path] = []
     license_file = str(crate.get("license_file") or "")
     if license_file:
-        p = Path(license_file)
-        candidates.append(p if p.is_absolute() else package_dir / p)
-
+        path = Path(license_file)
+        candidates.append(path if path.is_absolute() else package_dir / path)
     if package_dir.is_dir():
-        for child in package_dir.iterdir():
-            name = child.name.lower()
-            if child.is_file() and (name.startswith(("license", "licence")) or name.startswith("copying")):
-                candidates.append(child)
+        candidates.extend(
+            child
+            for child in package_dir.iterdir()
+            if child.is_file() and child.name.lower().startswith(("license", "licence", "copying"))
+        )
+    return candidates
 
+
+def _read_license_candidates(candidates: list[Path], package_dir: Path) -> list[tuple[str, str]]:
     seen: set[Path] = set()
     texts: list[tuple[str, str]] = []
     for path in sorted(candidates, key=lambda item: item.name.lower()):
@@ -370,13 +376,9 @@ def _rust_license_files(crate: dict[str, Any]) -> list[tuple[str, str]]:
         if resolved in seen or not path.is_file():
             continue
         seen.add(resolved)
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        label = path.name if path.parent == package_dir else str(path)
+        text = path.read_text(encoding="utf-8", errors="replace")
         if _is_useful_license_text(text):
-            texts.append((label, text))
+            texts.append((path.name if path.parent == package_dir else str(path), text))
     return texts
 
 
@@ -788,33 +790,37 @@ def _artifact_metadata_from_lockfile(pkg: dict[str, Any]) -> tuple[str, list[tup
     locked wheels before falling back to the sdist result.
     """
     package_name = pkg["name"]
-    sdist = pkg.get("sdist")
-    sdist_metadata: tuple[str, list[tuple[str, str]]] | None = None
-    if isinstance(sdist, dict) and sdist.get("url") and sdist.get("hash"):
-        data = _download_locked_artifact(sdist["url"], sdist["hash"])
-        sdist_metadata = _sdist_metadata_from_bytes(data, package_name=package_name)
-        if not _is_weak_license_name(sdist_metadata[0]):
-            return sdist_metadata
-
-    wheels = cast(list[dict[str, Any]], pkg.get("wheels") or [])
-    first_wheel_metadata: tuple[str, list[tuple[str, str]]] | None = None
-    for wheel in wheels:
-        if wheel.get("url") and wheel.get("hash"):
-            data = _download_locked_artifact(wheel["url"], wheel["hash"])
-            wheel_metadata = _wheel_metadata_from_bytes(data, package_name=package_name)
-            if first_wheel_metadata is None:
-                first_wheel_metadata = wheel_metadata
-            if not _is_weak_license_name(wheel_metadata[0]):
-                if sdist_metadata and sdist_metadata[1]:
-                    return wheel_metadata[0], sdist_metadata[1]
-                return wheel_metadata
-
-    if sdist_metadata is not None:
+    sdist_metadata = _sdist_artifact_metadata(pkg.get("sdist"), package_name)
+    if sdist_metadata and not _is_weak_license_name(sdist_metadata[0]):
         return sdist_metadata
-    if first_wheel_metadata is not None:
-        return first_wheel_metadata
-
+    wheel_metadata = _wheel_artifact_metadata(pkg.get("wheels"), package_name, sdist_metadata)
+    if wheel_metadata:
+        return wheel_metadata
+    if sdist_metadata:
+        return sdist_metadata
     raise ValueError(f"No downloadable artifact found in uv.lock for {package_name}")
+
+
+def _sdist_artifact_metadata(artifact: Any, package_name: str) -> tuple[str, list[tuple[str, str]]] | None:
+    if not isinstance(artifact, dict) or not artifact.get("url") or not artifact.get("hash"):
+        return None
+    data = _download_locked_artifact(artifact["url"], artifact["hash"])
+    return _sdist_metadata_from_bytes(data, package_name=package_name)
+
+
+def _wheel_artifact_metadata(
+    artifacts: Any, package_name: str, sdist_metadata: tuple[str, list[tuple[str, str]]] | None
+) -> tuple[str, list[tuple[str, str]]] | None:
+    first_metadata = None
+    for wheel in cast(list[dict[str, Any]], artifacts or []):
+        if not wheel.get("url") or not wheel.get("hash"):
+            continue
+        data = _download_locked_artifact(wheel["url"], wheel["hash"])
+        metadata = _wheel_metadata_from_bytes(data, package_name=package_name)
+        first_metadata = first_metadata or metadata
+        if not _is_weak_license_name(metadata[0]):
+            return (metadata[0], sdist_metadata[1]) if sdist_metadata and sdist_metadata[1] else metadata
+    return first_metadata
 
 
 def _infer_license_name(license_name: str, license_texts: list[tuple[str, str]]) -> str:
@@ -985,34 +991,32 @@ def _node_attribution_packages(lock: dict[str, Any], workspace_package_keys: set
 
     rows: dict[str, NodeAttributionPackage] = {}
     for path, meta in packages.items():
-        normalized_path = str(path).replace("\\", "/")
-        if "node_modules" not in normalized_path.split("/"):
-            continue
-        if not isinstance(meta, dict):
-            continue
-        if meta.get("extraneous"):
-            continue
-        version = str(meta.get("version") or "").strip()
-        if not version:
-            continue
-        name = str(meta.get("name") or _node_package_name_from_lock_path(normalized_path)).strip()
-        if not name:
-            continue
-        key = f"{name}@{version}"
-        if key in workspace_package_keys:
-            continue
-        license_name = str(meta.get("license") or "UNKNOWN")
-        rows[key] = {
-            "name": name,
-            "version": version,
-            "license_name": license_name,
-            "key": key,
-            "resolved": str(meta.get("resolved") or ""),
-            "integrity": str(meta.get("integrity") or ""),
-            "platform_gated": bool(meta.get("optional") or meta.get("os") or meta.get("cpu")),
-        }
+        package = _node_attribution_package(path, meta, workspace_package_keys)
+        if package:
+            rows[package["key"]] = package
+    return [rows[key] for key in sorted(rows)]
 
-    return sorted(rows.values(), key=lambda row: (row["name"].lower(), row["version"], row["license_name"]))
+
+def _node_attribution_package(path: Any, meta: Any, workspace_package_keys: set[str]) -> NodeAttributionPackage | None:
+    normalized_path = str(path).replace("\\", "/")
+    if "node_modules" not in normalized_path.split("/") or not isinstance(meta, dict) or meta.get("extraneous"):
+        return None
+    version = str(meta.get("version") or "").strip()
+    name = str(meta.get("name") or _node_package_name_from_lock_path(normalized_path)).strip()
+    if not name or not version:
+        return None
+    key = f"{name}@{version}"
+    if key in workspace_package_keys:
+        return None
+    return {
+        "name": name,
+        "version": version,
+        "license_name": str(meta.get("license") or "UNKNOWN"),
+        "key": key,
+        "resolved": str(meta.get("resolved") or ""),
+        "integrity": str(meta.get("integrity") or ""),
+        "platform_gated": bool(meta.get("optional") or meta.get("os") or meta.get("cpu")),
+    }
 
 
 def _node_integrity_matches(data: bytes, integrity: str) -> bool:

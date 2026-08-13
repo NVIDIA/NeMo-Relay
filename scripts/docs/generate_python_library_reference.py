@@ -392,44 +392,50 @@ def _write_module(output_dir: Path, module: ModuleDoc, position: int, modules: l
     if module.summary:
         lines.append(f"{module.summary}\n\n")
 
-    if module.classes:
-        lines.append("## Classes\n\n")
-        for class_doc in module.classes:
-            bases = f"({', '.join(class_doc.bases)})" if class_doc.bases else ""
-            lines.append(f"### `{class_doc.name}{bases}`\n\n")
-            if class_doc.summary:
-                lines.append(f"{class_doc.summary}\n\n")
-            if class_doc.methods:
-                lines.append("#### Methods\n\n")
-                for method in class_doc.methods:
-                    lines.append(f"##### `{method.name}`\n\n")
-                    lines.append(f"```python\n{method.signature}\n```\n\n")
-                    if method.summary:
-                        lines.append(f"{method.summary}\n\n")
-
-    if module.functions:
-        lines.append("## Functions\n\n")
-        for function in module.functions:
-            lines.append(f"### `{function.name}`\n\n")
-            lines.append(f"```python\n{function.signature}\n```\n\n")
-            if function.summary:
-                lines.append(f"{function.summary}\n\n")
-
-    if module.aliases:
-        lines.append("## Type Aliases And Constants\n\n")
-        for alias in module.aliases:
-            lines.append(f"- `{alias}`\n")
-        lines.append("\n")
-
-    if module.reexports:
-        lines.append("## Re-exports\n\n")
-        for name in module.reexports:
-            lines.append(f"- `{name}`\n")
-        lines.append("\n")
+    _write_classes(lines, module)
+    _write_functions(lines, module)
+    _write_named_section(lines, "Type Aliases And Constants", module.aliases)
+    _write_named_section(lines, "Re-exports", module.reexports)
 
     output_path = _module_output_path(output_dir, module, modules)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("".join(lines), encoding="utf-8")
+
+
+def _write_classes(lines: list[str], module: ModuleDoc) -> None:
+    if not module.classes:
+        return
+    lines.append("## Classes\n\n")
+    for class_doc in module.classes:
+        bases = f"({', '.join(class_doc.bases)})" if class_doc.bases else ""
+        lines.append(f"### `{class_doc.name}{bases}`\n\n")
+        _write_summary(lines, class_doc.summary)
+        if class_doc.methods:
+            lines.append("#### Methods\n\n")
+            for method in class_doc.methods:
+                lines.append(f"##### `{method.name}`\n\n```python\n{method.signature}\n```\n\n")
+                _write_summary(lines, method.summary)
+
+
+def _write_functions(lines: list[str], module: ModuleDoc) -> None:
+    if not module.functions:
+        return
+    lines.append("## Functions\n\n")
+    for function in module.functions:
+        lines.append(f"### `{function.name}`\n\n```python\n{function.signature}\n```\n\n")
+        _write_summary(lines, function.summary)
+
+
+def _write_named_section(lines: list[str], title: str, names: list[str]) -> None:
+    if names:
+        lines.append(f"## {title}\n\n")
+        lines.extend(f"- `{name}`\n" for name in names)
+        lines.append("\n")
+
+
+def _write_summary(lines: list[str], summary: str) -> None:
+    if summary:
+        lines.append(f"{summary}\n\n")
 
 
 def generate(repo_root: Path, output_dir: Path) -> int:
