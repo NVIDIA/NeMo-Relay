@@ -1697,9 +1697,9 @@ package-node:
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     fi
-    build_args=(build)
+    build_args=(build --)
     if [[ -n "$node_target" ]]; then
-        build_args+=(-- --target "$node_target")
+        build_args+=(--target "$node_target")
     fi
     if [[ "$node_build_strategy" == "zig" ]]; then
         # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI
@@ -1716,7 +1716,7 @@ package-node:
         uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
         activate_project_venv
         prepend_ziglang_to_path "$(project_python_executable)"
-        build_args+=(-- --zig --zig-abi-suffix "$linux_glibc_version")
+        build_args+=(--zig --zig-abi-suffix "$linux_glibc_version")
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     npm run --workspace=nemo-relay-node "${build_args[@]}"
