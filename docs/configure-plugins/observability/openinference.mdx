@@ -41,6 +41,12 @@ projection. It supports the `mark_projection`, `mark_exclude_names`, and
 `attribute_mappings` controls on the typed endpoint, retaining the legacy
 behavior.
 
+Normalized tool results emit one `llm.input_messages` entry per result with
+`message.role = "tool"`, `message.tool_call_id`, and `message.content`.
+Anthropic user messages that contain only `tool_result` blocks expand into
+separate entries so parallel tool results retain their original order and
+correlation IDs.
+
 Set `OTEL_AUTHORIZATION` to the complete authorization header value before
 activation. NeMo Relay snapshots the value when the plugin
 activates. The variable must be set and nonblank. A header name cannot appear

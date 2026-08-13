@@ -1039,20 +1039,9 @@ impl CodecIdentityInvocation {
         match (self.codec_kind.as_str(), self.codec_id) {
             ("none", _) => Ok(LlmCodecIdentity::None),
             ("opaque", _) => Ok(LlmCodecIdentity::Opaque),
-            ("builtin", Some(id)) => match id.as_str() {
-                "openai_chat" => Ok(LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)),
-                "openai_responses" => {
-                    Ok(LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses))
-                }
-                "anthropic_messages" => Ok(LlmCodecIdentity::BuiltIn(
-                    BuiltinLlmCodec::AnthropicMessages,
-                )),
-                "oci_genai" => Ok(LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)),
-                "gemini_generate_content" => Ok(LlmCodecIdentity::BuiltIn(
-                    BuiltinLlmCodec::GeminiGenerateContent,
-                )),
-                _ => Err(format!("unknown built-in LLM codec: {id}")),
-            },
+            ("builtin", Some(id)) => BuiltinLlmCodec::from_id(&id)
+                .map(LlmCodecIdentity::BuiltIn)
+                .ok_or_else(|| format!("unknown built-in LLM codec: {id}")),
             ("runtime", Some(id)) => Ok(LlmCodecIdentity::Runtime(id)),
             (kind, _) => Err(format!("invalid LLM codec context: {kind}")),
         }

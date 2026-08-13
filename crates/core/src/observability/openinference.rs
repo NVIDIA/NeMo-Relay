@@ -6,9 +6,10 @@
 //! Projection functions used by the unified OpenTelemetry subscriber.
 
 use super::{
-    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model, manual,
-    merge_usage, model_name_for_llm_event, push_serialized_top_level_attributes,
-    push_top_level_json_attributes,
+    estimate_cost_for_response_or_model, estimate_cost_for_response_or_requested_model,
+    input_tokens_including_cache, manual, merge_usage, model_name_for_llm_event,
+    push_serialized_top_level_attributes, push_top_level_json_attributes,
+    total_tokens_including_cache,
 };
 use crate::api::event::{Event, EventNormalizationExt};
 use crate::api::scope::ScopeType;
@@ -150,7 +151,12 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
         fallback_usage.as_ref(),
     );
     if is_llm {
-        push_llm_usage_attributes(&mut attributes, usage.as_ref());
+        push_llm_usage_attributes(
+            &mut attributes,
+            Some(event.name()),
+            normalized.as_deref(),
+            usage.as_ref(),
+        );
     }
     if is_llm
         && let Some(cost_total) =
@@ -164,17 +170,22 @@ pub(super) fn end_attributes(event: &Event) -> Vec<KeyValue> {
     attributes
 }
 
-fn push_llm_usage_attributes(attributes: &mut Vec<KeyValue>, usage: Option<&Usage>) {
+fn push_llm_usage_attributes(
+    attributes: &mut Vec<KeyValue>,
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+    usage: Option<&Usage>,
+) {
     let Some(usage) = usage else {
         return;
     };
-    if let Some(v) = usage.prompt_tokens {
+    if let Some(v) = input_tokens_including_cache(provider, response, usage) {
         attributes.push(KeyValue::new("llm.token_count.prompt", v as i64));
     }
     if let Some(v) = usage.completion_tokens {
         attributes.push(KeyValue::new("llm.token_count.completion", v as i64));
     }
-    if let Some(v) = usage.total_tokens {
+    if let Some(v) = total_tokens_including_cache(provider, response, usage) {
         attributes.push(KeyValue::new("llm.token_count.total", v as i64));
     }
     if let Some(v) = usage.cache_read_tokens {
@@ -301,40 +312,123 @@ fn push_annotated_input_messages(
     messages: &[Message],
     start_index: usize,
 ) {
-    for (offset, message) in messages.iter().enumerate() {
-        let index = start_index + offset;
-        let role = match message {
-            Message::System { .. } => "system",
-            Message::Developer { .. } => "developer",
-            Message::User { .. } => "user",
-            Message::Assistant { .. } => "assistant",
-            Message::Tool { .. } => "tool",
-            Message::Function { .. } => "function",
-            Message::ToolCallItem { .. } => "assistant",
-            Message::ToolResultItem { .. } => "tool",
-            Message::ProviderNative { value, .. } => value
-                .get("role")
-                .and_then(Json::as_str)
-                .unwrap_or("provider_native"),
+    let mut next_index = start_index;
+    for message in messages {
+        if let Message::User { content, .. } = message
+            && let Some(parts) = exclusive_tool_result_parts(content)
+        {
+            for part in parts {
+                let ContentPart::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } = part
+                else {
+                    continue;
+                };
+                push_tool_result_input_message(attributes, next_index, tool_use_id, content);
+                next_index += 1;
+            }
+            continue;
+        }
+
+        let index = next_index;
+        next_index += 1;
+        let (role, content, tool_call_id) = match message {
+            Message::System { content, .. } => ("system", message_content_text(content), None),
+            Message::Developer { content, .. } => {
+                ("developer", message_content_text(content), None)
+            }
+            Message::User { content, .. } => ("user", message_content_text(content), None),
+            Message::Assistant { content, .. } => (
+                "assistant",
+                content.as_ref().and_then(message_content_text),
+                None,
+            ),
+            Message::Tool {
+                content,
+                tool_call_id,
+            } => (
+                "tool",
+                tool_message_content(content),
+                Some(tool_call_id.as_str()),
+            ),
+            Message::Function { content, .. } => (
+                "function",
+                content.as_deref().and_then(display_text_from_string),
+                None,
+            ),
+            Message::ToolCallItem { .. } => ("assistant", None, None),
+            Message::ToolResultItem {
+                call_id, output, ..
+            } => (
+                "tool",
+                Some(tool_result_content(output)),
+                Some(call_id.as_str()),
+            ),
+            Message::ProviderNative { value, .. } => (
+                value
+                    .get("role")
+                    .and_then(Json::as_str)
+                    .unwrap_or("provider_native"),
+                value.get("content").and_then(display_text_from_json),
+                None,
+            ),
         };
         push_message_role(attributes, "llm.input_messages", index, role);
-        let content = match message {
-            Message::System { content, .. }
-            | Message::Developer { content, .. }
-            | Message::User { content, .. }
-            | Message::Tool { content, .. } => message_content_text(content),
-            Message::Assistant { content, .. } => content.as_ref().and_then(message_content_text),
-            Message::Function { content, .. } => {
-                content.as_deref().and_then(display_text_from_string)
-            }
-            Message::ProviderNative { value, .. } => {
-                value.get("content").and_then(display_text_from_json)
-            }
-            Message::ToolCallItem { .. } | Message::ToolResultItem { .. } => None,
-        };
         if let Some(content) = content {
             push_message_text_value(attributes, "llm.input_messages", index, content);
         }
+        if let Some(tool_call_id) = tool_call_id {
+            attributes.push(KeyValue::new(
+                format!("llm.input_messages.{index}.message.tool_call_id"),
+                tool_call_id.to_string(),
+            ));
+        }
+    }
+}
+
+fn exclusive_tool_result_parts(content: &MessageContent) -> Option<&[ContentPart]> {
+    let MessageContent::Parts(parts) = content else {
+        return None;
+    };
+    (!parts.is_empty()
+        && parts
+            .iter()
+            .all(|part| matches!(part, ContentPart::ToolResult { .. })))
+    .then_some(parts)
+}
+
+fn push_tool_result_input_message(
+    attributes: &mut Vec<KeyValue>,
+    index: usize,
+    tool_call_id: &str,
+    content: &Json,
+) {
+    push_message_role(attributes, "llm.input_messages", index, "tool");
+    push_message_text_value(
+        attributes,
+        "llm.input_messages",
+        index,
+        tool_result_content(content),
+    );
+    attributes.push(KeyValue::new(
+        format!("llm.input_messages.{index}.message.tool_call_id"),
+        tool_call_id.to_string(),
+    ));
+}
+
+fn tool_message_content(content: &MessageContent) -> Option<String> {
+    match content {
+        MessageContent::Text(text) => Some(text.clone()),
+        MessageContent::Parts(parts) => to_json_string(parts),
+    }
+}
+
+fn tool_result_content(content: &Json) -> String {
+    match content {
+        Json::String(text) => text.clone(),
+        value => value.to_string(),
     }
 }
 
