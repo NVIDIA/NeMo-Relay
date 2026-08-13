@@ -57,8 +57,8 @@ impl NativePlugin for ExampleNativePlugin {
         let plugin_runtime = context.runtime();
 
         observe::register(context, &config, &plugin_runtime)?;
-        requests::register(context, &config, &plugin_runtime)?;
-        execution::register(context, &config)?;
+        requests::register(context, &config)?;
+        execution::register(context, &config, &plugin_runtime)?;
         Ok(())
     }
 }

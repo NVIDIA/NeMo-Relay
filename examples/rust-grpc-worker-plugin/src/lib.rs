@@ -37,9 +37,7 @@ impl WorkerPlugin for DocumentationWorker {
         if config.requests.enabled {
             register_requests(context, &config);
         }
-        if config.execution.enabled {
-            register_execution(context, &config);
-        }
+        register_execution(context, &config);
         Ok(())
     }
 }
@@ -165,18 +163,9 @@ fn register_requests(context: &mut PluginContext, config: &ExampleConfig) {
         config.requests.break_chain,
         {
             let tag = config.tag.clone();
-            let runtime_config = config.runtime.clone();
-            let runtime = context.runtime();
             move |name, value| {
                 let tag = tag.clone();
-                let runtime_config = runtime_config.clone();
-                let runtime = runtime.clone();
-                async move {
-                    if let Some(runtime) = runtime {
-                        emit_runtime_events(&runtime, &tag, &runtime_config).await?;
-                    }
-                    Ok(tag_tool_request(value, &name, &tag))
-                }
+                async move { Ok(tag_tool_request(value, &name, &tag)) }
             }
         },
     );
@@ -237,6 +226,28 @@ fn register_requests(context: &mut PluginContext, config: &ExampleConfig) {
 }
 
 fn register_execution(context: &mut PluginContext, config: &ExampleConfig) {
+    if (config.runtime.emit_marks || config.runtime.emit_isolated_scope)
+        && let Some(runtime) = context.runtime()
+    {
+        context.register_tool_execution_intercept("documentation_runtime_events", 0, {
+            let tag = config.tag.clone();
+            let runtime_config = config.runtime.clone();
+            move |_name, value, next| {
+                let runtime = runtime.clone();
+                let tag = tag.clone();
+                let runtime_config = runtime_config.clone();
+                async move {
+                    emit_runtime_events(&runtime, &tag, &runtime_config).await?;
+                    Ok(ToolExecutionInterceptOutcome::new(next.call(value).await?))
+                }
+            }
+        });
+    }
+
+    if !config.execution.enabled {
+        return;
+    }
+
     context.register_tool_execution_intercept(
         "documentation_tool_execution",
         config.execution.priority,

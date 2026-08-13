@@ -11,9 +11,11 @@ helpers live in separate source modules. Together they register the subscriber,
 all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
 the current typed 0.8.0 SDK.
 
-Run the focused tests and build the shared library from this directory. Every
-test has its own configuration input and asserts one validation, schema, or
-packaging contract:
+Run the focused tests and build the shared library from this directory. The
+configuration tests isolate validation and schema contracts. The lifecycle test
+builds a fresh `cdylib`, materializes a digest-checked manifest, activates the
+plugin in a host, executes middleware, observes its runtime mark, and clears
+the callbacks before unloading the library:
 
 ```bash
 cargo test

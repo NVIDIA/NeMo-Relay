@@ -85,7 +85,8 @@ class ExamplePythonWorker(WorkerPlugin):
         if observe["enabled"]:
             self._register_observation(ctx, tag, observe)
         if requests["enabled"]:
-            self._register_requests(ctx, tag, requests, execution, runtime_settings)
+            self._register_requests(ctx, tag, requests, execution)
+        self._register_runtime(ctx, tag, runtime_settings)
         if execution["enabled"]:
             self._register_execution(ctx, execution)
 
@@ -159,7 +160,6 @@ class ExamplePythonWorker(WorkerPlugin):
         tag: str,
         requests: dict[str, Json],
         execution: dict[str, Json],
-        runtime_settings: dict[str, Json],
     ) -> None:
         priority = cast(int, requests["priority"])
         break_chain = cast(bool, requests["break_chain"])
@@ -173,7 +173,6 @@ class ExamplePythonWorker(WorkerPlugin):
             return None
 
         async def tool_request(name: str, args: Json) -> Json:
-            await _emit_runtime_events(ctx, tag, runtime_settings)
             if not isinstance(args, dict):
                 return args
             return {
@@ -229,6 +228,17 @@ class ExamplePythonWorker(WorkerPlugin):
         ctx.register_llm_request_intercept(
             "documentation_llm_request", llm_request, priority=priority, break_chain=break_chain
         )
+
+    @staticmethod
+    def _register_runtime(ctx: PluginContext, tag: str, settings: dict[str, Json]) -> None:
+        if not settings["emit_marks"] and not settings["emit_isolated_scope"]:
+            return
+
+        async def runtime_events(_name: str, args: Json, next_call: Any) -> ToolExecutionInterceptOutcome:
+            await _emit_runtime_events(ctx, tag, settings)
+            return ToolExecutionInterceptOutcome(result=await next_call.call(args))
+
+        ctx.register_tool_execution_intercept("documentation_runtime_events", runtime_events, priority=0)
 
     @staticmethod
     def _register_execution(ctx: PluginContext, execution: dict[str, Json]) -> None:

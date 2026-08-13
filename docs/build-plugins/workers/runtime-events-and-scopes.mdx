@@ -135,7 +135,8 @@ failed work supplies failure metadata and then propagates the original callback 
 The examples use a structured cleanup sequence: capture the previous binding, create an
 isolated stack only when configured, bind it, push a scope, run plugin work, pop the scope
 with success or error metadata, restore the previous binding, and drop the isolated
-stack. Python uses `try`/`finally`; Rust uses guards and awaits cleanup before returning.
+stack. Python uses `try`/`finally`; Rust uses explicit result handling and awaits cleanup
+before returning.
 
 Shutdown can race with these operations. The worker stops accepting new invocations,
 cancels active callbacks, and continues only the bounded cleanup that the SDK can still

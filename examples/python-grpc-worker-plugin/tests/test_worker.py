@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Iterator
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -76,8 +77,15 @@ def register_example(example: Any) -> tuple[MagicMock, MagicMock]:
     return context, runtime
 
 
-def callback(context: MagicMock, method: str) -> Any:
-    return getattr(context, method).call_args.args[1]
+def callback(context: MagicMock, method: str, name: str | None = None) -> Any:
+    calls = getattr(context, method).call_args_list
+    if name is not None:
+        for call in calls:
+            if call.args[0] == name:
+                return call.args[1]
+        raise AssertionError(f"{method} did not register {name!r}")
+    assert len(calls) == 1, f"{method} has multiple callbacks; select one by name"
+    return calls[0].args[1]
 
 
 def test_manifest_digest_matches_worker_source() -> None:
@@ -200,9 +208,18 @@ def test_register_installs_all_protocol_surfaces(example: Any) -> None:
         "register_llm_stream_execution_intercept",
     }
 
-    assert {
-        method for method in registration_methods if getattr(context, method).call_count == 1
-    } == registration_methods
+    assert all(getattr(context, method).call_count >= 1 for method in registration_methods)
+
+
+def test_runtime_registration_does_not_depend_on_request_configuration(example: Any) -> None:
+    context, _runtime = configured_context()
+    config = deepcopy(example.DEFAULT_CONFIG)
+    config["requests"]["enabled"] = False
+
+    example.ExamplePythonWorker().register(context, config)
+
+    assert context.register_tool_request_intercept.call_count == 0
+    callback(context, "register_tool_execution_intercept", "documentation_runtime_events")
 
 
 async def test_subscriber_emits_observation_mark(example: Any) -> None:
@@ -303,9 +320,11 @@ async def test_tool_request_intercept_tags_real_request(example: Any) -> None:
 
 async def test_runtime_helpers_clean_up_successful_request(example: Any) -> None:
     context, runtime = register_example(example)
-    intercept = callback(context, "register_tool_request_intercept")
+    intercept = callback(context, "register_tool_execution_intercept", "documentation_runtime_events")
+    next_call = MagicMock()
+    next_call.call = AsyncMock(return_value={"ok": True})
 
-    await intercept("safe_tool", {"value": 1})
+    await intercept("safe_tool", {"value": 1}, next_call)
 
     runtime.push_scope.assert_awaited_once()
     runtime.pop_scope.assert_awaited_once_with("scope-handle", output={"done": True})
@@ -315,10 +334,12 @@ async def test_runtime_helpers_clean_up_successful_request(example: Any) -> None
 async def test_runtime_helpers_close_failed_request(example: Any) -> None:
     context, runtime = register_example(example)
     runtime.emit_mark.side_effect = RuntimeError("mark failed")
-    intercept = callback(context, "register_tool_request_intercept")
+    intercept = callback(context, "register_tool_execution_intercept", "documentation_runtime_events")
+    next_call = MagicMock()
+    next_call.call = AsyncMock(return_value={"ok": True})
 
     with pytest.raises(RuntimeError, match="mark failed"):
-        await intercept("safe_tool", {"value": 1})
+        await intercept("safe_tool", {"value": 1}, next_call)
 
     runtime.pop_scope.assert_awaited_once_with("scope-handle", metadata={"failed": True})
     runtime.create_scope_stack.assert_not_awaited()
@@ -328,10 +349,12 @@ async def test_runtime_cleanup_preserves_the_callback_error(example: Any) -> Non
     context, runtime = register_example(example)
     runtime.emit_mark.side_effect = RuntimeError("mark failed")
     runtime.pop_scope.side_effect = RuntimeError("cleanup failed")
-    intercept = callback(context, "register_tool_request_intercept")
+    intercept = callback(context, "register_tool_execution_intercept", "documentation_runtime_events")
+    next_call = MagicMock()
+    next_call.call = AsyncMock(return_value={"ok": True})
 
     with pytest.raises(RuntimeError, match="mark failed"):
-        await intercept("safe_tool", {"value": 1})
+        await intercept("safe_tool", {"value": 1}, next_call)
 
     runtime.pop_scope.assert_awaited_once_with("scope-handle", metadata={"failed": True})
 
@@ -351,7 +374,7 @@ def test_llm_request_intercept_preserves_outcome_fields(example: Any) -> None:
 
 async def test_tool_execution_returns_pending_mark(example: Any) -> None:
     context, _runtime = register_example(example)
-    intercept = callback(context, "register_tool_execution_intercept")
+    intercept = callback(context, "register_tool_execution_intercept", "documentation_tool_execution")
     next_call = MagicMock()
     next_call.call = AsyncMock(return_value={"ok": True})
 

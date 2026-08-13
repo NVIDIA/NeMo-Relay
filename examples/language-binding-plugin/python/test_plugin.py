@@ -188,6 +188,26 @@ async def test_subscriber_observes_managed_call(active_plugin: ActivatedExample)
     assert active_plugin.implementation.events
 
 
+async def test_runtime_events_do_not_depend_on_request_rewriting(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    implementation = DocumentationPlugin()
+    configuration = component("enforce")
+    configuration.components[0].config["requests"]["enabled"] = False
+    plugin.register("documentation-plugin", implementation)
+    try:
+        await plugin.initialize(configuration)
+        await tools.execute("safe_tool", {"value": 1}, lambda args: args)
+        await subscribers.flush_async()
+
+        assert "documentation-plugin.request" in implementation.events
+    finally:
+        await plugin.clear_async()
+        plugin.deregister("documentation-plugin")
+
+
 async def test_teardown_removes_plugin_kind(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))

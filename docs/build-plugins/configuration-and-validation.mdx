@@ -11,6 +11,11 @@ effect clear, and reject ambiguous input before Relay changes the runtime. Provi
 clients, callbacks, file handles, and resolved secret values belong in implementation
 state rather than in the configuration document.
 
+The `runtime` group is independent of the request-policy group. When either runtime
+setting is enabled, the examples install a small tool-execution wrapper that emits marks
+or manages an isolated stack. Disabling request rewriting, including with
+`requests.break_chain`, does not suppress those runtime operations.
+
 ## The Two Configuration Files Have Different Jobs
 
 | File | Purpose |

@@ -12,7 +12,7 @@ from copy import deepcopy
 from typing import Any
 
 import nemo_relay
-from nemo_relay import llm, plugin, subscribers, tools
+from nemo_relay import llm, plugin, scope, subscribers, tools
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "tag": "documentation",
@@ -268,6 +268,22 @@ class DocumentationPlugin:
                 requests["break_chain"],
                 llm_request,
             )
+
+        if settings["runtime"]["emit_marks"] or settings["runtime"]["emit_isolated_scope"]:
+
+            async def runtime_events(_name, args, next_call):
+                if settings["runtime"]["emit_marks"]:
+                    scope.event(
+                        "documentation-plugin.request",
+                        data={"tag": tag, "secret": "application-value"},
+                    )
+                if settings["runtime"]["emit_isolated_scope"]:
+                    with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+                        with scope.scope("documentation-plugin.isolated", nemo_relay.ScopeType.Custom):
+                            pass
+                return nemo_relay.ToolExecutionInterceptOutcome(await next_call(args))
+
+            context.register_tool_execution_intercept("runtime-events", 0, runtime_events)
 
         async def stream_request(_request, next_call):
             async for chunk in await next_call(_request):

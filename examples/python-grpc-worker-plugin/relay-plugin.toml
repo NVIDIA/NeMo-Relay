@@ -25,7 +25,7 @@ manifest_root = "."
 artifact = "nemo_relay_python_grpc_worker_example/worker.py"
 
 [integrity]
-sha256 = "sha256:307a72a7d9396e3ee8bcd9c3dee89368f270b8a7b8c139bd1e46800d501467c2"
+sha256 = "sha256:fab6ffba15dd24f3a9006ed0cc7266699d8331a54ae3e3cce28677fb516d7353"
 
 [load]
 runtime = "python"

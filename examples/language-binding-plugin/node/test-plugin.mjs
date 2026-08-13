@@ -197,6 +197,17 @@ test('runtime controls emit a mark and an isolated scope only when enabled', asy
   }, runtimeDisabled);
 });
 
+test('runtime controls do not depend on request rewriting', async () => {
+  const requestsDisabled = config('enforce');
+  requestsDisabled.components[0].config.requests.enabled = false;
+  await withActivePlugin(async () => {
+    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    await relay.flushSubscribers();
+
+    assert.ok(documentationPlugin.events.includes('documentation-plugin.request'));
+  }, requestsDisabled);
+});
+
 test('teardown removes the plugin kind', async () => {
   const restoreEnvironment = isolateExampleEnvironment();
   plugin.register('documentation-plugin', documentationPlugin);

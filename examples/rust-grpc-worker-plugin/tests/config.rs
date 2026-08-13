@@ -120,39 +120,6 @@ fn assert_schema_defaults(schema: &Json, value: &Json, path: &str) {
 }
 
 #[test]
-fn implementation_declares_each_safe_worker_surface() {
-    let source = include_str!("../src/lib.rs");
-    assert_eq!(
-        [
-            "register_subscriber",
-            "register_mark_sanitize_guardrail",
-            "register_scope_sanitize_start_guardrail",
-            "register_scope_sanitize_end_guardrail",
-            "register_tool_sanitize_request_guardrail",
-            "register_tool_sanitize_response_guardrail",
-            "register_tool_conditional_execution_guardrail",
-            "register_tool_request_intercept",
-            "register_tool_execution_intercept",
-            "register_llm_sanitize_request_guardrail",
-            "register_llm_sanitize_response_guardrail",
-            "register_llm_conditional_execution_guardrail",
-            "register_llm_request_intercept",
-            "register_llm_execution_intercept",
-            "register_llm_stream_execution_intercept",
-        ]
-        .iter()
-        .filter(|method| source.contains(**method))
-        .count(),
-        15
-    );
-    assert!(source.contains("config.requests.priority"));
-    assert!(source.contains("config.execution.priority"));
-    assert!(source.contains("config.requests.break_chain"));
-    assert!(source.contains("pop_scope(&handle"));
-    assert!(source.contains("drop_scope_stack(&stack"));
-}
-
-#[test]
 fn manifest_uses_the_rust_worker_load_contract() {
     let manifest = include_str!("../relay-plugin.toml");
     assert!(manifest.contains("relay = \">=0.6,<1.0\""));

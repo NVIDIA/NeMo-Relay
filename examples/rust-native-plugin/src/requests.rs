@@ -3,18 +3,16 @@
 
 use nemo_relay_plugin::{
     EventCategory, Json, LlmOptimizationContribution, LlmRequestInterceptOutcome, PendingMarkSpec,
-    PluginContext, PluginRuntime,
+    PluginContext,
 };
 use serde_json::json;
 
 use crate::config::ExampleConfig;
 use crate::observe::add_header;
-use crate::runtime::emit_configured_runtime_events;
 
 pub(crate) fn register(
     context: &mut PluginContext<'_>,
     config: &ExampleConfig,
-    runtime: &PluginRuntime,
 ) -> nemo_relay_plugin::Result<()> {
     if !config.requests.enabled {
         return Ok(());
@@ -38,16 +36,9 @@ pub(crate) fn register(
         config.requests.break_chain,
         {
             let tag = config.tag.clone();
-            let runtime = runtime.clone();
-            let runtime_config = config.runtime.clone();
             move |name, value| {
                 let tag = tag.clone();
-                let runtime = runtime.clone();
-                let runtime_config = runtime_config.clone();
-                async move {
-                    emit_configured_runtime_events(&runtime, &tag, &runtime_config)?;
-                    Ok(tag_tool_request(value, &name, &tag))
-                }
+                async move { Ok(tag_tool_request(value, &name, &tag)) }
             }
         },
     )?;

@@ -109,8 +109,8 @@ impl NativePlugin for ExampleNativePlugin {
         let config = config::ExampleConfig::parse(plugin_config)?;
         let runtime = context.runtime();
         observe::register(context, &config, &runtime)?;
-        requests::register(context, &config, &runtime)?;
-        execution::register(context, &config)?;
+        requests::register(context, &config)?;
+        execution::register(context, &config, &runtime)?;
         Ok(())
     }
 }
@@ -143,7 +143,8 @@ Follow these pages in order to build, activate, exercise, and remove the native 
 6. Consult [Native ABI Reference](/build-plugins/native/native-abi-reference) only when
    implementing or auditing the raw boundary.
 
-Success is not merely a library that loads. The complete path validates rejected and
-disabled input, activates a valid component, exercises the plugin's 15 registrations,
-and verifies representative tool, LLM, stream, event, codec, continuation, mark, and
-scope paths before it clears registrations and unloads the library.
+Success is not merely a library that loads. The atomic lifecycle test builds the `cdylib`
+in an isolated target directory, materializes and integrity-checks its manifest, activates
+a valid component, executes a managed tool call, observes the runtime mark, and clears
+registrations before the library unloads. The focused configuration tests cover rejected
+input and schema shape; the scenario pages show the remaining callback contracts.

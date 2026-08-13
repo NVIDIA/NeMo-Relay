@@ -120,9 +120,6 @@ Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
 worker process.
 
-For a complete manifest and runnable plugin, refer to the
-[Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md).
-
 ## Request Intercepts
 
 LLM request intercepts return one canonical outcome:

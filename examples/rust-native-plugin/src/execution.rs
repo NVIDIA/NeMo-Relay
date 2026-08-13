@@ -3,17 +3,38 @@
 
 use futures::StreamExt;
 use nemo_relay_plugin::{
-    EventCategory, Json, LlmJsonAsyncStream, PendingMarkSpec, PluginContext,
+    EventCategory, Json, LlmJsonAsyncStream, PendingMarkSpec, PluginContext, PluginRuntime,
     ToolExecutionInterceptOutcome,
 };
 use serde_json::json;
 
 use crate::config::ExampleConfig;
+use crate::runtime::emit_configured_runtime_events;
 
 pub(crate) fn register(
     context: &mut PluginContext<'_>,
     config: &ExampleConfig,
+    runtime: &PluginRuntime,
 ) -> nemo_relay_plugin::Result<()> {
+    if config.runtime.emit_marks || config.runtime.emit_isolated_scope {
+        context.register_tool_execution_intercept("documentation_runtime_events", 0, {
+            let tag = config.tag.clone();
+            let runtime = runtime.clone();
+            let runtime_config = config.runtime.clone();
+            move |_name, request, next| {
+                let tag = tag.clone();
+                let runtime = runtime.clone();
+                let runtime_config = runtime_config.clone();
+                async move {
+                    emit_configured_runtime_events(&runtime, &tag, &runtime_config)?;
+                    Ok(ToolExecutionInterceptOutcome::new(
+                        next.call(request).await?,
+                    ))
+                }
+            }
+        })?;
+    }
+
     if !config.execution.enabled {
         return Ok(());
     }

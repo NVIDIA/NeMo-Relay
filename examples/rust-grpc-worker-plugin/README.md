@@ -10,9 +10,10 @@ guide. It validates the shared documentation configuration, registers every
 safe `grpc-v1` surface, exercises continuations and lazy streams, uses
 invocation-scoped codecs, and demonstrates marks and scope-stack cleanup.
 
-Run `cargo test` and `cargo build` from this directory. The tests are
-order-independent and each asserts one configuration, schema, or manifest
-contract. Copy
+Run `cargo test` and `cargo build` from this directory. The configuration and
+schema tests are order-independent. The lifecycle test builds a fresh worker,
+materializes a digest-checked manifest, activates it through `grpc-v1`, runs
+managed middleware, observes a host-runtime mark, and verifies shutdown. Copy
 `relay-plugin.toml` to `relay-plugin.local.toml`, replace the platform worker
 placeholder with the built executable name, and replace only `<artifact-sha256>`
 with the lowercase hexadecimal digest of the built executable. The manifest value

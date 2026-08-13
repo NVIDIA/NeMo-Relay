@@ -63,8 +63,8 @@ class ExamplePythonWorker(WorkerPlugin):
                 settings["tag"],
                 settings["requests"],
                 settings["execution"],
-                settings["runtime"],
             )
+        self._register_runtime(context, settings["tag"], settings["runtime"])
         if settings["execution"]["enabled"]:
             self._register_execution(context, settings["execution"])
 
@@ -106,9 +106,7 @@ impl WorkerPlugin for DocumentationWorker {
         if settings.requests.enabled {
             register_requests(context, &settings);
         }
-        if settings.execution.enabled {
-            register_execution(context, &settings);
-        }
+        register_execution(context, &settings);
         Ok(())
     }
 }
@@ -140,9 +138,9 @@ Follow these pages in order to build, activate, exercise, and stop a worker plug
 4. Use the [grpc-v1 Protocol Reference](/build-plugins/workers/grpc-v1-protocol) to audit
    an SDK or implement a custom command.
 
-A complete worker test packages the artifact, completes handshake and validation,
-asserts all 15 registrations, exercises unary and stream continuations, codec
-proxies, cancellation, marks, and scopes, and then verifies orderly shutdown. The
-checked SDK suites and Python example divide that coverage between transport integration
-and atomic callback-contract tests; merely starting a process and registering one
-intercept is not enough evidence.
+The atomic Rust lifecycle test builds the executable in an isolated target directory,
+materializes and integrity-checks its manifest, completes worker activation, executes a
+managed tool call across `grpc-v1`, observes a host-runtime mark, and verifies orderly
+shutdown. The Rust and Python callback-contract tests then isolate the sanitizer,
+continuation, streaming, codec, cancellation, and scope-cleanup behavior. Merely
+starting a process and registering one intercept is not enough evidence.

@@ -213,7 +213,6 @@ export const documentationPlugin = {
         requests.mode === 'enforce' && requests.blocked_tools.includes(name) ? `tool '${name}' is blocked` : null,
       );
       context.registerToolRequestIntercept('tool-request', requests.priority, requests.break_chain, (_name, args) => {
-        emitRuntimeEvents(runtime, settings.tag);
         return { ...args, plugin_tag: settings.tag };
       });
       context.registerLlmConditionalExecutionGuardrail('llm-policy', 10, (request) => {
@@ -237,6 +236,12 @@ export const documentationPlugin = {
           annotated,
         }),
       );
+    }
+    if (runtime.emit_marks || runtime.emit_isolated_scope) {
+      context.registerToolExecutionIntercept('runtime-events', 0, async (args, next) => {
+        emitRuntimeEvents(runtime, settings.tag);
+        return { result: await next(args) };
+      });
     }
     if (execution.enabled) {
       context.registerToolExecutionIntercept('tool-execution', execution.priority, async (args, next) => ({
