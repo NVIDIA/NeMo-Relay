@@ -9,13 +9,14 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 
-use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
+use nemo_relay::api::event::{
+    CategoryProfile, Event, ScopeCategory, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
+};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
     LlmSanitizeResponseFn, ToolSanitizeFn,
 };
-use nemo_relay::api::tool::TOOL_RESULT_ANNOTATION_PROFILE_KEY;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
     ProviderSurface, detect_response_surface, request_codec as build_request_codec,

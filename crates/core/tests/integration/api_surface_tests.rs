@@ -12,7 +12,9 @@ use test_support::ready;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::StreamExt;
-use nemo_relay::api::event::{CategoryProfile, Event, ScopeCategory};
+use nemo_relay::api::event::{
+    CategoryProfile, Event, ScopeCategory, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
+};
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call, llm_call_end,
@@ -63,9 +65,7 @@ use nemo_relay::api::subscriber::{
     deregister_subscriber, flush_subscribers, register_subscriber, scope_deregister_subscriber,
     scope_register_subscriber,
 };
-use nemo_relay::api::tool::{
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes, ToolExecutionResult,
-};
+use nemo_relay::api::tool::{ToolAttributes, ToolExecutionResult};
 use nemo_relay::api::tool::{
     tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
     tool_request_intercepts,

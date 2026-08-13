@@ -21,9 +21,13 @@ dynamic worker plugins. Use it when plugin code should run in its own Python
 process and communicate with Relay through the versioned `grpc-v1` worker
 protocol.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline.
-Workers built for an earlier Relay release must be rebuilt with this SDK and
-declare a `compat.relay` range beginning at `0.8.0` or later.
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. The
+protocol name remains `grpc-v1`, while generated `ToolNext` responses and tool
+execution outcomes use structural protobuf `ToolExecutionResult` and
+`ToolExecutionInterceptOutcome` messages instead of schema-tagged JSON
+envelopes. Workers and custom bindings built for an earlier Relay release must
+regenerate their protobuf bindings, rebuild with this SDK, and declare a
+`compat.relay` range beginning at `0.8.0` or later.
 
 ## Why Use It?
 

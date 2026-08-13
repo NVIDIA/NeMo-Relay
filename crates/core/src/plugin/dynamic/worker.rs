@@ -27,10 +27,13 @@ use nemo_relay_worker_proto::v1::{
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
-    ToolNextRequest, ValidateRequest, WorkerError,
+    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    ToolExecutionResultResponse, ToolInvocation, ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_tool_execution_intercept_outcome,
+    encode_tool_execution_result, json_envelope,
+};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -71,10 +74,7 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
     event as emit_scope_mark, pop_scope, push_scope,
 };
-use crate::api::tool::{
-    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA,
-    ToolExecutionInterceptOutcome,
-};
+use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
@@ -1565,15 +1565,10 @@ impl WorkerPluginCallback {
         let response = self.invoke_async(request).await?;
         match response.result {
             Some(invoke_response_result::Result::ToolExecution(result)) => {
-                let outcome =
-                    required_envelope(result.outcome, "tool execution intercept outcome")?;
-                if outcome.schema != TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA {
-                    return Err(FlowError::Internal(format!(
-                        "worker returned unsupported tool execution intercept outcome schema: {}",
-                        outcome.schema
-                    )));
-                }
-                decode_json_envelope(&outcome).map_err(|err| {
+                let outcome = result.outcome.ok_or_else(|| {
+                    FlowError::Internal("worker tool execution intercept outcome is missing".into())
+                })?;
+                decode_tool_execution_intercept_outcome(outcome).map_err(|err| {
                     FlowError::Internal(format!(
                         "worker returned invalid tool execution intercept outcome: {err}"
                     ))
@@ -2626,7 +2621,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
     async fn tool_next(
         &self,
         request: Request<ToolNextRequest>,
-    ) -> Result<Response<JsonResult>, Status> {
+    ) -> Result<Response<ToolExecutionResultResponse>, Status> {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
@@ -2650,10 +2645,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                     panic_payload_message(payload.as_ref())
                 )))
             });
-        Ok(Response::new(typed_json_result(
-            TOOL_EXECUTION_RESULT_SCHEMA,
-            result,
-        )))
+        Ok(Response::new(tool_execution_result_response(result)))
     }
 
     async fn llm_next(
@@ -3073,6 +3065,29 @@ fn typed_json_result<T: serde::Serialize>(schema: &str, result: FlowResult<T>) -
             error: None,
         },
         Err(err) => JsonResult {
+            value: None,
+            error: Some(flow_error_to_worker(err)),
+        },
+    }
+}
+
+fn tool_execution_result_response(
+    result: FlowResult<ToolExecutionResult>,
+) -> ToolExecutionResultResponse {
+    match result {
+        Ok(value) => match encode_tool_execution_result(&value) {
+            Ok(value) => ToolExecutionResultResponse {
+                value: Some(value),
+                error: None,
+            },
+            Err(err) => ToolExecutionResultResponse {
+                value: None,
+                error: Some(flow_error_to_worker(FlowError::Internal(format!(
+                    "failed to encode tool execution result: {err}"
+                )))),
+            },
+        },
+        Err(err) => ToolExecutionResultResponse {
             value: None,
             error: Some(flow_error_to_worker(err)),
         },

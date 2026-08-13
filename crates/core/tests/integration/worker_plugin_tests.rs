@@ -1191,12 +1191,63 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         rewritten["_nemo_relay_plugin"]["tag"],
         "managed-environment"
     );
+
+    let tool_result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("python-worker-tool")
+            .args(json!({ "query": "relay" }))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({ "provider_result": true, "args": args }),
+                        json!({ "source": "provider" }),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .expect("Python tool execution intercept should call ToolNext and return its outcome");
+    assert_eq!(tool_result.result["provider_result"], true);
+    assert_eq!(
+        tool_result.result["_nemo_relay_plugin"]["tag"],
+        "managed-environment"
+    );
+    assert_eq!(
+        tool_result.result["args"]["_nemo_relay_plugin"]["tag"],
+        "managed-environment"
+    );
+    assert_eq!(
+        tool_result.annotation,
+        Some(json!({
+            "upstream": { "source": "provider" },
+            "worker": {
+                "tool_name": "python-worker-tool",
+                "tag": "managed-environment",
+            },
+        }))
+    );
+
     flush_subscribers().expect("Python callback mark should flush");
+    let captured_events = events.lock().unwrap();
     find_event(
-        &events.lock().unwrap(),
+        &captured_events,
         "examples.python_grpc_worker.tool_request",
         None,
     );
+    let tool_mark = find_event(
+        &captured_events,
+        "examples.python_grpc_worker.tool_execution",
+        None,
+    );
+    assert_eq!(
+        tool_mark.data(),
+        Some(&json!({
+            "tool_name": "python-worker-tool",
+            "tag": "managed-environment",
+        }))
+    );
+    drop(captured_events);
 
     drop(cleanup);
 }

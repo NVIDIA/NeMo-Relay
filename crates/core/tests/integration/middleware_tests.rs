@@ -23,6 +23,7 @@ use test_support::{ready, ready_result};
 use futures::StreamExt;
 use nemo_relay::api::event::{
     CategoryProfile, DataSchema, Event, EventCategory, PendingMarkSpec, ScopeCategory,
+    TOOL_RESULT_ANNOTATION_PROFILE_KEY,
 };
 use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_request_intercepts,
@@ -64,9 +65,8 @@ use nemo_relay::api::scope::{EmitMarkEventParams, ScopeHandle, ScopeType, event}
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolExecutionInterceptOutcome, ToolExecutionResult,
-    tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
-    tool_request_intercepts,
+    ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call, tool_call_end,
+    tool_call_execute, tool_conditional_execution, tool_request_intercepts,
 };
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,

@@ -110,9 +110,9 @@ Execution intercepts add lifecycle-owned pending marks to that shape:
   JavaScript pending-mark DTOs use `categoryProfile`.
 - Public C intercept callbacks return canonical JSON with `result`, optional
   `annotation`, and optional `pending_marks`.
-- `grpc-v1` worker SDKs exchange the result in a `JsonEnvelope` with schema
-  `nemo.relay.ToolExecutionResult@1` and the intercept outcome with schema
-  `nemo.relay.ToolExecutionInterceptOutcome@2`.
+- `grpc-v1` worker SDKs exchange protobuf `ToolExecutionResult` and
+  `ToolExecutionInterceptOutcome` messages. Their arbitrary JSON fields use
+  lossless protobuf `JsonValue` wrappers.
 
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
@@ -121,10 +121,11 @@ Relay 0.8 establishes this canonical result as the native API 1 and `grpc-v1`
 baseline. Rebuild every dynamic plugin and declare a `compat.relay` range that
 excludes Relay versions before 0.8. The recommended range is
 `>=0.8.0,<1.0`; open-ended ranges such as `>=0.8.0` are valid. The native ABI
-remains v4, and the `nemo.relay.worker.v1` protobuf transport layout remains
-unchanged. These stable binary and transport layouts are independent of the
-breaking application JSON semantic change. Future incompatible JSON contract
-changes must increment the corresponding native API or worker protocol version.
+remains v4. Workers retain the `grpc-v1` identifier and
+`nemo.relay.worker.v1` package, but Relay 0.8 changes the `ToolNext` response
+type and tool-execution outcome field type. Regenerate worker protobuf bindings
+as part of the required rebuild. Future incompatible contract changes must
+increment the corresponding native API or worker protocol version.
 
 ## Migration
 

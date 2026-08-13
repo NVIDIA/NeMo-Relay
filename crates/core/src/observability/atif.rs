@@ -569,7 +569,7 @@ fn observation_extra(event: &Event, output: Option<&Json>) -> Json {
         }
         if let Some(annotation) = super::tool_result_annotation(event) {
             extra_object.insert(
-                crate::api::tool::TOOL_RESULT_ANNOTATION_PROFILE_KEY.to_string(),
+                crate::api::event::TOOL_RESULT_ANNOTATION_PROFILE_KEY.to_string(),
                 annotation.clone(),
             );
         }
@@ -3171,7 +3171,7 @@ fn observation_result_has_tool_result_extra(result: &AtifObservationResult) -> b
         .and_then(|extra| extra.as_object())
         .is_some_and(|extra| {
             extra.contains_key("tool_result")
-                || extra.contains_key(crate::api::tool::TOOL_RESULT_ANNOTATION_PROFILE_KEY)
+                || extra.contains_key(crate::api::event::TOOL_RESULT_ANNOTATION_PROFILE_KEY)
         })
 }
 

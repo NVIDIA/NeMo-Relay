@@ -12,8 +12,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 implement the `nemo.relay.worker.v1` API. Relay starts every worker and connects
 to it through local endpoints. Remote worker endpoints are not supported.
 
-Relay 0.8 resets the `grpc-v1` application JSON contract to use canonical
-`ToolExecutionResult` values. Rebuild every worker for Relay 0.8 and declare a
+Relay 0.8 resets the `grpc-v1` tool-result contract to use structured protobuf
+`ToolExecutionResult` and `ToolExecutionInterceptOutcome` messages. Rebuild
+every worker and regenerate custom protobuf bindings for Relay 0.8. Declare a
 `compat.relay` range that excludes earlier releases. The recommended range is
 `>=0.8.0,<1.0`; open-ended or narrower 0.8-or-newer ranges are valid. The
 manifest is an author compatibility assertion, not artifact attestation.
@@ -41,8 +42,10 @@ or LLM-stream continuations during execution intercepts.
 This page defines the application contract. Refer to the [canonical protobuf
 transport schema](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
 for every message and RPC field required to implement another runtime. The
-protobuf package, services, RPCs, fields, and field numbers remain unchanged;
-the JSON envelope semantics are breaking for workers built before Relay 0.8.
+protobuf package, service names, and RPC method names remain at v1. The
+`ToolNext` response type and the `ToolExecutionInterceptResult.outcome` field
+type change for the Relay 0.8 baseline. Workers built against an earlier
+`grpc-v1` schema are incompatible and must regenerate their bindings.
 
 ## PluginWorker RPCs
 
@@ -156,18 +159,24 @@ current sanitizer invocation. Relay rejects missing, forged, expired,
 wrong-direction, or activation-mismatched capabilities. Codec transformation
 failures are non-retryable worker errors.
 
-The following envelope schemas are normative for canonical tool results:
+The following protobuf types are normative for canonical tool results:
 
-| Location | Required `JsonEnvelope.schema` |
+| Protocol Location | Required Protobuf Type |
 | --- | --- |
-| Successful `RelayHostRuntime.ToolNext` response `JsonResult.value` | `nemo.relay.ToolExecutionResult@1` |
-| `InvokeResponse.tool_execution.outcome` | `nemo.relay.ToolExecutionInterceptOutcome@2` |
+| `RelayHostRuntime.ToolNext` response | `ToolExecutionResultResponse` |
+| Successful `ToolExecutionResultResponse.value` | `ToolExecutionResult` |
+| `InvokeResponse.tool_execution.outcome` | `ToolExecutionInterceptOutcome` |
 
-The tool intercept outcome has a flat payload containing `result`, optional
-`annotation`, and Relay-owned `pending_marks`. These application JSON semantics
-change without adding a protobuf package, RPC, message, or field. Workers built
-against the earlier `grpc-v1` tool-result contract must be rebuilt. Future
-incompatible JSON semantic changes must increment `worker_protocol`.
+`ToolExecutionResult` contains a required `result` and optional `annotation`.
+`ToolExecutionInterceptOutcome` adds Relay-owned `pending_marks`. Each opaque
+JSON leaf uses `JsonValue`, whose bytes contain exactly one JSON value. This
+preserves arbitrary JSON and integer precision while generated protobuf clients
+enforce the surrounding result, annotation, and pending-mark structure.
+
+These are deliberate protobuf type changes under the Relay 0.8 `grpc-v1`
+baseline. The package and RPC method names remain v1, but workers must
+regenerate their protobuf bindings and rebuild. Future incompatible worker
+protobuf or payload semantic changes must increment `worker_protocol`.
 
 A worker may call an execution continuation repeatedly or concurrently while
 the corresponding `Invoke` or `InvokeStream` callback is active. Each call gets
@@ -201,8 +210,10 @@ message JsonEnvelope {
 }
 ```
 
-Use `JsonEnvelope` for Relay DTOs. Protobuf defines protocol control flow and
-does not duplicate Relay event, tool, LLM, scope, or diagnostic models.
+Use `JsonEnvelope` for open Relay DTOs that the protocol does not model
+directly. Canonical tool results are the exception: protobuf defines their
+wrapper and pending-mark structure, and `JsonValue` carries each arbitrary JSON
+leaf losslessly.
 
 ## Activation and Shutdown
 

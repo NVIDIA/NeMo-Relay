@@ -106,11 +106,13 @@ Relay versions before 0.8. Use `>=0.8.0,<1.0` unless you deliberately need a
 narrower or open-ended 0.8-or-newer range. The manifest is the plugin author's
 compatibility assertion, not proof that an artifact was rebuilt.
 
-The native ABI remains v4. Workers continue to use the
-`nemo.relay.worker.v1` protobuf package with unchanged services, RPCs, fields,
-and field numbers. Those binary and transport layouts are independent of the
-breaking application JSON semantic change. Future incompatible JSON contract
-changes must increment the corresponding native API or worker protocol version.
+The native ABI remains v4. Workers continue to use `grpc-v1` and the
+`nemo.relay.worker.v1` protobuf package, but this baseline changes the
+`ToolNext` response from `JsonResult` to `ToolExecutionResultResponse` and
+changes `ToolExecutionInterceptResult.outcome` from `JsonEnvelope` to
+`ToolExecutionInterceptOutcome`. Regenerate worker protobuf bindings during
+the required rebuild. Future incompatible contract changes must increment the
+corresponding native API or worker protocol version.
 
 Manual tool end helpers also require the canonical wrapper. For example, pass
 `nemo_relay.ToolExecutionResult(payload)` to Python `tools.call_end`,

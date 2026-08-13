@@ -7,7 +7,7 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, EventSanitizeFields, MarkEvent,
-    ScopeCategory, ScopeEvent,
+    ScopeCategory, ScopeEvent, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
 };
 use crate::api::llm::{
     LlmCallExecuteParams, LlmCallParams, LlmRequest, LlmStreamCallExecuteParams, llm_call,
@@ -23,8 +23,8 @@ use crate::api::scope::{
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 use crate::api::tool::{
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolCallEndParams, ToolCallExecuteParams, ToolCallParams,
-    ToolExecutionResult, tool_call, tool_call_end, tool_call_execute,
+    ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolExecutionResult, tool_call,
+    tool_call_end, tool_call_execute,
 };
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;

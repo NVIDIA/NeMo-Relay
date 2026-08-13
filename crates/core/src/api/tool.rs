@@ -3,7 +3,9 @@
 
 use serde_json::json;
 
-use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
+use crate::api::event::{
+    BaseEvent, Event, MarkEvent, PendingMarkSpec, TOOL_RESULT_ANNOTATION_PROFILE_KEY,
+};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -29,9 +31,8 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 pub use nemo_relay_types::api::tool::{
-    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA,
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes, ToolExecutionInterceptOutcome,
-    ToolExecutionResult,
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
+    ToolExecutionInterceptOutcome, ToolExecutionResult,
 };
 
 fn queue_sanitized_event_with_scope_stack(

@@ -28,8 +28,12 @@ tooling.
 Relay 0.8 establishes the canonical tool-result contract as the `grpc-v1`
 baseline. Workers built for an earlier Relay release must be rebuilt, and their
 manifests must declare a `compat.relay` range beginning at `0.8.0` or later.
-The protobuf package, RPCs, field numbers, and generated module remain `v1`;
-the required application DTOs are identified by their JSON-envelope schemas.
+The protocol identifier and protobuf package remain `grpc-v1` and
+`nemo.relay.worker.v1`, respectively. However, the generated protobuf API
+changes at the tool-result boundary: `ToolNext` returns
+`ToolExecutionResultResponse`, and `ToolExecutionInterceptResult.outcome` is a
+typed `ToolExecutionInterceptOutcome`. Rebuild every worker against the Relay
+0.8 protocol definitions.
 
 ## Why Use It?
 
@@ -37,30 +41,36 @@ the required application DTOs are identified by their JSON-envelope schemas.
   message definitions accepted by Relay worker manifests.
 - **Use generated Tonic bindings**: Access versioned client and server types
   from `v1` without generating protobuf code in a consumer project.
-- **Keep data ownership clear**: Carry Relay DTOs in JSON envelopes backed by
-  `nemo-relay-types`; protobuf owns transport control flow.
+- **Keep data ownership clear**: Use structural protobuf wrappers for tool
+  results while preserving open application payloads as lossless JSON bytes.
+  Other Relay DTOs continue to use JSON envelopes backed by
+  `nemo-relay-types`.
 
 ## What You Get
 
 - **`WORKER_PROTOCOL_GRPC_V1`**: The stable `grpc-v1` protocol identifier.
 - **`v1` module**: Generated `PluginWorker` and `RelayHostRuntime` gRPC
-  clients, servers, services, and messages. The module name is the protobuf
-  package version; it does not track application DTO schema versions carried
-  by JSON envelopes.
+  clients, servers, services, and messages.
 - **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
   serializing Relay DTOs into protocol payloads.
+- **Tool-result conversion helpers**: Encode and decode the shared
+  `nemo-relay-types` tool-result DTOs through their structural protobuf forms.
 
-## Tool Result Envelopes
+## Structural Tool Result Contract
 
-The `grpc-v1` tool-result boundary requires these exact envelope schemas:
+The `grpc-v1` tool-result boundary uses these generated message types:
 
-| Protocol location | Required schema |
+| Protocol Location | Protobuf Type |
 | --- | --- |
-| Successful `RelayHostRuntime.ToolNext` `JsonResult.value` | `nemo.relay.ToolExecutionResult@1` |
-| `ToolExecutionInterceptResult.outcome` | `nemo.relay.ToolExecutionInterceptOutcome@2` |
+| Successful `RelayHostRuntime.ToolNext` response | `ToolExecutionResultResponse.value` containing `ToolExecutionResult` |
+| `ToolExecutionInterceptResult.outcome` | `ToolExecutionInterceptOutcome` |
 
-Hosts and SDKs enforce these tags, and custom workers must emit and accept the
-same contract. Raw or differently tagged JSON is rejected at these locations.
+Both messages define `result` and optional `annotation` fields. Intercept
+outcomes also define ordered `pending_marks`. Arbitrary JSON values use
+`JsonValue`, whose bytes contain exactly one JSON value; this preserves JSON
+integers and other application data without the numeric coercion of
+`google.protobuf.Value`. Hosts and SDKs reject a missing required `result` or
+invalid JSON bytes. JSON null annotations normalize to absence.
 
 ## Installation
 

@@ -1,12 +1,22 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tests for stable worker protocol helpers and enum values.
+//! Tests for stable worker protocol helpers, structural tool results, and enum values.
 
-use nemo_relay_worker_proto::v1::{
-    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, RegistrationSurface, ScopeType,
+use nemo_relay_types::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
+use nemo_relay_types::api::tool::{
+    ToolExecutionInterceptOutcome as SharedToolExecutionInterceptOutcome,
+    ToolExecutionResult as SharedToolExecutionResult,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::v1::{
+    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface,
+    ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
+};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_tool_execution_intercept_outcome,
+    decode_tool_execution_result, encode_tool_execution_intercept_outcome,
+    encode_tool_execution_result, json_envelope,
+};
 use prost::Message;
 use serde_json::json;
 
@@ -131,4 +141,136 @@ fn invalid_json_envelope_reports_decode_error() {
     };
 
     assert!(decode_json_envelope::<serde_json::Value>(&envelope).is_err());
+}
+
+#[test]
+fn tool_execution_result_has_structural_wire_fields() {
+    let value = ProtoToolExecutionResult {
+        result: Some(JsonValue {
+            json: b"1".to_vec(),
+        }),
+        annotation: Some(JsonValue {
+            json: b"2".to_vec(),
+        }),
+    };
+
+    assert_eq!(
+        value.encode_to_vec(),
+        vec![0x0a, 0x03, 0x0a, 0x01, b'1', 0x12, 0x03, 0x0a, 0x01, b'2']
+    );
+}
+
+#[test]
+fn tool_execution_contract_round_trips_lossless_json_and_pending_marks() {
+    let mut profile = CategoryProfile {
+        subtype: Some("checkpoint".into()),
+        ..CategoryProfile::default()
+    };
+    profile.extra.insert("score".into(), json!(0.75));
+    let value = SharedToolExecutionInterceptOutcome::annotated(
+        json!({"large_integer": 9_007_199_254_740_993_u64}),
+        json!({"source": "worker"}),
+    )
+    .with_pending_mark(PendingMarkSpec {
+        name: "worker-checkpoint".into(),
+        category: Some(EventCategory::new("vendor.category")),
+        category_profile: Some(profile),
+        data: Some(json!({"ok": true})),
+        metadata: Some(json!({"sequence": 1})),
+    });
+
+    let encoded = encode_tool_execution_intercept_outcome(&value).unwrap();
+    assert_eq!(
+        encoded.pending_marks[0].category.as_deref(),
+        Some("vendor.category")
+    );
+    assert_eq!(
+        decode_tool_execution_intercept_outcome(encoded).unwrap(),
+        value
+    );
+}
+
+#[test]
+fn tool_execution_result_normalizes_null_annotation_to_absence() {
+    let shared = SharedToolExecutionResult {
+        result: json!("ok"),
+        annotation: Some(serde_json::Value::Null),
+    };
+    let encoded = encode_tool_execution_result(&shared).unwrap();
+    assert!(encoded.annotation.is_none());
+
+    let decoded = decode_tool_execution_result(ProtoToolExecutionResult {
+        result: Some(JsonValue {
+            json: br#""ok""#.to_vec(),
+        }),
+        annotation: Some(JsonValue {
+            json: b"null".to_vec(),
+        }),
+    })
+    .unwrap();
+    assert_eq!(decoded.annotation, None);
+}
+
+#[test]
+fn tool_execution_result_rejects_missing_result_and_contextualizes_invalid_json() {
+    let missing = decode_tool_execution_result(ProtoToolExecutionResult {
+        result: None,
+        annotation: None,
+    })
+    .expect_err("result is semantically required");
+    assert_eq!(
+        missing.to_string(),
+        "tool execution result.result is missing"
+    );
+
+    let invalid = decode_tool_execution_result(ProtoToolExecutionResult {
+        result: Some(JsonValue { json: vec![0xff] }),
+        annotation: None,
+    })
+    .expect_err("invalid UTF-8/JSON must fail");
+    assert!(
+        invalid
+            .to_string()
+            .contains("invalid JSON in tool execution result.result")
+    );
+}
+
+#[test]
+fn tool_execution_result_tolerates_unknown_protobuf_fields() {
+    let mut bytes = ProtoToolExecutionResult {
+        result: Some(JsonValue {
+            json: br#"{"ok":true}"#.to_vec(),
+        }),
+        annotation: None,
+    }
+    .encode_to_vec();
+    // Unknown field 31, varint wire type, value 7.
+    bytes.extend_from_slice(&[0xf8, 0x01, 0x07]);
+
+    let decoded_proto = ProtoToolExecutionResult::decode(bytes.as_slice()).unwrap();
+    let decoded = decode_tool_execution_result(decoded_proto).unwrap();
+    assert_eq!(decoded.result, json!({"ok": true}));
+}
+
+#[test]
+fn tool_execution_outcome_rejects_non_object_pending_mark_category_profile() {
+    let outcome = nemo_relay_worker_proto::v1::ToolExecutionInterceptOutcome {
+        result: Some(JsonValue {
+            json: br#"{"ok":true}"#.to_vec(),
+        }),
+        annotation: None,
+        pending_marks: vec![nemo_relay_worker_proto::v1::PendingMarkSpec {
+            name: "worker.mark".into(),
+            category: None,
+            category_profile: Some(JsonValue {
+                json: br#"["not","an","object"]"#.to_vec(),
+            }),
+            data: None,
+            metadata: None,
+        }],
+    };
+
+    let error = decode_tool_execution_intercept_outcome(outcome)
+        .expect_err("category_profile must decode as a CategoryProfile object");
+    assert!(error.to_string().contains("pending_marks.category_profile"));
 }

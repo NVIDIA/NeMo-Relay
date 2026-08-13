@@ -20,10 +20,9 @@ use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
     ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
-    PluginContext, PluginRuntime, Result, ScopeType, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
-    TOOL_EXECUTION_RESULT_SCHEMA, ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
-    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
-    serve_plugin_arc_with_config,
+    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome,
+    ToolExecutionResult, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin,
+    serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -34,10 +33,14 @@ use nemo_relay_worker_proto::v1::{
     DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
     InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
     LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
+    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_tool_execution_intercept_outcome,
+    encode_tool_execution_result, json_envelope,
+};
 use serde_json::json;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -1481,10 +1484,10 @@ async fn worker_service_propagates_host_runtime_errors() {
         ),
         (
             MockHostFailures {
-                tool_next_wrong_schema: true,
+                tool_next_missing_result: true,
                 ..Default::default()
             },
-            "nemo.relay.ToolExecutionResult@1",
+            "tool execution result.result is missing",
         ),
     ] {
         host.set_failures(failures);
@@ -2026,7 +2029,7 @@ struct MockHostFailures {
     pop_scope: HostFailure,
     drop_scope_stack: HostFailure,
     tool_next: bool,
-    tool_next_wrong_schema: bool,
+    tool_next_missing_result: bool,
     llm_next: bool,
     llm_stream_mode: MockStreamMode,
     codec_request_decode: bool,
@@ -2175,32 +2178,30 @@ impl RelayHostRuntime for MockHost {
     async fn tool_next(
         &self,
         request: Request<ToolNextRequest>,
-    ) -> std::result::Result<Response<JsonResult>, Status> {
+    ) -> std::result::Result<Response<ToolExecutionResultResponse>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
         self.record(format!("tool_next:{}", request.continuation_id));
         if self.failures().tool_next {
-            return Ok(Response::new(JsonResult {
+            return Ok(Response::new(ToolExecutionResultResponse {
                 value: None,
                 error: Some(worker_error("tool next failed")),
             }));
         }
-        let schema = if self.failures().tool_next_wrong_schema {
-            "nemo.relay.Json@1"
+        let value = if self.failures().tool_next_missing_result {
+            ProtoToolExecutionResult {
+                result: None,
+                annotation: None,
+            }
         } else {
-            TOOL_EXECUTION_RESULT_SCHEMA
+            encode_tool_execution_result(&ToolExecutionResult::annotated(
+                json!({"next": "tool"}),
+                json!({"source": "host"}),
+            ))
+            .expect("encode tool result")
         };
-        Ok(Response::new(JsonResult {
-            value: Some(
-                json_envelope(
-                    schema,
-                    &ToolExecutionResult::annotated(
-                        json!({"next": "tool"}),
-                        json!({"source": "host"}),
-                    ),
-                )
-                .expect("encode tool result"),
-            ),
+        Ok(Response::new(ToolExecutionResultResponse {
+            value: Some(value),
             error: None,
         }))
     }
@@ -2753,11 +2754,9 @@ async fn invoke_json(client: &mut PluginWorkerClient<Channel>, request: InvokeRe
             decode_json_envelope(&result.value.expect("json value")).expect("decode JSON result")
         }
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
-            decode_json_envelope::<ToolExecutionInterceptOutcome>(
-                &result.outcome.expect("tool execution outcome"),
-            )
-            .expect("decode tool execution outcome")
-            .result
+            decode_tool_execution_intercept_outcome(result.outcome.expect("tool execution outcome"))
+                .expect("decode tool execution outcome")
+                .result
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }
@@ -2775,8 +2774,7 @@ async fn invoke_tool_execution(
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
             let outcome = result.outcome.expect("tool execution outcome");
-            assert_eq!(outcome.schema, TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA);
-            decode_json_envelope(&outcome).expect("decode tool execution outcome")
+            decode_tool_execution_intercept_outcome(outcome).expect("decode tool execution outcome")
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }

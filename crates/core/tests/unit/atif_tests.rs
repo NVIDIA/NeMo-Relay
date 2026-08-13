@@ -6,11 +6,12 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
+    TOOL_RESULT_ANNOTATION_PROFILE_KEY, llm_attributes_to_strings, scope_attributes_to_strings,
+    tool_attributes_to_strings,
 };
 use crate::api::llm::{LlmAttributes, LlmRequest};
 use crate::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
-use crate::api::tool::{TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes};
+use crate::api::tool::ToolAttributes;
 use crate::codec::anthropic::AnthropicMessagesCodec;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::openai_chat::OpenAIChatCodec;

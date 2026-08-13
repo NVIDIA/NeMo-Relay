@@ -37,10 +37,7 @@ pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
-pub use nemo_relay_types::api::tool::{
-    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA,
-    ToolExecutionInterceptOutcome, ToolExecutionResult,
-};
+pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
@@ -60,10 +57,13 @@ use nemo_relay_worker_proto::v1::{
     LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
     LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck, WorkerError,
+    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolExecutionResultResponse,
+    ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_tool_execution_result,
+    encode_tool_execution_intercept_outcome, json_envelope,
+};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -935,7 +935,7 @@ impl ToolNext {
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        decode_typed_json_result(response, TOOL_EXECUTION_RESULT_SCHEMA)
+        tool_execution_result_to_sdk(response)
     }
 }
 
@@ -2256,14 +2256,26 @@ fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<Inv
         result: Some(
             nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
                 ToolExecutionInterceptResult {
-                    outcome: Some(json_envelope(
-                        TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
-                        &outcome,
-                    )?),
+                    outcome: Some(
+                        encode_tool_execution_intercept_outcome(&outcome)
+                            .map_err(|err| WorkerSdkError::Callback(err.to_string()))?,
+                    ),
                 },
             ),
         ),
     })
+}
+
+fn tool_execution_result_to_sdk(
+    result: ToolExecutionResultResponse,
+) -> Result<ToolExecutionResult> {
+    if let Some(error) = result.error {
+        return Err(worker_error_to_sdk(error));
+    }
+    let value = result
+        .value
+        .ok_or_else(|| WorkerSdkError::InvalidInput("tool execution result is missing".into()))?;
+    decode_tool_execution_result(value).map_err(|err| WorkerSdkError::InvalidInput(err.to_string()))
 }
 
 fn stream_chunk_to_json(chunk: StreamChunk) -> Result<Json> {

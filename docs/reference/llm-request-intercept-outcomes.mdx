@@ -121,9 +121,9 @@ codec input, sanitizer input, or start payload.
 ## Historical 0.6 Migration
 
 This section describes the NeMo Relay 0.6 migration. Relay 0.8 retains the
-`grpc-v1` identifier and resets the tool-result portion of its application JSON
-contract; rebuild workers and exclude pre-0.8 Relay versions in
-`compat.relay`.
+`grpc-v1` identifier but replaces the tool-result envelope fields with
+structured protobuf messages. Rebuild workers, regenerate custom protobuf
+bindings, and exclude pre-0.8 Relay versions in `compat.relay`.
 
 This finalizes unpublished native ABI v2 and `grpc-v1` contracts. Rebuild all
 development native plugins and workers against the same NeMo Relay release that

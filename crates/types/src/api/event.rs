@@ -216,6 +216,9 @@ pub enum ScopeCategory {
     End,
 }
 
+/// Category-profile key used to carry an opaque tool-result annotation.
+pub const TOOL_RESULT_ANNOTATION_PROFILE_KEY: &str = "tool_result_annotation";
+
 /// Category-specific profile data.
 ///
 /// Unknown wire keys are preserved in `extra`. LLM annotations are serialized
@@ -261,7 +264,7 @@ impl CategoryProfile {
     /// [`crate::api::tool::ToolExecutionResult`] contract.
     pub fn tool_result_annotation(&self) -> Option<&Json> {
         self.extra
-            .get(crate::api::tool::TOOL_RESULT_ANNOTATION_PROFILE_KEY)
+            .get(TOOL_RESULT_ANNOTATION_PROFILE_KEY)
             .filter(|value| !value.is_null())
     }
 

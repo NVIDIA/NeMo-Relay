@@ -7,12 +7,10 @@ use std::sync::Arc;
 
 use nemo_relay_types::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, PendingMarkSpec, ScopeCategory, ScopeEvent,
-    llm_attributes_to_strings,
+    TOOL_RESULT_ANNOTATION_PROFILE_KEY, llm_attributes_to_strings,
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay_types::api::tool::{
-    TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolExecutionInterceptOutcome, ToolExecutionResult,
-};
+use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Map, json};

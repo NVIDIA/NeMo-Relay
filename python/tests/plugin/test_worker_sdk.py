@@ -49,15 +49,17 @@ from nemo_relay_plugin._api import (  # noqa: E402
     JSON_SCHEMA,
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
-    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
-    TOOL_EXECUTION_RESULT_SCHEMA,
     WORKER_PROTOCOL,
     _announced_worker_endpoint,
+    _decode_json_value,
     _decode_required_envelope,
     _grpc_target,
     _json_envelope,
+    _json_value,
     _open_host_channel,
     _required_env,
+    _tool_execution_intercept_outcome_to_proto,
+    _tool_execution_result_from_proto,
     _unlink_unix_socket,
     _WorkerService,
     _write_endpoint_file,
@@ -106,6 +108,141 @@ def test_tool_execution_result_and_outcome_preserve_optional_annotation():
     assert null_outcome.to_json() == {"result": {"ok": True}, "pending_marks": []}
     with pytest.raises(WorkerSdkError, match="result field"):
         ToolExecutionResult.from_json({"annotation": {"source": "worker"}})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        True,
+        False,
+        0,
+        -17,
+        2.5,
+        "relay",
+        [1, "two", None, {"nested": False}],
+        {"content": [{"type": "text", "text": "ok"}], "structuredContent": {"count": 2}},
+    ],
+)
+def test_tool_execution_result_proto_preserves_arbitrary_json(value: Json):
+    decoded = _tool_execution_result_from_proto(pb.ToolExecutionResult(result=_json_value(value)))
+
+    assert decoded == ToolExecutionResult(result=value)
+
+
+def test_tool_execution_result_proto_normalizes_null_annotation():
+    decoded = _tool_execution_result_from_proto(
+        pb.ToolExecutionResult(
+            result=_json_value({"ok": True}),
+            annotation=_json_value(None),
+        )
+    )
+
+    assert decoded.annotation is None
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_message"),
+    [
+        (pb.ToolExecutionResult(), "missing result"),
+        (pb.ToolExecutionResult(result=pb.JsonValue()), "result contains invalid JSON"),
+        (pb.ToolExecutionResult(result=pb.JsonValue(json=b"{")), "result contains invalid JSON"),
+        (
+            pb.ToolExecutionResult(
+                result=_json_value({"ok": True}),
+                annotation=pb.JsonValue(json=b"not-json"),
+            ),
+            "annotation contains invalid JSON",
+        ),
+    ],
+)
+def test_tool_execution_result_proto_rejects_missing_or_malformed_fields(message: Any, expected_message: str):
+    with pytest.raises(WorkerSdkError, match=expected_message):
+        _tool_execution_result_from_proto(message)
+
+
+def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks():
+    message = _tool_execution_intercept_outcome_to_proto(
+        ToolExecutionInterceptOutcome(
+            result=[{"text": "ok"}, None],
+            annotation={"source": ["worker", 1]},
+            pending_marks=[
+                PendingMarkSpec(
+                    "worker.mark",
+                    category="tool",
+                    category_profile={"subtype": "checkpoint", "nested": {"ok": True}},
+                    data=False,
+                    metadata=0,
+                )
+            ],
+        )
+    )
+
+    assert _decode_json_value(message.result, "result") == [{"text": "ok"}, None]
+    assert _decode_json_value(message.annotation, "annotation") == {"source": ["worker", 1]}
+    assert len(message.pending_marks) == 1
+    mark = message.pending_marks[0]
+    assert mark.name == "worker.mark"
+    assert mark.HasField("category")
+    assert mark.category == "tool"
+    assert _decode_json_value(mark.category_profile, "category profile") == {
+        "subtype": "checkpoint",
+        "nested": {"ok": True},
+    }
+    assert _decode_json_value(mark.data, "data") is False
+    assert _decode_json_value(mark.metadata, "metadata") == 0
+
+
+def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fields():
+    message = _tool_execution_intercept_outcome_to_proto(
+        ToolExecutionInterceptOutcome(result=None, pending_marks=[PendingMarkSpec("worker.mark")], annotation=None)
+    )
+
+    assert message.HasField("result")
+    assert _decode_json_value(message.result, "result") is None
+    assert not message.HasField("annotation")
+    mark = message.pending_marks[0]
+    assert not mark.HasField("category")
+    for field_name in ("category_profile", "data", "metadata"):
+        assert not mark.HasField(field_name)
+
+
+def test_tool_execution_outcome_proto_rejects_non_object_mark_category_profile():
+    with pytest.raises(WorkerSdkError, match="category_profile must be a JSON object or None"):
+        _tool_execution_intercept_outcome_to_proto(
+            ToolExecutionInterceptOutcome(
+                result={"ok": True},
+                pending_marks=[PendingMarkSpec("worker.mark", category_profile=["not", "an", "object"])],
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_message"),
+    [
+        (
+            ToolExecutionInterceptOutcome(result={}, pending_marks=[cast(Any, {"name": "not-a-spec"})]),
+            "must contain PendingMarkSpec",
+        ),
+        (
+            ToolExecutionInterceptOutcome(result={}, pending_marks=[PendingMarkSpec(cast(Any, 1))]),
+            "pending mark name must be a string",
+        ),
+        (
+            ToolExecutionInterceptOutcome(
+                result={},
+                pending_marks=[PendingMarkSpec("worker.mark", category=cast(Any, 1))],
+            ),
+            "pending mark category must be a string or None",
+        ),
+    ],
+)
+def test_tool_execution_outcome_proto_rejects_malformed_pending_marks(
+    outcome: ToolExecutionInterceptOutcome,
+    expected_message: str,
+):
+    with pytest.raises(WorkerSdkError, match=expected_message):
+        _tool_execution_intercept_outcome_to_proto(outcome)
 
 
 def test_optimization_contribution_fixture_round_trips_losslessly(optimization_contribution_fixture: Json):
@@ -248,17 +385,36 @@ class RecordingHostStub:
 
     async def ToolNext(self, request: Any) -> Any:
         self.requests.append(request)
-        if self.failures.get("ToolNext") == "error":
-            return pb.JsonResult(error=_worker_error("ToolNext failed"))
+        failure = self.failures.get("ToolNext")
+        if failure == "error":
+            return pb.ToolExecutionResultResponse(error=_worker_error("ToolNext failed"))
+        if failure == "empty":
+            return pb.ToolExecutionResultResponse()
+        if failure == "missing_result":
+            return pb.ToolExecutionResultResponse(
+                value=pb.ToolExecutionResult(annotation=_json_value({"source": "host"}))
+            )
+        if failure == "malformed_result":
+            return pb.ToolExecutionResultResponse(value=pb.ToolExecutionResult(result=pb.JsonValue(json=b"not-json")))
+        if failure == "malformed_annotation":
+            return pb.ToolExecutionResultResponse(
+                value=pb.ToolExecutionResult(
+                    result=_json_value({"ok": True}),
+                    annotation=pb.JsonValue(json=b"not-json"),
+                )
+            )
+        if failure == "null_annotation":
+            return pb.ToolExecutionResultResponse(
+                value=pb.ToolExecutionResult(
+                    result=_json_value({"ok": True}),
+                    annotation=_json_value(None),
+                )
+            )
         value = json.loads(request.value.json.decode("utf-8"))
-        schema = JSON_SCHEMA if self.failures.get("ToolNext") == "wrong_schema" else TOOL_EXECUTION_RESULT_SCHEMA
-        return pb.JsonResult(
-            value=_json_envelope(
-                schema,
-                ToolExecutionResult(
-                    result={"next_tool": value},
-                    annotation={"source": "host"},
-                ).to_json(),
+        return pb.ToolExecutionResultResponse(
+            value=pb.ToolExecutionResult(
+                result=_json_value({"next_tool": value}),
+                annotation=_json_value({"source": "host"}),
             )
         )
 
@@ -454,10 +610,24 @@ def test_generated_proto_matches_worker_contract():
 
     host_runtime = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"]
     tool_next = host_runtime.methods_by_name["ToolNext"]
-    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.JsonResult"
+    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
+    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
+    assert tool_result["result"].number == 1
+    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    assert tool_result["annotation"].number == 2
+    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    pending_mark = pb.PendingMarkSpec.DESCRIPTOR.fields_by_name
+    assert pending_mark["name"].number == 1
+    assert pending_mark["category"].number == 2
+    assert pending_mark["category"].has_presence
+    tool_outcome = pb.ToolExecutionInterceptOutcome.DESCRIPTOR.fields_by_name
+    assert tool_outcome["result"].number == 1
+    assert tool_outcome["annotation"].number == 2
+    assert tool_outcome["pending_marks"].number == 3
+    assert tool_outcome["pending_marks"].message_type.full_name == "nemo.relay.worker.v1.PendingMarkSpec"
     outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
     assert outcome.number == 1
-    assert outcome.message_type.full_name == "nemo.relay.worker.v1.JsonEnvelope"
+    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
 
 
 async def test_health_handshake_validate_register_and_all_surfaces(service: _WorkerService):
@@ -2074,9 +2244,18 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
     with pytest.raises(WorkerSdkError, match="ToolNext failed"):
         await ToolNext(runtime, "tool-next").call({"value": 1})
 
-    host_stub.failures["ToolNext"] = "wrong_schema"
-    with pytest.raises(WorkerSdkError, match=r"nemo\.relay\.ToolExecutionResult@1"):
-        await ToolNext(runtime, "tool-next").call({"value": 1})
+    for failure, expected_message in (
+        ("empty", "tool execution result is missing"),
+        ("missing_result", "tool execution result is missing result"),
+        ("malformed_result", "tool execution result contains invalid JSON"),
+        ("malformed_annotation", "tool execution result annotation contains invalid JSON"),
+    ):
+        host_stub.failures["ToolNext"] = failure
+        with pytest.raises(WorkerSdkError, match=expected_message):
+            await ToolNext(runtime, "tool-next").call({"value": 1})
+
+    host_stub.failures["ToolNext"] = "null_annotation"
+    assert (await ToolNext(runtime, "tool-next").call({"value": 1})).annotation is None
 
     host_stub.failures["LlmNext"] = "error"
     with pytest.raises(WorkerSdkError, match="LlmNext failed"):
@@ -2835,8 +3014,31 @@ async def _invoke_tool_execution_async(
         AbortContext(),
     )
     assert response.WhichOneof("result") == "tool_execution", response
-    assert response.tool_execution.outcome.schema == TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA
-    return _envelope_value(response.tool_execution.outcome)
+    outcome = response.tool_execution.outcome
+    value = {
+        "result": _decode_json_value(outcome.result, "tool execution outcome result"),
+        "pending_marks": [
+            {
+                "name": mark.name,
+                "category": mark.category if mark.HasField("category") else None,
+                "category_profile": (
+                    _decode_json_value(mark.category_profile, "pending mark category profile")
+                    if mark.HasField("category_profile")
+                    else None
+                ),
+                "data": _decode_json_value(mark.data, "pending mark data") if mark.HasField("data") else None,
+                "metadata": (
+                    _decode_json_value(mark.metadata, "pending mark metadata") if mark.HasField("metadata") else None
+                ),
+            }
+            for mark in outcome.pending_marks
+        ],
+    }
+    if outcome.HasField("annotation"):
+        annotation = _decode_json_value(outcome.annotation, "tool execution outcome annotation")
+        if annotation is not None:
+            value["annotation"] = annotation
+    return value
 
 
 def _envelope_value(envelope: Any) -> Json:

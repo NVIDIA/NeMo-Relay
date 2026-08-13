@@ -14,23 +14,25 @@ use crate::api::runtime::{
     BuiltinLlmCodec, LlmCodecIdentity, LlmSanitizeRequestContext, LlmSanitizeResponseContext,
     MiddlewareContinuationLease, NemoRelayContextState,
 };
-use crate::api::tool::{TOOL_EXECUTION_RESULT_SCHEMA, ToolExecutionResult};
+use crate::api::tool::ToolExecutionResult;
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::optimization::LlmOptimizationContribution;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
-use nemo_relay_worker_proto::json_envelope;
 use nemo_relay_worker_proto::v1::invoke_response::Result as InvokeResult;
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
 use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
     EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest, LlmCodecDecodeResponse,
-    LlmCodecEncodeRequest, LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest,
-    PopScopeRequest, PushScopeRequest, Registration, ScopeContext, ScopeType as ProtoScopeType,
-    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
+    HealthResponse, JsonEnvelope, JsonResult, JsonValue, LlmCodecDecodeRequest,
+    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmNextRequest, LlmRequestInterceptResult,
+    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, Registration, ScopeContext,
+    ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionInterceptResult, ToolExecutionResultResponse, ToolNextRequest, ValidateRequest,
     ValidateResponse, WorkerAck,
 };
+use nemo_relay_worker_proto::{decode_tool_execution_result, json_envelope};
 use serde_json::json;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -698,11 +700,23 @@ async fn callback_helpers_cover_worker_response_edges() {
             "llm_intercept_error" => InvokeResponse {
                 result: Some(InvokeResult::Error(worker_error.clone())),
             },
-            "tool_intercept_legacy_outcome" => InvokeResponse {
+            "tool_intercept_missing_result" => InvokeResponse {
                 result: Some(InvokeResult::ToolExecution(ToolExecutionInterceptResult {
-                    outcome: Some(JsonEnvelope {
-                        schema: "nemo.relay.ToolExecutionInterceptOutcome@1".into(),
-                        json: br#"{"result":{},"pending_marks":[]}"#.to_vec(),
+                    outcome: Some(ProtoToolExecutionInterceptOutcome {
+                        result: None,
+                        annotation: None,
+                        pending_marks: Vec::new(),
+                    }),
+                })),
+            },
+            "tool_intercept_invalid_result" => InvokeResponse {
+                result: Some(InvokeResult::ToolExecution(ToolExecutionInterceptResult {
+                    outcome: Some(ProtoToolExecutionInterceptOutcome {
+                        result: Some(JsonValue {
+                            json: b"{".to_vec(),
+                        }),
+                        annotation: None,
+                        pending_marks: Vec::new(),
                     }),
                 })),
             },
@@ -805,17 +819,32 @@ async fn callback_helpers_cover_worker_response_edges() {
 
     let error = callback
         .invoke_tool_execution(
-            "tool_intercept_legacy_outcome",
+            "tool_intercept_missing_result",
             "lookup",
             json!({}),
             Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
         )
         .await
-        .expect_err("legacy tool outcome schema should fail");
+        .expect_err("tool outcome without its required result should fail");
     assert!(
         error
             .to_string()
-            .contains("unsupported tool execution intercept outcome schema")
+            .contains("tool execution intercept outcome.result is missing")
+    );
+
+    let error = callback
+        .invoke_tool_execution(
+            "tool_intercept_invalid_result",
+            "lookup",
+            json!({}),
+            Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })),
+        )
+        .await
+        .expect_err("tool outcome with invalid result JSON should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("invalid JSON in tool execution intercept outcome.result")
     );
 
     let error = callback
@@ -2607,15 +2636,12 @@ async fn worker_continuations_use_the_scope_stack_selected_for_each_call() {
         service.tool_next(request("worker-next-first")),
         service.tool_next(request("worker-next-second"))
     );
-    let decode = |response: tonic::Response<JsonResult>| {
+    let decode = |response: tonic::Response<ToolExecutionResultResponse>| {
         let value = response
             .into_inner()
             .value
             .expect("tool next should return a value");
-        assert_eq!(value.schema, TOOL_EXECUTION_RESULT_SCHEMA);
-        decode_json_envelope::<ToolExecutionResult>(&value)
-            .unwrap()
-            .result
+        decode_tool_execution_result(value).unwrap().result
     };
 
     assert_eq!(decode(first.unwrap()), json!(expected[0]));

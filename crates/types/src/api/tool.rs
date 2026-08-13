@@ -9,28 +9,19 @@ use serde::{Deserialize, Serialize};
 use crate::Json;
 use crate::api::event::PendingMarkSpec;
 
-/// Versioned JSON envelope schema for [`ToolExecutionResult`].
+/// Versioned native-plugin JSON envelope schema for [`ToolExecutionResult`].
 pub const TOOL_EXECUTION_RESULT_SCHEMA: &str = "nemo.relay.ToolExecutionResult@1";
 
-/// Versioned JSON envelope schema for [`ToolExecutionInterceptOutcome`].
+/// Versioned native-plugin JSON envelope schema for [`ToolExecutionInterceptOutcome`].
 pub const TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA: &str =
     "nemo.relay.ToolExecutionInterceptOutcome@2";
 
-/// Category-profile key used to carry an opaque tool-result annotation.
-pub const TOOL_RESULT_ANNOTATION_PROFILE_KEY: &str = "tool_result_annotation";
-
-fn annotation_is_present(annotation: &Json) -> bool {
-    !annotation.is_null()
+fn normalize_annotation(annotation: Option<Json>) -> Option<Json> {
+    annotation.filter(|value| !value.is_null())
 }
 
 fn normalized_annotation(annotation: &Option<Json>) -> Option<&Json> {
-    annotation
-        .as_ref()
-        .filter(|annotation| annotation_is_present(annotation))
-}
-
-fn normalize_annotation(annotation: Option<Json>) -> Option<Json> {
-    annotation.filter(annotation_is_present)
+    annotation.as_ref().filter(|value| !value.is_null())
 }
 
 fn annotation_is_absent(annotation: &Option<Json>) -> bool {

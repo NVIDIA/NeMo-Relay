@@ -6,7 +6,7 @@
 use super::*;
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    tool_attributes_to_strings,
+    TOOL_RESULT_ANNOTATION_PROFILE_KEY, tool_attributes_to_strings,
 };
 use crate::api::runtime::{
     NemoRelayContextState, PropagationContext, ThreadScopeStackBinding,
@@ -15,7 +15,7 @@ use crate::api::runtime::{
 };
 use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
-use crate::api::tool::{TOOL_RESULT_ANNOTATION_PROFILE_KEY, ToolAttributes};
+use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::request::{AnnotatedLlmRequest, MessageContent};
 use crate::codec::response::{
