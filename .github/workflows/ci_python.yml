@@ -122,7 +122,7 @@ jobs:
         run: just test-python-plugin-e2e
 
       - name: Run Python LangChain integration tests
-        if: ${{ inputs.run_integration_langchain }}
+        if: ${{ inputs.run_integration_langchain && matrix.platform != 'windows-arm64' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-langchain
 
