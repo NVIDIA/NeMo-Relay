@@ -653,7 +653,13 @@ fn bootstrap_hmac_key_path() -> Result<PathBuf, CliError> {
 
 fn load_existing_bootstrap_hmac_key() -> Result<Option<[u8; BOOTSTRAP_HMAC_KEY_BYTES]>, CliError> {
     let path = bootstrap_hmac_key_path()?;
-    let mut file = match OpenOptions::new().read(true).open(&path) {
+    load_existing_bootstrap_hmac_key_at(&path)
+}
+
+fn load_existing_bootstrap_hmac_key_at(
+    path: &Path,
+) -> Result<Option<[u8; BOOTSTRAP_HMAC_KEY_BYTES]>, CliError> {
+    let mut file = match OpenOptions::new().read(true).open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
@@ -709,9 +715,82 @@ fn load_existing_bootstrap_hmac_key() -> Result<Option<[u8; BOOTSTRAP_HMAC_KEY_B
     Ok(Some(key))
 }
 
+fn bootstrap_hmac_key_permissions_are_private(path: &Path) -> Result<bool, CliError> {
+    let Some(parent) = path.parent() else {
+        return Ok(false);
+    };
+    for candidate in [parent, path] {
+        match candidate.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => return Ok(false),
+            Err(error) => {
+                return Err(CliError::Config(format!(
+                    "failed to inspect bootstrap path {}: {error}",
+                    candidate.display()
+                )));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory_mode = fs::metadata(parent)
+            .map_err(|error| {
+                CliError::Config(format!(
+                    "failed to inspect bootstrap state directory {}: {error}",
+                    parent.display()
+                ))
+            })?
+            .permissions()
+            .mode();
+        let key_mode = fs::metadata(path)
+            .map_err(|error| {
+                CliError::Config(format!(
+                    "failed to inspect bootstrap HMAC key {}: {error}",
+                    path.display()
+                ))
+            })?
+            .permissions()
+            .mode();
+        Ok(directory_mode & 0o077 == 0
+            && directory_mode & 0o500 == 0o500
+            && key_mode & 0o077 == 0
+            && key_mode & 0o400 == 0o400)
+    }
+
+    #[cfg(windows)]
+    {
+        let directory_is_private =
+            crate::filesystem::windows_path_is_private(parent).map_err(|error| {
+                CliError::Config(format!(
+                    "failed to inspect bootstrap state directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        let key_is_private = crate::filesystem::windows_path_is_private(path).map_err(|error| {
+            CliError::Config(format!(
+                "failed to inspect bootstrap HMAC key {}: {error}",
+                path.display()
+            ))
+        })?;
+        Ok(directory_is_private && key_is_private)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    Ok(false)
+}
+
 fn load_or_create_bootstrap_hmac_key_at(
     path: &Path,
 ) -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
+    if bootstrap_hmac_key_permissions_are_private(path)?
+        && let Some(key) = load_existing_bootstrap_hmac_key_at(path)?
+    {
+        return Ok(key);
+    }
     load_or_create_bootstrap_hmac_key_at_with_timeout(path, BOOTSTRAP_HMAC_LOCK_TIMEOUT)
 }
 

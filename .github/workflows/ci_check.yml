@@ -36,6 +36,7 @@ env:
   NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
+  UV_PYTHON_PREFERENCE: only-system
 
 jobs:
   install-script:
@@ -145,10 +146,10 @@ jobs:
           go-version: ${{ steps.ci-config.outputs.go_version }}
           cache: false
 
-      - name: Install managed Python
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
@@ -162,7 +163,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false

@@ -90,6 +90,9 @@ pub(super) fn install(command: InstallCommand) -> Result<ExitCode, CliError> {
             "no supported Claude Code or Codex host CLI was detected".into(),
         ));
     }
+    if !request.dry_run {
+        crate::configuration::BootstrapChallengeKey::load()?;
+    }
     run_agent_operations(agents, "install", |agent| {
         crate::agents::install_integration(agent, request.clone())
     })

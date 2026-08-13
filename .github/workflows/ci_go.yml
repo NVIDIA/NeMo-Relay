@@ -19,6 +19,7 @@ env:
   NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
+  UV_PYTHON_PREFERENCE: only-system
 
 jobs:
   Test:
@@ -68,7 +69,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false

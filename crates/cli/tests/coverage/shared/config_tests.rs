@@ -2639,6 +2639,60 @@ fn bootstrap_hmac_key_creation_is_concurrency_safe_and_stable() {
     assert_eq!(std::fs::metadata(path).unwrap().len(), 32);
 }
 
+#[cfg(unix)]
+#[test]
+fn bootstrap_hmac_key_reuses_private_state_without_changing_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state/fingerprint-hmac.key");
+    let original = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
+    let parent = path.parent().unwrap();
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+
+    let reloaded = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
+
+    assert_eq!(reloaded, original);
+    assert_eq!(
+        std::fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+        0o500
+    );
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o400
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn bootstrap_hmac_key_repairs_group_or_other_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state/fingerprint-hmac.key");
+    let original = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
+    let parent = path.parent().unwrap();
+
+    for (directory_mode, key_mode) in [(0o750, 0o640), (0o701, 0o604)] {
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(directory_mode)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(key_mode)).unwrap();
+
+        assert_eq!(
+            load_or_create_bootstrap_hmac_key_at(&path).unwrap(),
+            original
+        );
+        assert_eq!(
+            std::fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn bootstrap_hmac_key_uses_and_repairs_a_private_windows_dacl() {
