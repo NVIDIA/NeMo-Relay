@@ -772,18 +772,14 @@ fn editor_enum_default_index(field: &EditorFieldSpec, current: Option<&Value>) -
 
 fn editor_enum_value(field: &EditorFieldSpec, selected: usize) -> Value {
     let value = field.enum_values[selected];
-    if field
-        .enum_values
-        .iter()
-        .all(|candidate| candidate.parse::<i64>().is_ok())
-    {
-        json!(
+    match field.kind {
+        EditorFieldKind::IntegerEnum => json!(
             value
                 .parse::<i64>()
-                .expect("numeric editor enum values were validated above")
-        )
-    } else {
-        json!(value)
+                .expect("integer editor enum values must be valid i64 values")
+        ),
+        EditorFieldKind::Enum => json!(value),
+        _ => unreachable!("editor enum value requested for a non-enum field"),
     }
 }
 

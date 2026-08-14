@@ -469,6 +469,13 @@ impl InstrumentDescriptor {
     }
 
     fn accepts(&self, value: MetricValue) -> Result<(), MetricValidationError> {
+        if self.kind == MetricKind::Counter
+            && matches!(value, MetricValue::F64(value) if value.get() < 0.0)
+        {
+            return Err(MetricValidationError::new(
+                "counter values must be non-negative",
+            ));
+        }
         let accepted = match (self.kind, value) {
             (MetricKind::Counter, MetricValue::U64(_))
             | (MetricKind::UpDownCounter, MetricValue::I64(_))
@@ -476,7 +483,7 @@ impl InstrumentDescriptor {
             | (MetricKind::Gauge, _)
             | (MetricKind::Histogram, MetricValue::U64(_))
             | (MetricKind::Histogram, MetricValue::F64(_)) => true,
-            (MetricKind::Counter, MetricValue::F64(value)) => value.get() >= 0.0,
+            (MetricKind::Counter, MetricValue::F64(_)) => true,
             _ => false,
         };
         accepted.then_some(()).ok_or_else(|| {
@@ -616,6 +623,7 @@ fn parse_attribute_array(values: &[Json]) -> Result<AttributeValue, MetricValida
             .map(|value| {
                 value
                     .as_f64()
+                    .filter(|_| value.as_i64().is_none())
                     .and_then(|value| FiniteF64::try_from(value).ok())
             })
             .collect::<Option<Vec<_>>>()

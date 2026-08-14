@@ -29,11 +29,13 @@ use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_
 use crate::observability::{relay_span_id, relay_trace_id};
 use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
+use super::OpenTelemetryRuntimeDiagnostics;
 use super::otel::{COMPLETED_SPAN_CONTEXT_LIMIT, OpenTelemetryError, OtlpTransport, Result};
 use super::otel_signal::{
-    MetricMarkClassification, SignalExporterRuntime, build_grpc_metadata, build_in_owned_runtime,
-    classify_metric_mark, record_signal_runtime_diagnostic, reject_signal_header_environment,
-    resolve_http_signal_endpoint, signal_resource, validate_signal_headers,
+    MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
+    build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
+    resolve_http_signal_endpoint, should_relog_runtime_diagnostic, signal_resource,
+    validate_signal_headers,
 };
 
 const DEFAULT_MAX_QUEUE_SIZE: usize = 2_048;
@@ -204,6 +206,7 @@ struct LogSubscriberInner {
     _processor: Arc<Mutex<LogEventProcessor>>,
     provider: SdkLoggerProvider,
     delivery_diagnostics: Arc<LogDeliveryDiagnostics>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
     subscriber: EventSubscriberFn,
     _runtime: SignalExporterRuntime,
 }
@@ -228,20 +231,20 @@ impl OpenTelemetryLogSubscriber {
         config.validate()?;
         let minimum_severity = config.minimum_severity;
         let instrumentation_scope = config.instrumentation_scope.clone();
-        let diagnostic_field = config.diagnostic_field.clone();
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(config.diagnostic_field.clone());
         let delivery_diagnostics = Arc::new(LogDeliveryDiagnostics::new(
             config.endpoint.clone(),
-            config.diagnostic_field.clone(),
+            runtime_diagnostics.clone(),
         ));
         let provider_diagnostics = Arc::clone(&delivery_diagnostics);
         let (provider, runtime) = build_in_owned_runtime("nemo-relay-otlp-logs", move || {
             build_log_provider(&config, provider_diagnostics)
         })?;
         let logger = provider.logger(instrumentation_scope);
-        let processor = Arc::new(Mutex::new(LogEventProcessor::new(
+        let processor = Arc::new(Mutex::new(LogEventProcessor::new_with_runtime_diagnostics(
             logger,
             minimum_severity,
-            diagnostic_field,
+            runtime_diagnostics.clone(),
         )));
         let callback_processor = Arc::clone(&processor);
         let callback_recovery_warned = Arc::new(AtomicBool::new(false));
@@ -267,6 +270,7 @@ impl OpenTelemetryLogSubscriber {
                 _processor: processor,
                 provider,
                 delivery_diagnostics,
+                runtime_diagnostics,
                 subscriber,
                 _runtime: runtime,
             }),
@@ -276,6 +280,11 @@ impl OpenTelemetryLogSubscriber {
     /// Return the raw Relay subscriber callback.
     pub fn subscriber(&self) -> EventSubscriberFn {
         Arc::clone(&self.inner.subscriber)
+    }
+
+    /// Return a bounded snapshot of runtime diagnostics for this subscriber.
+    pub fn runtime_diagnostics(&self) -> OpenTelemetryRuntimeDiagnostics {
+        self.inner.runtime_diagnostics.snapshot()
     }
 
     /// Register the subscriber globally.
@@ -390,26 +399,25 @@ struct LogDeliveryDiagnostics {
     export_failures: AtomicU64,
     queue_reported: AtomicBool,
     endpoint: String,
-    diagnostic_field: Option<String>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
 }
 
 impl LogDeliveryDiagnostics {
-    fn new(endpoint: String, diagnostic_field: Option<String>) -> Self {
+    fn new(endpoint: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
         Self {
             emitted: AtomicU64::new(0),
             accepted: AtomicU64::new(0),
             export_failures: AtomicU64::new(0),
             queue_reported: AtomicBool::new(false),
             endpoint,
-            diagnostic_field,
+            runtime_diagnostics,
         }
     }
 
     fn record_export_failure(&self, error: &impl std::fmt::Display) {
         self.export_failures.fetch_add(1, Ordering::Relaxed);
-        record_signal_runtime_diagnostic(
+        self.runtime_diagnostics.record(
             "otel.logs_export_failed",
-            self.diagnostic_field.clone(),
             format!(
                 "OpenTelemetry log export to endpoint {} failed: {error}",
                 self.endpoint
@@ -424,9 +432,8 @@ impl LogDeliveryDiagnostics {
             .load(Ordering::Relaxed)
             .saturating_sub(self.accepted.load(Ordering::Relaxed));
         if dropped > 0 && !self.queue_reported.swap(true, Ordering::Relaxed) {
-            record_signal_runtime_diagnostic(
+            self.runtime_diagnostics.record(
                 "otel.logs_dropped",
-                self.diagnostic_field.clone(),
                 format!(
                     "OpenTelemetry dropped {dropped} logs before export to endpoint {} because the batch queue was full",
                     self.endpoint
@@ -495,7 +502,7 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         let result = self.inner.shutdown_with_timeout(timeout);
-        if result.is_ok() && self.diagnostics.diagnostic_field.is_some() {
+        if result.is_ok() && self.diagnostics.runtime_diagnostics.has_plugin_mirror() {
             let dropped = self.diagnostics.record_queue_drops();
             let export_failures = self.diagnostics.export_failures.load(Ordering::Relaxed);
             if dropped > 0 || export_failures > 0 {
@@ -607,14 +614,27 @@ struct LogEventProcessor {
     invalid_severity_count: u64,
     invalid_metric_count: u64,
     active_lineage_high_water_reported: bool,
-    diagnostic_field: Option<String>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
 }
 
 impl LogEventProcessor {
+    #[cfg(test)]
     fn new(
         logger: SdkLogger,
         minimum_severity: LogSeverity,
         diagnostic_field: Option<String>,
+    ) -> Self {
+        Self::new_with_runtime_diagnostics(
+            logger,
+            minimum_severity,
+            SignalRuntimeDiagnostics::new(diagnostic_field),
+        )
+    }
+
+    fn new_with_runtime_diagnostics(
+        logger: SdkLogger,
+        minimum_severity: LogSeverity,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
     ) -> Self {
         Self {
             logger,
@@ -623,7 +643,7 @@ impl LogEventProcessor {
             invalid_severity_count: 0,
             invalid_metric_count: 0,
             active_lineage_high_water_reported: false,
-            diagnostic_field,
+            runtime_diagnostics,
         }
     }
 
@@ -652,9 +672,8 @@ impl LogEventProcessor {
             active_scope_count;
             "OpenTelemetry log lineage retained more than {COMPLETED_SPAN_CONTEXT_LIMIT} active scopes to preserve trace context"
         );
-        record_signal_runtime_diagnostic(
+        self.runtime_diagnostics.record(
             "otel.log_active_scope_high_water",
-            self.diagnostic_field.clone(),
             format!(
                 "OpenTelemetry log lineage retained {active_scope_count} active scopes to preserve trace context"
             ),
@@ -668,7 +687,15 @@ impl LogEventProcessor {
             MetricMarkClassification::Valid(_) => return,
             MetricMarkClassification::Invalid(error) => {
                 self.invalid_metric_count = self.invalid_metric_count.saturating_add(1);
-                if self.invalid_metric_count == 1 {
+                let diagnostic_count = self.runtime_diagnostics.record(
+                    "otel.metric_mark_invalid",
+                    format!(
+                        "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
+                        event.name()
+                    ),
+                    1,
+                );
+                if should_relog_runtime_diagnostic(diagnostic_count) {
                     log::warn!(
                         target: "nemo_relay.observability",
                         event = "otel_metric_mark_rejected",
@@ -676,15 +703,6 @@ impl LogEventProcessor {
                         "OpenTelemetry metric mark was dropped atomically: {error}"
                     );
                 }
-                record_signal_runtime_diagnostic(
-                    "otel.metric_mark_invalid",
-                    self.diagnostic_field.clone(),
-                    format!(
-                        "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
-                        event.name()
-                    ),
-                    1,
-                );
                 return;
             }
         }
@@ -692,7 +710,15 @@ impl LogEventProcessor {
             Ok(severity) => severity,
             Err(error) => {
                 self.invalid_severity_count = self.invalid_severity_count.saturating_add(1);
-                if self.invalid_severity_count == 1 {
+                let diagnostic_count = self.runtime_diagnostics.record(
+                    "otel.log_mark_invalid_severity",
+                    format!(
+                        "OpenTelemetry log mark {:?} was dropped: {error}",
+                        event.name()
+                    ),
+                    1,
+                );
+                if should_relog_runtime_diagnostic(diagnostic_count) {
                     log::warn!(
                         target: "nemo_relay.observability",
                         event = "otel_log_invalid_severity",
@@ -700,15 +726,6 @@ impl LogEventProcessor {
                         "OpenTelemetry log mark was dropped: {error}"
                     );
                 }
-                record_signal_runtime_diagnostic(
-                    "otel.log_mark_invalid_severity",
-                    self.diagnostic_field.clone(),
-                    format!(
-                        "OpenTelemetry log mark {:?} was dropped: {error}",
-                        event.name()
-                    ),
-                    1,
-                );
                 return;
             }
         };

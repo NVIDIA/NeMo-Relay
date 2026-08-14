@@ -305,6 +305,12 @@ subscriber before instrumented work. During graceful teardown, deregister it,
 call the binding's force-flush method (`force_flush()` or `forceFlush()`), and
 then call `shutdown()`.
 
+Rust direct subscribers also expose `runtime_diagnostics()`. Its bounded
+snapshot reports each runtime condition's stable code, occurrence count, and
+most recent message. Use it to monitor rejected metric marks, capacity limits,
+and delivery failures without configuring the observability plugin. The plugin
+continues to include the same conditions in its runtime report.
+
 ## Version 2 to Version 3
 
 Version 3 replaces the separate version-2 sections:

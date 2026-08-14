@@ -222,6 +222,40 @@ fn direct_log_subscriber_recovers_a_poisoned_processor_lock() {
 }
 
 #[test]
+fn direct_log_subscriber_exposes_runtime_diagnostics() {
+    let subscriber =
+        OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new("http://127.0.0.1:4318"))
+            .unwrap();
+    let event = mark(
+        None,
+        "invalid-metric",
+        Some(json!({"measurements": []})),
+        Some(
+            DataSchema::builder()
+                .name(METRIC_DATA_SCHEMA_NAME)
+                .version("999")
+                .build(),
+        ),
+        None,
+    );
+
+    for _ in 0..3 {
+        (subscriber.subscriber())(&event);
+    }
+
+    let diagnostics = subscriber.runtime_diagnostics();
+    let diagnostic = diagnostics
+        .get("otel.metric_mark_invalid")
+        .expect("invalid metric diagnostic");
+    assert_eq!(diagnostic.count, 3);
+    assert!(
+        diagnostic
+            .message
+            .contains("unsupported metric schema version")
+    );
+}
+
+#[test]
 fn signal_endpoint_resolution_replaces_trace_suffix_without_nested_paths() {
     for (input, expected) in [
         (
@@ -251,7 +285,7 @@ fn signal_endpoint_resolution_replaces_trace_suffix_without_nested_paths() {
 fn log_delivery_state_reports_queue_and_export_failures_independently() {
     let diagnostics = LogDeliveryDiagnostics::new(
         "https://collector.example/v1/logs".to_string(),
-        Some("opentelemetry.logs.endpoints[0].endpoint".to_string()),
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.logs.endpoints[0].endpoint".to_string())),
     );
     diagnostics.emitted.store(3, Ordering::Relaxed);
     diagnostics.accepted.store(2, Ordering::Relaxed);

@@ -49,6 +49,8 @@ pub mod otel_metrics;
 mod otel_signal;
 pub mod plugin_component;
 
+pub use otel_signal::{OpenTelemetryRuntimeDiagnostic, OpenTelemetryRuntimeDiagnostics};
+
 /// Return the provider-independent input total used by semantic observability
 /// projections. Anthropic reports uncached, cache-read, and cache-creation
 /// input tokens separately, while providers such as OpenAI include cache reads

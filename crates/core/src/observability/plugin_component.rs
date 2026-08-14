@@ -593,7 +593,7 @@ crate::editor_config! {
     impl ObservabilityConfig {
         version => {
             label: "version",
-            kind: Enum,
+            kind: IntegerEnum,
             values: ["3", "4"],
         },
         atof => {
@@ -1443,6 +1443,7 @@ fn register_opentelemetry(
             ) as MetricEventCallback
         })
         .collect::<Vec<_>>();
+    let metric_diagnostic_field = (!metric_callbacks.is_empty()).then_some("opentelemetry.metrics");
     // Retain the subscribers as long as the registered fan-out callback exists.
     // Their providers and exporter runtimes must outlive event delivery.
     let delivery_trace_subscribers = trace_subscribers.clone();
@@ -1481,6 +1482,7 @@ fn register_opentelemetry(
                 &log_callbacks,
                 &metric_callbacks,
                 &rejected_metric_marks,
+                metric_diagnostic_field,
                 event,
             );
         }),
@@ -1524,6 +1526,7 @@ fn deliver_opentelemetry_event(
     log_callbacks: &[EventSubscriberFn],
     metric_callbacks: &[MetricEventCallback],
     rejected_metric_marks: &AtomicU64,
+    metric_diagnostic_field: Option<&str>,
     event: &Event,
 ) {
     match classify_metric_mark(event) {
@@ -1540,7 +1543,12 @@ fn deliver_opentelemetry_event(
             );
         }
         MetricMarkClassification::Invalid(error) => {
-            reject_opentelemetry_metric_mark(event, rejected_metric_marks, &error);
+            reject_opentelemetry_metric_mark(
+                event,
+                rejected_metric_marks,
+                metric_diagnostic_field,
+                &error,
+            );
         }
     }
 }
@@ -1592,7 +1600,12 @@ fn deliver_opentelemetry_metric_callbacks(
     }
 }
 
-fn reject_opentelemetry_metric_mark(event: &Event, rejected_metric_marks: &AtomicU64, error: &str) {
+fn reject_opentelemetry_metric_mark(
+    event: &Event,
+    rejected_metric_marks: &AtomicU64,
+    metric_diagnostic_field: Option<&str>,
+    error: &str,
+) {
     let rejection_count = rejected_metric_marks.fetch_add(1, Ordering::Relaxed) + 1;
     if rejection_count == 1 {
         log::warn!(
@@ -1604,7 +1617,7 @@ fn reject_opentelemetry_metric_mark(event: &Event, rejected_metric_marks: &Atomi
     }
     crate::observability::otel_signal::record_signal_runtime_diagnostic(
         "otel.metric_mark_invalid",
-        Some("opentelemetry.metrics".to_string()),
+        metric_diagnostic_field.map(str::to_owned),
         format!(
             "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
             event.name()

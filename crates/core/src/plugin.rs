@@ -2463,7 +2463,7 @@ pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     {
         existing.message = diagnostic.message;
         existing.session_id = diagnostic.session_id;
-        existing.count += 1;
+        existing.count = existing.count.saturating_add(diagnostic.count);
     } else {
         state.report.runtime_diagnostics.push(diagnostic);
     }

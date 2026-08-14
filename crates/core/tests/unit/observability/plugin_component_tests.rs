@@ -3806,7 +3806,7 @@ fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
         None,
     ));
 
-    deliver_opentelemetry_event(&callbacks, &[], &[], &AtomicU64::new(0), &event);
+    deliver_opentelemetry_event(&callbacks, &[], &[], &AtomicU64::new(0), None, &event);
 
     assert!(delivered.load(std::sync::atomic::Ordering::SeqCst));
 }
@@ -3842,6 +3842,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
         &log_callbacks,
         &metric_callbacks,
         &rejected_metric_marks,
+        Some("opentelemetry.metrics"),
         &ordinary_mark,
     );
     assert_eq!(traced.load(Ordering::Relaxed), 1);
@@ -3865,6 +3866,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
         &log_callbacks,
         &metric_callbacks,
         &rejected_metric_marks,
+        Some("opentelemetry.metrics"),
         &valid_metric,
     );
     assert_eq!(traced.load(Ordering::Relaxed), 1);
@@ -3882,6 +3884,7 @@ fn opentelemetry_routes_marks_by_metric_schema() {
             &log_callbacks,
             &metric_callbacks,
             &rejected_metric_marks,
+            Some("opentelemetry.metrics"),
             &event,
         );
     }
@@ -3920,6 +3923,7 @@ fn non_metric_schema_marks_keep_trace_and_log_routing() {
         &log_callbacks,
         &metric_callbacks,
         &AtomicU64::new(0),
+        Some("opentelemetry.metrics"),
         &event,
     );
 
@@ -3976,10 +3980,7 @@ fn log_only_plugin_reports_invalid_reserved_metric_marks_once() {
         .collect::<Vec<_>>();
     assert_eq!(diagnostics.len(), 1, "diagnostics: {diagnostics:?}");
     assert_eq!(diagnostics[0].count, 2);
-    assert_eq!(
-        diagnostics[0].field.as_deref(),
-        Some("opentelemetry.metrics")
-    );
+    assert_eq!(diagnostics[0].field.as_deref(), None);
 
     clear_plugin_configuration().unwrap();
 }

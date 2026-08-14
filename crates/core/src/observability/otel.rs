@@ -24,11 +24,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::otel_signal::{MetricMarkClassification, classify_metric_mark};
+use super::otel_signal::{
+    MetricMarkClassification, SignalRuntimeDiagnostics, classify_metric_mark,
+    should_relog_runtime_diagnostic,
+};
 use super::{
-    MarkProjection, OpenTelemetryType, OtlpAttributeMapping, apply_attribute_mappings,
-    attribute_mapping_aliases, attribute_mapping_inputs, default_mark_exclude_names,
-    effective_mark_projection, estimate_cost_for_response_or_model,
+    MarkProjection, OpenTelemetryRuntimeDiagnostics, OpenTelemetryType, OtlpAttributeMapping,
+    apply_attribute_mappings, attribute_mapping_aliases, attribute_mapping_inputs,
+    default_mark_exclude_names, effective_mark_projection, estimate_cost_for_response_or_model,
     estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
     push_serialized_top_level_attributes, push_session_identity_attributes,
     push_tool_result_annotation_attribute, push_top_level_json_attributes, relay_span_id,
@@ -57,10 +60,7 @@ use opentelemetry_sdk::trace::{
 };
 use uuid::Uuid;
 
-use crate::plugin::{
-    OTEL_RUNTIME_DELIVERY_FAILURE_MARKER, RuntimeDiagnostic,
-    record_active_plugin_runtime_diagnostic,
-};
+use crate::plugin::OTEL_RUNTIME_DELIVERY_FAILURE_MARKER;
 
 pub(super) const COMPLETED_SPAN_CONTEXT_LIMIT: usize = 4096;
 
@@ -424,6 +424,7 @@ struct Inner {
     // `SdkTracerProvider` and must be dropped before `ExporterRuntime` joins
     // and tears down its Tokio runtime. Do not reorder these fields.
     processor: Arc<Mutex<OtelEventProcessor>>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
     subscriber: EventSubscriberFn,
     _runtime: Option<ExporterRuntime>,
 }
@@ -431,6 +432,7 @@ struct Inner {
 struct ExporterRuntime {
     stop: Option<mpsc::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
 }
 
 impl Drop for ExporterRuntime {
@@ -473,7 +475,9 @@ impl OpenTelemetrySubscriber {
             .map_err(OpenTelemetryError::InvalidAttributeMappings)?;
         reject_global_header_environment()?;
         validate_headers(&config.headers)?;
-        let (provider, runtime) = build_owned_tracer_provider(config.clone(), diagnostic_field)?;
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(diagnostic_field);
+        let (provider, runtime) =
+            build_owned_tracer_provider(config.clone(), runtime_diagnostics.clone())?;
         Ok(Self::from_tracer_provider_with_scope_and_type(
             provider,
             config.instrumentation_scope,
@@ -583,14 +587,19 @@ impl OpenTelemetrySubscriber {
         attribute_mappings: Vec<OtlpAttributeMapping>,
         runtime: Option<ExporterRuntime>,
     ) -> Self {
+        let runtime_diagnostics = runtime
+            .as_ref()
+            .map(|runtime| runtime.runtime_diagnostics.clone())
+            .unwrap_or_else(|| SignalRuntimeDiagnostics::new(None));
         let processor = Arc::new(Mutex::new(
-            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings(
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
                 provider,
                 instrumentation_scope,
                 otel_type,
                 mark_projection,
                 mark_exclude_names,
                 attribute_mappings,
+                runtime_diagnostics.clone(),
             ),
         ));
         let processor_for_callback = Arc::clone(&processor);
@@ -606,6 +615,7 @@ impl OpenTelemetrySubscriber {
         Self {
             inner: Arc::new(Inner {
                 processor,
+                runtime_diagnostics,
                 subscriber,
                 _runtime: runtime,
             }),
@@ -615,6 +625,11 @@ impl OpenTelemetrySubscriber {
     /// Returns the raw NeMo Relay subscriber callback for custom registration flows.
     pub fn subscriber(&self) -> EventSubscriberFn {
         Arc::clone(&self.inner.subscriber)
+    }
+
+    /// Return a bounded snapshot of runtime diagnostics for this subscriber.
+    pub fn runtime_diagnostics(&self) -> OpenTelemetryRuntimeDiagnostics {
+        self.inner.runtime_diagnostics.snapshot()
     }
 
     /// Registers this subscriber globally with the NeMo Relay runtime.
@@ -684,10 +699,11 @@ impl OpenTelemetrySubscriber {
 
 fn build_owned_tracer_provider(
     config: OpenTelemetryConfig,
-    diagnostic_field: Option<String>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
 ) -> Result<(SdkTracerProvider, ExporterRuntime)> {
     let (result_sender, result_receiver) = mpsc::sync_channel(1);
     let (stop_sender, stop_receiver) = mpsc::channel();
+    let provider_diagnostics = runtime_diagnostics.clone();
     let runtime_thread = thread::Builder::new()
         .name("nemo-relay-otlp".to_string())
         .spawn(move || {
@@ -705,7 +721,7 @@ fn build_owned_tracer_provider(
             };
             let provider = {
                 let _guard = runtime.enter();
-                build_tracer_provider(&config, diagnostic_field)
+                build_tracer_provider(&config, provider_diagnostics)
             };
             let keep_runtime_alive = provider.is_ok();
             let _ = result_sender.send(provider);
@@ -722,6 +738,7 @@ fn build_owned_tracer_provider(
         ExporterRuntime {
             stop: Some(stop_sender),
             thread: Some(runtime_thread),
+            runtime_diagnostics,
         },
     ))
 }
@@ -766,7 +783,7 @@ pub(crate) fn validate_headers(headers: &HashMap<String, String>) -> Result<()> 
 
 fn build_tracer_provider(
     config: &OpenTelemetryConfig,
-    diagnostic_field: Option<String>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
 ) -> Result<SdkTracerProvider> {
     let exporter = match config.transport {
         OtlpTransport::HttpBinary => {
@@ -838,7 +855,7 @@ fn build_tracer_provider(
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
         exporter,
         config.endpoint.clone(),
-        diagnostic_field,
+        runtime_diagnostics,
         batch_config.build(),
     );
     Ok(builder.with_span_processor(processor).build())
@@ -876,7 +893,7 @@ struct DiagnosticBatchSpanProcessor {
     completed_spans: AtomicU64,
     accepted_spans: Arc<AtomicU64>,
     endpoint: String,
-    diagnostic_field: Option<String>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
     diagnostic_reported: AtomicBool,
 }
 
@@ -884,7 +901,7 @@ impl DiagnosticBatchSpanProcessor {
     fn new_with_batch_config<E: SpanExporter + 'static>(
         exporter: E,
         endpoint: String,
-        diagnostic_field: Option<String>,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
         batch_config: opentelemetry_sdk::trace::BatchConfig,
     ) -> Self {
         let accepted_spans = Arc::new(AtomicU64::new(0));
@@ -899,7 +916,7 @@ impl DiagnosticBatchSpanProcessor {
             completed_spans: AtomicU64::new(0),
             accepted_spans,
             endpoint,
-            diagnostic_field,
+            runtime_diagnostics,
             diagnostic_reported: AtomicBool::new(false),
         }
     }
@@ -909,23 +926,17 @@ impl DiagnosticBatchSpanProcessor {
             .completed_spans
             .load(Ordering::Relaxed)
             .saturating_sub(self.accepted_spans.load(Ordering::Relaxed));
-        if dropped == 0
-            || self.diagnostic_field.is_none()
-            || self.diagnostic_reported.swap(true, Ordering::Relaxed)
-        {
+        if dropped == 0 || self.diagnostic_reported.swap(true, Ordering::Relaxed) {
             return dropped;
         }
-        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
-            code: "otel.spans_dropped".to_string(),
-            component: "observability".to_string(),
-            field: self.diagnostic_field.clone(),
-            message: format!(
+        self.runtime_diagnostics.record(
+            "otel.spans_dropped",
+            format!(
                 "OpenTelemetry dropped {dropped} spans before export to endpoint {} because the batch queue was full",
                 self.endpoint
             ),
-            session_id: None,
-            count: dropped,
-        });
+            dropped,
+        );
         dropped
     }
 }
@@ -948,7 +959,7 @@ impl SpanProcessor for DiagnosticBatchSpanProcessor {
         let result = self.inner.shutdown_with_timeout(timeout);
         if result.is_ok() {
             let dropped = self.record_dropped_spans();
-            if dropped > 0 && self.diagnostic_field.is_some() {
+            if dropped > 0 && self.runtime_diagnostics.has_plugin_mirror() {
                 return Err(OTelSdkError::InternalFailure(format!(
                     "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: otel.spans_dropped ({dropped})"
                 )));
@@ -1002,6 +1013,7 @@ pub(super) struct OtelEventProcessor {
     mark_exclude_names: Vec<String>,
     attribute_mappings: Vec<OtlpAttributeMapping>,
     invalid_metric_count: u64,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
 }
 
 impl OtelEventProcessor {
@@ -1089,6 +1101,7 @@ impl OtelEventProcessor {
         )
     }
 
+    #[cfg(test)]
     fn new_with_mark_projection_and_exclusions_and_mappings(
         provider: SdkTracerProvider,
         instrumentation_scope: String,
@@ -1096,6 +1109,26 @@ impl OtelEventProcessor {
         mark_projection: MarkProjection,
         mark_exclude_names: Vec<String>,
         attribute_mappings: Vec<OtlpAttributeMapping>,
+    ) -> Self {
+        Self::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+            provider,
+            instrumentation_scope,
+            otel_type,
+            mark_projection,
+            mark_exclude_names,
+            attribute_mappings,
+            SignalRuntimeDiagnostics::new(None),
+        )
+    }
+
+    fn new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+        provider: SdkTracerProvider,
+        instrumentation_scope: String,
+        otel_type: OpenTelemetryType,
+        mark_projection: MarkProjection,
+        mark_exclude_names: Vec<String>,
+        attribute_mappings: Vec<OtlpAttributeMapping>,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
     ) -> Self {
         let tracer = provider.tracer(instrumentation_scope);
         Self {
@@ -1109,6 +1142,7 @@ impl OtelEventProcessor {
             mark_exclude_names,
             attribute_mappings,
             invalid_metric_count: 0,
+            runtime_diagnostics,
         }
     }
 
@@ -1270,7 +1304,15 @@ impl OtelEventProcessor {
             MetricMarkClassification::Valid(_) => return,
             MetricMarkClassification::Invalid(error) => {
                 self.invalid_metric_count = self.invalid_metric_count.saturating_add(1);
-                if self.invalid_metric_count == 1 {
+                let diagnostic_count = self.runtime_diagnostics.record(
+                    "otel.metric_mark_invalid",
+                    format!(
+                        "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
+                        event.name()
+                    ),
+                    1,
+                );
+                if should_relog_runtime_diagnostic(diagnostic_count) {
                     log::warn!(
                         target: "nemo_relay.observability",
                         event = "otel_metric_mark_rejected",

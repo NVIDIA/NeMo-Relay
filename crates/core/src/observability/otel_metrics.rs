@@ -30,12 +30,15 @@ use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Stream, Tempo
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use serde_json::Value as Json;
+use sha2::{Digest, Sha256};
 
+use super::OpenTelemetryRuntimeDiagnostics;
 use super::otel::{OpenTelemetryError, OtlpTransport, Result};
 use super::otel_signal::{
-    MetricMarkClassification, SignalExporterRuntime, build_grpc_metadata, build_in_owned_runtime,
-    classify_metric_mark, record_signal_runtime_diagnostic, reject_signal_header_environment,
-    resolve_http_signal_endpoint, signal_resource, validate_signal_headers,
+    MetricMarkClassification, SignalExporterRuntime, SignalRuntimeDiagnostics, build_grpc_metadata,
+    build_in_owned_runtime, classify_metric_mark, reject_signal_header_environment,
+    resolve_http_signal_endpoint, should_relog_runtime_diagnostic, signal_resource,
+    validate_signal_headers,
 };
 
 const DEFAULT_EXPORT_INTERVAL: Duration = Duration::from_secs(60);
@@ -258,6 +261,7 @@ struct MetricSubscriberInner {
     processor_lock_recovery_warned: Arc<AtomicBool>,
     provider: SdkMeterProvider,
     delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
     subscriber: EventSubscriberFn,
     _runtime: SignalExporterRuntime,
 }
@@ -282,11 +286,11 @@ impl OpenTelemetryMetricSubscriber {
         config.validate()?;
         let instrumentation_scope = config.instrumentation_scope.clone();
         let max_instruments = config.max_instruments;
-        let diagnostic_field = config.diagnostic_field.clone();
         let cardinality_limit = config.cardinality_limit;
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(config.diagnostic_field.clone());
         let delivery_diagnostics = Arc::new(MetricDeliveryDiagnostics::new(
             config.endpoint.clone(),
-            config.diagnostic_field.clone(),
+            runtime_diagnostics.clone(),
         ));
         let provider_diagnostics = Arc::clone(&delivery_diagnostics);
         let (provider, runtime) = build_in_owned_runtime("nemo-relay-otlp-metrics", move || {
@@ -294,12 +298,14 @@ impl OpenTelemetryMetricSubscriber {
         })?;
         let meter =
             provider.meter_with_scope(InstrumentationScope::builder(instrumentation_scope).build());
-        let processor = Arc::new(Mutex::new(MetricEventProcessor::new(
-            meter,
-            max_instruments,
-            diagnostic_field,
-            cardinality_limit,
-        )));
+        let processor = Arc::new(Mutex::new(
+            MetricEventProcessor::new_with_runtime_diagnostics(
+                meter,
+                max_instruments,
+                cardinality_limit,
+                runtime_diagnostics.clone(),
+            ),
+        ));
         let callback_processor = Arc::clone(&processor);
         let processor_lock_recovery_warned = Arc::new(AtomicBool::new(false));
         let callback_recovery_warned_for_callback = Arc::clone(&processor_lock_recovery_warned);
@@ -316,6 +322,7 @@ impl OpenTelemetryMetricSubscriber {
                 processor_lock_recovery_warned,
                 provider,
                 delivery_diagnostics,
+                runtime_diagnostics,
                 subscriber,
                 _runtime: runtime,
             }),
@@ -325,6 +332,11 @@ impl OpenTelemetryMetricSubscriber {
     /// Return the raw Relay subscriber callback.
     pub fn subscriber(&self) -> EventSubscriberFn {
         Arc::clone(&self.inner.subscriber)
+    }
+
+    /// Return a bounded snapshot of runtime diagnostics for this subscriber.
+    pub fn runtime_diagnostics(&self) -> OpenTelemetryRuntimeDiagnostics {
+        self.inner.runtime_diagnostics.snapshot()
     }
 
     pub(crate) fn process_validated(
@@ -456,15 +468,15 @@ struct DiagnosticMetricExporter<E> {
 #[derive(Debug)]
 struct MetricDeliveryDiagnostics {
     endpoint: String,
-    diagnostic_field: Option<String>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
     export_failures: AtomicU64,
 }
 
 impl MetricDeliveryDiagnostics {
-    fn new(endpoint: String, diagnostic_field: Option<String>) -> Self {
+    fn new(endpoint: String, runtime_diagnostics: SignalRuntimeDiagnostics) -> Self {
         Self {
             endpoint,
-            diagnostic_field,
+            runtime_diagnostics,
             export_failures: AtomicU64::new(0),
         }
     }
@@ -482,9 +494,8 @@ impl<E: PushMetricExporter> PushMetricExporter for DiagnosticMetricExporter<E> {
             self.diagnostics
                 .export_failures
                 .fetch_add(1, Ordering::Relaxed);
-            record_signal_runtime_diagnostic(
+            self.diagnostics.runtime_diagnostics.record(
                 "otel.metrics_export_failed",
-                self.diagnostics.diagnostic_field.clone(),
                 format!(
                     "OpenTelemetry metric export to endpoint {} failed: {error}",
                     self.diagnostics.endpoint
@@ -501,7 +512,7 @@ impl<E: PushMetricExporter> PushMetricExporter for DiagnosticMetricExporter<E> {
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         let result = self.inner.shutdown_with_timeout(timeout);
-        if result.is_ok() && self.diagnostics.diagnostic_field.is_some() {
+        if result.is_ok() && self.diagnostics.runtime_diagnostics.has_plugin_mirror() {
             let failures = self.diagnostics.export_failures.load(Ordering::Relaxed);
             if failures > 0 {
                 return Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
@@ -566,7 +577,7 @@ enum CachedInstrument {
 struct InstrumentEntry {
     descriptor: MetricDescriptor,
     instrument: CachedInstrument,
-    attribute_sets: HashSet<String>,
+    attribute_sets: HashSet<[u8; 32]>,
 }
 
 struct MetricEventProcessor {
@@ -574,23 +585,38 @@ struct MetricEventProcessor {
     instruments: HashMap<String, InstrumentEntry>,
     max_instruments: usize,
     rejected_marks: u64,
-    diagnostic_field: Option<String>,
+    runtime_diagnostics: SignalRuntimeDiagnostics,
     cardinality_limit: usize,
 }
 
 impl MetricEventProcessor {
+    #[cfg(test)]
     fn new(
         meter: Meter,
         max_instruments: usize,
         diagnostic_field: Option<String>,
         cardinality_limit: usize,
     ) -> Self {
+        Self::new_with_runtime_diagnostics(
+            meter,
+            max_instruments,
+            cardinality_limit,
+            SignalRuntimeDiagnostics::new(diagnostic_field),
+        )
+    }
+
+    fn new_with_runtime_diagnostics(
+        meter: Meter,
+        max_instruments: usize,
+        cardinality_limit: usize,
+        runtime_diagnostics: SignalRuntimeDiagnostics,
+    ) -> Self {
         Self {
             meter,
             instruments: HashMap::new(),
             max_instruments,
             rejected_marks: 0,
-            diagnostic_field,
+            runtime_diagnostics,
             cardinality_limit,
         }
     }
@@ -675,13 +701,13 @@ impl MetricEventProcessor {
                 .instruments
                 .get_mut(&key)
                 .expect("metric instrument was preflighted and constructed");
-            if let Some(attribute_key) = metric_attribute_set_key(&measurement.attributes)
-                && !entry.attribute_sets.contains(&attribute_key)
+            if let Some(attribute_fingerprint) =
+                metric_attribute_set_fingerprint(&measurement.attributes)
+                && !entry.attribute_sets.contains(&attribute_fingerprint)
             {
                 if entry.attribute_sets.len() >= self.cardinality_limit {
-                    record_signal_runtime_diagnostic(
+                    self.runtime_diagnostics.record(
                         "otel.metric_cardinality_limit",
-                        self.diagnostic_field.clone(),
                         format!(
                             "OpenTelemetry metric {:?} exceeded the endpoint cardinality limit of {}; additional attribute sets use the SDK overflow series",
                             measurement.descriptor.name.as_str(),
@@ -690,7 +716,7 @@ impl MetricEventProcessor {
                         1,
                     );
                 } else {
-                    entry.attribute_sets.insert(attribute_key);
+                    entry.attribute_sets.insert(attribute_fingerprint);
                 }
             }
             record_measurement(&entry.instrument, measurement);
@@ -700,7 +726,15 @@ impl MetricEventProcessor {
 
     fn reject(&mut self, event: &Event, kind: MetricRejection, error: String) {
         self.rejected_marks = self.rejected_marks.saturating_add(1);
-        if self.rejected_marks == 1 {
+        let diagnostic_count = self.runtime_diagnostics.record(
+            kind.code(),
+            format!(
+                "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
+                event.name()
+            ),
+            1,
+        );
+        if should_relog_runtime_diagnostic(diagnostic_count) {
             log::warn!(
                 target: "nemo_relay.observability",
                 event = "otel_metric_mark_rejected",
@@ -708,15 +742,6 @@ impl MetricEventProcessor {
                 "OpenTelemetry metric mark was dropped atomically: {error}"
             );
         }
-        record_signal_runtime_diagnostic(
-            kind.code(),
-            self.diagnostic_field.clone(),
-            format!(
-                "OpenTelemetry metric mark {:?} was dropped atomically: {error}",
-                event.name()
-            ),
-            1,
-        );
     }
 }
 
@@ -759,11 +784,71 @@ fn lock_metric_processor<'a>(
     }
 }
 
-fn metric_attribute_set_key(attributes: &MetricAttributes) -> Option<String> {
+fn metric_attribute_set_fingerprint(attributes: &MetricAttributes) -> Option<[u8; 32]> {
     if attributes.is_empty() {
         return None;
     }
-    Some(format!("{attributes:?}"))
+
+    let mut hasher = Sha256::new();
+    for (key, value) in attributes.iter() {
+        hash_metric_attribute_bytes(&mut hasher, key.as_bytes());
+        match value {
+            AttributeValue::String(value) => {
+                hasher.update(b"s");
+                hash_metric_attribute_bytes(&mut hasher, value.as_bytes());
+            }
+            AttributeValue::Bool(value) => {
+                hasher.update(b"b");
+                hasher.update([u8::from(*value)]);
+            }
+            AttributeValue::I64(value) => {
+                hasher.update(b"i");
+                hasher.update(value.to_be_bytes());
+            }
+            AttributeValue::F64(value) => {
+                hasher.update(b"f");
+                hasher.update(value.get().to_bits().to_be_bytes());
+            }
+            AttributeValue::StringArray(values) => {
+                hasher.update(b"S");
+                hash_metric_attribute_count(&mut hasher, values.len());
+                for value in values {
+                    hash_metric_attribute_bytes(&mut hasher, value.as_bytes());
+                }
+            }
+            AttributeValue::BoolArray(values) => {
+                hasher.update(b"B");
+                hash_metric_attribute_count(&mut hasher, values.len());
+                for value in values {
+                    hasher.update([u8::from(*value)]);
+                }
+            }
+            AttributeValue::I64Array(values) => {
+                hasher.update(b"I");
+                hash_metric_attribute_count(&mut hasher, values.len());
+                for value in values {
+                    hasher.update(value.to_be_bytes());
+                }
+            }
+            AttributeValue::F64Array(values) => {
+                hasher.update(b"F");
+                hash_metric_attribute_count(&mut hasher, values.len());
+                for value in values {
+                    hasher.update(value.get().to_bits().to_be_bytes());
+                }
+            }
+        }
+    }
+    Some(hasher.finalize().into())
+}
+
+fn hash_metric_attribute_count(hasher: &mut Sha256, count: usize) {
+    hasher.update((count as u64).to_be_bytes());
+}
+
+fn hash_metric_attribute_bytes(hasher: &mut Sha256, value: &[u8]) {
+    hash_metric_attribute_count(hasher, value.len());
+    hasher.update(value);
 }
 
 #[derive(Debug, Clone, Copy)]

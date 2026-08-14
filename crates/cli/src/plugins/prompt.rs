@@ -1217,7 +1217,7 @@ fn prompt_value(
                 CliError::Config(format!("invalid JSON for {}: {error}", field.name))
             })
         }
-        EditorFieldKind::Enum => {
+        EditorFieldKind::Enum | EditorFieldKind::IntegerEnum => {
             let values = field.enum_values;
             let default_idx = editor_enum_default_index(field, current);
             let idx = Select::with_theme(theme)

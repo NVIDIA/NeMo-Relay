@@ -877,7 +877,7 @@ fn editor_model_object_and_schema_helpers_cover_fallbacks() {
     let version = ObservabilityConfig::editor_schema()
         .field("version")
         .expect("observability version field");
-    assert_eq!(version.kind, EditorFieldKind::Enum);
+    assert_eq!(version.kind, EditorFieldKind::IntegerEnum);
     assert_eq!(version.enum_values, &["3", "4"]);
     let nested = nested_editor_keys(ObservabilityConfig::editor_schema());
     assert!(nested.contains(&"atof"));
@@ -3029,6 +3029,14 @@ fn editor_enum_values_preserve_numeric_config_fields() {
     assert_eq!(editor_enum_default_index(&version, Some(&json!(4))), 1);
     assert_eq!(editor_enum_value(&version, 0), json!(3));
     assert_eq!(editor_enum_value(&version, 1), json!(4));
+
+    let numeric_strings = EditorFieldSpec {
+        kind: EditorFieldKind::Enum,
+        enum_values: &["1", "2"],
+        ..version
+    };
+    assert_eq!(editor_enum_value(&numeric_strings, 0), json!("1"));
+    assert_eq!(editor_enum_value(&numeric_strings, 1), json!("2"));
 
     let severity = ObservabilityConfig::editor_schema()
         .field("opentelemetry")

@@ -4,8 +4,9 @@
 //! Shared infrastructure for independently owned OTLP signal providers.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use opentelemetry::KeyValue;
@@ -19,6 +20,120 @@ use crate::api::event::{
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
 use super::otel::{OpenTelemetryError, Result};
+
+const MAX_RUNTIME_DIAGNOSTICS: usize = 32;
+const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
+
+/// A bounded aggregate describing an OpenTelemetry runtime problem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenTelemetryRuntimeDiagnostic {
+    /// Stable identifier for the diagnostic condition.
+    pub code: String,
+    /// Most recent message recorded for this condition.
+    pub message: String,
+    /// Total number of occurrences recorded for this condition.
+    pub count: u64,
+}
+
+/// Snapshot of bounded runtime diagnostics recorded by an OpenTelemetry subscriber.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OpenTelemetryRuntimeDiagnostics {
+    diagnostics: Vec<OpenTelemetryRuntimeDiagnostic>,
+}
+
+impl OpenTelemetryRuntimeDiagnostics {
+    /// Return diagnostics in stable code order.
+    pub fn entries(&self) -> &[OpenTelemetryRuntimeDiagnostic] {
+        &self.diagnostics
+    }
+
+    /// Return a diagnostic by its stable code.
+    pub fn get(&self, code: &str) -> Option<&OpenTelemetryRuntimeDiagnostic> {
+        self.diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+    }
+}
+
+#[derive(Debug, Default)]
+struct RuntimeDiagnosticState {
+    diagnostics: BTreeMap<&'static str, OpenTelemetryRuntimeDiagnostic>,
+}
+
+/// Shared runtime-diagnostic recorder for one independently owned OTLP subscriber.
+#[derive(Debug, Clone)]
+pub(super) struct SignalRuntimeDiagnostics {
+    state: Arc<Mutex<RuntimeDiagnosticState>>,
+    plugin_field: Option<String>,
+}
+
+impl SignalRuntimeDiagnostics {
+    pub(super) fn new(plugin_field: Option<String>) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RuntimeDiagnosticState::default())),
+            plugin_field,
+        }
+    }
+
+    pub(super) fn record(&self, code: &'static str, message: String, count: u64) -> u64 {
+        let count = count.max(1);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let total = if let Some(diagnostic) = state.diagnostics.get_mut(code) {
+            diagnostic.message = truncate_runtime_diagnostic_message(message.clone());
+            diagnostic.count = diagnostic.count.saturating_add(count);
+            diagnostic.count
+        } else if state.diagnostics.len() < MAX_RUNTIME_DIAGNOSTICS {
+            state.diagnostics.insert(
+                code,
+                OpenTelemetryRuntimeDiagnostic {
+                    code: code.to_string(),
+                    message: truncate_runtime_diagnostic_message(message.clone()),
+                    count,
+                },
+            );
+            count
+        } else {
+            return 0;
+        };
+        drop(state);
+
+        record_signal_runtime_diagnostic(code, self.plugin_field.clone(), message, count);
+        total
+    }
+
+    pub(super) fn snapshot(&self) -> OpenTelemetryRuntimeDiagnostics {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        OpenTelemetryRuntimeDiagnostics {
+            diagnostics: state.diagnostics.values().cloned().collect(),
+        }
+    }
+
+    pub(super) fn has_plugin_mirror(&self) -> bool {
+        self.plugin_field.is_some()
+    }
+}
+
+pub(super) fn should_relog_runtime_diagnostic(count: u64) -> bool {
+    count.is_power_of_two()
+}
+
+fn truncate_runtime_diagnostic_message(message: String) -> String {
+    if message.chars().count() <= MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS {
+        return message;
+    }
+    let mut truncated = message
+        .chars()
+        .take(MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS)
+        .collect::<String>();
+    truncated.push('…');
+    truncated
+}
 
 pub(super) enum MetricMarkClassification {
     NotMetric,

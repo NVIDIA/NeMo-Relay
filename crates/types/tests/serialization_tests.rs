@@ -150,6 +150,44 @@ fn metric_validation_rejects_invalid_names_values_units_and_boundaries() {
 }
 
 #[test]
+fn metric_validation_explains_negative_f64_counter_rejection() {
+    let error = MetricEnvelope {
+        measurements: vec![measurement(
+            MetricKind::Counter,
+            MetricValueType::F64,
+            json!(-0.1),
+        )],
+    }
+    .validate()
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("counter values must be non-negative")
+    );
+}
+
+#[test]
+fn metric_validation_rejects_mixed_numeric_attribute_arrays_in_any_order() {
+    for values in [json!([1, 1.5]), json!([1.5, 1])] {
+        let mut metric = measurement(MetricKind::Gauge, MetricValueType::I64, json!(1));
+        metric.attributes = Some(json!({"value": values}));
+
+        let error = MetricEnvelope {
+            measurements: vec![metric],
+        }
+        .validate()
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("attribute arrays must contain one primitive type")
+        );
+    }
+}
+
+#[test]
 fn metric_validation_enforces_attribute_and_descriptor_contracts() {
     let mut valid = measurement(MetricKind::Gauge, MetricValueType::F64, json!(1.0));
     valid.attributes = Some(json!({

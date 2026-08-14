@@ -22,6 +22,8 @@ pub enum EditorFieldKind {
     Float,
     /// Value selected from a fixed set of allowed choices.
     Enum,
+    /// Integer value selected from a fixed set of allowed choices.
+    IntegerEnum,
     /// Object with string keys and string values.
     StringMap,
     /// Arbitrary JSON value.
@@ -43,7 +45,7 @@ pub struct EditorFieldSpec {
     pub label: &'static str,
     /// Editor control shape.
     pub kind: EditorFieldKind,
-    /// Allowed display choices, when [`EditorFieldKind::Enum`] is used.
+    /// Allowed display choices, when an enum field kind is used.
     pub enum_values: &'static [&'static str],
     /// Whether the field is represented as an `Option<T>` in Rust.
     pub optional: bool,
@@ -213,6 +215,7 @@ macro_rules! editor_config {
     (@kind Integer) => { $crate::config_editor::EditorFieldKind::Integer };
     (@kind Float) => { $crate::config_editor::EditorFieldKind::Float };
     (@kind Enum) => { $crate::config_editor::EditorFieldKind::Enum };
+    (@kind IntegerEnum) => { $crate::config_editor::EditorFieldKind::IntegerEnum };
     (@kind StringMap) => { $crate::config_editor::EditorFieldKind::StringMap };
     (@kind Json) => { $crate::config_editor::EditorFieldKind::Json };
     (@kind List) => { $crate::config_editor::EditorFieldKind::List };

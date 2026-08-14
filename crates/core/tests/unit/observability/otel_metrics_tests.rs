@@ -116,6 +116,29 @@ fn direct_metric_subscriber_recovers_a_poisoned_processor_lock() {
 }
 
 #[test]
+fn direct_metric_subscriber_exposes_runtime_diagnostics() {
+    let subscriber =
+        OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new("http://127.0.0.1:4318"))
+            .unwrap();
+    let event = metric_event("999", json!({"measurements": []}));
+
+    for _ in 0..3 {
+        (subscriber.subscriber())(&event);
+    }
+
+    let diagnostics = subscriber.runtime_diagnostics();
+    let diagnostic = diagnostics
+        .get("otel.metric_mark_invalid")
+        .expect("invalid metric diagnostic");
+    assert_eq!(diagnostic.count, 3);
+    assert!(
+        diagnostic
+            .message
+            .contains("unsupported metric schema version")
+    );
+}
+
+#[test]
 fn metric_endpoint_resolution_replaces_terminal_trace_path() {
     for (input, expected) in [
         (
@@ -238,7 +261,9 @@ fn metric_config_rejects_blank_and_padded_headers() {
 fn metric_delivery_state_survives_exporter_error_wrapping() {
     let diagnostics = MetricDeliveryDiagnostics::new(
         "https://collector.example/v1/metrics".to_string(),
-        Some("opentelemetry.metrics.endpoints[0].endpoint".to_string()),
+        SignalRuntimeDiagnostics::new(Some(
+            "opentelemetry.metrics.endpoints[0].endpoint".to_string(),
+        )),
     );
     diagnostics.export_failures.store(2, Ordering::Relaxed);
 
@@ -540,6 +565,25 @@ fn metric_attribute_scalars_preserve_supported_primitive_types() {
         let (_, value) = attributes.iter().next().unwrap();
         assert_eq!(metric_attribute_value(value), expected);
     }
+}
+
+#[test]
+fn metric_attribute_fingerprints_are_typed_and_fixed_size() {
+    let string = MetricAttributes::try_from(Some(&json!({"value": "1"}))).unwrap();
+    let integer = MetricAttributes::try_from(Some(&json!({"value": 1}))).unwrap();
+    let reordered = MetricAttributes::try_from(Some(&json!({"b": true, "a": 1}))).unwrap();
+    let ordered = MetricAttributes::try_from(Some(&json!({"a": 1, "b": true}))).unwrap();
+
+    let string_fingerprint = metric_attribute_set_fingerprint(&string).unwrap();
+    assert_ne!(
+        string_fingerprint,
+        metric_attribute_set_fingerprint(&integer).unwrap()
+    );
+    assert_eq!(
+        metric_attribute_set_fingerprint(&reordered),
+        metric_attribute_set_fingerprint(&ordered)
+    );
+    assert_eq!(std::mem::size_of_val(&string_fingerprint), 32);
 }
 
 struct CapturedRequest {
