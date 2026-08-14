@@ -2598,6 +2598,25 @@ fn bootstrap_hmac_key_creation_is_concurrency_safe_and_stable() {
 
 #[cfg(unix)]
 #[test]
+fn bootstrap_hmac_key_completes_empty_private_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("state/fingerprint-hmac.key");
+    let parent = path.parent().unwrap();
+    std::fs::create_dir_all(parent).unwrap();
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::File::create(&path).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let key = load_or_create_bootstrap_hmac_key_at(&path).unwrap();
+
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 32);
+    assert_eq!(load_or_create_bootstrap_hmac_key_at(&path).unwrap(), key);
+}
+
+#[cfg(unix)]
+#[test]
 fn bootstrap_hmac_key_reuses_private_state_without_changing_permissions() {
     use std::os::unix::fs::PermissionsExt;
 
