@@ -598,6 +598,42 @@ fn test_model_pricing_omits_total_when_nonzero_usage_lacks_a_rate() {
 }
 
 #[test]
+fn test_model_pricing_omits_total_when_nonzero_cache_read_usage_lacks_a_rate() {
+    let catalog = pricing_catalog(json!([
+        {
+            "provider": "future-ai",
+            "model_id": "future-model",
+            "pricing_as_of": "2026-06-04",
+            "pricing_source": "https://example.test/pricing",
+            "rates": {
+                "input_per_million": 1.0,
+                "output_per_million": 2.0,
+                "cache_write_per_million": 1.5
+            },
+            "prompt_cache": {
+                "read_accounting": "separate"
+            }
+        }
+    ]));
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(2_000),
+        cache_read_tokens: Some(3_000),
+        cache_write_tokens: Some(4_000),
+        ..Usage::default()
+    };
+
+    let cost = estimate_cost_with_catalog(&catalog, "future-model", &usage).unwrap();
+
+    assert_eq!(cost.total, None);
+    assert_eq!(cost.input, Some(0.001));
+    assert_eq!(cost.output, Some(0.004));
+    assert_eq!(cost.cache_read, None);
+    assert_eq!(cost.cache_write, Some(0.006));
+    assert_eq!(cost.source, CostSource::ModelPricing);
+}
+
+#[test]
 fn test_prompt_threshold_pricing_applies_selected_tier_to_full_request() {
     let catalog = threshold_pricing_catalog("included_in_prompt_tokens");
     let usage = Usage {
