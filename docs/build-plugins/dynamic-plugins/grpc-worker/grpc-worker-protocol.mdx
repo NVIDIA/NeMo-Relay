@@ -1,6 +1,6 @@
 ---
 title: "gRPC Worker Protocol Overview"
-description: "Understand the local `grpc-v1` contract and canonical protocol definition for NeMo Relay worker plugins."
+description: "Understand the local `grpc-v1` contract and transport schema for NeMo Relay worker plugins."
 position: 15
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -11,6 +11,13 @@ SPDX-License-Identifier: Apache-2.0 */}
 `plugin.kind = "worker"`. Python, Rust, and other local executables can
 implement the `nemo.relay.worker.v1` API. Relay starts every worker and connects
 to it through local endpoints. Remote worker endpoints are not supported.
+
+Relay 0.8 resets the `grpc-v1` tool-result contract to use structured protobuf
+`ToolExecutionResult` and `ToolExecutionInterceptOutcome` messages. Rebuild
+every worker and regenerate custom protobuf bindings for Relay 0.8. Declare a
+`compat.relay` range that excludes earlier releases. The recommended range is
+`>=0.8.0,<1.0`; open-ended or narrower 0.8-or-newer ranges are valid. The
+manifest is an author compatibility assertion, not artifact attestation.
 
 Use the Rust or Python SDK unless you need another runtime. Refer to [gRPC
 Worker Plugin Concepts](/build-plugins/dynamic-plugins/grpc-worker/about) for runtime
@@ -32,9 +39,13 @@ Relay implements `RelayHostRuntime` for worker-initiated operations. It lets a
 worker emit marks, manage scopes and isolated scope stacks, and call tool, LLM,
 or LLM-stream continuations during execution intercepts.
 
-This page summarizes the stable contract. Refer to the [canonical protocol
-definition](https://github.com/NVIDIA/NeMo-Relay/blob/0.5.0-alpha.20260706/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
-for every message and RPC field required to implement another runtime.
+This page defines the application contract. Refer to the [canonical protobuf
+transport schema](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto)
+for every message and RPC field required to implement another runtime. The
+protobuf package, service names, and RPC method names remain at v1. The
+`ToolNext` response type and the `ToolExecutionInterceptResult.outcome` field
+type change for the Relay 0.8 baseline. Workers built against an earlier
+`grpc-v1` schema are incompatible and must regenerate their bindings.
 
 ## PluginWorker RPCs
 
@@ -148,6 +159,25 @@ current sanitizer invocation. Relay rejects missing, forged, expired,
 wrong-direction, or activation-mismatched capabilities. Codec transformation
 failures are non-retryable worker errors.
 
+The following protobuf types are normative for canonical tool results:
+
+| Protocol Location | Required Protobuf Type |
+| --- | --- |
+| `RelayHostRuntime.ToolNext` response | `ToolExecutionResultResponse` |
+| Successful `ToolExecutionResultResponse.value` | `ToolExecutionResult` |
+| `InvokeResponse.tool_execution.outcome` | `ToolExecutionInterceptOutcome` |
+
+`ToolExecutionResult` contains a required `result` and optional `annotation`.
+`ToolExecutionInterceptOutcome` adds Relay-owned `pending_marks` as one JSON
+array. Each opaque JSON value uses `JsonValue`, whose bytes contain exactly one
+JSON value. This preserves arbitrary JSON and integer precision while generated
+protobuf clients enforce the surrounding result and annotation structure.
+
+These are deliberate protobuf type changes under the Relay 0.8 `grpc-v1`
+baseline. The package and RPC method names remain v1, but workers must
+regenerate their protobuf bindings and rebuild. Future incompatible worker
+protobuf or payload semantic changes must increment `worker_protocol`.
+
 A worker may call an execution continuation repeatedly or concurrently while
 the corresponding `Invoke` or `InvokeStream` callback is active. Each call gets
 an isolated scope-stack branch containing the scopes visible at invocation.
@@ -180,8 +210,10 @@ message JsonEnvelope {
 }
 ```
 
-Use `JsonEnvelope` for Relay DTOs. Protobuf defines protocol control flow and
-does not duplicate Relay event, tool, LLM, scope, or diagnostic models.
+Use `JsonEnvelope` for open Relay DTOs that the protocol does not model
+directly. Canonical tool results are the exception: protobuf defines their
+wrapper, and `JsonValue` carries the application result, annotation, and
+pending-mark array losslessly.
 
 ## Activation and Shutdown
 

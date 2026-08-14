@@ -29,7 +29,8 @@ use super::{
     effective_mark_projection, estimate_cost_for_response_or_model,
     estimate_cost_for_response_or_requested_model, manual, model_name_for_llm_event,
     push_serialized_top_level_attributes, push_session_identity_attributes,
-    push_top_level_json_attributes, relay_span_id, relay_trace_id, validate_attribute_mappings,
+    push_tool_result_annotation_attribute, push_top_level_json_attributes, relay_span_id,
+    relay_trace_id, validate_attribute_mappings,
 };
 use crate::api::event::{Event, EventNormalizationExt, ScopeCategory};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack};
@@ -1466,6 +1467,7 @@ fn end_attributes(event: &Event) -> Vec<KeyValue> {
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.data", event.data());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.metadata", event.metadata());
     push_top_level_json_attributes(&mut attributes, "nemo_relay.end.output", event.output());
+    push_tool_result_annotation_attribute(&mut attributes, event);
     if event
         .category()
         .is_some_and(|category| category.as_str() == "llm")

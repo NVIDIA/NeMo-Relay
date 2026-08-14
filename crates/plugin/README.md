@@ -44,13 +44,15 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **`PluginRuntime`**: Typed helpers for Relay-owned scopes and marks.
 - **Stable native ABI v4**: C-compatible host and plugin tables behind the
   safe Rust authoring interface. Relay negotiates frozen v3 and v2 tables for
-  previously compiled plugins.
+  Relay 0.8-built plugins that target those layouts.
 - **Typed async middleware**: Every typed guardrail, sanitizer, and intercept
   returns a future driven by a per-plugin SDK-owned Tokio runtime. Subscribers
   and raw synchronous ABI registrations remain synchronous.
 - **Async continuations and streams**: Cloneable `ToolNext`, `LlmNext`, and
   `LlmStreamNext` handles support repeated or concurrent calls. Streaming LLM
   continuations use a pull-based host handle.
+- **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, keeping
+  application results and opaque annotations adjacent across native API 1.
 
 ## Installation
 
@@ -97,7 +99,17 @@ Build the `cdylib`, describe its entry symbol and compatibility in a
 `relay-plugin.toml` manifest, then register it through the Relay CLI. See the
 complete example for platform-specific artifact and manifest setup.
 
-Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. Relay creates one
+Use `compat.native_api = "1"`. Relay 0.8 establishes the canonical
+`ToolExecutionResult` JSON contract as the native API 1 baseline. Every native
+plugin must be rebuilt for Relay 0.8 and declare a `compat.relay` range that
+excludes earlier versions. The recommended range is `>=0.8.0,<1.0`; an
+open-ended range such as `>=0.8.0` is also valid. The manifest is the plugin
+author's compatibility assertion, not proof that the artifact was rebuilt.
+
+The JSON contract is independent of the native host-table layout. This SDK
+continues to export ABI v4, whose C-compatible layouts and callback signatures
+are unchanged by the tool-result cutover. Future incompatible native JSON
+contract changes must increment `compat.native_api`. Relay creates one
 SDK-owned Tokio executor for each configured plugin component. It defaults to
 two workers: enough for modest concurrent async I/O without broadly
 oversubscribing the host. Increase the count only when measured I/O concurrency

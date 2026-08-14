@@ -131,8 +131,10 @@ Category-specific fields live under `category_profile`. NeMo Relay uses
 `model_name` for LLM events, `tool_call_id` for tool events, and `subtype` for
 custom-category events. LLM codec annotations, when present, are serialized
 under `category_profile.annotated_request` on LLM start events and
-`category_profile.annotated_response` on LLM end events. Unknown profile fields
-are preserved so newer producers can interoperate with older consumers.
+`category_profile.annotated_response` on LLM end events. A successful tool end
+event places its optional opaque result annotation under
+`category_profile.tool_result_annotation`. Unknown profile fields are preserved
+so newer producers can interoperate with older consumers.
 
 ### Annotated Request and Response Data
 
@@ -140,6 +142,14 @@ LLM codecs can enrich LLM events with annotated request and response data. These
 annotations are part of the canonical event JSON under `category_profile` when
 they are present, so ATOF JSONL export and in-process subscriber JSON expose the
 same payload shape. Request annotations use the owning agent's freshness state.
+
+Managed and manual tool execution uses `ToolExecutionResult` to keep the
+application-owned `result` separate from an optional opaque `annotation`.
+Relay records the result as the tool end output and projects a non-null
+annotation into `category_profile.tool_result_annotation`. A tool
+sanitize-response guardrail sanitizes only the result. A scope-end event
+sanitizer can then replace or remove the annotation before subscribers and
+exporters receive the event.
 
 ### Event Handoff
 

@@ -1600,6 +1600,44 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
 }
 
 #[test]
+fn gen_ai_projection_includes_anthropic_cache_tokens_in_input_total() {
+    let event = make_end_event(
+        Uuid::now_v7(),
+        None,
+        "anthropic.messages",
+        ScopeType::Llm,
+        Some(json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 17_980,
+                "cache_creation_input_tokens": 9_421
+            }
+        })),
+    );
+
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("gen_ai.usage.input_tokens"),
+        Some(&"27403".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_read.input_tokens"),
+        Some(&"17980".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        Some(&"9421".to_string())
+    );
+}
+
+#[test]
 fn gen_ai_end_projection_preserves_explicit_error_type() {
     let event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
@@ -2217,6 +2255,32 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
             },
             {
                 "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "call-2",
+                    "content": "claude result"
+                }]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-3",
+                        "content": "mixed result"
+                    },
+                    {
+                        "type": "text",
+                        "text": "continue"
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": []
+            },
+            {
+                "role": "user",
                 "content": [
                     {
                         "type": "provider_native",
@@ -2270,6 +2334,32 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
                     "id": "call-1",
                     "response": "result"
                 }]
+            },
+            {
+                "role": "tool",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "id": "call-2",
+                    "response": "claude result"
+                }]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "call-3",
+                        "response": "mixed result"
+                    },
+                    {
+                        "type": "text",
+                        "content": "continue"
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "parts": []
             },
             {
                 "role": "user",
@@ -3348,7 +3438,11 @@ fn assert_otel_tool_attribute_branches() {
         Some(&"true".to_string())
     );
 
-    let tool_end_attributes = attr_map(&end_attributes(&Event::Scope(ScopeEvent::new(
+    let tool_end_profile = CategoryProfile::builder()
+        .tool_call_id("call-456")
+        .tool_result_annotation(json!({"opaque": {"rank": 1}}))
+        .build();
+    let tool_end_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("lookup")
             .metadata(json!({"phase": "complete"}))
@@ -3357,12 +3451,37 @@ fn assert_otel_tool_attribute_branches() {
         ScopeCategory::End,
         Vec::new(),
         EventCategory::tool(),
-        Some(CategoryProfile::builder().tool_call_id("call-456").build()),
-    ))));
+        Some(tool_end_profile),
+    ));
+    let tool_end_attributes = attr_map(&end_attributes(&tool_end_event));
     assert_eq!(
         tool_end_attributes.get("nemo_relay.end.data.result"),
         Some(&"true".to_string())
     );
+    assert_eq!(
+        tool_end_attributes.get("nemo_relay.tool.result.annotation"),
+        Some(&r#"{"opaque":{"rank":1}}"#.to_string())
+    );
+
+    let llm_profile = CategoryProfile::builder()
+        .tool_result_annotation(json!({"must_not_project": true}))
+        .build();
+    let llm_end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("chat").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(llm_profile),
+    ));
+    assert!(
+        !attr_map(&end_attributes(&llm_end_event))
+            .contains_key("nemo_relay.tool.result.annotation")
+    );
+
+    let gen_ai_attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &tool_end_event,
+    ));
+    assert!(!gen_ai_attributes.contains_key("nemo_relay.tool.result.annotation"));
 }
 
 fn assert_otel_catalog_cost_branches() {

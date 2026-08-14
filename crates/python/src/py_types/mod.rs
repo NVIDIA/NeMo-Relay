@@ -159,6 +159,7 @@ fn register_llm_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLlmSanitizeResponseCodec>()?;
     m.add_class::<PyPendingMarkSpec>()?;
     m.add_class::<PyLLMRequestInterceptOutcome>()?;
+    m.add_class::<PyToolExecutionResult>()?;
     m.add_class::<PyToolExecutionInterceptOutcome>()?;
     m.add_class::<PyAnnotatedLLMRequest>()?;
     m.add_class::<PyAnnotatedLLMResponse>()?;

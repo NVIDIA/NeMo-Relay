@@ -64,8 +64,8 @@ use nemo_relay::api::scope::{EmitMarkEventParams, ScopeHandle, ScopeType, event}
 use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{
-    ToolExecutionInterceptOutcome, tool_call, tool_call_end, tool_call_execute,
-    tool_conditional_execution, tool_request_intercepts,
+    ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call, tool_call_end,
+    tool_call_execute, tool_conditional_execution, tool_request_intercepts,
 };
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationTokenImpact,
@@ -548,7 +548,7 @@ async fn test_execution_intercept_calls_next() {
     let oc = original_called.clone();
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         oc.store(true, Ordering::SeqCst);
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { Ok(args.into()) })
     });
 
     let result = tool_call_execute(
@@ -565,7 +565,7 @@ async fn test_execution_intercept_calls_next() {
         original_called.load(Ordering::SeqCst),
         "Original callable should be invoked"
     );
-    assert_eq!(result["value"], 42);
+    assert_eq!(result.result["value"], 42);
 
     // Cleanup
     deregister_tool_execution_intercept("passthrough").unwrap();
@@ -597,7 +597,7 @@ async fn test_execution_intercept_skips_next() {
     let oc = original_called.clone();
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         oc.store(true, Ordering::SeqCst);
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { Ok(args.into()) })
     });
 
     let result = tool_call_execute(
@@ -614,10 +614,335 @@ async fn test_execution_intercept_skips_next() {
         !original_called.load(Ordering::SeqCst),
         "Original callable should NOT be invoked"
     );
-    assert_eq!(result["intercepted"], true);
+    assert_eq!(result.result["intercepted"], true);
 
     // Cleanup
     deregister_tool_execution_intercept("short_circuit").unwrap();
+}
+
+#[tokio::test]
+async fn tool_execution_result_annotation_is_explicit_through_the_chain() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_execution_intercept(
+        "annotation",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let mut execution_result = next(args).await?;
+                assert_eq!(
+                    execution_result.annotation,
+                    Some(json!({"source": "producer"}))
+                );
+                execution_result.result["rewritten"] = json!(true);
+                execution_result.annotation = Some(json!({"source": "middleware"}));
+                Ok(execution_result.into())
+            })
+        }),
+    )
+    .unwrap();
+
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("annotated-tool")
+            .args(json!({}))
+            .func(Arc::new(|_args| {
+                Box::pin(async {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({"raw": true}),
+                        json!({"source": "producer"}),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.result, json!({"raw": true, "rewritten": true}));
+    assert_eq!(result.annotation, Some(json!({"source": "middleware"})));
+    deregister_tool_execution_intercept("annotation").unwrap();
+}
+
+#[tokio::test]
+async fn tool_execution_intercepts_can_preserve_remove_and_short_circuit_annotations() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    register_tool_execution_intercept(
+        "annotation-preserve",
+        1,
+        Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
+    )
+    .unwrap();
+    let preserved = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("preserved-annotation")
+            .args(json!({}))
+            .func(Arc::new(|_args| {
+                Box::pin(async {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({"result": "preserved"}),
+                        json!({"source": "producer"}),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(preserved.annotation, Some(json!({"source": "producer"})));
+    deregister_tool_execution_intercept("annotation-preserve").unwrap();
+
+    register_tool_execution_intercept(
+        "annotation-remove",
+        1,
+        Arc::new(|_name, args, next| {
+            Box::pin(async move {
+                let result = next(args).await?.without_annotation();
+                Ok(result.into())
+            })
+        }),
+    )
+    .unwrap();
+    let removed = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("removed-annotation")
+            .args(json!({}))
+            .func(Arc::new(|_args| {
+                Box::pin(async {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({"result": "removed"}),
+                        json!({"source": "producer"}),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(removed.result, json!({"result": "removed"}));
+    assert_eq!(removed.annotation, None);
+    deregister_tool_execution_intercept("annotation-remove").unwrap();
+
+    let provider_called = Arc::new(AtomicBool::new(false));
+    register_tool_execution_intercept(
+        "annotation-short-circuit",
+        1,
+        Arc::new(|_name, _args, _next| {
+            Box::pin(async {
+                Ok(ToolExecutionInterceptOutcome::annotated(
+                    json!({"result": "short-circuit"}),
+                    json!({"source": "middleware"}),
+                ))
+            })
+        }),
+    )
+    .unwrap();
+    let captured_provider_called = Arc::clone(&provider_called);
+    let short_circuited = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("short-circuit-annotation")
+            .args(json!({}))
+            .func(Arc::new(move |_args| {
+                captured_provider_called.store(true, Ordering::SeqCst);
+                Box::pin(async { Ok(ToolExecutionResult::new(json!({}))) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert!(!provider_called.load(Ordering::SeqCst));
+    assert_eq!(short_circuited.result, json!({"result": "short-circuit"}));
+    assert_eq!(
+        short_circuited.annotation,
+        Some(json!({"source": "middleware"}))
+    );
+    deregister_tool_execution_intercept("annotation-short-circuit").unwrap();
+}
+
+#[tokio::test]
+async fn mcp_error_result_remains_successful_and_distinct_from_relay_annotation() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "mcp-tool-result-observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    let mcp_result = json!({
+        "content": [{"type": "text", "text": "provider-reported failure"}],
+        "structuredContent": {"code": "not_found"},
+        "_meta": {"provider": "mcp"},
+        "isError": true,
+    });
+    let relay_annotation = json!({"cache": {"hit": false}});
+
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("mcp-error-result")
+            .args(json!({}))
+            .func(Arc::new({
+                let mcp_result = mcp_result.clone();
+                let relay_annotation = relay_annotation.clone();
+                move |_args| {
+                    let mcp_result = mcp_result.clone();
+                    let relay_annotation = relay_annotation.clone();
+                    Box::pin(async move {
+                        Ok(ToolExecutionResult::annotated(mcp_result, relay_annotation))
+                    })
+                }
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.result, mcp_result);
+    assert_eq!(result.annotation, Some(relay_annotation.clone()));
+
+    let captured = captured_events_snapshot(&events);
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "mcp-error-result" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(end.data(), Some(&mcp_result));
+    assert_eq!(end.metadata().unwrap()["otel.status_code"], "OK");
+    assert_eq!(end.tool_result_annotation().unwrap(), relay_annotation);
+
+    deregister_subscriber("mcp-tool-result-observer").unwrap();
+}
+
+#[tokio::test]
+async fn tool_result_annotation_uses_the_event_sanitizer_chain() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    register_subscriber(
+        "tool-annotation-observer",
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_scope_sanitize_end_guardrail(
+        "tool-annotation-sanitizer",
+        1,
+        Arc::new(|event, mut fields| {
+            Box::pin(async move {
+                if event.name() == "sanitized-annotation-tool"
+                    && let Some(annotation) = fields
+                        .category_profile
+                        .as_mut()
+                        .and_then(|profile| profile.tool_result_annotation.as_mut())
+                        .and_then(Json::as_object_mut)
+                {
+                    annotation.insert("secret".into(), json!("[redacted]"));
+                }
+                Ok(fields)
+            })
+        }),
+    )
+    .unwrap();
+    register_tool_sanitize_response_guardrail(
+        "tool-result-sanitizer",
+        1,
+        Arc::new(|_name, mut result| {
+            result["raw"] = json!("[redacted]");
+            ready(result)
+        }),
+    )
+    .unwrap();
+
+    let result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("sanitized-annotation-tool")
+            .args(json!({}))
+            .func(Arc::new(|_args| {
+                Box::pin(async {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({"raw": true}),
+                        json!({"secret": "classified"}),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.result, json!({"raw": true}));
+    assert_eq!(result.annotation, Some(json!({"secret": "classified"})));
+
+    let captured = captured_events_snapshot(&events);
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "sanitized-annotation-tool"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(
+        end.tool_result_annotation().unwrap()["secret"],
+        "[redacted]"
+    );
+    assert_eq!(end.data().unwrap(), &json!({"raw": "[redacted]"}));
+
+    deregister_scope_sanitize_end_guardrail("tool-annotation-sanitizer").unwrap();
+    register_scope_sanitize_end_guardrail(
+        "tool-annotation-failure",
+        1,
+        Arc::new(|_event, _fields| {
+            Box::pin(async {
+                Err(FlowError::Internal(
+                    "intentional annotation sanitizer failure".into(),
+                ))
+            })
+        }),
+    )
+    .unwrap();
+    let failed_result = tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("failed-annotation-tool")
+            .args(json!({}))
+            .func(Arc::new(|_args| {
+                Box::pin(async {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({"raw": true}),
+                        json!({"secret": "still-visible-to-caller"}),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        failed_result.annotation,
+        Some(json!({"secret": "still-visible-to-caller"}))
+    );
+    let captured = captured_events_snapshot(&events);
+    let failed_end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "failed-annotation-tool"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert!(failed_end.data().is_none());
+    assert!(failed_end.category_profile().is_none());
+
+    deregister_tool_sanitize_response_guardrail("tool-result-sanitizer").unwrap();
+    deregister_scope_sanitize_end_guardrail("tool-annotation-failure").unwrap();
+    deregister_subscriber("tool-annotation-observer").unwrap();
 }
 
 /// Register 2 chained execution intercepts. Verify both run in priority order
@@ -667,7 +992,7 @@ async fn test_execution_intercept_chain_ordering() {
     let o_orig = order.clone();
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         o_orig.lock().unwrap().push("original".into());
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { Ok(args.into()) })
     });
 
     let _ = tool_call_execute(
@@ -720,7 +1045,7 @@ async fn test_execution_intercept_modifies_args() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
 
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
@@ -732,8 +1057,8 @@ async fn test_execution_intercept_modifies_args() {
     .await
     .unwrap();
 
-    assert_eq!(result["original"], true);
-    assert_eq!(result["injected"], true);
+    assert_eq!(result.result["original"], true);
+    assert_eq!(result.result["injected"], true);
 
     // Cleanup
     deregister_tool_execution_intercept("arg_modifier").unwrap();
@@ -772,7 +1097,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
                 Box::pin(async move {
                     let result = next(args).await?;
                     Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name("tool.mark.outer")
                                 .data(json!({"layer": "outer"}))
@@ -796,9 +1121,9 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
             Arc::new(|_name, args, next| {
                 Box::pin(async move {
                     let mut result = next(args).await?;
-                    result["compressed"] = json!(true);
+                    result.result["compressed"] = json!(true);
                     Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name("tool.mark.inner")
                                 .category(EventCategory::custom())
@@ -821,13 +1146,13 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool-outcome")
             .args(json!({"value": 42}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
             .build(),
     )
     .await
     .unwrap();
-    assert_eq!(result, json!({"value": 42, "compressed": true}));
-    assert!(result.get("pending_marks").is_none());
+    assert_eq!(result.result, json!({"value": 42, "compressed": true}));
+    assert!(result.result.get("pending_marks").is_none());
 
     flush_subscribers().unwrap();
     let captured = events.lock().unwrap();
@@ -865,7 +1190,7 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
     assert_eq!(outer.parent_uuid(), Some(start.uuid()));
     assert!(inner.timestamp() > end.timestamp());
     assert!(outer.timestamp() > inner.timestamp());
-    assert_eq!(end.data().unwrap(), &result);
+    assert_eq!(end.data().unwrap(), &result.result);
     assert_eq!(inner.category().map(EventCategory::as_str), Some("custom"));
     assert_eq!(
         inner
@@ -942,7 +1267,7 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
             Box::pin(async move {
                 let result = next(args).await?;
                 Ok(
-                    ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                    ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                         PendingMarkSpec::builder()
                             .name("plugin.output_compacted")
                             .category(EventCategory::custom())
@@ -965,12 +1290,20 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("managed-tool")
             .args(json!({"value": 42}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(
+                        args,
+                        json!({"opaque": {"rank": 1}}),
+                    ))
+                })
+            }))
             .build(),
     )
     .await
     .unwrap();
-    assert_eq!(result, json!({"value": 42}));
+    assert_eq!(result.result, json!({"value": 42}));
+    assert_eq!(result.annotation, Some(json!({"opaque": {"rank": 1}})));
 
     flush_subscribers().unwrap();
     let captured = events.lock().unwrap();
@@ -987,11 +1320,24 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
     assert!(tool_end_index < mark_index);
     let tool_end = &captured[tool_end_index];
     let mark = &captured[mark_index];
+    assert_eq!(
+        tool_end.tool_result_annotation().unwrap(),
+        json!({"opaque": {"rank": 1}})
+    );
     assert_eq!(mark.parent_uuid(), Some(tool_end.uuid()));
     assert!(mark.timestamp() > tool_end.timestamp());
     drop(captured);
 
     let trajectory = atif.export().unwrap();
+    assert!(trajectory.steps.iter().any(|step| {
+        step.observation.as_ref().is_some_and(|observation| {
+            observation.results.iter().any(|result| {
+                result.extra.as_ref().is_some_and(|extra| {
+                    extra.get("tool_result_annotation") == Some(&json!({"opaque": {"rank": 1}}))
+                })
+            })
+        })
+    }));
     assert!(trajectory.steps.iter().all(|step| {
         !step.tool_calls.as_deref().is_some_and(|calls| {
             calls
@@ -1010,6 +1356,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
         .iter()
         .find(|span| span.name.as_ref() == "mark:plugin.output_compacted")
         .unwrap();
+    assert!(otel_tool.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "nemo_relay.tool.result.annotation"
+            && attribute.value.to_string() == r#"{"opaque":{"rank":1}}"#
+    }));
     assert_eq!(otel_mark.parent_span_id, otel_tool.span_context.span_id());
     assert!(otel_mark.start_time > otel_tool.end_time);
     assert!(otel_mark.attributes.iter().any(|attribute| {
@@ -1039,6 +1389,10 @@ async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() 
         .iter()
         .find(|span| span.name.as_ref() == "mark:plugin.output_compacted")
         .unwrap();
+    assert!(openinference_tool.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "nemo_relay.tool.result.annotation"
+            && attribute.value.to_string() == r#"{"opaque":{"rank":1}}"#
+    }));
     assert_eq!(
         openinference_mark.parent_span_id,
         openinference_tool.span_context.span_id()
@@ -1106,7 +1460,7 @@ async fn test_tool_execution_error_discards_downstream_pending_marks() {
                 Box::pin(async move {
                     let result = next(args).await?;
                     Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name("tool.mark.must_not_emit")
                                 .build(),
@@ -1121,7 +1475,7 @@ async fn test_tool_execution_error_discards_downstream_pending_marks() {
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool-outcome-error")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
             .build(),
     )
     .await
@@ -1135,8 +1489,18 @@ async fn test_tool_execution_error_discards_downstream_pending_marks() {
             .iter()
             .all(|event| event.name() != "tool.mark.must_not_emit")
     );
-    assert!(captured.iter().any(|event| {
-        event.name() == "tool-outcome-error" && event.scope_category() == Some(ScopeCategory::End)
+    let error_end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "tool-outcome-error"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert!(error_end.category_profile().is_none_or(|profile| {
+        profile
+            .tool_result_annotation
+            .as_ref()
+            .is_none_or(|value| value.is_null())
     }));
     drop(captured);
 
@@ -1180,7 +1544,7 @@ async fn test_managed_tool_reuses_start_subscriber_snapshot_for_end_and_marks() 
                     .unwrap();
                     let result = next(args).await?;
                     Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name("tool.snapshot.mark")
                                 .build(),
@@ -1195,7 +1559,7 @@ async fn test_managed_tool_reuses_start_subscriber_snapshot_for_end_and_marks() 
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool-subscriber-snapshot")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
             .build(),
     )
     .await
@@ -1264,7 +1628,7 @@ async fn test_managed_tool_reuses_start_subscriber_snapshot_for_error_end() {
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool-error-subscriber-snapshot")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
             .build(),
     )
     .await
@@ -1310,11 +1674,17 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
                 let first = next(json!({"branch": "first", "delay_ms": 40}));
                 let second = next(json!({"branch": "second", "delay_ms": 1}));
                 let (first, second) = tokio::join!(first, second);
-                Ok(json!({
-                    "first": first?,
-                    "second": second?,
-                })
-                .into())
+                let first = first?;
+                let second = second?;
+                assert_eq!(first.annotation, Some(json!({"branch": "first"})));
+                assert_eq!(second.annotation, Some(json!({"branch": "second"})));
+                Ok(ToolExecutionInterceptOutcome::annotated(
+                    json!({
+                        "first": first.result,
+                        "second": second.result,
+                    }),
+                    json!({"combined": true}),
+                ))
             })
         }),
     )
@@ -1339,7 +1709,7 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
                         .unwrap()
                         .push(branch.clone());
                     Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name(format!("tool.concurrent.{branch}"))
                                 .build(),
@@ -1351,14 +1721,14 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
         .unwrap();
 
     let provider_barrier = Arc::new(tokio::sync::Barrier::new(2));
-    tool_call_execute(
+    let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool-concurrent-next")
             .args(json!({}))
             .func(Arc::new(move |args| {
                 let provider_barrier = Arc::clone(&provider_barrier);
                 Box::pin(async move {
-                    let branch = args["branch"].as_str().unwrap();
+                    let branch = args["branch"].as_str().unwrap().to_string();
                     let scope_name = if branch == "first" {
                         "tool-concurrent-next-first"
                     } else {
@@ -1379,13 +1749,19 @@ async fn test_repeated_next_marks_follow_invocation_order_not_completion_order()
                             .handle_uuid(&scope.uuid)
                             .build(),
                     )?;
-                    Ok(args)
+                    Ok(ToolExecutionResult::annotated(
+                        args,
+                        json!({"branch": branch}),
+                    ))
                 })
             }))
             .build(),
     )
     .await
     .unwrap();
+    assert_eq!(result.result["first"]["branch"], "first");
+    assert_eq!(result.result["second"]["branch"], "second");
+    assert_eq!(result.annotation, Some(json!({"combined": true})));
     flush_subscribers().unwrap();
 
     assert_eq!(
@@ -1439,13 +1815,13 @@ async fn execution_next_is_revoked_after_each_interceptor_settles() {
             .args(json!({}))
             .func(Arc::new(move |args| {
                 captured_tool_provider_calls.fetch_add(1, Ordering::AcqRel);
-                ready_result(Ok(args))
+                ready_result(Ok(args.into()))
             }))
             .build(),
     )
     .await
     .unwrap();
-    assert_eq!(result, json!({"source": "tool-intercept"}));
+    assert_eq!(result.result, json!({"source": "tool-intercept"}));
     let late_tool_next = tool_next.lock().unwrap().take().unwrap();
     let error = late_tool_next(json!({"late": true})).await.unwrap_err();
     assert!(matches!(
@@ -1699,7 +2075,8 @@ async fn spawned_rust_next_preserves_the_full_managed_context() {
                             Ok(json!({
                                 "parent_uuid": capture_propagation_context()?.parent_uuid.to_string(),
                                 "scope_uuid": task_scope_top().uuid.to_string(),
-                            }))
+                            })
+                            .into())
                         })
                     }))
                     .build(),
@@ -1729,7 +2106,7 @@ async fn spawned_rust_next_preserves_the_full_managed_context() {
         .uuid()
         .to_string();
     assert_eq!(
-        provider_parent,
+        provider_parent.result,
         json!({
             "parent_uuid": start_uuid,
             "scope_uuid": owner.uuid.to_string(),
@@ -1968,7 +2345,7 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("cancelled-tool")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
             .build(),
     ));
     tokio::select! {
@@ -1986,6 +2363,20 @@ async fn dropping_pending_tool_execution_closes_the_managed_lifecycle() {
         .filter_map(Event::scope_category)
         .collect::<Vec<_>>();
     assert_eq!(lifecycle, [ScopeCategory::Start, ScopeCategory::End]);
+    let events = events.lock().unwrap();
+    let cancelled_end = events
+        .iter()
+        .find(|event| {
+            event.name() == "cancelled-tool" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert!(cancelled_end.category_profile().is_none_or(|profile| {
+        profile
+            .tool_result_annotation
+            .as_ref()
+            .is_none_or(|value| value.is_null())
+    }));
+    drop(events);
 
     deregister_tool_execution_intercept("pending_tool_execution").unwrap();
     deregister_subscriber("cancelled_tool_lifecycle").unwrap();
@@ -2045,7 +2436,7 @@ async fn cancelled_tool_end_uses_the_originating_scope_sanitizer() {
             .name("cancelled-tool-cross-scope")
             .args(json!({}))
             .data(json!({"secret": "classified"}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
             .build(),
     ));
     tokio::select! {
@@ -2065,6 +2456,12 @@ async fn cancelled_tool_end_uses_the_originating_scope_sanitizer() {
         })
         .expect("cancelled tool should emit an end event");
     assert_eq!(end.data(), Some(&json!({"secret": "[redacted]"})));
+    assert!(end.category_profile().is_none_or(|profile| {
+        profile
+            .tool_result_annotation
+            .as_ref()
+            .is_none_or(|value| value.is_null())
+    }));
 
     set_thread_scope_stack(originating_stack);
     deregister_tool_execution_intercept("pending_tool_cross_scope").unwrap();
@@ -2109,7 +2506,7 @@ async fn dropping_pending_conditional_closes_the_guardrail_scope() {
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("cancelled-conditional-tool")
             .args(json!({}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(args.into()) })))
             .build(),
     ));
     tokio::select! {
@@ -2294,7 +2691,7 @@ async fn test_conditional_guardrail_rejects() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
 
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
@@ -2331,7 +2728,7 @@ async fn test_conditional_guardrail_allows() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
 
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
@@ -2343,7 +2740,7 @@ async fn test_conditional_guardrail_allows() {
     .await;
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap()["input"], "data");
+    assert_eq!(result.unwrap().result["input"], "data");
 
     // Cleanup
     deregister_tool_conditional_execution_guardrail("allower").unwrap();
@@ -2380,7 +2777,7 @@ async fn test_tool_conditional_guardrail_emits_guardrail_scope() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let allowed = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("safe_tool")
@@ -2470,7 +2867,7 @@ async fn test_conditional_guardrail_first_rejection_wins() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
 
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
@@ -2515,7 +2912,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     .unwrap();
 
     // Dangerous tool is rejected
-    let func1: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func1: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let err = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("dangerous_tool")
@@ -2527,7 +2924,7 @@ async fn test_conditional_guardrail_tool_name_filtering() {
     assert!(err.is_err());
 
     // Safe tool is allowed
-    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let ok = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("safe_tool")
@@ -2630,7 +3027,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
     .unwrap();
 
     // Execute -- intercept should fire
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let _ = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -2651,7 +3048,7 @@ async fn test_scope_local_execution_intercept_cleanup() {
     .unwrap();
 
     // Execute again -- intercept should NOT fire
-    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func2: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let _ = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -2810,7 +3207,7 @@ async fn test_scope_local_and_global_execution_intercept_merge() {
     let oo = order.clone();
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         oo.lock().unwrap().push("original".into());
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { Ok(args.into()) })
     });
 
     let _ = tool_call_execute(
@@ -2880,7 +3277,7 @@ async fn test_conditional_rejection_prevents_intercepts() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -2933,7 +3330,7 @@ async fn test_conditional_rejection_prevents_execution() {
     let oc = original_called.clone();
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         oc.store(true, Ordering::SeqCst);
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { Ok(args.into()) })
     });
 
     let result = tool_call_execute(
@@ -3078,7 +3475,7 @@ async fn test_response_sanitize_guardrails_pipe() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"raw": true}))
+            .execution_result(json!({"raw": true}).into())
             .build(),
     )
     .unwrap();
@@ -3512,7 +3909,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         record_middleware_callback(&tracked, "tool_func");
         assert_middleware_callback_locks_are_free();
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { Ok(args.into()) })
     });
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
@@ -3523,7 +3920,7 @@ async fn test_tool_middleware_callbacks_run_without_registry_or_scope_locks() {
     )
     .await
     .unwrap();
-    assert_eq!(result["ok"], true);
+    assert_eq!(result.result["ok"], true);
     flush_subscribers().unwrap();
     assert_middleware_callback_labels(
         &callbacks,
@@ -3935,7 +4332,7 @@ async fn test_full_pipeline_integration() {
     let o_orig = order.clone();
     let func: ToolExecutionNextFn = Arc::new(move |args| {
         o_orig.lock().unwrap().push("original_execution".into());
-        Box::pin(async move { Ok(args) })
+        Box::pin(async move { Ok(args.into()) })
     });
 
     let result = tool_call_execute(
@@ -3963,8 +4360,8 @@ async fn test_full_pipeline_integration() {
     assert!(index("original_execution") < index("sanitize_response"));
 
     // Verify the request intercept's modification persists through the pipeline
-    assert_eq!(result["intercepted"], true);
-    assert_eq!(result["data"], "test");
+    assert_eq!(result.result["intercepted"], true);
+    assert_eq!(result.result["data"], "test");
 
     // Cleanup
     deregister_tool_request_intercept("req_intercept").unwrap();
@@ -4547,41 +4944,77 @@ async fn test_managed_tool_payload_sanitizers_are_queued_off_execution_path() {
     reset_global();
     setup_isolated_thread();
 
-    let sanitizer_started = Arc::new(tokio::sync::Notify::new());
-    let sanitizer_release = Arc::new(tokio::sync::Notify::new());
+    let request_started = Arc::new(tokio::sync::Notify::new());
+    let request_release = Arc::new(tokio::sync::Notify::new());
     register_tool_sanitize_request_guardrail(
         "managed_queued_tool_request",
         1,
         Arc::new({
-            let sanitizer_started = Arc::clone(&sanitizer_started);
-            let sanitizer_release = Arc::clone(&sanitizer_release);
+            let request_started = Arc::clone(&request_started);
+            let request_release = Arc::clone(&request_release);
             move |_name, args| {
-                let sanitizer_started = Arc::clone(&sanitizer_started);
-                let sanitizer_release = Arc::clone(&sanitizer_release);
+                let request_started = Arc::clone(&request_started);
+                let request_release = Arc::clone(&request_release);
                 Box::pin(async move {
-                    sanitizer_started.notify_one();
-                    sanitizer_release.notified().await;
+                    request_started.notify_one();
+                    request_release.notified().await;
                     Ok(args)
                 })
             }
         }),
     )
     .unwrap();
-    register_subscriber("managed_queued_tool_observer", Arc::new(|_| {})).unwrap();
+    let response_started = Arc::new(tokio::sync::Notify::new());
+    let response_release = Arc::new(tokio::sync::Notify::new());
+    register_tool_sanitize_response_guardrail(
+        "managed_queued_tool_response",
+        1,
+        Arc::new({
+            let response_started = Arc::clone(&response_started);
+            let response_release = Arc::clone(&response_release);
+            move |_name, mut result| {
+                let response_started = Arc::clone(&response_started);
+                let response_release = Arc::clone(&response_release);
+                Box::pin(async move {
+                    response_started.notify_one();
+                    response_release.notified().await;
+                    result["sanitized"] = json!(true);
+                    Ok(result)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    register_subscriber(
+        "managed_queued_tool_observer",
+        Arc::new({
+            let events = Arc::clone(&events);
+            move |event| events.lock().unwrap().push(event.clone())
+        }),
+    )
+    .unwrap();
 
     let call = tokio::spawn(async {
         tool_call_execute(
             nemo_relay::api::tool::ToolCallExecuteParams::builder()
                 .name("managed-queued-tool")
                 .args(json!({"input": true}))
-                .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+                .func(Arc::new(|args| {
+                    Box::pin(async move {
+                        Ok(ToolExecutionResult::annotated(
+                            args,
+                            json!({"opaque": "caller-visible"}),
+                        ))
+                    })
+                }))
                 .build(),
         )
         .await
     });
     tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        sanitizer_started.notified(),
+        request_started.notified(),
     )
     .await
     .expect("managed tool request sanitizer did not start");
@@ -4590,11 +5023,33 @@ async fn test_managed_tool_payload_sanitizers_are_queued_off_execution_path() {
         .expect("request sanitizer blocked managed tool execution")
         .expect("managed tool task should join")
         .expect("managed tool call should succeed");
-    assert_eq!(result, json!({"input": true}));
+    assert_eq!(result.result, json!({"input": true}));
+    assert_eq!(result.annotation, Some(json!({"opaque": "caller-visible"})));
 
-    sanitizer_release.notify_one();
-    flush_subscribers().unwrap();
+    request_release.notify_one();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        response_started.notified(),
+    )
+    .await
+    .expect("managed tool response sanitizer did not start");
+    assert_flush_waits_for_pending_completion(|| response_release.notify_one());
+    let events = events.lock().unwrap();
+    let end = events
+        .iter()
+        .find(|event| {
+            event.name() == "managed-queued-tool"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .expect("managed tool END event should be published after flush");
+    assert_eq!(end.data().unwrap()["sanitized"], true);
+    assert_eq!(
+        end.tool_result_annotation().unwrap(),
+        json!({"opaque": "caller-visible"})
+    );
+    drop(events);
     deregister_tool_sanitize_request_guardrail("managed_queued_tool_request").unwrap();
+    deregister_tool_sanitize_response_guardrail("managed_queued_tool_response").unwrap();
     deregister_subscriber("managed_queued_tool_observer").unwrap();
 }
 
@@ -5715,7 +6170,7 @@ async fn test_empty_chain_passthrough() {
     reset_global();
     setup_isolated_thread();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
 
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
@@ -5728,7 +6183,7 @@ async fn test_empty_chain_passthrough() {
     .unwrap();
 
     assert_eq!(
-        result["value"], "unchanged",
+        result.result["value"], "unchanged",
         "Data should pass through unmodified"
     );
 }

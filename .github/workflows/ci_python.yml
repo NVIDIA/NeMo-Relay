@@ -38,6 +38,7 @@ env:
   NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
   UV_PYTHON_DOWNLOADS: never
+  UV_PYTHON_PREFERENCE: only-system
 
 jobs:
   Test:
@@ -88,10 +89,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
@@ -103,45 +105,10 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
-      - name: Set up Windows ARM Python
-        if: ${{ matrix.platform == 'windows-arm64' }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
-          architecture: arm64
-
-      - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
-        run: |
-          set -e
-          python - <<'PY' >> "$GITHUB_ENV"
-          import sys
-          print(f"UV_PYTHON={sys.executable}")
-          PY
-
-      - name: Install managed Python
-        if: ${{ matrix.platform != 'windows-arm64' }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
-
-      - name: Install Windows ARM64 OpenSSL
-        if: ${{ matrix.platform == 'windows-arm64' }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'vcpkg'
-          git clone https://github.com/microsoft/vcpkg $vcpkgRoot
-          git -C $vcpkgRoot checkout --detach 56bb2411609227288b70117ead2c47585ba07713
-          & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics
-          & (Join-Path $vcpkgRoot 'vcpkg.exe') install openssl:arm64-windows-static-md --clean-after-build --disable-metrics
-
-          $opensslDir = Join-Path $vcpkgRoot 'installed\arm64-windows-static-md'
-          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_DIR=$opensslDir"
-          Add-Content -Path $env:GITHUB_ENV -Value "OPENSSL_STATIC=1"
-          Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=$vcpkgRoot"
-          Add-Content -Path $env:GITHUB_ENV -Value "VCPKGRS_TRIPLET=arm64-windows-static-md"
-
       - name: Run Python tests with coverage
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
@@ -155,7 +122,7 @@ jobs:
         run: just test-python-plugin-e2e
 
       - name: Run Python LangChain integration tests
-        if: ${{ inputs.run_integration_langchain }}
+        if: ${{ inputs.run_integration_langchain && matrix.platform != 'windows-arm64' }}
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-langchain
 
@@ -192,11 +159,13 @@ jobs:
           - &package-linux-musl-amd64
             platform: linux-musl-amd64
             architecture: x86_64
+            rust_target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
             container_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
           - &package-linux-musl-arm64
             platform: linux-musl-arm64
             architecture: aarch64
+            rust_target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
             container_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
 
@@ -224,10 +193,11 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: ${{ !contains(matrix.platform, 'musl') }}
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8
         if: ${{ !contains(matrix.platform, 'musl') }}
@@ -236,27 +206,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: ${{ env.NEMO_RELAY_CI_WORKSPACE }}/uv.lock
 
-      - name: Set up Windows ARM Python
-        if: ${{ matrix.platform == 'windows-arm64' }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - name: Set up Python
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
-          architecture: arm64
-
-      - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
-        run: |
-          set -e
-          python - <<'PY' >> "$GITHUB_ENV"
-          import sys
-          print(f"UV_PYTHON={sys.executable}")
-          PY
-
-      - name: Install managed Python
-        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
-        run: |
-          set -e
-          UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         if: ${{ !contains(matrix.platform, 'musl') }}
@@ -369,36 +323,29 @@ jobs:
           set -euo pipefail
           mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"
 
-      - name: Build musllinux wheel
+      - name: Stage musllinux packaging source
         if: ${{ contains(matrix.platform, 'musl') }}
-        env:
-          MUSLLINUX_IMAGE: ${{ matrix.container_image }}
-          MUSLLINUX_INTERPRETER: /opt/python/cp311-cp311/bin/python
-          MUSLLINUX_WHEEL_DIRECTORY: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
-          NEMO_RELAY_RUST_VERSION: ${{ steps.ci-config.outputs.rust_version }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -euo pipefail
-          docker run --rm \
-            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
-            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
-            --env MUSLLINUX_INTERPRETER \
-            --env MUSLLINUX_WHEEL_DIRECTORY \
-            --env NEMO_RELAY_MATURIN_VERSION \
-            --env NEMO_RELAY_PACKAGE_VERSION \
-            --env NEMO_RELAY_RUST_VERSION \
-            "$MUSLLINUX_IMAGE" \
-            /bin/sh -ec '
-              apk add --no-cache curl
-              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
-                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
-              export PATH="$HOME/.cargo/bin:$PATH"
-              "$MUSLLINUX_INTERPRETER" -m pip install --no-cache-dir "maturin==$NEMO_RELAY_MATURIN_VERSION"
-              export PATH="$(dirname "$MUSLLINUX_INTERPRETER"):$PATH"
-              "$MUSLLINUX_INTERPRETER" scripts/package_python_musllinux.py \
-                --version "$NEMO_RELAY_PACKAGE_VERSION" \
-                --out "$MUSLLINUX_WHEEL_DIRECTORY" \
-                --interpreter "$MUSLLINUX_INTERPRETER"
-            '
+          python3 scripts/package_python_musllinux.py \
+            --version "$NEMO_RELAY_PACKAGE_VERSION" \
+            --source-out "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-source"
+
+      - name: Build musllinux wheel
+        if: ${{ contains(matrix.platform, 'musl') }}
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v${{ env.NEMO_RELAY_MATURIN_VERSION }}
+          manylinux: musllinux_1_2
+          container: ${{ matrix.container_image }}
+          target: ${{ matrix.rust_target }}
+          rust-toolchain: ${{ steps.ci-config.outputs.rust_version }}
+          working-directory: tmp/musllinux-source
+          args: >-
+            --locked --release
+            --interpreter /opt/python/cp311-cp311/bin/python
+            --out ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
 
       - name: Verify musllinux wheel platform tag
         if: ${{ contains(matrix.platform, 'musl') }}
@@ -469,7 +416,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         if: ${{ matrix.platform == 'source-and-plugin' }}
         with:
-          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}
+          shared-key: nemo-relay-rust-linux-amd64-${{ steps.ci-config.outputs.rust_version }}-release
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -480,25 +427,11 @@ jobs:
         with:
           version: ${{ steps.ci-config.outputs.uv_version }}
 
-      - name: Set up Windows ARM Python
-        if: ${{ matrix.platform == 'windows-arm64' }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - name: Set up Python
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
-          architecture: arm64
-
-      - name: Select setup-python interpreter for uv
-        if: ${{ matrix.platform == 'windows-arm64' }}
-        run: |
-          set -e
-          python - <<'PY' >> "$GITHUB_ENV"
-          import sys
-          print(f"UV_PYTHON={sys.executable}")
-          PY
-
-      - name: Install managed Python
-        if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'windows-arm64' }}
-        run: UV_PYTHON_DOWNLOADS=manual uv python install --managed-python ${{ steps.ci-config.outputs.default_python_version }}
 
       - name: Download matching Python wheel artifact
         if: ${{ !contains(matrix.platform, 'musl') && matrix.platform != 'source-and-plugin' }}

@@ -283,7 +283,7 @@ Emitted as a point-in-time checkpoint. Unpaired (no start and end semantics). A 
 | `"agent"`        | Top-level agent or workflow scope.                                                               |
 | `"function"`     | Generic function or application step.                                                            |
 | `"llm"`          | LLM call. Populates `category_profile.model_name`.                                               |
-| `"tool"`         | Tool invocation. Populates `category_profile.tool_call_id`.                                      |
+| `"tool"`         | Tool invocation. Populates `category_profile.tool_call_id` and can carry `category_profile.tool_result_annotation` on a successful end event. |
 | `"retriever"`    | Retrieval step (document search, index lookup).                                                  |
 | `"embedder"`     | Embedding-generation step.                                                                       |
 | `"reranker"`     | Result reranking step.                                                                           |
@@ -329,6 +329,10 @@ The `category` `enum` is closed but `"custom"` + `category_profile.subtype` prov
 
   <ParamField path="category_profile.tool_call_id" type="string | null">
     LLM-provider correlation ID when `category == "tool"`. It can be `null` when the tool was not invoked through an LLM tool-use flow.
+  </ParamField>
+
+  <ParamField path="category_profile.tool_result_annotation" type="JSON value | null">
+    Optional opaque metadata from `ToolExecutionResult` when `category == "tool"` and `scope_category == "end"`. Relay does not interpret or flatten this value. It is absent on tool start events, error end events, and successful results without an annotation.
   </ParamField>
 
   <ParamField path="category_profile.subtype" type="string">

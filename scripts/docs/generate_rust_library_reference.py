@@ -377,105 +377,124 @@ def _block_markdown(node: PageElement, page: Page, pages_by_html: dict[Path, Pag
         return ""
     if not isinstance(node, Tag):
         return ""
-
-    classes = _tag_classes(node)
-    if node.name in {"script", "style", "rustdoc-toolbar"} or classes & {"anchor", "doc-anchor", "src"}:
+    if _ignore_block(node):
         return ""
-    if node.name == "div" and "main-heading" in classes:
-        return ""
-    if node.name == "span" and "item-info" in classes:
-        return ""
-    if node.get("id") in {"synthetic-implementations-list", "blanket-implementations-list"}:
-        return ""
-
-    if node.name in {"h2", "h3", "h4", "h5"} and "code-header" in classes:
-        return _code_header_markdown(node, page, pages_by_html)
-
     if node.name in {"h2", "h3", "h4", "h5"}:
-        level = {"h2": "##", "h3": "###", "h4": "####", "h5": "#####"}[node.name]
-        text = _heading_text(node)
-        if text in {"Auto Trait Implementations", "Blanket Implementations"}:
-            return ""
-        return f"{level} {text}\n\n" if text else ""
+        return _render_heading(node, page, pages_by_html)
+    renderer = _BLOCK_RENDERERS.get(node.name)
+    if renderer is not None:
+        return renderer(node, page, pages_by_html, depth)
+    return "".join(_block_markdown(child, page, pages_by_html, depth) for child in node.children)
 
-    if node.name == "span" and "section-header" in classes:
-        text = _plain_code(node)
-        return f"### {_inline_code(text)}\n\n" if text else ""
 
-    if node.name == "p":
-        text = re.sub(r"\s+", " ", _inline_markdown(node, page, pages_by_html)).strip()
-        return f"{text}\n\n" if text else ""
+def _ignore_block(node: Tag) -> bool:
+    classes = _tag_classes(node)
+    return (
+        node.name in {"script", "style", "rustdoc-toolbar"}
+        or bool(classes & {"anchor", "doc-anchor", "src"})
+        or (node.name == "div" and "main-heading" in classes)
+        or (node.name == "span" and "item-info" in classes)
+        or node.get("id") in {"synthetic-implementations-list", "blanket-implementations-list"}
+    )
 
-    if node.name == "pre":
-        if node.find("a", href=True) is not None:
-            return _linked_signature_block(node, page, pages_by_html)
-        return _rust_fence(_plain_code(node))
 
-    if node.name == "ul":
-        lines: list[str] = []
-        for li in node.find_all("li", recursive=False):
-            text = re.sub(r"\s+", " ", _inline_markdown(li, page, pages_by_html)).strip()
-            if text:
-                lines.append(f"{'  ' * depth}- {text}")
-        return "\n".join(lines) + ("\n\n" if lines else "")
+def _render_heading(node: Tag, page: Page, pages_by_html: dict[Path, Page]) -> str:
+    if "code-header" in _tag_classes(node):
+        return _code_header_markdown(node, page, pages_by_html)
+    text = _heading_text(node)
+    if not text or text in {"Auto Trait Implementations", "Blanket Implementations"}:
+        return ""
+    levels = {"h2": "##", "h3": "###", "h4": "####", "h5": "#####"}
+    return f"{levels[node.name]} {text}\n\n"
 
-    if node.name == "ol":
-        lines = []
-        for index, li in enumerate(node.find_all("li", recursive=False), start=1):
-            text = re.sub(r"\s+", " ", _inline_markdown(li, page, pages_by_html)).strip()
-            if text:
-                lines.append(f"{'  ' * depth}{index}. {text}")
-        return "\n".join(lines) + ("\n\n" if lines else "")
 
-    if node.name == "dl":
-        parts: list[str] = []
-        children = [child for child in node.children if isinstance(child, Tag)]
-        index = 0
-        while index < len(children):
-            if children[index].name != "dt":
-                index += 1
-                continue
-            term = re.sub(r"\s+", " ", _inline_markdown(children[index], page, pages_by_html)).strip()
-            description = ""
-            if index + 1 < len(children) and children[index + 1].name == "dd":
-                description = re.sub(
-                    r"\s+",
-                    " ",
-                    _inline_markdown(children[index + 1], page, pages_by_html),
-                ).strip()
-                index += 1
-            if term:
-                line = f"- {term}"
-                if description:
-                    line += f": {description}"
-                parts.append(line)
+def _render_section_header(node: Tag, _page: Page, _pages_by_html: dict[Path, Page], _depth: int) -> str:
+    text = _plain_code(node) if "section-header" in _tag_classes(node) else ""
+    return f"### {_inline_code(text)}\n\n" if text else ""
+
+
+def _render_paragraph(node: Tag, page: Page, pages_by_html: dict[Path, Page], _depth: int) -> str:
+    text = re.sub(r"\s+", " ", _inline_markdown(node, page, pages_by_html)).strip()
+    return f"{text}\n\n" if text else ""
+
+
+def _render_pre(node: Tag, page: Page, pages_by_html: dict[Path, Page], _depth: int) -> str:
+    return (
+        _linked_signature_block(node, page, pages_by_html)
+        if node.find("a", href=True)
+        else _rust_fence(_plain_code(node))
+    )
+
+
+def _render_list(node: Tag, page: Page, pages_by_html: dict[Path, Page], depth: int) -> str:
+    ordered = node.name == "ol"
+    lines = []
+    for index, li in enumerate(node.find_all("li", recursive=False), start=1):
+        text = re.sub(r"\s+", " ", _inline_markdown(li, page, pages_by_html)).strip()
+        if text:
+            marker = f"{index}." if ordered else "-"
+            lines.append(f"{'  ' * depth}{marker} {text}")
+    return "\n".join(lines) + ("\n\n" if lines else "")
+
+
+def _render_definition_list(node: Tag, page: Page, pages_by_html: dict[Path, Page], _depth: int) -> str:
+    children = [child for child in node.children if isinstance(child, Tag)]
+    parts: list[str] = []
+    index = 0
+    while index < len(children):
+        term_node = children[index]
+        if term_node.name != "dt":
             index += 1
-        return "\n".join(parts) + ("\n\n" if parts else "")
+            continue
+        term = re.sub(r"\s+", " ", _inline_markdown(term_node, page, pages_by_html)).strip()
+        description, index = _definition_description(children, index, page, pages_by_html)
+        if term:
+            parts.append(f"- {term}{f': {description}' if description else ''}")
+        index += 1
+    return "\n".join(parts) + ("\n\n" if parts else "")
 
-    if node.name == "table":
-        rows: list[str] = []
-        for row in node.find_all("tr"):
-            cells = [
-                re.sub(r"\s+", " ", _inline_markdown(cell, page, pages_by_html)).strip()
-                for cell in row.find_all(["th", "td"], recursive=False)
-            ]
-            if cells:
-                rows.append("- " + " | ".join(cell for cell in cells if cell))
-        return "\n".join(rows) + ("\n\n" if rows else "")
 
-    if node.name == "details":
-        pieces: list[str] = []
-        summary = node.find("summary", recursive=False)
-        if isinstance(summary, Tag) and "hideme" not in _tag_classes(summary):
-            pieces.append(_block_markdown(summary, page, pages_by_html, depth))
-        for child in node.children:
-            if child is summary:
-                continue
-            pieces.append(_block_markdown(child, page, pages_by_html, depth))
-        return "".join(pieces)
+def _definition_description(
+    children: list[Tag], index: int, page: Page, pages_by_html: dict[Path, Page]
+) -> tuple[str, int]:
+    if index + 1 >= len(children) or children[index + 1].name != "dd":
+        return "", index
+    description = re.sub(r"\s+", " ", _inline_markdown(children[index + 1], page, pages_by_html)).strip()
+    return description, index + 1
 
-    pieces = [_block_markdown(child, page, pages_by_html, depth) for child in node.children]
+
+def _render_table(node: Tag, page: Page, pages_by_html: dict[Path, Page], _depth: int) -> str:
+    rows = []
+    for row in node.find_all("tr"):
+        cells = [
+            re.sub(r"\s+", " ", _inline_markdown(cell, page, pages_by_html)).strip()
+            for cell in row.find_all(["th", "td"], recursive=False)
+        ]
+        if cells:
+            rows.append("- " + " | ".join(cell for cell in cells if cell))
+    return "\n".join(rows) + ("\n\n" if rows else "")
+
+
+def _render_details(node: Tag, page: Page, pages_by_html: dict[Path, Page], depth: int) -> str:
+    summary = node.find("summary", recursive=False)
+    pieces = [
+        _block_markdown(child, page, pages_by_html, depth)
+        for child in node.children
+        if child is not summary or (isinstance(summary, Tag) and "hideme" not in _tag_classes(summary))
+    ]
     return "".join(pieces)
+
+
+_BLOCK_RENDERERS = {
+    "span": _render_section_header,
+    "p": _render_paragraph,
+    "pre": _render_pre,
+    "ul": _render_list,
+    "ol": _render_list,
+    "dl": _render_definition_list,
+    "table": _render_table,
+    "details": _render_details,
+}
 
 
 def _remove_noisy_sections(content: Tag) -> None:

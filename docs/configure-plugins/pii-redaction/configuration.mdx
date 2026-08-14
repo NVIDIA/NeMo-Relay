@@ -70,7 +70,7 @@ The top-level PII redaction object contains:
 | `output` | Enables managed LLM response sanitization and non-tool, non-LLM scope-end field sanitization. Defaults to `true`. |
 | `mark` | Enables mark `data`, `category_profile`, and `metadata` sanitization. Defaults to `true`. |
 | `tool_input` | Enables sanitization of emitted tool-request observability payloads. Defaults to `true`. |
-| `tool_output` | Enables sanitization of emitted tool-response observability payloads. Defaults to `true`. |
+| `tool_output` | Enables sanitization of emitted `ToolExecutionResult.result` and `ToolExecutionResult.annotation` observability values. Defaults to `true`. |
 | `priority` | Guardrail priority. Lower values run earlier. Defaults to `100`. |
 | `codec` | Optional compatibility fallback for legacy/manual managed LLM calls that do not expose an active codec. |
 | `profiles` | Ordered redaction profiles. Each profile selects `builtin` or `local_model`; enabled profiles cover every supported sanitization surface. |
@@ -326,8 +326,12 @@ unsanitized.
 
 The plugin uses different payload boundaries for tools and LLMs:
 
-- Tools use JSON-native payloads. Paths point into the emitted tool args or
-  tool result shape directly.
+- Tools use JSON-native payloads. Paths point into the emitted tool args
+  directly. For built-in action policies, including detector-backed policies,
+  tool response paths apply independently to the emitted
+  `ToolExecutionResult.result` and `ToolExecutionResult.annotation` JSON
+  documents. A path is relative to each document; it does not start with
+  `/result` or `/annotation`.
 - LLM requests use the active resolved codec for that managed call. LLM
   responses use the active built-in codec for normalized projection. Prefer
   normalized Relay paths such as:
@@ -407,11 +411,14 @@ That means:
   Each exporter can omit or transform fields as part of its normal projection,
   but raw values removed by the plugin do not bypass the sanitizer.
 
-For tool and LLM scope events, the PII redaction scope sanitizer leaves `data`,
-`category_profile`, and `metadata` unchanged because the specialized tool or
-LLM sanitizer already owns that lifecycle boundary. This prevents repeated
-hashing or masking. Other scope categories use `input` for starts and `output`
-for ends.
+For built-in action policies, including detector-backed policies, the PII
+redaction scope sanitizer leaves `data` and typed `category_profile` fields
+unchanged on tool and LLM scope events because the specialized sanitizer already
+owns that lifecycle boundary. It sanitizes `metadata` independently. When
+`tool_output` is enabled, the tool scope-end sanitizer also sanitizes only
+`category_profile.tool_result_annotation`; the other typed tool profile
+fields remain unchanged. This prevents repeated hashing or masking. Other scope
+categories use `input` for starts and `output` for ends.
 
 ## Local Model Mode
 

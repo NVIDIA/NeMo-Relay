@@ -623,7 +623,7 @@ async fn tool_parallelism_feature_registers_execution_intercept() {
     feature.register(&mut ctx).await.unwrap();
     assert_tool_execution_intercept_registered(&name);
 
-    let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("search")
@@ -633,7 +633,7 @@ async fn tool_parallelism_feature_registers_execution_intercept() {
     )
     .await
     .unwrap();
-    assert_eq!(result["query"], json!("coverage"));
+    assert_eq!(result.result["query"], json!("coverage"));
 
     let mut registrations = ctx.finish();
     rollback_registrations(&mut registrations);

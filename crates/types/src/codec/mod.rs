@@ -3,6 +3,8 @@
 
 //! Shared normalized LLM request and response data types.
 
+/// Stable LLM codec identities shared across SDK boundaries.
+pub mod identity;
 /// Plugin-neutral LLM optimization evidence and summaries.
 pub mod optimization;
 /// Normalized LLM request data types.

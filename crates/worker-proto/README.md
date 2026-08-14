@@ -25,14 +25,26 @@ Use `nemo-relay-worker` to author Rust workers. Depend on this crate directly
 only when implementing another worker SDK, a custom host, or protocol-level
 tooling.
 
+Relay 0.8 establishes the canonical tool-result contract as the `grpc-v1`
+baseline. Workers built for an earlier Relay release must be rebuilt, and their
+manifests must declare a `compat.relay` range beginning at `0.8.0` or later.
+The protocol identifier and protobuf package remain `grpc-v1` and
+`nemo.relay.worker.v1`, respectively. However, the generated protobuf API
+changes at the tool-result boundary: `ToolNext` returns
+`ToolExecutionResultResponse`, and `ToolExecutionInterceptResult.outcome` is a
+typed `ToolExecutionInterceptOutcome`. Rebuild every worker against the Relay
+0.8 protocol definitions.
+
 ## Why Use It?
 
 - **Share the stable transport contract**: Use the `grpc-v1` service and
   message definitions accepted by Relay worker manifests.
 - **Use generated Tonic bindings**: Access versioned client and server types
   from `v1` without generating protobuf code in a consumer project.
-- **Keep data ownership clear**: Carry Relay DTOs in JSON envelopes backed by
-  `nemo-relay-types`; protobuf owns transport control flow.
+- **Keep data ownership clear**: Use structural protobuf wrappers for tool
+  results while preserving open application payloads as lossless JSON bytes.
+  Other Relay DTOs continue to use JSON envelopes backed by
+  `nemo-relay-types`.
 
 ## What You Get
 
@@ -41,6 +53,24 @@ tooling.
   clients, servers, services, and messages.
 - **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
   serializing Relay DTOs into protocol payloads.
+- **JSON value helpers**: `json_value` and `decode_json_value` for the opaque
+  application values inside structural tool-result messages.
+
+## Structural Tool Result Contract
+
+The `grpc-v1` tool-result boundary uses these generated message types:
+
+| Protocol Location | Protobuf Type |
+| --- | --- |
+| Successful `RelayHostRuntime.ToolNext` response | `ToolExecutionResultResponse.value` containing `ToolExecutionResult` |
+| `ToolExecutionInterceptResult.outcome` | `ToolExecutionInterceptOutcome` |
+
+Both messages define `result` and optional `annotation` fields. Intercept
+outcomes also carry their ordered `pending_marks` as one JSON array. Arbitrary
+JSON values use `JsonValue`, whose bytes contain exactly one JSON value; this
+preserves JSON integers and other application data without the numeric coercion
+of `google.protobuf.Value`. Hosts and SDKs reject a missing required `result`
+or invalid JSON bytes. JSON null annotations normalize to absence.
 
 ## Installation
 

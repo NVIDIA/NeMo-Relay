@@ -3858,3 +3858,131 @@ fn event_contains_command(config: &Value, event: &str, command: &str) -> bool {
             })
         })
 }
+
+#[test]
+fn codex_host_helpers_honor_home_and_quote_gateway_commands() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    assert_eq!(codex_home_dir().unwrap(), dir.path().join(".codex"));
+    let command = codex_hook_command("http://127.0.0.1:47632/path with space");
+    assert!(command.contains("hook-forward codex --gateway-url"));
+    let quoted_gateway_url = if cfg!(windows) {
+        "\"http://127.0.0.1:47632/path with space\""
+    } else {
+        "'http://127.0.0.1:47632/path with space'"
+    };
+    assert!(command.contains(quoted_gateway_url));
+    assert_eq!(
+        legacy_named_codex_hook_command(),
+        "nemo-relay plugin-shim hook codex"
+    );
+}
+
+#[test]
+fn codex_hook_and_provider_helpers_distinguish_empty_and_managed_configuration() {
+    assert!(!hook_config_has_hook_groups(&json!({})));
+    assert!(!hook_config_has_hook_groups(
+        &json!({"hooks": {"SessionStart": []}})
+    ));
+    assert!(hook_config_has_hook_groups(
+        &json!({"hooks": {"SessionStart": [{}]}})
+    ));
+
+    let managed = r#"
+model_provider = "nemo-relay-openai"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay"
+base_url = "http://127.0.0.1:47632/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+[features]
+hooks = true
+[features.multi_agent_v2]
+enabled = false
+"#
+    .parse::<DocumentMut>()
+    .unwrap();
+    assert!(codex_config_doc_has_managed_install(
+        &managed,
+        "http://127.0.0.1:47632/v1"
+    ));
+    assert_eq!(feature_hooks_enabled(&managed), Some(true));
+    assert!(!codex_config_doc_has_managed_install(
+        &managed,
+        "http://other"
+    ));
+}
+
+#[test]
+fn codex_provider_helpers_restore_managed_items() {
+    let mut doc = r#"
+model_provider = "nemo-relay-openai"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay"
+base_url = "http://127.0.0.1:47632/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+http_headers = { Existing = "old", X_NEMO_RELAY_CLIENT_TOKEN = "token" }
+[features]
+hooks = true
+[features.multi_agent_v2]
+enabled = false
+"#
+    .parse::<DocumentMut>()
+    .unwrap();
+    assert_eq!(
+        codex_provider_header(&doc, "existing").and_then(TomlValue::as_str),
+        Some("old")
+    );
+    assert_eq!(
+        codex_provider_header(&doc, "x_nemo_relay_client_token").and_then(TomlValue::as_str),
+        Some("token")
+    );
+
+    let backup = "model_provider = \"original\"\n[features]\nhooks = false\n"
+        .parse::<DocumentMut>()
+        .unwrap();
+    restore_top_level_item_if_str(&mut doc, &backup, "model_provider", "nemo-relay-openai");
+    restore_table_item_if_bool(&mut doc, &backup, "features", "hooks", true);
+    assert_eq!(doc["model_provider"].as_str(), Some("original"));
+    assert_eq!(feature_hooks_enabled(&doc), Some(false));
+}
+
+#[test]
+fn codex_install_preserves_user_provider_headers_when_rebuilding_configuration() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"
+model_provider = "nemo-relay-openai"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay"
+base_url = "http://127.0.0.1:47632"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+http_headers = { User_Header = "preserve-me" }
+[features]
+hooks = true
+[features.multi_agent_v2]
+enabled = false
+"#,
+    )
+    .unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        codex_provider_header(&doc, "user_header").and_then(TomlValue::as_str),
+        Some("preserve-me")
+    );
+    assert!(codex_provider_header(&doc, BOOTSTRAP_CLIENT_TOKEN_HEADER).is_some());
+}

@@ -259,9 +259,12 @@ Repository-local `.nemo-relay/plugins.toml` files are not discovered.
 
 ## Gateway Editing Files
 
-Use the interactive editor for Observability, Adaptive, NeMo Guardrails, and
-PII Redaction configuration. The editor also updates the configuration of
-manifest-backed dynamic plugins that `plugins add` has registered:
+Use the interactive editor for Observability, Adaptive, PII Redaction, and
+existing NeMo Guardrails configuration. The built-in `nemo_guardrails`
+component is deprecated and scheduled for removal in NeMo Relay 0.9; do not
+use the editor to start a new Guardrails deployment. The editor also updates
+the configuration of manifest-backed dynamic plugins that `plugins add` has
+registered:
 
 ```bash
 nemo-relay plugins edit
@@ -440,10 +443,11 @@ your `initialize` config applies.
 
 The editor writes explicit defaults for edited Observability and Adaptive
 sections. It writes NeMo Guardrails, PII Redaction, and dynamic-plugin fields
-only when readers configure them. In a layered config model, omitting a field
-means "inherit a lower precedence value"; it does not mean "delete that value."
-Use the dedicated `nemo-relay model-pricing` commands to manage model-pricing
-catalog sources.
+only when readers configure them. Use the NeMo Guardrails editor only to
+maintain or remove an existing configuration. In a layered config model,
+omitting a field means "inherit a lower precedence value"; it does not mean
+"delete that value." Use the dedicated `nemo-relay model-pricing` commands to
+manage model-pricing catalog sources.
 
 For example, this system file disables ATOF even if an explicit or user file
 enables it:

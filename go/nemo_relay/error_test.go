@@ -89,7 +89,7 @@ func TestAlreadyExistsErrorOnDuplicateToolRequestIntercept(t *testing.T) {
 
 func TestAlreadyExistsErrorOnDuplicateToolExecutionIntercept(t *testing.T) {
 	name := "go_err_dup_exec_int"
-	fn := func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+	fn := func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 		return toolExecutionOutcome(next(args))
 	}
 
@@ -187,8 +187,8 @@ func TestGuardrailRejectedErrorMessage(t *testing.T) {
 	defer DeregisterToolConditionalExecutionGuardrail("go_err_reject_msg")
 
 	_, err := ToolCallExecute("rejected_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{}`)), nil
 		},
 	)
 	if err == nil {
@@ -297,8 +297,8 @@ func TestSanitizeGuardrailAffectsEventInput(t *testing.T) {
 	defer DeregisterToolSanitizeRequestGuardrail("go_err_san_guard")
 
 	_, err := ToolCallExecute("san_evt_tool", json.RawMessage(`{"input": "test"}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"done": true}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"done": true}`)), nil
 		},
 	)
 	if err != nil {

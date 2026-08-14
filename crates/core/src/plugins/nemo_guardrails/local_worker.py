@@ -218,48 +218,54 @@ async def handle_message(message, pending_tasks):
     command = message.get("command")
     try:
         if command == "init":
-            worker = GuardrailsWorker(message.get("config") or {})
-            response(
-                request_id,
-                {
-                    "python": sys.executable,
-                    "version": ".".join(str(part) for part in sys.version_info[:3]),
-                },
-            )
+            worker = _initialize_worker(message)
+            response(request_id, _worker_details())
         elif worker is None:
             raise RuntimeError("NeMo Guardrails local Python worker is not initialized")
-        elif command == "check":
-            response(
-                request_id,
-                await worker.check(message.get("messages") or [], message.get("rail_type")),
-            )
-        elif command == "has_streaming_output_rails":
-            response(request_id, {"enabled": worker.has_streaming_output_rails()})
-        elif command == "ensure_streaming_output_supported":
-            worker.ensure_streaming_output_supported()
-            response(request_id)
-        elif command == "stream_start":
-            queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAXSIZE)
-            streams[request_id] = queue
-            track_task(
-                pending_tasks,
-                asyncio.create_task(worker.monitor_stream(request_id, message.get("messages") or [], queue, streams)),
-            )
-        elif command == "stream_text":
-            queue = streams.get(request_id)
-            if queue is not None:
-                await queue.put(message.get("text") or "")
-        elif command == "stream_end":
-            queue = streams.get(request_id)
-            if queue is not None:
-                await queue.put(None)
         else:
-            raise RuntimeError(f"unknown worker command {command!r}")
+            await _handle_worker_command(worker, command, request_id, message, pending_tasks)
     except Exception as err:
         if command and command.startswith("stream_"):
             stream_error(request_id, err)
         else:
             error_response(request_id, err)
+
+
+def _initialize_worker(message):
+    return GuardrailsWorker(message.get("config") or {})
+
+
+def _worker_details():
+    return {"python": sys.executable, "version": ".".join(str(part) for part in sys.version_info[:3])}
+
+
+async def _handle_worker_command(worker, command, request_id, message, pending_tasks):
+    if command == "check":
+        response(request_id, await worker.check(message.get("messages") or [], message.get("rail_type")))
+    elif command == "has_streaming_output_rails":
+        response(request_id, {"enabled": worker.has_streaming_output_rails()})
+    elif command == "ensure_streaming_output_supported":
+        worker.ensure_streaming_output_supported()
+        response(request_id)
+    elif command == "stream_start":
+        _start_stream(worker, request_id, message, pending_tasks)
+    elif command in {"stream_text", "stream_end"}:
+        await _write_stream(command, request_id, message)
+    else:
+        raise RuntimeError(f"unknown worker command {command!r}")
+
+
+def _start_stream(worker, request_id, message, pending_tasks):
+    queue = asyncio.Queue(maxsize=STREAM_QUEUE_MAXSIZE)
+    streams[request_id] = queue
+    task = worker.monitor_stream(request_id, message.get("messages") or [], queue, streams)
+    track_task(pending_tasks, asyncio.create_task(task))
+
+
+async def _write_stream(command, request_id, message):
+    queue = streams.get(request_id)
+    if queue is not None:
+        await queue.put(message.get("text") or "" if command == "stream_text" else None)
 
 
 async def main():

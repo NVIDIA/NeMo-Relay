@@ -327,7 +327,7 @@ func assertStreamExporterPath(t *testing.T) {
 func assertCallbackSerializationFailures(t *testing.T) {
 	t.Helper()
 	const toolName = "coverage_tool_intercept_serialize_failure"
-	if err := RegisterToolExecutionIntercept(toolName, 1, func(args json.RawMessage, _ func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+	if err := RegisterToolExecutionIntercept(toolName, 1, func(args json.RawMessage, _ func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 		return ToolExecutionInterceptOutcome{Result: args}, nil
 	}); err != nil {
 		t.Fatalf("RegisterToolExecutionIntercept failed: %v", err)
@@ -346,8 +346,8 @@ func assertCallbackSerializationFailures(t *testing.T) {
 	jsonMarshal = func(any) ([]byte, error) { return nil, errors.New("forced callback JSON marshal failure") }
 	defer func() { jsonMarshal = oldMarshal }()
 
-	if _, err := ToolCallExecute(toolName, json.RawMessage(`{}`), func(json.RawMessage) (json.RawMessage, error) {
-		return json.RawMessage(`{}`), nil
+	if _, err := ToolCallExecute(toolName, json.RawMessage(`{}`), func(json.RawMessage) (ToolExecutionResult, error) {
+		return toolExecutionResult(json.RawMessage(`{}`)), nil
 	}); err == nil {
 		t.Fatal("expected tool intercept serialization failure")
 	}
@@ -447,7 +447,7 @@ func testWrapperAndCodecFinalizersRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolCall failed: %v", err)
 	}
-	if err := ToolCallEnd(toolHandle, json.RawMessage(`{}`)); err != nil {
+	if err := ToolCallEnd(toolHandle, toolExecutionResult(json.RawMessage(`{}`))); err != nil {
 		t.Fatalf("ToolCallEnd failed: %v", err)
 	}
 

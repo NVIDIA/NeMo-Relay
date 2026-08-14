@@ -5,9 +5,9 @@
 
 //! Versioned gRPC protocol for NeMo Relay out-of-process worker plugins.
 //!
-//! The protobuf schema owns transport control flow. Relay data transfer objects
-//! are carried as JSON envelopes so `nemo-relay-types` remains the shared source
-//! of truth for event, LLM, tool, scope, and plugin diagnostic data shapes.
+//! The protobuf schema owns transport control flow and the tool-result wrapper
+//! structure. Open application payloads remain lossless JSON values, while
+//! other Relay data transfer objects are carried in JSON envelopes.
 
 /// Stable worker protocol identifier accepted by `compat.worker_protocol`.
 pub const WORKER_PROTOCOL_GRPC_V1: &str = "grpc-v1";
@@ -40,4 +40,24 @@ pub fn decode_json_envelope<T: serde::de::DeserializeOwned>(
     envelope: &v1::JsonEnvelope,
 ) -> Result<T, serde_json::Error> {
     serde_json::from_slice(&envelope.json)
+}
+
+/// Creates a lossless protocol JSON value from a serializable value.
+///
+/// # Errors
+/// Returns a serde error when the supplied value cannot be serialized as JSON.
+pub fn json_value<T: serde::Serialize>(value: &T) -> Result<v1::JsonValue, serde_json::Error> {
+    Ok(v1::JsonValue {
+        json: serde_json::to_vec(value)?,
+    })
+}
+
+/// Decodes a lossless protocol JSON value into the requested type.
+///
+/// # Errors
+/// Returns a serde error when the bytes are not valid JSON for `T`.
+pub fn decode_json_value<T: serde::de::DeserializeOwned>(
+    value: &v1::JsonValue,
+) -> Result<T, serde_json::Error> {
+    serde_json::from_slice(&value.json)
 }

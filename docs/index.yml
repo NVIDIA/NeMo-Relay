@@ -35,7 +35,7 @@ navigation:
         title: "Adaptive"
         title-source: frontmatter
       - folder: ./configure-plugins/nemo-guardrails
-        title: "NeMo Guardrails"
+        title: "NeMo Guardrails (Deprecated)"
         title-source: frontmatter
       - folder: ./configure-plugins/pii-redaction
         title: "PII Redaction"

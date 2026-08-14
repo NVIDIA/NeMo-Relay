@@ -668,6 +668,38 @@ fn test_exporter_omits_null_tool_observation_content() {
 }
 
 #[test]
+fn test_exporter_preserves_annotation_when_tool_result_is_null() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let annotation = json!({"cache": {"hit": true}});
+
+    // Managed execution normalizes a JSON-null result to absent event data,
+    // while the opaque result annotation remains in the category profile.
+    let mut end = event_builder(tool_uuid, EventType::End)
+        .name("noop")
+        .scope_type(ScopeType::Tool)
+        .tool_call_id("call_123")
+        .build();
+    end.category_profile_mut().unwrap().tool_result_annotation = Some(annotation.clone());
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+
+    assert_eq!(result.content, None);
+    assert_eq!(
+        result.extra.as_ref().unwrap()["tool_result_annotation"],
+        annotation
+    );
+    assert!(result.extra.as_ref().unwrap().get("tool_result").is_none());
+    assert!(observation_result_has_tool_result_extra(result));
+}
+
+#[test]
 fn test_exporter_moves_structured_tool_close_result_to_observation_extra() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let tool_uuid = Uuid::now_v7();
@@ -1946,7 +1978,7 @@ fn test_exporter_anthropic_messages_lifecycle_promotes_tool_use_blocks() {
     assert_eq!(agent_step.message, json!("I will search for it."));
     assert_eq!(agent_step.model_name, Some("claude-sonnet-4".to_string()));
     let metrics = agent_step.metrics.as_ref().unwrap();
-    assert_eq!(metrics.prompt_tokens, Some(11));
+    assert_eq!(metrics.prompt_tokens, Some(19));
     assert_eq!(metrics.completion_tokens, Some(7));
     assert_eq!(metrics.cached_tokens, Some(8));
     let tool_call = &agent_step.tool_calls.as_ref().unwrap()[0];

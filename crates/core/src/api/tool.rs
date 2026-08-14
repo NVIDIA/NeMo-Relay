@@ -28,7 +28,10 @@ use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
-pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
+pub use nemo_relay_types::api::tool::{
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
+    ToolExecutionInterceptOutcome, ToolExecutionResult,
+};
 
 fn queue_sanitized_event_with_scope_stack(
     event: Event,
@@ -196,8 +199,9 @@ pub struct ToolCallExecuteParams {
 pub struct ToolCallEndParams<'a> {
     /// Tool handle to close.
     pub handle: &'a ToolHandle,
-    /// Raw tool result associated with the end event.
-    pub result: Json,
+    /// Application result and optional opaque annotation associated with the
+    /// end event.
+    pub execution_result: ToolExecutionResult,
     /// Optional application payload retained for compatibility; Agent
     /// Trajectory Observability Format (ATOF) data is the result.
     #[builder(default)]
@@ -423,10 +427,11 @@ async fn tool_call_with_subscriber_snapshot(
 ///
 /// # Parameters
 /// - `handle`: Tool handle to close.
-/// - `result`: Raw tool result associated with the end event.
+/// - `execution_result`: Application result and optional opaque annotation
+///   associated with the end event.
 /// - `data`: Optional application payload retained for compatibility. The
-///   emitted end event data is the sanitized `result` unless it sanitizes to
-///   JSON null, in which case this payload is used.
+///   emitted end event data is the sanitized application result unless it
+///   sanitizes to JSON null, in which case this payload is used.
 /// - `metadata`: Optional JSON metadata recorded on the end event.
 /// - `timestamp`: Optional timestamp recorded on the emitted end event. When
 ///   `None`, the runtime uses the current UTC time, or one microsecond after
@@ -443,8 +448,9 @@ async fn tool_call_with_subscriber_snapshot(
 ///
 /// # Notes
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
-/// the caller-owned `result` value. If a sanitizer errors or panics, Relay omits
-/// that observability payload and does not run remaining sanitizers.
+/// the caller-owned execution result. General event sanitizers can rewrite or
+/// remove the emitted annotation. If a sanitizer errors or panics, Relay omits
+/// the governed observability fields and does not run remaining sanitizers.
 pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
@@ -466,7 +472,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
             subscribers,
         )
     };
-    let result = params.result;
+    let ToolExecutionResult { result, annotation } = params.execution_result;
     let fallback = params.data;
     let event = {
         let context = global_context();
@@ -501,6 +507,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
                     }
                 });
                 event.apply_sanitize_fields(fields);
+                attach_tool_result_annotation(&mut event, annotation);
                 event
             })
         }),
@@ -571,7 +578,7 @@ async fn tool_call_end_with_pending_marks(
         .collect::<Vec<_>>();
     let event_sanitizers = snapshot_event_sanitizers(&event, &scope_stack).unwrap_or_default();
     let tool_name = params.handle.name.clone();
-    let result = params.result;
+    let ToolExecutionResult { result, annotation } = params.execution_result;
     let fallback = params.data;
     dispatch_transformed_event(
         event,
@@ -590,6 +597,7 @@ async fn tool_call_end_with_pending_marks(
                     }
                 });
                 event.apply_sanitize_fields(fields);
+                attach_tool_result_annotation(&mut event, annotation);
                 event
             })
         }),
@@ -602,6 +610,15 @@ async fn tool_call_end_with_pending_marks(
         dispatch_sanitized_event(mark, sanitizers, subscribers, scope_stack.clone());
     }
     Ok(())
+}
+
+fn attach_tool_result_annotation(event: &mut Event, annotation: Option<Json>) {
+    let Some(annotation) = annotation.filter(|value| !value.is_null()) else {
+        return;
+    };
+    if let Some(profile) = event.category_profile_mut() {
+        profile.tool_result_annotation = Some(annotation);
+    }
 }
 
 fn emit_tool_end_without_output(
@@ -692,8 +709,8 @@ impl Drop for ManagedToolCompletion {
 /// - `metadata`: Optional JSON metadata recorded on emitted events.
 ///
 /// # Returns
-/// A [`Result`] containing the raw tool result returned by the callback or an
-/// execution intercept.
+/// A [`Result`] containing the application result and optional opaque
+/// annotation returned by the callback or an execution intercept.
 ///
 /// # Errors
 /// Returns [`FlowError::GuardrailRejected`] when conditional-execution
@@ -703,7 +720,7 @@ impl Drop for ManagedToolCompletion {
 /// # Notes
 /// When execution fails after the start event has been emitted, the runtime
 /// still emits a tool-end event without an output payload.
-pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
+pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExecutionResult> {
     let ToolCallExecuteParams {
         name,
         args,
@@ -816,16 +833,14 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
     })
     .await;
     match execution {
-        Ok(outcome) => {
-            let ToolExecutionInterceptOutcome {
-                result,
-                pending_marks,
-            } = outcome;
+        Ok(mut outcome) => {
+            let pending_marks = std::mem::take(&mut outcome.pending_marks);
+            let execution_result = outcome.into_execution_result();
             let end_metadata = metadata_with_otel_status(metadata, "OK", None);
             tool_call_end_with_pending_marks(
                 ToolCallEndParams::builder()
                     .handle(&handle)
-                    .result(result.clone())
+                    .execution_result(execution_result.clone())
                     .data_opt(data)
                     .metadata_opt(end_metadata)
                     .build(),
@@ -834,7 +849,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<Json> {
             )
             .await?;
             completion.disarm();
-            Ok(result)
+            Ok(execution_result)
         }
         Err(error) => {
             let end_metadata = metadata_with_otel_error(metadata, &error);

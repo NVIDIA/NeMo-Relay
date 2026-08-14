@@ -238,6 +238,11 @@ pub struct CategoryProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtype: Option<String>,
 
+    /// Normalized tool result annotation for successful tool end events.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "option_json_is_none_or_null")]
+    pub tool_result_annotation: Option<Json>,
+
     /// Unknown category-profile keys preserved from newer producers.
     #[builder(default)]
     #[serde(flatten)]
@@ -263,10 +268,15 @@ impl CategoryProfile {
         self.model_name.is_none()
             && self.tool_call_id.is_none()
             && self.subtype.is_none()
+            && option_json_is_none_or_null(&self.tool_result_annotation)
             && self.annotated_request.is_none()
             && self.annotated_response.is_none()
             && self.extra.is_empty()
     }
+}
+
+fn option_json_is_none_or_null(value: &Option<Json>) -> bool {
+    value.as_ref().is_none_or(Json::is_null)
 }
 
 /// Shared event metadata carried by every ATOF event.
@@ -511,6 +521,17 @@ impl Event {
             Self::Scope(event) => event.category_profile.as_mut(),
             Self::Mark(event) => event.category_profile.as_mut(),
         }
+    }
+
+    /// Return an owned copy of the normalized tool result annotation.
+    ///
+    /// JSON null is normalized to absence.
+    pub fn tool_result_annotation(&self) -> Option<Json> {
+        self.category_profile()?
+            .tool_result_annotation
+            .as_ref()
+            .filter(|value| !value.is_null())
+            .cloned()
     }
 
     /// Return the parent scope UUID, if the event is nested under a scope.

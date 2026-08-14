@@ -11,6 +11,7 @@ Example::
 
     from dataclasses import dataclass
 
+    import nemo_relay
     import nemo_relay.typed as typed
 
     @dataclass
@@ -21,8 +22,8 @@ Example::
     class SearchResult:
         answer: str
 
-    async def tool_impl(args: SearchArgs) -> SearchResult:
-        return SearchResult(answer=args.query.upper())
+    async def tool_impl(args: SearchArgs) -> nemo_relay.ToolExecutionResult[SearchResult]:
+        return nemo_relay.ToolExecutionResult(SearchResult(answer=args.query.upper()))
 
     result = await typed.tool_execute(
         "search",
@@ -47,7 +48,7 @@ import weakref
 from typing import AsyncIterator, Awaitable, Callable, Generic, Protocol, TypeVar, cast, overload
 
 from nemo_relay import Json, llm, tools
-from nemo_relay._native import LLMRequest, LlmStream, ScopeHandle
+from nemo_relay._native import LLMRequest, LlmStream, ScopeHandle, ToolExecutionResult
 from nemo_relay.codecs import LlmCodec, LlmResponseCodec
 
 T = TypeVar("T")
@@ -466,7 +467,7 @@ class BestEffortAnyCodec(Codec[object]):
 async def tool_execute(
     name: str,
     args: TArgs,
-    func: Callable[[TArgs], Awaitable[TResult]],
+    func: Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]],
     args_codec: Codec[TArgs],
     result_codec: Codec[TResult],
     *,
@@ -474,14 +475,14 @@ async def tool_execute(
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
-) -> TResult: ...
+) -> ToolExecutionResult[TResult]: ...
 
 
 @overload
 async def tool_execute(
     name: str,
     args: TArgs,
-    func: Callable[[TArgs], TResult],
+    func: Callable[[TArgs], ToolExecutionResult[TResult]],
     args_codec: Codec[TArgs],
     result_codec: Codec[TResult],
     *,
@@ -489,13 +490,13 @@ async def tool_execute(
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
-) -> TResult: ...
+) -> ToolExecutionResult[TResult]: ...
 
 
 async def tool_execute(
     name: str,
     args: TArgs,
-    func: Callable[[TArgs], TResult] | Callable[[TArgs], Awaitable[TResult]],
+    func: Callable[[TArgs], ToolExecutionResult[TResult]] | Callable[[TArgs], Awaitable[ToolExecutionResult[TResult]]],
     args_codec: Codec[TArgs],
     result_codec: Codec[TResult],
     *,
@@ -503,14 +504,15 @@ async def tool_execute(
     attributes: int | None = None,
     data: Json | None = None,
     metadata: Json | None = None,
-) -> TResult:
+) -> ToolExecutionResult[TResult]:
     """Run ``nemo_relay.tools.execute`` with typed arguments and results.
 
     Args:
         name: Tool name recorded on emitted lifecycle events.
         args: Typed arguments to serialize before entering the runtime.
         func: Tool implementation invoked with deserialized typed arguments.
-            The implementation may be synchronous or asynchronous.
+            It returns ``ToolExecutionResult[TResult]`` and may be synchronous
+            or asynchronous.
         args_codec: Codec used to convert ``args`` to and from JSON.
         result_codec: Codec used to convert the tool result to and from JSON.
         handle: Optional parent scope handle. When omitted, the current scope
@@ -520,12 +522,14 @@ async def tool_execute(
         metadata: Optional JSON metadata recorded on the emitted start event.
 
     Returns:
-        TResult: The decoded typed result produced by ``func``.
+        ToolExecutionResult[TResult]: The decoded typed result and its opaque
+        annotation.
 
     Example::
 
         from dataclasses import dataclass
 
+        import nemo_relay
         from nemo_relay.typed import DataclassCodec, tool_execute
 
         @dataclass
@@ -536,8 +540,8 @@ async def tool_execute(
         class SearchResult:
             answer: str
 
-        async def tool_impl(args: SearchArgs) -> SearchResult:
-            return SearchResult(answer=args.query.upper())
+        async def tool_impl(args: SearchArgs):
+            return nemo_relay.ToolExecutionResult(SearchResult(answer=args.query.upper()))
 
         result = await tool_execute(
             "search",
@@ -553,12 +557,14 @@ async def tool_execute(
     """
     json_args = args_codec.to_json(args)
 
-    async def _json_func(json_args_inner: Json) -> Json:
+    async def _json_func(json_args_inner: Json) -> ToolExecutionResult[Json]:
         typed_args = args_codec.from_json(json_args_inner)
-        result: TResult | Awaitable[TResult] = func(typed_args)
+        result = func(typed_args)
         if inspect.isawaitable(result):
-            return result_codec.to_json(await typing.cast(Awaitable[TResult], result))
-        return result_codec.to_json(typing.cast(TResult, result))
+            result = await typing.cast(Awaitable[ToolExecutionResult[TResult]], result)
+        if not isinstance(result, ToolExecutionResult):
+            raise TypeError("typed tool callback must return ToolExecutionResult")
+        return ToolExecutionResult(result_codec.to_json(result.result), result.annotation)
 
     json_result = await tools.execute(
         name,
@@ -569,7 +575,7 @@ async def tool_execute(
         data=data,
         metadata=metadata,
     )
-    return result_codec.from_json(json_result)
+    return ToolExecutionResult(result_codec.from_json(json_result.result), json_result.annotation)
 
 
 @overload

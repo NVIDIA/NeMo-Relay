@@ -33,7 +33,7 @@ use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::{FlowError, Result};
@@ -72,14 +72,16 @@ pub type NemoRelayToolConditionalCb = unsafe extern "C" fn(
     args_json: *const c_char,
 ) -> *mut c_char;
 
-/// Callback for tool execution (default callable). Receives arguments as JSON,
-/// returns result as JSON. The returned string must be allocated with `malloc`
-/// or equivalent.
+/// Callback for tool execution (default callable). Receives arguments as JSON
+/// and returns a serialized `ToolExecutionResult` with required `result` and
+/// optional `annotation` fields. The returned string must be allocated with
+/// `malloc` or equivalent.
 pub type NemoRelayToolExecCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, args_json: *const c_char) -> *mut c_char;
 
 /// Runtime-provided "next" callback for tool execution middleware chain.
 /// Call this from an intercept to invoke the next layer (or original function).
+/// The returned string contains a serialized `ToolExecutionResult`.
 /// `next_ctx` is borrowed and valid only until the intercept callback returns;
 /// callers must not retain it or invoke `next_fn` asynchronously. The returned
 /// string belongs to the caller and must be released with
@@ -90,11 +92,12 @@ pub type NemoRelayToolExecNextFn =
 /// Callback for tool execution intercepts. Receives arguments as JSON plus
 /// a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
 /// the next layer in the middleware chain, or return directly to short-circuit.
-/// The `result` field is passed to the remaining middleware and application;
+/// The `result` and optional `annotation` fields are passed to the remaining
+/// middleware and application;
 /// `pending_marks` are Relay-owned lifecycle metadata emitted after the
 /// tool-end event and are not included in the application-visible result.
-/// The returned JSON must contain a `result` field and may contain a
-/// `pending_marks` array. The returned string must be allocated with `malloc`
+/// The returned JSON must contain a `result` field and may contain `annotation`
+/// and `pending_marks` fields. The returned string must be allocated with `malloc`
 /// or an equivalent allocation compatible with `nemo_relay_string_free`.
 /// Ownership transfers to Relay when the callback returns; the callback must
 /// not free or reuse the string afterward, and Relay frees it exactly once.
@@ -404,7 +407,9 @@ pub fn wrap_tool_exec_fn(
     cb: NemoRelayToolExecCb,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
-) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync> {
+) -> Box<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionResult>> + Send>> + Send + Sync,
+> {
     let ud = make_user_data(user_data, free_fn);
     Box::new(move |args: Json| {
         let ud = ud.clone();
@@ -413,7 +418,12 @@ pub fn wrap_tool_exec_fn(
             let c_args = json_to_c_string(&args);
             let result_ptr = unsafe { cb(ud.ptr, c_args) };
             unsafe { nemo_relay_string_free_internal(c_args) };
-            let result = json_result_from_ptr(result_ptr, "tool execution callback failed");
+            let result = json_result_from_ptr(result_ptr, "tool execution callback failed")
+                .and_then(|value| {
+                    serde_json::from_value::<ToolExecutionResult>(value).map_err(|error| {
+                        FlowError::Internal(format!("invalid tool execution result JSON: {error}"))
+                    })
+                });
             unsafe { nemo_relay_string_free_internal(result_ptr) };
             result
         })
@@ -457,7 +467,15 @@ pub fn wrap_tool_exec_intercept_fn(
                 let handle = tokio::runtime::Handle::current();
                 let result = tokio::task::block_in_place(|| handle.block_on(next(args)));
                 match result {
-                    Ok(json) => json_to_c_string(&json),
+                    Ok(execution_result) => match serde_json::to_value(execution_result) {
+                        Ok(json) => json_to_c_string(&json),
+                        Err(error) => {
+                            set_last_error(&format!(
+                                "failed to serialize tool execution result: {error}"
+                            ));
+                            std::ptr::null_mut()
+                        }
+                    },
                     Err(e) => {
                         set_last_error(&e.to_string());
                         std::ptr::null_mut()

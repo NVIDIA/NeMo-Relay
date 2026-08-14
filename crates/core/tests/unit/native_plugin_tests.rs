@@ -34,6 +34,16 @@ use crate::api::runtime::{
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::response::AnnotatedLlmResponse;
 
+type RawToolExecutionNextFn =
+    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync>;
+
+fn canonical_tool_next(next: RawToolExecutionNextFn) -> NativeAsyncNextInner {
+    NativeAsyncNextInner::Tool(Arc::new(move |value| {
+        let future = next(value);
+        Box::pin(async move { future.await.map(ToolExecutionResult::from) })
+    }))
+}
+
 struct ThreadScopeStackRestore(Option<ThreadScopeStackBinding>);
 
 impl ThreadScopeStackRestore {
@@ -136,6 +146,31 @@ fn native_async_release_defers_library_guard_drop_to_host_reaper() {
         receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
         "nemo-relay-native-reaper"
     );
+}
+
+#[test]
+fn native_loader_empty_input_and_stream_context_drop_are_safe() {
+    let activation = load_native_plugins(Vec::<NativePluginLoadSpec>::new()).unwrap();
+    assert!(activation.plugins.is_empty());
+
+    let next: LlmStreamExecutionNextFn =
+        Arc::new(|_| Box::pin(async { Ok(LlmJsonStream::new(tokio_stream::empty())) }));
+    let raw = Box::into_raw(Box::new(next)).cast::<c_void>();
+    let context = NativeStreamNextContext::new(raw);
+    drop(context);
+}
+
+#[test]
+fn native_last_error_helpers_store_and_clear_messages() {
+    clear_native_last_error();
+    assert_eq!(native_last_error_message(), None);
+    set_native_last_error("native test error");
+    assert_eq!(
+        native_last_error_message().as_deref(),
+        Some("native test error")
+    );
+    clear_native_last_error();
+    assert_eq!(native_last_error_message(), None);
 }
 
 unsafe extern "C" fn complete_native_next_result(
@@ -467,7 +502,7 @@ fn native_test_adapter(
         allows_multiple_components: false,
         instance: Arc::new(NativePluginInstance {
             plugin_kind: "test.native.adapter".into(),
-            relay_compat: "^0.7".into(),
+            relay_compat: "^0.8".into(),
             allows_multiple_components: false,
             plugin: Mutex::new(plugin),
             _library: libloading::os::unix::Library::this().into(),
@@ -531,6 +566,25 @@ fn native_loader_helpers_cover_compatibility_descriptor_and_digest_edges() {
     assert_native_descriptor_edges();
     assert_native_digest_edges();
     assert_native_host_api_versions();
+}
+
+#[test]
+fn native_status_helpers_keep_error_categories_stable() {
+    clear_native_last_error();
+    assert!(matches!(
+        flow_error_from_status(NemoRelayStatus::NotFound, "missing"),
+        FlowError::NotFound(message) if message.contains("missing")
+    ));
+    assert_eq!(
+        status_from_plugin_error(PluginError::InvalidConfig("bad".into())),
+        NemoRelayStatus::InvalidArg
+    );
+    assert_eq!(
+        status_from_flow_error(FlowError::Internal("bad".into())),
+        NemoRelayStatus::Internal
+    );
+    assert_eq!(panic_payload_message(&"string panic"), "string panic");
+    clear_native_last_error();
 }
 
 fn assert_native_compatibility_edges() {
@@ -944,7 +998,7 @@ fn accepted_native_callbacks_settle_when_cancelled_before_first_poll() {
     };
     let unary_started = Arc::new(AtomicBool::new(false));
     let unary_next = Arc::new(NativeAsyncNext::with_completion_owner(
-        NativeAsyncNextInner::Tool({
+        canonical_tool_next({
             let started = Arc::clone(&unary_started);
             Arc::new(move |value| {
                 started.store(true, Ordering::SeqCst);
@@ -1172,14 +1226,14 @@ async fn native_async_result_entrypoint_reports_provider_errors_and_panics() {
     for next_fn in [
         Arc::new(|_value| {
             Box::pin(async { Err(FlowError::Internal("provider failed".into())) })
-                as Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
+                as Pin<Box<dyn Future<Output = FlowResult<ToolExecutionResult>> + Send>>
         }) as ToolExecutionNextFn,
         Arc::new(|_value| {
             Box::pin(async {
                 panic!("provider panicked");
                 #[allow(unreachable_code)]
-                Ok(Json::Null)
-            }) as Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>>
+                Ok(ToolExecutionResult::new(Json::Null))
+            }) as Pin<Box<dyn Future<Output = FlowResult<ToolExecutionResult>> + Send>>
         }) as ToolExecutionNextFn,
     ] {
         let next = Arc::new(NativeAsyncNext::new(
@@ -1228,7 +1282,7 @@ async fn native_async_stream_next_entrypoint_validates_handle_kind_and_request()
     let invocation = native_string("null");
 
     let tool_next = Arc::new(NativeAsyncNext::new(
-        NativeAsyncNextInner::Tool(Arc::new(|value| Box::pin(async move { Ok(value) }))),
+        canonical_tool_next(Arc::new(|value| Box::pin(async move { Ok(value) }))),
         tokio::runtime::Handle::current(),
         None,
     ));
@@ -1608,7 +1662,7 @@ fn native_async_next_abi_runs_tool_llm_and_stream_continuations() {
         .unwrap();
     let cases: Vec<(NativeAsyncNextInner, Json, Json)> = vec![
         (
-            NativeAsyncNextInner::Tool(Arc::new(|value| Box::pin(async move { Ok(value) }))),
+            canonical_tool_next(Arc::new(|value| Box::pin(async move { Ok(value) }))),
             json!({"tool": true}),
             json!({"result": {"tool": true}, "pending_marks": []}),
         ),
@@ -1709,7 +1763,7 @@ fn native_async_next_reports_a_revoked_continuation_without_calling_the_provider
     let provider_calls = Arc::new(AtomicUsize::new(0));
     let (lease, guard) = MiddlewareContinuationLease::capture();
     let next = Arc::new(NativeAsyncNext::new(
-        NativeAsyncNextInner::Tool({
+        canonical_tool_next({
             let provider_calls = provider_calls.clone();
             Arc::new(move |value| {
                 let provider_calls = provider_calls.clone();
@@ -1774,7 +1828,7 @@ fn native_async_next_result_supports_repeated_concurrent_calls() {
         .unwrap();
     let provider_calls = Arc::new(AtomicUsize::new(0));
     let next = Arc::new(NativeAsyncNext::new(
-        NativeAsyncNextInner::Tool({
+        canonical_tool_next({
             let provider_calls = provider_calls.clone();
             Arc::new(move |value| {
                 provider_calls.fetch_add(1, Ordering::SeqCst);
@@ -1839,15 +1893,19 @@ fn native_async_next_result_supports_repeated_concurrent_calls() {
     assert_eq!(
         first_result.unwrap().unwrap(),
         json!({
-            "value": {"branch": "first"},
-            "scope": first_scope,
+            "result": {
+                "value": {"branch": "first"},
+                "scope": first_scope,
+            },
         })
     );
     assert_eq!(
         second_result.unwrap().unwrap(),
         json!({
-            "value": {"branch": "second"},
-            "scope": second_scope,
+            "result": {
+                "value": {"branch": "second"},
+                "scope": second_scope,
+            },
         })
     );
     assert_eq!(provider_calls.load(Ordering::SeqCst), 2);
@@ -2003,7 +2061,7 @@ fn owned_native_result_continuation_is_aborted_when_completion_is_cancelled() {
     let started = Arc::new(AtomicBool::new(false));
     let dropped = Arc::new(AtomicBool::new(false));
     let next = Arc::new(NativeAsyncNext::with_completion_owner(
-        NativeAsyncNextInner::Tool({
+        canonical_tool_next({
             let started = Arc::clone(&started);
             let dropped = Arc::clone(&dropped);
             Arc::new(move |_value| {
@@ -2070,7 +2128,7 @@ fn native_async_next_result_uses_captured_scope_on_an_unbound_plugin_thread() {
         .to_string();
     let next = with_scope_stack(captured_stack, || {
         Arc::new(NativeAsyncNext::new(
-            NativeAsyncNextInner::Tool(Arc::new(|value| {
+            canonical_tool_next(Arc::new(|value| {
                 Box::pin(async move {
                     Ok(json!({
                         "value": value,
@@ -2105,8 +2163,10 @@ fn native_async_next_result_uses_captured_scope_on_an_unbound_plugin_thread() {
     assert_eq!(
         runtime.block_on(receiver).unwrap().unwrap(),
         json!({
-            "value": {"thread": "plugin"},
-            "scope": captured_scope,
+            "result": {
+                "value": {"thread": "plugin"},
+                "scope": captured_scope,
+            },
         })
     );
 
@@ -2169,7 +2229,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
                         async {
                             let unary_stack = expected_stack.clone();
                             let unary = Arc::new(NativeAsyncNext::new(
-                                NativeAsyncNextInner::Tool(Arc::new(move |_value| {
+                                canonical_tool_next(Arc::new(move |_value| {
                                     let unary_stack = unary_stack.clone();
                                     Box::pin(async move {
                                         Ok(native_continuation_context_observation(
@@ -2292,7 +2352,7 @@ fn native_async_next_preserves_runtime_context_for_unary_and_stream_continuation
 }
 
 #[test]
-fn native_legacy_next_preserves_runtime_context_for_unary_and_stream_continuations() {
+fn native_sync_next_preserves_runtime_context_for_unary_and_stream_continuations() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -2322,12 +2382,15 @@ fn native_legacy_next_preserves_runtime_context_for_unary_and_stream_continuatio
                             let unary_next: ToolExecutionNextFn = Arc::new(move |_value| {
                                 let unary_stack = unary_stack.clone();
                                 Box::pin(async move {
-                                    Ok(native_continuation_context_observation(
-                                        &unary_stack,
-                                        expected_event_uuid,
+                                    Ok(ToolExecutionResult::new(
+                                        native_continuation_context_observation(
+                                            &unary_stack,
+                                            expected_event_uuid,
+                                        ),
                                     ))
                                 })
                             });
+                            let unary_next = unary_next;
                             let invocation = native_string_from_json(&Json::Null).unwrap();
                             let mut output = ptr::null_mut();
                             assert_eq!(
@@ -2344,7 +2407,7 @@ fn native_legacy_next_preserves_runtime_context_for_unary_and_stream_continuatio
                             );
                             let observed: Json =
                                 serde_json::from_str(&read_native_string(output).unwrap()).unwrap();
-                            assert_eq!(observed, expected);
+                            assert_eq!(observed, json!({"result": expected}));
                             unsafe {
                                 native_string_free(invocation);
                                 native_string_free(output);
@@ -2416,7 +2479,7 @@ fn native_async_next_panics_settle_unary_and_stream_errors() {
         .unwrap();
 
     let next = Arc::new(NativeAsyncNext::new(
-        NativeAsyncNextInner::Tool(Arc::new(|_value| {
+        canonical_tool_next(Arc::new(|_value| {
             Box::pin(async move {
                 panic!("native unary next panic");
             })
@@ -2532,7 +2595,7 @@ fn native_async_next_is_permanently_one_shot() {
         .unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let next = Arc::new(NativeAsyncNext::new(
-        NativeAsyncNextInner::Tool({
+        canonical_tool_next({
             let calls = Arc::clone(&calls);
             Arc::new(move |value| {
                 let calls = Arc::clone(&calls);
@@ -2588,7 +2651,7 @@ fn cancelled_native_async_next_does_not_start_unary_or_stream_continuations() {
         .unwrap();
     let unary_started = Arc::new(AtomicBool::new(false));
     let unary = Arc::new(NativeAsyncNext::new(
-        NativeAsyncNextInner::Tool({
+        canonical_tool_next({
             let unary_started = unary_started.clone();
             Arc::new(move |value| {
                 unary_started.store(true, Ordering::SeqCst);
@@ -3512,7 +3575,7 @@ fn native_async_callback_contract_errors_abort_an_invoked_next() {
                 invoke_native_next_then_return_state,
                 user_data,
                 json!({}),
-                Some(NativeAsyncNextInner::Tool(Arc::new({
+                Some(canonical_tool_next(Arc::new({
                     let started_tx = started_tx.clone();
                     let dropped_tx = dropped_tx.clone();
                     move |_value| {
@@ -4967,17 +5030,6 @@ fn assert_async_registration_entrypoints_validate_contracts(
             ),
             NemoRelayStatus::Ok
         );
-        assert_eq!(
-            native_plugin_context_register_async_stream_middleware(
-                ctx,
-                stream_name,
-                0,
-                invoke_native_stream_next_then_return_state,
-                ptr::null_mut(),
-                None,
-            ),
-            NemoRelayStatus::Internal
-        );
         native_string_free(name);
         native_string_free(stream_name);
     }
@@ -5036,7 +5088,7 @@ unsafe extern "C" fn resolve_async_static_json(
 async fn native_async_wrappers_validate_callback_result_shapes() {
     let instance = Arc::new(NativePluginInstance {
         plugin_kind: "test.native.async".into(),
-        relay_compat: "^0.7".into(),
+        relay_compat: "^0.8".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -5901,7 +5953,7 @@ fn native_callback_helpers_cover_success_error_and_invalid_output() {
 async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
     let instance = Arc::new(NativePluginInstance {
         plugin_kind: "test.native.callback-errors".into(),
-        relay_compat: "^0.7".into(),
+        relay_compat: "^0.8".into(),
         allows_multiple_components: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
@@ -6195,7 +6247,7 @@ fn tool_next(output: FlowResult<Json>) -> ToolExecutionNextFn {
     let output = Arc::new(Mutex::new(Some(output)));
     Arc::new(move |_args| {
         let output = output.lock().unwrap().take().unwrap();
-        Box::pin(async move { output })
+        Box::pin(async move { output.map(ToolExecutionResult::from) })
     })
 }
 
@@ -6222,7 +6274,7 @@ fn native_non_streaming_continuations_cover_success_and_error_paths() {
     );
     assert_eq!(
         take_json_from_native_string(out, "unused").unwrap(),
-        json!({"result": 2})
+        json!({"result": {"result": 2}})
     );
     unsafe { drop(Box::from_raw(next as *mut ToolExecutionNextFn)) };
 

@@ -159,8 +159,9 @@ If the change is large or public-facing, also verify:
 - README and docs entry points still match current package names and paths
 - Examples still run with the documented commands
 - Any renamed public surfaces are reflected consistently in manifests and docs
-- Dynamic plugin examples use `compat.relay = ">=0.5,<1.0"` unless deliberately
-  narrower.
+- Dynamic plugin examples exclude Relay versions before 0.8. The recommended
+  range is `compat.relay = ">=0.8.0,<1.0"`; open-ended or narrower
+  0.8-or-newer ranges are valid when intentional.
 
 ## References
 

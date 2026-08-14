@@ -467,7 +467,7 @@ fn test_usage_facts_parity_for_anthropic_payload_with_cache_write() {
     );
 
     let metrics = exports.agent_step().metrics.as_ref().unwrap();
-    assert_eq!(metrics.prompt_tokens, Some(1000));
+    assert_eq!(metrics.prompt_tokens, Some(1264));
     assert_eq!(metrics.completion_tokens, Some(500));
     // ATIF folds cache reads and writes into a single cached_tokens sum
     // (200 + 64).
@@ -476,16 +476,17 @@ fn test_usage_facts_parity_for_anthropic_payload_with_cache_write() {
     let openinference = exports.openinference_attrs("model-call");
     assert_eq!(
         openinference.get("llm.token_count.prompt"),
-        Some(&"1000".to_string())
+        Some(&"1264".to_string())
     );
     assert_eq!(
         openinference.get("llm.token_count.completion"),
         Some(&"500".to_string())
     );
-    // Anthropic reports no total; the shared codec computes 1000 + 500.
+    // Anthropic reports each cache type separately, so the semantic prompt
+    // and total counts include both cache reads and cache writes.
     assert_eq!(
         openinference.get("llm.token_count.total"),
-        Some(&"1500".to_string())
+        Some(&"1764".to_string())
     );
     assert_eq!(
         openinference.get("llm.token_count.prompt_details.cache_read"),

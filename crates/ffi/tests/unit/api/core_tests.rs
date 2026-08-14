@@ -838,7 +838,7 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
         assert_eq!(nemo_relay_tool_handle_attributes(handle), 1);
         assert!(take_string(nemo_relay_tool_handle_parent_uuid(handle)).is_some());
 
-        let result = cstring(r#"{"ok": true}"#);
+        let result = cstring(r#"{"result":{"ok":true},"annotation":{"source":"manual"}}"#);
         assert_status!(
             nemo_relay_tool_call_end(handle, result.as_ptr(), ptr::null(), ptr::null()),
             NemoRelayStatus::Ok
@@ -862,8 +862,9 @@ fn test_ffi_tool_lifecycle_execute_and_helpers() {
             NemoRelayStatus::Ok
         );
         let executed_json = returned_json(execute_out);
-        assert_eq!(executed_json["intercepted"], json!(true));
-        assert_eq!(executed_json["executed"], json!(true));
+        assert_eq!(executed_json["result"]["intercepted"], json!(true));
+        assert_eq!(executed_json["result"]["executed"], json!(true));
+        assert_eq!(executed_json["annotation"]["source"], json!("ffi"));
 
         assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log()).clone();
@@ -1060,7 +1061,7 @@ fn test_ffi_manual_lifecycle_timestamps_accept_unix_micros() {
             ),
             NemoRelayStatus::Ok
         );
-        let tool_result = cstring(r#"{"ok":true}"#);
+        let tool_result = cstring(r#"{"result":{"ok":true}}"#);
         assert_status!(
             api::nemo_relay_tool_call_end(
                 tool,
@@ -1238,7 +1239,7 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
             ),
             NemoRelayStatus::Ok
         );
-        let tool_result = cstring(r#"{"ok":true}"#);
+        let tool_result = cstring(r#"{"result":{"ok":true}}"#);
         assert_invalid_timestamp(api::nemo_relay_tool_call_end(
             tool,
             tool_result.as_ptr(),
@@ -1411,6 +1412,11 @@ fn test_ffi_additional_null_and_invalid_json_paths() {
         );
         assert_status!(
             nemo_relay_tool_call_end(handle, args.as_ptr(), ptr::null(), ptr::null()),
+            NemoRelayStatus::InvalidJson
+        );
+        let execution_result = cstring(r#"{"result":{"value":1}}"#);
+        assert_status!(
+            nemo_relay_tool_call_end(handle, execution_result.as_ptr(), ptr::null(), ptr::null(),),
             NemoRelayStatus::Ok
         );
         nemo_relay_tool_handle_free(handle);

@@ -310,43 +310,7 @@ def _repair_premature_tab_group_closes(pages_dir: Path) -> int:
         in_tab = False
 
         for index, line in enumerate(lines):
-            stripped = line.strip()
-
-            if (
-                in_tabs
-                and not in_tab
-                and stripped
-                and not (stripped == "</Tabs>" or stripped.startswith("<Tab ") or stripped.startswith("</Tab"))
-            ):
-                if repaired and repaired[-1] != "":
-                    repaired.append("")
-                repaired.append("</Tabs>")
-                repaired.append("")
-                in_tabs = False
-
-            if stripped == "<Tabs>":
-                in_tabs = True
-                repaired.append(line)
-                continue
-
-            if in_tabs and stripped == "</Tabs>":
-                next_nonblank = next(
-                    (candidate.strip() for candidate in lines[index + 1 :] if candidate.strip()),
-                    "",
-                )
-                if next_nonblank.startswith("<Tab "):
-                    continue
-                in_tabs = False
-                repaired.append(line)
-                continue
-
-            if in_tabs and stripped.startswith("<Tab "):
-                in_tab = True
-
-            repaired.append(line)
-
-            if in_tabs and stripped.startswith("</Tab"):
-                in_tab = False
+            in_tabs, in_tab = _repair_tab_line(lines, index, line, repaired, in_tabs, in_tab)
 
         if in_tabs:
             if repaired and repaired[-1] != "":
@@ -358,6 +322,43 @@ def _repair_premature_tab_group_closes(pages_dir: Path) -> int:
         if _write_if_changed(mdx_file, original, updated):
             changed += 1
     return changed
+
+
+def _repair_tab_line(
+    lines: list[str], index: int, line: str, repaired: list[str], in_tabs: bool, in_tab: bool
+) -> tuple[bool, bool]:
+    stripped = line.strip()
+    if in_tabs and not in_tab and stripped and not _is_tab_markup(stripped):
+        _close_tabs(repaired)
+        in_tabs = False
+    if stripped == "<Tabs>":
+        repaired.append(line)
+        return True, False
+    if in_tabs and stripped == "</Tabs>":
+        if _next_nonblank(lines, index).startswith("<Tab "):
+            return in_tabs, in_tab
+        repaired.append(line)
+        return False, in_tab
+    repaired.append(line)
+    if in_tabs and stripped.startswith("<Tab "):
+        return in_tabs, True
+    if in_tabs and stripped.startswith("</Tab"):
+        return in_tabs, False
+    return in_tabs, in_tab
+
+
+def _is_tab_markup(line: str) -> bool:
+    return line == "</Tabs>" or line.startswith("<Tab ") or line.startswith("</Tab")
+
+
+def _next_nonblank(lines: list[str], index: int) -> str:
+    return next((candidate.strip() for candidate in lines[index + 1 :] if candidate.strip()), "")
+
+
+def _close_tabs(lines: list[str]) -> None:
+    if lines and lines[-1] != "":
+        lines.append("")
+    lines.extend(("</Tabs>", ""))
 
 
 def _add_language_tab_sync(pages_dir: Path) -> int:

@@ -12,7 +12,8 @@ Direct instrumentation puts NeMo Relay at the boundaries where work happens.
 Scopes define request and agent ownership, managed execution helpers wrap tool
 and LLM calls, middleware applies policy and transformation, and subscribers
 receive lifecycle events. This path gives the runtime a complete view of agent
-work while keeping the application callback result unchanged.
+work while keeping the application-owned payload unchanged inside the canonical
+`ToolExecutionResult` returned by managed tool calls.
 
 ## Start Here When
 

@@ -413,6 +413,7 @@ typedef char *(*NemoRelayToolConditionalCb)(void *user_data, const char *name, c
 /**
  * Runtime-provided "next" callback for tool execution middleware chain.
  * Call this from an intercept to invoke the next layer (or original function).
+ * The returned string contains a serialized `ToolExecutionResult`.
  * `next_ctx` is borrowed and valid only until the intercept callback returns;
  * callers must not retain it or invoke `next_fn` asynchronously. The returned
  * string belongs to the caller and must be released with
@@ -424,11 +425,12 @@ typedef char *(*NemoRelayToolExecNextFn)(const char *args_json, void *next_ctx);
  * Callback for tool execution intercepts. Receives arguments as JSON plus
  * a `next` callback and its context. Call `next_fn(args, next_ctx)` to invoke
  * the next layer in the middleware chain, or return directly to short-circuit.
- * The `result` field is passed to the remaining middleware and application;
+ * The `result` and optional `annotation` fields are passed to the remaining
+ * middleware and application;
  * `pending_marks` are Relay-owned lifecycle metadata emitted after the
  * tool-end event and are not included in the application-visible result.
- * The returned JSON must contain a `result` field and may contain a
- * `pending_marks` array. The returned string must be allocated with `malloc`
+ * The returned JSON must contain a `result` field and may contain `annotation`
+ * and `pending_marks` fields. The returned string must be allocated with `malloc`
  * or an equivalent allocation compatible with `nemo_relay_string_free`.
  * Ownership transfers to Relay when the callback returns; the callback must
  * not free or reuse the string afterward, and Relay frees it exactly once.
@@ -439,9 +441,10 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
                                               void *next_ctx);
 
 /**
- * Callback for tool execution (default callable). Receives arguments as JSON,
- * returns result as JSON. The returned string must be allocated with `malloc`
- * or equivalent.
+ * Callback for tool execution (default callable). Receives arguments as JSON
+ * and returns a serialized `ToolExecutionResult` with required `result` and
+ * optional `annotation` fields. The returned string must be allocated with
+ * `malloc` or equivalent.
  */
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 
@@ -2486,9 +2489,10 @@ NemoRelayStatus nemo_relay_tool_call(const char *name,
  *
  * # Parameters
  * - `handle`: The tool handle from `nemo_relay_tool_call`.
- * - `result_json`: Tool result as a null-terminated JSON C string. This
- *   result becomes the end-event data after sanitize-response guardrails unless
- *   it sanitizes to JSON null.
+ * - `result_json`: Serialized `ToolExecutionResult` as a null-terminated JSON
+ *   C string with required `result` and optional `annotation` fields. Its
+ *   `result` becomes the end-event data after sanitize-response guardrails
+ *   unless it sanitizes to JSON null.
  * - `data_json`: Optional null-terminated JSON data used when the sanitized
  *   result is JSON null, or null.
  * - `metadata_json`: Optional null-terminated JSON metadata recorded on the
@@ -2529,8 +2533,8 @@ NemoRelayStatus nemo_relay_tool_call_end(const struct FfiToolHandle *handle,
  * - `attributes`: Bitfield of tool attributes.
  * - `data_json`: Optional JSON data, or null.
  * - `metadata_json`: Optional JSON metadata, or null.
- * - `out`: On success, receives the result as a JSON C string. Caller must free
- *   with `nemo_relay_string_free`.
+ * - `out`: On success, receives a serialized `ToolExecutionResult` as a JSON C
+ *   string. Caller must free it with `nemo_relay_string_free`.
  *
  * # Safety
  * `name`, `args_json`, and `out` must be valid, non-null pointers.

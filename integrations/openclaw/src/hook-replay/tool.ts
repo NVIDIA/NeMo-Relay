@@ -130,7 +130,7 @@ export function replayAfterToolCall(
       event.toolCallId ?? ctx.toolCallId ?? null,
       startMicrosFromDuration(endMicros, event.durationMs),
     );
-    manager.nf.toolCallEnd(handle, endPayload, null, metadata, endMicros);
+    manager.nf.toolCallEnd(handle, { result: endPayload }, null, metadata, endMicros);
     manager.state.counters.toolSpansReplayed += 1;
   });
 }

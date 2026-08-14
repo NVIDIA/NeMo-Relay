@@ -224,7 +224,7 @@ fn nested_request_sanitizer_publication_precedes_manual_end_event() {
     tool_call_end(
         ToolCallEndParams::builder()
             .handle(&handle)
-            .result(json!({"output": true}))
+            .execution_result(json!({"output": true}).into())
             .build(),
     )
     .unwrap();

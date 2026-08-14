@@ -64,7 +64,7 @@ async function main() {
     const toolResult = await toolCallExecute(
       "search",
       { query: "hello" },
-      (args) => ({ echo: args.query }),
+      (args) => ({ result: { echo: args.query } }),
       handle,
       null,
       null,
@@ -82,7 +82,7 @@ async function main() {
       null,
     );
 
-    console.log(toolResult);
+    console.log(toolResult.result);
     console.log(llmResult);
   });
 
@@ -97,12 +97,16 @@ main().catch((error) => {
 });
 ```
 
+The managed tool callback returns `{ result, annotation? }`, and application
+code reads `toolResult.result`. The optional annotation carries opaque JSON
+metadata without changing the business result.
+
 ## What Success Looks Like
 
 You should see:
 
 - Event lines for the scope, tool, and LLM lifecycles, plus the `initialized` mark event
-- `{ echo: 'hello' }` from the tool call
+- `{ echo: 'hello' }` from the tool call's `result` field
 - An object containing `ok: true` and the echoed message payload from the LLM callback
 
 That combination tells you both the business callbacks and the instrumentation

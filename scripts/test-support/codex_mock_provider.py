@@ -296,47 +296,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.server.wait_at_barrier_if_enabled()
-        if anthropic_stream is not None and not request.get("stream", False):
-            body = json.dumps(
-                {
-                    "id": f"msg_{uuid.uuid4().hex}",
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "pong"}],
-                    "model": request.get("model", "claude-sonnet-4-5"),
-                    "stop_reason": "end_turn",
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": 1, "output_tokens": 1},
-                }
-            ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
-        if chat_stream is not None and not request.get("stream", False):
-            body = json.dumps(
-                {
-                    "id": f"chatcmpl_{uuid.uuid4().hex}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": request.get("model", "gpt-4o-mini"),
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "pong"},
-                            "finish_reason": "stop",
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-                }
-            ).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+        if self._send_non_stream_response(request, anthropic_stream, chat_stream):
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -355,6 +315,49 @@ class Handler(BaseHTTPRequestHandler):
             for event_name, event in anthropic_stream or []:
                 self.wfile.write(f"event: {event_name}\ndata: {json.dumps(event)}\n\n".encode())
         self.wfile.flush()
+
+    def _send_non_stream_response(self, request, anthropic_stream, chat_stream) -> bool:
+        if request.get("stream", False):
+            return False
+        if anthropic_stream is not None:
+            self._send_json(self._anthropic_response(request))
+            return True
+        if chat_stream is not None:
+            self._send_json(self._chat_response(request))
+            return True
+        return False
+
+    def _send_json(self, payload) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    @staticmethod
+    def _anthropic_response(request):
+        return {
+            "id": f"msg_{uuid.uuid4().hex}",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "pong"}],
+            "model": request.get("model", "claude-sonnet-4-5"),
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+
+    @staticmethod
+    def _chat_response(request):
+        return {
+            "id": f"chatcmpl_{uuid.uuid4().hex}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.get("model", "gpt-4o-mini"),
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
 
 
 def main() -> None:

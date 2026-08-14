@@ -123,14 +123,14 @@ describe('Scope-local guardrail registration and execution', () => {
       {
         original: true,
       },
-      (args) => args,
+      (args) => ({ result: args }),
       null,
       null,
       null,
       null,
     );
     // Sanitize guardrails are observability-only; they modify event data, not execution results
-    assert.equal(result.original, true);
+    assert.equal(result.result.original, true);
     await waitForEvents(events, (ev) => ev.some((e) => isScopeEvent(e, 'tool', 'start')));
     deregisterSubscriber('sl_san_exec_sub');
     const startEvents = events.filter((e) => isScopeEvent(e, 'tool', 'start'));
@@ -152,8 +152,8 @@ describe('Scope-local guardrail registration and execution', () => {
     const result = await toolCallExecute(
       'sl_resp_tool',
       {},
-      (args) => ({
-        value: 99,
+      () => ({
+        result: { value: 99 },
       }),
       null,
       null,
@@ -161,7 +161,7 @@ describe('Scope-local guardrail registration and execution', () => {
       null,
     );
     // Sanitize guardrails are observability-only; they modify event data, not execution results
-    assert.equal(result.value, 99);
+    assert.equal(result.result.value, 99);
     await waitForEvents(events, (ev) => ev.some((e) => isScopeEvent(e, 'tool', 'end')));
     deregisterSubscriber('sl_resp_exec_sub');
     const endEvents = events.filter((e) => isScopeEvent(e, 'tool', 'end'));
@@ -185,8 +185,8 @@ describe('Scope-local guardrail registration and execution', () => {
         toolCallExecute(
           'sl_blocked_tool',
           {},
-          (args) => ({
-            should_not: 'run',
+          () => ({
+            result: { should_not: 'run' },
           }),
           null,
           null,
@@ -212,7 +212,7 @@ describe('Scope-local guardrail registration and execution', () => {
     });
     try {
       await assert.rejects(
-        () => toolCallExecute('sl_throw_tool', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        () => toolCallExecute('sl_throw_tool', {}, () => ({ result: { should_not: 'run' } }), null, null, null, null),
         /scope guardrail boom/i,
       );
     } finally {
@@ -422,14 +422,14 @@ describe('Scope-local auto-cleanup on scope pop', () => {
       {
         original: true,
       },
-      (args) => args,
+      (args) => ({ result: args }),
       null,
       null,
       null,
       null,
     );
-    assert.equal(result.from_popped_scope, undefined);
-    assert.equal(result.original, true);
+    assert.equal(result.result.from_popped_scope, undefined);
+    assert.equal(result.result.original, true);
   });
 
   it('scope-local intercept is cleaned up when scope is popped', async () => {
@@ -445,14 +445,14 @@ describe('Scope-local auto-cleanup on scope pop', () => {
       {
         original: true,
       },
-      (args) => args,
+      (args) => ({ result: args }),
       null,
       null,
       null,
       null,
     );
-    assert.equal(result.from_popped_intercept, undefined);
-    assert.equal(result.original, true);
+    assert.equal(result.result.from_popped_intercept, undefined);
+    assert.equal(result.result.original, true);
   });
 
   it('scope-local subscriber is cleaned up when scope is popped', async () => {
@@ -506,15 +506,16 @@ describe('Scope-local auto-cleanup on scope pop', () => {
   it('scope-local tool execution intercept is cleaned up when scope is popped', async () => {
     const scope = pushScope('sl_cleanup_tool_exec', ScopeType.Agent, null, null);
     scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_cleanup_tool_exec_int', 10, async (args, next) => {
-      const result = await next({
+      const downstream = await next({
         ...args,
         fromPoppedScope: true,
       });
       return {
         result: {
-          ...result,
+          ...downstream.result,
           wrapped: true,
         },
+        ...(downstream.annotation == null ? {} : { annotation: downstream.annotation }),
       };
     });
     popScope(scope);
@@ -525,7 +526,7 @@ describe('Scope-local auto-cleanup on scope pop', () => {
         original: true,
       },
       (args) => ({
-        sawIntercept: args.fromPoppedScope || false,
+        result: { sawIntercept: args.fromPoppedScope || false },
       }),
       null,
       null,
@@ -533,7 +534,7 @@ describe('Scope-local auto-cleanup on scope pop', () => {
       null,
     );
     assert.deepEqual(result, {
-      sawIntercept: false,
+      result: { sawIntercept: false },
     });
   });
 
@@ -640,9 +641,9 @@ describe('Scope-local auto-cleanup on scope pop', () => {
     popScope(child);
 
     // After child scope pop, parent intercept should still be active
-    const result = await toolCallExecute('sl_nested_tool', {}, (args) => args, null, null, null, null);
-    assert.equal(result.parent_ran, true);
-    assert.equal(result.child_ran, undefined);
+    const result = await toolCallExecute('sl_nested_tool', {}, (args) => ({ result: args }), null, null, null, null);
+    assert.equal(result.result.parent_ran, true);
+    assert.equal(result.result.child_ran, undefined);
 
     scopeDeregisterToolRequestIntercept(parent.uuid, 'sl_parent_guard');
     popScope(parent);
@@ -668,7 +669,7 @@ describe('Priority merge of global and scope-local middleware', () => {
       return args;
     });
 
-    await toolCallExecute('sl_merged_tool', {}, (args) => args, null, null, null, null);
+    await toolCallExecute('sl_merged_tool', {}, (args) => ({ result: args }), null, null, null, null);
     // Sanitize guardrails are observability-only; verify via tool Start event input
     await waitForEvents(events, (ev) => ev.some((e) => isScopeEvent(e, 'tool', 'start')));
     deregisterSubscriber('sl_merge_sub');
@@ -701,9 +702,9 @@ describe('Priority merge of global and scope-local middleware', () => {
       return args;
     });
 
-    const result = await toolCallExecute('sl_merge_int_tool', {}, (args) => args, null, null, null, null);
-    assert.equal(result.global_intercepted, true);
-    assert.equal(result.scope_intercepted, true);
+    const result = await toolCallExecute('sl_merge_int_tool', {}, (args) => ({ result: args }), null, null, null, null);
+    assert.equal(result.result.global_intercepted, true);
+    assert.equal(result.result.scope_intercepted, true);
     assert.deepEqual(order, ['global', 'scope']);
 
     scopeDeregisterToolRequestIntercept(scope.uuid, 'sl_merge_local_int');
@@ -718,7 +719,16 @@ describe('Priority merge of global and scope-local middleware', () => {
     });
     try {
       await assert.rejects(
-        () => toolCallExecute('sl_tool_request_throw_call', {}, () => ({ should_not: 'run' }), null, null, null, null),
+        () =>
+          toolCallExecute(
+            'sl_tool_request_throw_call',
+            {},
+            () => ({ result: { should_not: 'run' } }),
+            null,
+            null,
+            null,
+            null,
+          ),
         /scope tool request intercept boom/i,
       );
     } finally {
@@ -729,29 +739,31 @@ describe('Priority merge of global and scope-local middleware', () => {
 
   it('scope-local execution intercept and global intercept merge', async () => {
     lib.registerToolExecutionIntercept('sl_merge_global_exec', 5, async (args, next) => {
-      const result = await next({
+      const downstream = await next({
         ...args,
         from_global: true,
       });
       return {
         result: {
-          ...result,
+          ...downstream.result,
           global_exec: true,
         },
+        ...(downstream.annotation == null ? {} : { annotation: downstream.annotation }),
       };
     });
 
     const scope = pushScope('sl_merge_exec_scope', ScopeType.Agent, null, null);
     scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_merge_local_exec', 15, async (args, next) => {
-      const result = await next({
+      const downstream = await next({
         ...args,
         from_scope: true,
       });
       return {
         result: {
-          ...result,
+          ...downstream.result,
           scope_exec: true,
         },
+        ...(downstream.annotation == null ? {} : { annotation: downstream.annotation }),
       };
     });
 
@@ -760,18 +772,20 @@ describe('Priority merge of global and scope-local middleware', () => {
       {
         base: true,
       },
-      (args) => args,
+      (args) => ({ result: args }),
       null,
       null,
       null,
       null,
     );
     assert.deepEqual(result, {
-      base: true,
-      from_global: true,
-      from_scope: true,
-      scope_exec: true,
-      global_exec: true,
+      result: {
+        base: true,
+        from_global: true,
+        from_scope: true,
+        scope_exec: true,
+        global_exec: true,
+      },
     });
 
     scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_merge_local_exec');
@@ -790,23 +804,27 @@ describe('Priority merge of global and scope-local middleware', () => {
       releaseBlocker = resolve;
     });
 
-    scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_target', 100, async (args, next) => ({
-      result: {
-        ...(await next(args)),
-        snapshotted: true,
-      },
-    }));
+    scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_target', 100, async (args, next) => {
+      const downstream = await next(args);
+      return {
+        result: {
+          ...downstream.result,
+          snapshotted: true,
+        },
+        ...(downstream.annotation == null ? {} : { annotation: downstream.annotation }),
+      };
+    });
     scopeRegisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_blocker', -100, async (args, next) => {
       blockerEntered();
       await release;
-      return { result: await next(args) };
+      return await next(args);
     });
 
     try {
       const execution = toolCallExecute(
         'sl_snapshot_exec_tool',
         {},
-        () => ({ downstream: true }),
+        () => ({ result: { downstream: true } }),
         null,
         null,
         null,
@@ -816,8 +834,10 @@ describe('Priority merge of global and scope-local middleware', () => {
       assert.equal(scopeDeregisterToolExecutionIntercept(scope.uuid, 'sl_snapshot_exec_target'), true);
       releaseBlocker();
       assert.deepEqual(await execution, {
-        downstream: true,
-        snapshotted: true,
+        result: {
+          downstream: true,
+          snapshotted: true,
+        },
       });
     } finally {
       releaseBlocker();

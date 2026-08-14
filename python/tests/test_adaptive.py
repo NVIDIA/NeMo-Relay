@@ -15,6 +15,7 @@ from nemo_relay import (
     LLMRequest,
     LLMRequestInterceptOutcome,
     ScopeType,
+    ToolExecutionResult,
     llm,
     plugin,
     scope,
@@ -368,10 +369,10 @@ class TestAdaptivePluginConfiguration:
             assert result["x-python-llm-exec"] == "priority:17"
 
             def my_tool(args):
-                return args
+                return ToolExecutionResult(args)
 
             tool_result = await tools.execute("search", {"query": "test"}, my_tool)
-            assert tool_result["x-python-tool-plugin"] == "priority:17"
+            assert tool_result.result["x-python-tool-plugin"] == "priority:17"
 
             def my_stream_llm(_request: LLMRequest):
                 async def gen():

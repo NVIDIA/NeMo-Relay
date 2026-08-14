@@ -42,7 +42,7 @@ use nemo_relay_plugin::{
     NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
     NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
     NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolNext,
+    ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -417,6 +417,7 @@ static ASYNC_REGISTRATIONS: Mutex<Vec<RegisteredAsync>> = Mutex::new(Vec::new())
 static ASYNC_STREAM_REGISTRATION: Mutex<Option<RegisteredAsyncStream>> = Mutex::new(None);
 static ASYNC_PUSH_BACKPRESSURE: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_COMPLETION_RETAINS: AtomicUsize = AtomicUsize::new(0);
+static ASYNC_TOOL_NEXT_RESULT: AtomicBool = AtomicBool::new(false);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
@@ -1925,7 +1926,23 @@ unsafe extern "C" fn capture_async_next_result(
     unsafe { &*next.cast::<MockAsyncNext>() }
         .calls
         .fetch_add(1, Ordering::SeqCst);
-    unsafe { cb(user_data, invocation_json, ptr::null()) };
+    if ASYNC_TOOL_NEXT_RESULT.load(Ordering::SeqCst) {
+        let host = test_host();
+        let invocation: Json = read_host_string(&host, invocation_json)
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .expect("tool next invocation JSON");
+        let result = json_host_string(
+            &host,
+            json!({
+                "result": invocation,
+                "annotation": {"source": "host"},
+            }),
+        );
+        unsafe { cb(user_data, result, ptr::null()) };
+        unsafe { (host.string_free)(result) };
+    } else {
+        unsafe { cb(user_data, invocation_json, ptr::null()) };
+    }
     NemoRelayStatus::Ok
 }
 
@@ -2077,6 +2094,10 @@ fn invoke_async_registration(
     invocation: Json,
     next: Option<&MockAsyncNext>,
 ) -> std::result::Result<Json, String> {
+    ASYNC_TOOL_NEXT_RESULT.store(
+        registration.kind == NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept,
+        Ordering::SeqCst,
+    );
     let completion = MockAsyncCompletion::new();
     let invocation = json_host_string(&host.v3.v1, invocation);
     let state = unsafe {
@@ -2093,6 +2114,7 @@ fn invoke_async_registration(
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
     );
     let result = completion.wait();
+    ASYNC_TOOL_NEXT_RESULT.store(false, Ordering::SeqCst);
     completion.wait_for_release();
     assert!(completion.releases.load(Ordering::SeqCst) >= 1);
     result
@@ -3016,7 +3038,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         8,
         |_name, value, next| async move {
             let result = next.call(value).await?;
-            Ok(ToolExecutionInterceptOutcome::new(result))
+            Ok(ToolExecutionInterceptOutcome::from(result))
         },
     )
     .unwrap();
@@ -3191,16 +3213,15 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     };
     let registration =
         take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept);
-    assert_eq!(
-        invoke_async_registration(
-            &host,
-            &registration,
-            json!({ "name": "calculator", "value": { "answer": 42 } }),
-            Some(&next),
-        )
-        .unwrap()["result"],
-        json!({ "answer": 42 })
+    let outcome = invoke_async_registration(
+        &host,
+        &registration,
+        json!({ "name": "calculator", "value": { "answer": 42 } }),
+        Some(&next),
     );
+    let outcome = outcome.unwrap();
+    assert_eq!(outcome["result"], json!({ "answer": 42 }));
+    assert_eq!(outcome["annotation"], json!({"source": "host"}));
     unsafe { registration.free() };
 
     let request = test_llm_request();
@@ -3369,6 +3390,85 @@ fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
 }
 
 #[test]
+fn typed_async_llm_sanitize_context_decodes_all_builtin_identities() {
+    let _guard = begin_test();
+
+    for expected in [
+        BuiltinLlmCodec::OpenAiChat,
+        BuiltinLlmCodec::OpenAiResponses,
+        BuiltinLlmCodec::AnthropicMessages,
+        BuiltinLlmCodec::OCIGenAI,
+        BuiltinLlmCodec::GeminiGenerateContent,
+    ] {
+        let host = test_host_v4();
+        let mut ctx = test_context(&host.v3.v1);
+        ctx.register_llm_sanitize_request_guardrail(
+            "llm-request-builtins",
+            0,
+            move |request, context| async move {
+                assert_eq!(context.codec, LlmCodecIdentity::BuiltIn(expected));
+                Ok(Some(request))
+            },
+        )
+        .unwrap();
+
+        let registration =
+            take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest);
+        assert_eq!(
+            invoke_async_registration(
+                &host,
+                &registration,
+                json!({
+                    "request": test_llm_request(),
+                    "context": { "codec_kind": "builtin", "codec_id": expected.id() }
+                }),
+                None,
+            )
+            .unwrap()["content"],
+            json!({ "prompt": "hello" })
+        );
+        unsafe { registration.free() };
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while live_host_strings() != 0 {
+            assert!(
+                Instant::now() < deadline,
+                "host strings were not released after the sanitize invocation"
+            );
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[test]
+fn typed_async_llm_sanitize_context_rejects_unknown_builtin_identity() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+    ctx.register_llm_sanitize_request_guardrail(
+        "llm-request-unknown",
+        0,
+        |request, _context| async move { Ok(Some(request)) },
+    )
+    .unwrap();
+
+    let registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::LlmSanitizeRequest);
+    let error = invoke_async_registration(
+        &host,
+        &registration,
+        json!({
+            "request": test_llm_request(),
+            "context": { "codec_kind": "builtin", "codec_id": "future_provider" }
+        }),
+        None,
+    )
+    .expect_err("unknown built-in codec identities must be rejected");
+    assert!(error.contains("unknown built-in LLM codec: future_provider"));
+    unsafe { registration.free() };
+}
+
+#[test]
 fn typed_async_registration_failure_rolls_back_callback_state() {
     let _guard = begin_test();
     let host = test_host_v4();
@@ -3480,9 +3580,12 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
             next.call(json!({ "call": 1 })),
             next.call(json!({ "call": 2 }))
         );
+        let left = left?;
+        let right = right?;
         Ok(ToolExecutionInterceptOutcome::new(json!({
             "thread": thread,
-            "results": [left?, right?]
+            "results": [left.result, right.result],
+            "annotations": [left.annotation, right.annotation],
         })))
     })
     .unwrap();
@@ -3508,6 +3611,10 @@ fn typed_async_continuations_are_concurrent_and_executor_owned() {
     );
     assert_eq!(result["result"]["results"][0], json!({ "call": 1 }));
     assert_eq!(result["result"]["results"][1], json!({ "call": 2 }));
+    assert_eq!(
+        result["result"]["annotations"],
+        json!([{"source": "host"}, {"source": "host"}])
+    );
     assert_eq!(next.calls.load(Ordering::SeqCst), 2);
     assert_eq!(next.releases.load(Ordering::SeqCst), 1);
     unsafe { registration.free() };

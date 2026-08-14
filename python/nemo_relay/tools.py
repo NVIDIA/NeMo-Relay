@@ -14,10 +14,10 @@ Example::
     import nemo_relay
 
     async def search(args):
-        return {"result": args["query"].upper()}
+        return nemo_relay.ToolExecutionResult({"result": args["query"].upper()})
 
     result = await nemo_relay.tools.execute("search", {"query": "hello"}, search)
-    assert result == {"result": "HELLO"}
+    assert result.result == {"result": "HELLO"}
 """
 
 from datetime import datetime
@@ -91,7 +91,7 @@ def call(
         )
         nemo_relay.tools.call_end(
             handle,
-            {"result": "ok"},
+            nemo_relay.ToolExecutionResult({"result": "ok"}),
             data={"cached": False},
             metadata={"status": "success"},
         )
@@ -114,7 +114,7 @@ def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | 
 
     Args:
         handle: Tool handle returned by ``call()``.
-        result: JSON-compatible tool result to record on the end event.
+        result: Canonical ``ToolExecutionResult`` to record on the end event.
         data: Optional JSON payload used when the sanitized ``result`` is JSON null.
         metadata: Optional JSON metadata recorded on the emitted end event.
         timestamp: Optional timezone-aware ``datetime`` recorded on the emitted
@@ -153,7 +153,7 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
         name: Tool name recorded on emitted lifecycle events.
         args: JSON-compatible arguments passed through the middleware pipeline.
         func: Tool implementation invoked as ``func(args)`` after guardrails and
-            intercepts run.
+            intercepts run. It must return ``ToolExecutionResult``.
         handle: Optional parent scope handle. When omitted, the current scope
             becomes the parent.
         attributes: Optional native tool attributes attached to the start event.
@@ -161,7 +161,8 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
         metadata: Optional JSON metadata recorded on the emitted start event.
 
     Returns:
-        Json: The raw result returned by ``func`` or by an execution intercept.
+        ToolExecutionResult: The canonical result returned by ``func`` or an
+        execution intercept.
 
     Notes:
         Sanitize guardrails affect emitted event payloads only. They do not
@@ -173,7 +174,7 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
         import nemo_relay
 
         async def local_tool(args):
-            return {"count": len(args["items"])}
+            return nemo_relay.ToolExecutionResult({"count": len(args["items"])})
 
         result = await nemo_relay.tools.execute(
             "count",
@@ -184,7 +185,7 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
             data={"source": "example"},
             metadata={"request_id": "req-1"},
         )
-        assert result["count"] == 3
+        assert result.result["count"] == 3
     """
     ensure_scope_stack()
     return _native_tool_call_execute(

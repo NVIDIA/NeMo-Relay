@@ -20,6 +20,12 @@ SPDX-License-Identifier: Apache-2.0
 dynamic worker plugins. Use it when plugin code needs process isolation and
 communicates with Relay through the versioned `grpc-v1` worker protocol.
 
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline.
+Workers built for an earlier Relay release must be rebuilt with this SDK and
+declare a `compat.relay` range beginning at `0.8.0` or later. The protocol name
+remains `grpc-v1`, but its generated `ToolNext` response and tool-execution
+outcome fields now use structural protobuf messages.
+
 ## Why Use It?
 
 - **Isolate plugin code**: Run custom runtime behavior outside the Relay host
@@ -38,6 +44,8 @@ communicates with Relay through the versioned `grpc-v1` worker protocol.
 - **`PluginContext`**: Typed registrations for all supported worker surfaces.
 - **`PluginRuntime` and continuations**: Host-runtime callbacks and tool/LLM
   execution-chain helpers.
+- **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, so
+  workers can preserve an opaque annotation independently of the tool result.
 - **`serve_plugin`**: Tokio gRPC server startup using the Relay-provided worker
   environment.
 

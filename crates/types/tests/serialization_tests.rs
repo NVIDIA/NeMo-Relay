@@ -10,7 +10,7 @@ use nemo_relay_types::api::event::{
     llm_attributes_to_strings,
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
-use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay_types::codec::request::{AnnotatedLlmRequest, ContentPart, Message, MessageContent};
 use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 use serde_json::{Map, json};
@@ -178,23 +178,27 @@ fn llm_request_intercept_outcome_converts_from_request_inputs() {
 
 #[test]
 fn tool_execution_intercept_outcome_round_trips_pending_marks() {
-    let outcome = ToolExecutionInterceptOutcome::new(json!({"stdout": "compacted"}))
-        .with_pending_mark(
-            PendingMarkSpec::builder()
-                .name("tool.output.compacted")
-                .category(EventCategory::custom())
-                .category_profile(
-                    CategoryProfile::builder()
-                        .subtype("optimizer.saved_tokens")
-                        .build(),
-                )
-                .data(json!({"saved_tokens": 12}))
-                .metadata(json!({"source": "test"}))
-                .build(),
-        );
+    let outcome = ToolExecutionInterceptOutcome::annotated(
+        json!({"stdout": "compacted"}),
+        json!({"source": "middleware"}),
+    )
+    .with_pending_mark(
+        PendingMarkSpec::builder()
+            .name("tool.output.compacted")
+            .category(EventCategory::custom())
+            .category_profile(
+                CategoryProfile::builder()
+                    .subtype("optimizer.saved_tokens")
+                    .build(),
+            )
+            .data(json!({"saved_tokens": 12}))
+            .metadata(json!({"source": "test"}))
+            .build(),
+    );
 
     let encoded = serde_json::to_value(&outcome).expect("outcome should serialize");
     assert_eq!(encoded["result"]["stdout"], "compacted");
+    assert_eq!(encoded["annotation"]["source"], "middleware");
     assert_eq!(encoded["pending_marks"][0]["name"], "tool.output.compacted");
     assert_eq!(encoded["pending_marks"][0]["category"], "custom");
 
@@ -208,6 +212,7 @@ fn tool_execution_intercept_outcome_round_trips_pending_marks() {
     }))
     .expect("omitted pending marks and unknown fields should be accepted");
     assert!(defaults.pending_marks.is_empty());
+    assert!(defaults.annotation.is_none());
     assert_eq!(defaults.result, json!("plain"));
 
     assert!(
@@ -217,6 +222,162 @@ fn tool_execution_intercept_outcome_round_trips_pending_marks() {
         .is_err(),
         "result is required"
     );
+}
+
+#[test]
+fn tool_execution_result_round_trips_opaque_annotations() {
+    for annotation in [
+        json!("opaque"),
+        json!([true, 7]),
+        json!({"nested": {"status": "failed"}}),
+    ] {
+        let result = ToolExecutionResult::annotated(json!({"value": 42}), annotation.clone());
+        let encoded = serde_json::to_value(&result).expect("result should serialize");
+        assert_eq!(encoded["annotation"], annotation);
+        let decoded: ToolExecutionResult =
+            serde_json::from_value(encoded).expect("result should deserialize");
+        assert_eq!(decoded, result);
+    }
+
+    let missing: ToolExecutionResult = serde_json::from_value(json!({"result": [1, 2]}))
+        .expect("missing annotation should deserialize");
+    assert!(missing.annotation.is_none());
+
+    let null: ToolExecutionResult = serde_json::from_value(json!({
+        "result": "ok",
+        "annotation": null,
+    }))
+    .expect("null annotation should deserialize as absent");
+    assert!(null.annotation.is_none());
+    assert_eq!(
+        serde_json::to_value(ToolExecutionResult::annotated(json!("ok"), json!(null))).unwrap(),
+        json!({"result": "ok"})
+    );
+
+    assert!(
+        serde_json::from_value::<ToolExecutionResult>(json!({"annotation": {}})).is_err(),
+        "result is required"
+    );
+}
+
+#[test]
+fn tool_execution_result_helpers_preserve_payloads_and_normalize_annotations() {
+    let payload = json!({"value": 42});
+    let result: ToolExecutionResult = payload.clone().into();
+    assert_eq!(result.result, payload);
+    assert!(result.annotation.is_none());
+
+    let result = result.with_annotation(json!({"source": "tool"}));
+    assert_eq!(result.annotation, Some(json!({"source": "tool"})));
+    assert!(result.clone().without_annotation().annotation.is_none());
+    assert!(result.with_annotation(json!(null)).annotation.is_none());
+
+    let outcome = ToolExecutionInterceptOutcome::new(json!("ok"))
+        .with_pending_mark(
+            PendingMarkSpec::builder()
+                .name("tool.mark")
+                .category(EventCategory::custom())
+                .build(),
+        )
+        .with_annotation(json!({"source": "middleware"}));
+    assert_eq!(outcome.annotation, Some(json!({"source": "middleware"})));
+    assert_eq!(outcome.pending_marks.len(), 1);
+
+    let outcome = outcome.without_annotation();
+    assert!(outcome.annotation.is_none());
+    assert_eq!(outcome.pending_marks.len(), 1);
+    assert!(outcome.with_annotation(json!(null)).annotation.is_none());
+}
+
+#[test]
+fn tool_execution_null_annotations_have_stable_equality_and_round_trips() {
+    let result_with_null = ToolExecutionResult {
+        result: json!({"value": 42}),
+        annotation: Some(serde_json::Value::Null),
+    };
+    let canonical_result = ToolExecutionResult::new(json!({"value": 42}));
+    assert_eq!(result_with_null, canonical_result);
+
+    let encoded = serde_json::to_value(&result_with_null).expect("result should serialize");
+    assert_eq!(encoded, json!({"result": {"value": 42}}));
+    let decoded: ToolExecutionResult =
+        serde_json::from_value(encoded).expect("result should deserialize");
+    assert_eq!(decoded, result_with_null);
+
+    let outcome_from_result = ToolExecutionInterceptOutcome::from(result_with_null);
+    assert!(outcome_from_result.annotation.is_none());
+
+    let outcome_with_null = ToolExecutionInterceptOutcome {
+        result: json!("ok"),
+        annotation: Some(serde_json::Value::Null),
+        pending_marks: Vec::new(),
+    };
+    let canonical_outcome = ToolExecutionInterceptOutcome::new(json!("ok"));
+    assert_eq!(outcome_with_null, canonical_outcome);
+
+    let encoded = serde_json::to_value(&outcome_with_null).expect("outcome should serialize");
+    assert_eq!(encoded, json!({"result": "ok", "pending_marks": []}));
+    let decoded: ToolExecutionInterceptOutcome =
+        serde_json::from_value(encoded).expect("outcome should deserialize");
+    assert_eq!(decoded, outcome_with_null);
+    assert!(
+        outcome_with_null
+            .into_execution_result()
+            .annotation
+            .is_none()
+    );
+}
+
+#[test]
+fn category_profile_serializes_non_null_tool_result_annotation() {
+    let mut profile = CategoryProfile::builder()
+        .tool_result_annotation(json!({"opaque": true}))
+        .build();
+    assert_eq!(
+        profile.tool_result_annotation,
+        Some(json!({"opaque": true}))
+    );
+    assert_eq!(
+        serde_json::to_value(&profile).unwrap()["tool_result_annotation"],
+        json!({"opaque": true})
+    );
+    profile.tool_result_annotation = Some(serde_json::Value::Null);
+    assert!(
+        serde_json::to_value(profile)
+            .unwrap()
+            .get("tool_result_annotation")
+            .is_none()
+    );
+}
+
+#[test]
+fn event_returns_an_owned_tool_result_annotation() {
+    let annotation = json!({"opaque": true});
+    let event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("tool").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::tool(),
+        Some(
+            CategoryProfile::builder()
+                .tool_result_annotation(annotation.clone())
+                .build(),
+        ),
+    ));
+
+    assert_eq!(event.tool_result_annotation(), Some(annotation));
+}
+
+#[test]
+fn tool_execution_outcome_converts_without_exposing_pending_marks() {
+    let result = ToolExecutionResult::annotated(json!({"value": 42}), json!({"source": "tool"}));
+    let outcome = ToolExecutionInterceptOutcome::from(result.clone()).with_pending_mark(
+        PendingMarkSpec::builder()
+            .name("tool.mark")
+            .category(EventCategory::custom())
+            .build(),
+    );
+    assert_eq!(outcome.into_execution_result(), result);
 }
 
 #[test]

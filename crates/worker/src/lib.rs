@@ -37,7 +37,8 @@ pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
-pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
+pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
+pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
     LlmOptimizationModel, LlmOptimizationModelTransition, LlmOptimizationPayload,
@@ -56,10 +57,15 @@ use nemo_relay_worker_proto::v1::{
     LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
     LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck, WorkerError,
+    ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionInterceptResult, ToolExecutionResult as ProtoToolExecutionResult,
+    ToolExecutionResultResponse, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
+    WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -144,34 +150,6 @@ type LlmSanitizeRequestFn = Arc<
 >;
 type LlmSanitizeResponseFn =
     Arc<dyn Fn(Json, LlmSanitizeResponseContext) -> BoxFutureResult<Option<Json>> + Send + Sync>;
-
-/// Relay built-in codec identities supplied to worker sanitizers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinLlmCodec {
-    /// OpenAI Chat Completions.
-    OpenAiChat,
-    /// OpenAI Responses.
-    OpenAiResponses,
-    /// Anthropic Messages.
-    AnthropicMessages,
-    /// OCI Generative AI chat request and response payloads.
-    OCIGenAI,
-    /// Gemini generateContent request and response payloads.
-    GeminiGenerateContent,
-}
-
-/// Per-call LLM codec identity supplied to worker sanitizers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LlmCodecIdentity {
-    /// No codec was active.
-    None,
-    /// A Relay built-in codec was active.
-    BuiltIn(BuiltinLlmCodec),
-    /// A runtime-registered codec was active, identified by its stable ID.
-    Runtime(String),
-    /// A codec was active but has no registered identity.
-    Opaque,
-}
 
 /// Active codec context supplied to an LLM request sanitizer.
 #[derive(Clone)]
@@ -511,8 +489,8 @@ impl PluginContext {
     /// Registers a tool execution intercept.
     ///
     /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
-    /// [`ToolNext::call`] continues the chain and returns only the raw
-    /// downstream result JSON; Relay retains downstream pending marks.
+    /// [`ToolNext::call`] continues the chain and returns the downstream
+    /// [`ToolExecutionResult`]; Relay retains downstream pending marks.
     /// `ToolNext` may be called repeatedly or concurrently while the callback
     /// is active. Each call snapshots its visible worker scope stack, and Relay
     /// rejects late calls or cancels unfinished calls when the callback settles.
@@ -946,7 +924,7 @@ impl ToolNext {
     /// Calls may be repeated or concurrent while the owning interceptor is
     /// active. Each call receives an isolated snapshot of the scope stack
     /// visible here. Calls still unfinished when the interceptor settles fail.
-    pub async fn call(&self, value: Json) -> Result<Json> {
+    pub async fn call(&self, value: Json) -> Result<ToolExecutionResult> {
         let mut client = self.runtime.host_client().await?;
         let response = client
             .tool_next(Request::new(ToolNextRequest {
@@ -959,7 +937,7 @@ impl ToolNext {
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        json_result_to_sdk(response)
+        tool_execution_result_to_sdk(response)
     }
 }
 
@@ -2155,18 +2133,10 @@ fn codec_identity_from_proto(
     let codec_id = codec.and_then(|codec| codec.id.clone());
     match LlmCodecKind::try_from(codec_kind).ok() {
         Some(LlmCodecKind::Unspecified) => LlmCodecIdentity::None,
-        Some(LlmCodecKind::Builtin) => match codec_id.as_deref() {
-            Some("openai_chat") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat),
-            Some("openai_responses") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses),
-            Some("anthropic_messages") => {
-                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::AnthropicMessages)
-            }
-            Some("oci_genai") => LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI),
-            Some("gemini_generate_content") => {
-                LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::GeminiGenerateContent)
-            }
-            _ => LlmCodecIdentity::Opaque,
-        },
+        Some(LlmCodecKind::Builtin) => codec_id
+            .as_deref()
+            .and_then(BuiltinLlmCodec::from_id)
+            .map_or(LlmCodecIdentity::Opaque, LlmCodecIdentity::BuiltIn),
         Some(LlmCodecKind::Runtime) => codec_id
             .filter(|id| !id.is_empty())
             .map_or(LlmCodecIdentity::Opaque, LlmCodecIdentity::Runtime),
@@ -2288,13 +2258,57 @@ fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<Inv
         result: Some(
             nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
                 ToolExecutionInterceptResult {
-                    outcome: Some(json_envelope(
-                        "nemo.relay.ToolExecutionInterceptOutcome@1",
-                        &outcome,
-                    )?),
+                    outcome: Some(tool_execution_outcome_to_proto(outcome)?),
                 },
             ),
         ),
+    })
+}
+
+fn tool_execution_result_to_sdk(
+    result: ToolExecutionResultResponse,
+) -> Result<ToolExecutionResult> {
+    if let Some(error) = result.error {
+        return Err(worker_error_to_sdk(error));
+    }
+    let value = result
+        .value
+        .ok_or_else(|| WorkerSdkError::InvalidInput("tool execution result is missing".into()))?;
+    tool_execution_result_from_proto(value)
+}
+
+fn tool_execution_outcome_to_proto(
+    outcome: ToolExecutionInterceptOutcome,
+) -> Result<ProtoToolExecutionInterceptOutcome> {
+    Ok(ProtoToolExecutionInterceptOutcome {
+        result: Some(json_value(&outcome.result)?),
+        annotation: outcome
+            .annotation
+            .as_ref()
+            .filter(|value| !value.is_null())
+            .map(json_value)
+            .transpose()?,
+        pending_marks: (!outcome.pending_marks.is_empty())
+            .then(|| json_value(&outcome.pending_marks))
+            .transpose()?,
+    })
+}
+
+fn tool_execution_result_from_proto(
+    value: ProtoToolExecutionResult,
+) -> Result<ToolExecutionResult> {
+    let result = value.result.ok_or_else(|| {
+        WorkerSdkError::InvalidInput("tool execution result.result is missing".into())
+    })?;
+    let annotation = value
+        .annotation
+        .as_ref()
+        .map(decode_json_value)
+        .transpose()?
+        .filter(|value: &Json| !value.is_null());
+    Ok(ToolExecutionResult {
+        result: decode_json_value(&result)?,
+        annotation,
     })
 }
 

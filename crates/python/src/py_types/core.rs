@@ -19,7 +19,7 @@ use nemo_relay::api::runtime::{
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, PropagationContext,
     ThreadScopeStackBinding,
 };
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 
 /// Structured identity of the codec active during LLM sanitization.
 #[pyclass(name = "LlmCodecIdentity", frozen)]
@@ -949,6 +949,65 @@ impl PyLLMRequestInterceptOutcome {
     }
 }
 
+/// Canonical application-visible result returned by Python tool producers.
+#[pyclass(name = "ToolExecutionResult", from_py_object, generic)]
+#[derive(Clone)]
+pub struct PyToolExecutionResult {
+    result: Arc<Py<PyAny>>,
+    annotation: Option<Arc<Py<PyAny>>>,
+}
+
+#[pymethods]
+impl PyToolExecutionResult {
+    #[new]
+    #[pyo3(signature = (result, annotation=None))]
+    fn new(result: &Bound<'_, PyAny>, annotation: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        Ok(Self {
+            result: Arc::new(result.clone().unbind()),
+            annotation: annotation
+                .filter(|value| !value.is_none())
+                .map(|value| Arc::new(value.clone().unbind())),
+        })
+    }
+
+    #[getter]
+    fn result(&self, py: Python<'_>) -> Py<PyAny> {
+        self.result.as_ref().clone_ref(py)
+    }
+
+    #[getter]
+    fn annotation(&self, py: Python<'_>) -> Py<PyAny> {
+        self.annotation
+            .as_ref()
+            .map_or_else(|| py.None(), |value| value.as_ref().clone_ref(py))
+    }
+}
+
+impl PyToolExecutionResult {
+    pub(crate) fn from_inner(py: Python<'_>, inner: ToolExecutionResult) -> PyResult<Self> {
+        Ok(Self {
+            result: Arc::new(json_to_py(py, &inner.result)?),
+            annotation: inner
+                .annotation
+                .as_ref()
+                .map(|value| json_to_py(py, value))
+                .transpose()?
+                .map(Arc::new),
+        })
+    }
+
+    pub(crate) fn to_inner(&self, py: Python<'_>) -> PyResult<ToolExecutionResult> {
+        Ok(ToolExecutionResult {
+            result: py_to_json(self.result.as_ref().bind(py))?,
+            annotation: self
+                .annotation
+                .as_ref()
+                .map(|value| py_to_json(value.as_ref().bind(py)))
+                .transpose()?,
+        })
+    }
+}
+
 /// Canonical result returned by Python tool execution intercepts.
 #[pyclass(name = "ToolExecutionInterceptOutcome", from_py_object)]
 #[derive(Clone)]
@@ -959,11 +1018,16 @@ pub struct PyToolExecutionInterceptOutcome {
 #[pymethods]
 impl PyToolExecutionInterceptOutcome {
     #[new]
-    #[pyo3(signature = (result, pending_marks=Vec::new()))]
-    fn new(result: &Bound<'_, PyAny>, pending_marks: Vec<PyPendingMarkSpec>) -> PyResult<Self> {
+    #[pyo3(signature = (result, pending_marks=Vec::new(), *, annotation=None))]
+    fn new(
+        result: &Bound<'_, PyAny>,
+        pending_marks: Vec<PyPendingMarkSpec>,
+        annotation: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
         Ok(Self {
             inner: ToolExecutionInterceptOutcome {
                 result: py_to_json(result)?,
+                annotation: crate::convert::opt_py_to_json(annotation)?,
                 pending_marks: pending_marks.into_iter().map(|value| value.inner).collect(),
             },
         })
@@ -972,6 +1036,11 @@ impl PyToolExecutionInterceptOutcome {
     #[getter]
     fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         json_to_py(py, &self.inner.result)
+    }
+
+    #[getter]
+    fn annotation(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.annotation)
     }
 
     #[getter]

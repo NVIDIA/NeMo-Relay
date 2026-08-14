@@ -16,13 +16,13 @@ func TestToolShorthands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
-	if err := toolspkg.CallEnd(handle, json.RawMessage(`{"ok": true}`)); err != nil {
+	if err := toolspkg.CallEnd(handle, nemo_relay.ToolExecutionResult{Result: json.RawMessage(`{"ok": true}`)}); err != nil {
 		t.Fatalf("CallEnd failed: %v", err)
 	}
 
 	result, err := toolspkg.Execute("tools_execute", json.RawMessage(`{"value": 2}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return args, nil
+		func(args json.RawMessage) (nemo_relay.ToolExecutionResult, error) {
+			return nemo_relay.ToolExecutionResult{Result: args}, nil
 		},
 	)
 	if err != nil {
@@ -30,7 +30,7 @@ func TestToolShorthands(t *testing.T) {
 	}
 
 	var executed map[string]interface{}
-	if err := json.Unmarshal(result, &executed); err != nil {
+	if err := json.Unmarshal(result.Result, &executed); err != nil {
 		t.Fatalf("unmarshal execute result: %v", err)
 	}
 	if executed["value"] != float64(2) {

@@ -4438,11 +4438,15 @@ fn anthropic_messages_output_emits_openinference_text_tool_and_usage_attributes(
     );
     assert_eq!(
         attributes.get("llm.token_count.prompt"),
-        Some(&"11".to_string())
+        Some(&"19".to_string())
     );
     assert_eq!(
         attributes.get("llm.token_count.completion"),
         Some(&"7".to_string())
+    );
+    assert_eq!(
+        attributes.get("llm.token_count.total"),
+        Some(&"26".to_string())
     );
     assert_eq!(
         attributes.get("llm.token_count.prompt_details.cache_read"),
@@ -4637,6 +4641,89 @@ fn annotated_input_projection_covers_extended_roles_and_native_text() {
         message_content_text(&content).as_deref(),
         Some("portable refusal\nnative text\nnative refusal")
     );
+}
+
+#[test]
+fn annotated_input_projection_normalizes_tool_result_messages() {
+    let messages = vec![
+        Message::User {
+            content: MessageContent::Parts(vec![
+                ContentPart::ToolResult {
+                    tool_use_id: "call_1".into(),
+                    content: json!("first result"),
+                    is_error: None,
+                    extra: serde_json::Map::new(),
+                },
+                ContentPart::ToolResult {
+                    tool_use_id: "call_2".into(),
+                    content: json!({"status": "ok"}),
+                    is_error: Some(false),
+                    extra: serde_json::Map::new(),
+                },
+            ]),
+            name: None,
+        },
+        Message::User {
+            content: MessageContent::Parts(vec![
+                ContentPart::ToolResult {
+                    tool_use_id: "call_3".into(),
+                    content: json!("mixed result"),
+                    is_error: None,
+                    extra: serde_json::Map::new(),
+                },
+                ContentPart::Text {
+                    text: "follow-up".into(),
+                    extra: serde_json::Map::new(),
+                },
+            ]),
+            name: None,
+        },
+        Message::Tool {
+            content: MessageContent::Text("openai result".into()),
+            tool_call_id: "call_4".into(),
+        },
+        Message::ToolResultItem {
+            id: None,
+            call_id: "call_5".into(),
+            output: json!(["first", 2]),
+            extra: serde_json::Map::new(),
+        },
+    ];
+
+    let mut attributes = Vec::new();
+    push_annotated_input_messages(&mut attributes, &messages, 0);
+    let attributes = attr_map(&attributes);
+
+    for (index, call_id, content) in [
+        (0, "call_1", "first result"),
+        (1, "call_2", r#"{"status":"ok"}"#),
+        (3, "call_4", "openai result"),
+        (4, "call_5", r#"["first",2]"#),
+    ] {
+        assert_attr(
+            &attributes,
+            &format!("llm.input_messages.{index}.message.role"),
+            "tool",
+        );
+        assert_attr(
+            &attributes,
+            &format!("llm.input_messages.{index}.message.tool_call_id"),
+            call_id,
+        );
+        assert_attr(
+            &attributes,
+            &format!("llm.input_messages.{index}.message.content"),
+            content,
+        );
+    }
+    assert_attr(&attributes, "llm.input_messages.2.message.role", "user");
+    assert_attr(
+        &attributes,
+        "llm.input_messages.2.message.content",
+        "follow-up",
+    );
+    assert!(!attributes.contains_key("llm.input_messages.2.message.tool_call_id"));
+    assert!(!attributes.contains_key("llm.input_messages.5.message.role"));
 }
 
 #[test]

@@ -4044,7 +4044,7 @@ License: `MIT`
 ### Licenses
 License: `BSD-3-Clause`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 BSD 3-Clause License
 
@@ -5908,7 +5908,7 @@ THE SOFTWARE.
 ### Licenses
 License: `MIT`
 
-  - `LICENSE`:
+  - `licenses/LICENSE`:
 ```
 Permission is hereby granted, free of charge, to any person obtaining a
 copy of this software and associated documentation files (the

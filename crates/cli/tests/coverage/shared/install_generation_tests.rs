@@ -7,6 +7,24 @@ use std::fs::File;
 use tempfile::tempdir;
 
 use super::*;
+use crate::test_support::EnvScope;
+
+#[test]
+fn generation_environment_contract_requires_marker_and_token_together() {
+    let _environment = EnvScope::set(&[(GENERATION_FILE_ENV, None), (GENERATION_TOKEN_ENV, None)]);
+    assert!(
+        InstallGeneration::capture_guarded_from_env()
+            .unwrap()
+            .is_none()
+    );
+    unsafe { std::env::set_var(GENERATION_FILE_ENV, "/tmp/generation") };
+    assert!(InstallGeneration::capture_guarded_from_env().is_err());
+    unsafe {
+        std::env::remove_var(GENERATION_FILE_ENV);
+        std::env::set_var(GENERATION_TOKEN_ENV, "token");
+    }
+    assert!(InstallGeneration::capture_guarded_from_env().is_err());
+}
 
 #[test]
 fn plugin_retirement_rejects_an_external_lock_outside_its_layout() {
