@@ -240,14 +240,17 @@ export const documentationPlugin = {
     if (runtime.emit_marks || runtime.emit_isolated_scope) {
       context.registerToolExecutionIntercept('runtime-events', 0, async (args, next) => {
         emitRuntimeEvents(runtime, settings.tag);
-        return { result: await next(args) };
+        return await next(args);
       });
     }
     if (execution.enabled) {
-      context.registerToolExecutionIntercept('tool-execution', execution.priority, async (args, next) => ({
-        result: await next(args),
-        pendingMarks: execution.emit_pending_marks ? [{ name: 'documentation-plugin.tool-complete' }] : [],
-      }));
+      context.registerToolExecutionIntercept('tool-execution', execution.priority, async (args, next) => {
+        const downstream = await next(args);
+        return {
+          ...downstream,
+          pendingMarks: execution.emit_pending_marks ? [{ name: 'documentation-plugin.tool-complete' }] : [],
+        };
+      });
       context.registerLlmExecutionIntercept('llm-execution', execution.priority, async (request, next) => next(request));
       context.registerLlmStreamExecutionIntercept('llm-stream', execution.priority, async (request, next) =>
         (await next(request)).map((chunk) => ({ ...chunk, plugin_stream: true })),
@@ -291,7 +294,10 @@ export async function main() {
   try {
     const report = await plugin.initialize(config('enforce'));
     console.log('active:', report);
-    const toolResult = await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    const toolResult = await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => ({
+      result: args,
+      annotation: { source: 'application' },
+    }));
     console.log('tool:', toolResult);
     const request = { headers: {}, content: { model: 'allowed-model' } };
     const llmResult = await relay.llmCallExecute('allowed-model', request, (rewritten) => ({

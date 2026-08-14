@@ -124,9 +124,15 @@ test('activation reports no diagnostics', async () => {
 
 test('tool requests are rewritten', async () => {
   await withActivePlugin(async () => {
-    const result = await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    const result = await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => ({
+      result: args,
+      annotation: { source: 'application' },
+    }));
 
-    assert.deepEqual(result, { value: 1, plugin_tag: 'documentation' });
+    assert.deepEqual(result, {
+      result: { value: 1, plugin_tag: 'documentation' },
+      annotation: { source: 'application' },
+    });
   });
 });
 
@@ -179,7 +185,7 @@ test('subscriber observes an emitted event', async () => {
 
 test('runtime controls emit a mark and an isolated scope only when enabled', async () => {
   await withActivePlugin(async () => {
-    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => ({ result: args }));
     await relay.flushSubscribers();
 
     assert.ok(documentationPlugin.events.includes('documentation-plugin.request'));
@@ -189,7 +195,7 @@ test('runtime controls emit a mark and an isolated scope only when enabled', asy
   const runtimeDisabled = config('enforce');
   runtimeDisabled.components[0].config.runtime = { emit_marks: false, emit_isolated_scope: false };
   await withActivePlugin(async () => {
-    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => ({ result: args }));
     await relay.flushSubscribers();
 
     assert.ok(!documentationPlugin.events.includes('documentation-plugin.request'));
@@ -201,7 +207,7 @@ test('runtime controls do not depend on request rewriting', async () => {
   const requestsDisabled = config('enforce');
   requestsDisabled.components[0].config.requests.enabled = false;
   await withActivePlugin(async () => {
-    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => args);
+    await relay.toolCallExecute('safe_tool', { value: 1 }, (args) => ({ result: args }));
     await relay.flushSubscribers();
 
     assert.ok(documentationPlugin.events.includes('documentation-plugin.request'));

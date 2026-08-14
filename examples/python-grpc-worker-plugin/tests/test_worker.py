@@ -27,7 +27,7 @@ if os.environ.get("NEMO_RELAY_SKIP_PYTHON_PLUGIN_TESTS") == "1":
 
 pytest.importorskip("grpc")
 
-from nemo_relay_plugin import PluginContext, PluginRuntime  # noqa: E402
+from nemo_relay_plugin import PluginContext, PluginRuntime, ToolExecutionResult  # noqa: E402
 
 EXAMPLE_ROOT = Path(__file__).parents[1]
 MODULE_NAME = "nemo_relay_python_grpc_worker_example.worker"
@@ -99,7 +99,7 @@ def test_manifest_digest_matches_worker_source() -> None:
 def test_manifest_declares_current_worker_protocol() -> None:
     manifest = read_manifest()
 
-    assert manifest["compat"] == {"relay": ">=0.6,<1.0", "worker_protocol": "grpc-v1"}
+    assert manifest["compat"] == {"relay": ">=0.8.0,<1.0", "worker_protocol": "grpc-v1"}
 
 
 def test_schema_declares_only_supported_groups() -> None:
@@ -322,7 +322,7 @@ async def test_runtime_helpers_clean_up_successful_request(example: Any) -> None
     context, runtime = register_example(example)
     intercept = callback(context, "register_tool_execution_intercept", "documentation_runtime_events")
     next_call = MagicMock()
-    next_call.call = AsyncMock(return_value={"ok": True})
+    next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}))
 
     await intercept("safe_tool", {"value": 1}, next_call)
 
@@ -336,7 +336,7 @@ async def test_runtime_helpers_close_failed_request(example: Any) -> None:
     runtime.emit_mark.side_effect = RuntimeError("mark failed")
     intercept = callback(context, "register_tool_execution_intercept", "documentation_runtime_events")
     next_call = MagicMock()
-    next_call.call = AsyncMock(return_value={"ok": True})
+    next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}))
 
     with pytest.raises(RuntimeError, match="mark failed"):
         await intercept("safe_tool", {"value": 1}, next_call)
@@ -351,7 +351,7 @@ async def test_runtime_cleanup_preserves_the_callback_error(example: Any) -> Non
     runtime.pop_scope.side_effect = RuntimeError("cleanup failed")
     intercept = callback(context, "register_tool_execution_intercept", "documentation_runtime_events")
     next_call = MagicMock()
-    next_call.call = AsyncMock(return_value={"ok": True})
+    next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}))
 
     with pytest.raises(RuntimeError, match="mark failed"):
         await intercept("safe_tool", {"value": 1}, next_call)
@@ -376,11 +376,12 @@ async def test_tool_execution_returns_pending_mark(example: Any) -> None:
     context, _runtime = register_example(example)
     intercept = callback(context, "register_tool_execution_intercept", "documentation_tool_execution")
     next_call = MagicMock()
-    next_call.call = AsyncMock(return_value={"ok": True})
+    next_call.call = AsyncMock(return_value=ToolExecutionResult({"ok": True}, annotation={"source": "application"}))
 
     outcome = await intercept("safe_tool", {"value": 1}, next_call)
 
     assert outcome.result == {"ok": True}
+    assert outcome.annotation == {"source": "application"}
     assert len(outcome.pending_marks) == 1
 
 

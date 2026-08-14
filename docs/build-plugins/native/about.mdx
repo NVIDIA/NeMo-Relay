@@ -33,6 +33,12 @@ checked example declares `compat.relay = ">=0.8.0,<1.0"` and depends on
 `nemo-relay-plugin` 0.8.0. A manifest that admits an older host cannot promise those
 surfaces.
 
+Relay 0.8 changes the native API 1 tool-result JSON contract without changing the v4
+host-table layout. A tool callback and `ToolNext` continuation now return
+`ToolExecutionResult`, which carries `result` and optional opaque `annotation`; an
+execution intercept returns that pair plus pending marks. Rebuild native plugins for
+this contract even though the negotiated host-table ABI remains v4.
+
 ## What the SDK Owns
 
 The Rust SDK exports the stable entry symbol, converts host-owned JSON handles into

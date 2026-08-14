@@ -47,7 +47,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.6,<1.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -112,7 +112,7 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.6,<1.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -141,6 +141,11 @@ The Python package has one extra responsibility: `source.manifest_root` identifi
 directory Relay installs into its managed environment. The digest still covers only the
 declared artifact, so regenerate it whenever `worker.py` changes. A compiled worker has
 no managed Python environment and starts the executable named by `load.entrypoint`.
+
+Relay 0.8 keeps `grpc-v1` as the worker protocol identifier, but changes its tool-result
+messages. Both worker manifests therefore begin their Relay compatibility range at
+`0.8.0`. Rebuild SDK workers and regenerate bindings in a custom worker before packaging;
+the unchanged protocol name does not make an earlier worker wire-compatible.
 
 ## Package and Register the Artifact
 

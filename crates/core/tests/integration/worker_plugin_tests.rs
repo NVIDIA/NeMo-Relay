@@ -1501,13 +1501,15 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         ToolCallExecuteParams::builder()
             .name("lookup")
             .args(json!({ "query": "relay" }))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
             .build(),
     )
     .await
     .expect("managed Python tool call should emit a mark and return its mutation");
     assert_eq!(
-        rewritten["_nemo_relay_plugin"]["tag"],
+        rewritten.result["_nemo_relay_plugin"]["tag"],
         "managed-environment"
     );
 
@@ -1549,11 +1551,7 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
 
     flush_subscribers().expect("Python callback mark should flush");
     let captured_events = events.lock().unwrap();
-    find_event(
-        &captured_events,
-        "examples.python_grpc_worker.tool_request",
-        None,
-    );
+    find_event(&captured_events, "example.python_worker.tool_request", None);
     let tool_mark = find_event(
         &captured_events,
         "examples.python_grpc_worker.tool_execution",

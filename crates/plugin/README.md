@@ -92,6 +92,13 @@ leaves callbacks queued; lower it when the host runs many components or has a
 tight CPU budget. Do not block these workers; use async I/O or
 `tokio::task::spawn_blocking`.
 
+Relay 0.8 establishes canonical tool results as the native API 1 baseline. Tool
+callbacks and `ToolNext` return `ToolExecutionResult`, preserving an application result
+and optional opaque annotation. Tool execution intercepts return the same pair plus
+Relay-owned pending marks. The manifest contract remains `compat.native_api = "1"` and
+the C host-table ABI remains v4, but plugins must rebuild and exclude pre-0.8 Relay
+versions because the JSON result boundary changed.
+
 Set a plugin-wide default in Rust, then let the component's TOML configuration
 override it:
 

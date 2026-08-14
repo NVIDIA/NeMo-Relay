@@ -11,6 +11,13 @@ service contract. It can register the same 15 subscriber and middleware surfaces
 an in-process plugin, call continuations back in the host, use invocation-scoped codecs,
 and emit marks or manage scope stacks through host-runtime RPCs.
 
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Tool callbacks
+and `ToolNext` continuations preserve an application `result` and optional opaque
+`annotation`; an execution intercept adds only Relay-owned pending marks. Rebuild every
+SDK worker, regenerate custom protobuf bindings, and declare `compat.relay` beginning at
+`0.8.0`. The protocol remains named `grpc-v1`; this is a changed tool-result contract,
+not a new protocol family.
+
 Choose a worker when process or dependency isolation is worth the gRPC dispatch,
 JSON-envelope conversion, and scheduling cost on callback paths. The boundary limits the
 blast radius of a worker crash and keeps dependencies out of the application environment,

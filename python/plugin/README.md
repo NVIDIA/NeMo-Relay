@@ -21,6 +21,12 @@ dynamic worker plugins. Use it when plugin code should run in its own Python
 process and communicate with Relay through the versioned `grpc-v1` worker
 protocol.
 
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers and
+custom bindings built for earlier releases must regenerate protobuf bindings, rebuild,
+and declare `compat.relay` beginning at `0.8.0`. `ToolNext.call()` returns
+`ToolExecutionResult`, preserving opaque annotation metadata independently of the
+application result JSON.
+
 ## Authoring Surface
 
 The following rows describe the plugin authoring surfaces available through this SDK.
@@ -30,6 +36,7 @@ The following rows describe the plugin authoring surfaces available through this
 | `WorkerPlugin` and `PluginContext` | Define validation and install all 15 worker-owned subscriber and middleware registrations. |
 | `serve_plugin` | Starts an AsyncIO gRPC server from the Relay-managed environment and authenticated local activation endpoints. |
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
+| Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
 | Generated transport bindings | Ship private protobuf bindings in the wheel, so installation does not require `protoc` or `grpcio-tools`. |
 
 The worker process isolates Python dependencies and crashes from Relay while preserving

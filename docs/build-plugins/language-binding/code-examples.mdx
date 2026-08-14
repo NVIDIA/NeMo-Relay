@@ -28,7 +28,7 @@ Run and inspect the Rust host as follows:
    cargo run --locked
    ```
 
-2. Read the printed invalid report, active report, allowed tool result, rewritten LLM
+2. Read the printed invalid report, active report, canonical allowed-tool result, rewritten LLM
    headers, streamed chunks, and teardown confirmation.
 
 Success means the invalid configuration reports `documentation-plugin.unsupported_mode`,
@@ -91,7 +91,7 @@ chunks, and final teardown line:
 registered: documentation-plugin present
 invalid: documentation-plugin.unsupported_mode at requests.mode
 active: documentation-plugin enabled
-tool: {"value":1,"plugin_tag":"documentation"}
+tool: {"result":{"value":1,"plugin_tag":"documentation"},"annotation":{"source":"application"}}
 llm: {"headers":{"x-nemo-relay-plugin":"documentation"}}
 stream: {"chunk":1,"plugin_stream":true}
 stream: {"chunk":2,"plugin_stream":true}
@@ -100,5 +100,6 @@ teardown: complete
 
 The exact report debug representation is not a compatibility surface, so tests assert
 its diagnostic and component fields rather than matching the whole printed line. The
-tool, LLM, and stream JSON values are application-visible results and are asserted
-exactly by the checked examples.
+tool callback returns a `ToolExecutionResult`; each host checks its business payload
+through `.result` and verifies that the optional `.annotation` survives both execution
+wrappers. LLM and stream values remain their existing application-visible JSON values.

@@ -281,7 +281,11 @@ class DocumentationPlugin:
                     with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
                         with scope.scope("documentation-plugin.isolated", nemo_relay.ScopeType.Custom):
                             pass
-                return nemo_relay.ToolExecutionInterceptOutcome(await next_call(args))
+                downstream = await next_call(args)
+                return nemo_relay.ToolExecutionInterceptOutcome(
+                    downstream.result,
+                    annotation=downstream.annotation,
+                )
 
             context.register_tool_execution_intercept("runtime-events", 0, runtime_events)
 
@@ -298,7 +302,11 @@ class DocumentationPlugin:
                     if execution["emit_pending_marks"]
                     else []
                 )
-                return nemo_relay.ToolExecutionInterceptOutcome(result, marks)
+                return nemo_relay.ToolExecutionInterceptOutcome(
+                    result.result,
+                    marks,
+                    annotation=result.annotation,
+                )
 
             context.register_tool_execution_intercept("tool-execution", execution["priority"], tool_execution)
 
@@ -351,8 +359,13 @@ async def main() -> dict[str, Any]:
                 else:
                     os.environ["XDG_CONFIG_HOME"] = previous_config_home
         print("active:", report)
-        tool_result = await tools.execute("safe_tool", {"value": 1}, lambda args: args)
-        assert tool_result == {"value": 1, "plugin_tag": "documentation"}
+        tool_result = await tools.execute(
+            "safe_tool",
+            {"value": 1},
+            lambda args: nemo_relay.ToolExecutionResult(args, {"source": "application"}),
+        )
+        assert tool_result.result == {"value": 1, "plugin_tag": "documentation"}
+        assert tool_result.annotation == {"source": "application"}
         print("tool:", tool_result)
         request = nemo_relay.LLMRequest({}, {"model": "allowed-model"})
         llm_result = await llm.execute("allowed-model", request, lambda req: {"headers": req.headers})

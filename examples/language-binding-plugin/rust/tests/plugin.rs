@@ -10,7 +10,7 @@ use nemo_relay::api::llm::{
 };
 use nemo_relay::api::runtime::callbacks::LlmJsonStream;
 use nemo_relay::api::subscriber::flush_subscribers;
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::{
     ConfigReport, DiagnosticLevel, Plugin, clear_plugin_configuration, deregister_plugin,
     initialize_plugins_exact, list_plugin_kinds, register_plugin, validate_plugin_config,
@@ -192,13 +192,18 @@ async fn tool_request_is_rewritten() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(args, json!({"source": "application"})))
+                })
+            }))
             .build(),
     )
     .await
     .expect("tool call should succeed");
 
-    assert_eq!(result, json!({"value": 1, "plugin_tag": "documentation"}));
+    assert_eq!(result.result, json!({"value": 1, "plugin_tag": "documentation"}));
+    assert_eq!(result.annotation, Some(json!({"source": "application"})));
 }
 
 #[tokio::test]
@@ -314,7 +319,7 @@ async fn subscriber_observes_managed_call() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
             .build(),
     )
     .await
@@ -332,7 +337,7 @@ async fn configuration_controls_redaction_pending_marks_and_isolated_scope_event
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
             .build(),
     )
     .await
@@ -370,7 +375,7 @@ async fn runtime_events_do_not_depend_on_request_rewriting() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
             .build(),
     )
     .await
@@ -394,7 +399,7 @@ async fn runtime_events_are_not_stopped_by_request_break_chain() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
             .build(),
     )
     .await

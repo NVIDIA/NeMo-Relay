@@ -140,9 +140,14 @@ async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample
 
 
 async def test_tool_request_is_rewritten(active_plugin: ActivatedExample) -> None:
-    result = await tools.execute("safe_tool", {"value": 1}, lambda args: args)
+    result = await tools.execute(
+        "safe_tool",
+        {"value": 1},
+        lambda args: nemo_relay.ToolExecutionResult(args, {"source": "application"}),
+    )
 
-    assert result == {"value": 1, "plugin_tag": "documentation"}
+    assert result.result == {"value": 1, "plugin_tag": "documentation"}
+    assert result.annotation == {"source": "application"}
 
 
 async def test_tool_policy_blocks_configured_tool(active_plugin: ActivatedExample) -> None:
@@ -182,7 +187,7 @@ async def test_llm_stream_is_transformed(active_plugin: ActivatedExample) -> Non
 
 
 async def test_subscriber_observes_managed_call(active_plugin: ActivatedExample) -> None:
-    await tools.execute("safe_tool", {"value": 1}, lambda args: args)
+    await tools.execute("safe_tool", {"value": 1}, nemo_relay.ToolExecutionResult)
     await subscribers.flush_async()
 
     assert active_plugin.implementation.events
@@ -199,7 +204,7 @@ async def test_runtime_events_do_not_depend_on_request_rewriting(
     plugin.register("documentation-plugin", implementation)
     try:
         await plugin.initialize(configuration)
-        await tools.execute("safe_tool", {"value": 1}, lambda args: args)
+        await tools.execute("safe_tool", {"value": 1}, nemo_relay.ToolExecutionResult)
         await subscribers.flush_async()
 
         assert "documentation-plugin.request" in implementation.events

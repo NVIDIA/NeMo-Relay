@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::PluginConfig;
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation,
@@ -60,13 +60,21 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(
+                        args,
+                        json!({"source": "application"}),
+                    ))
+                })
+            }))
             .build(),
     )
     .await
     .expect("worker middleware should execute through grpc-v1");
-    assert_eq!(result["plugin_tag"], "documentation");
-    assert_eq!(result["plugin_tool"], "safe_tool");
+    assert_eq!(result.result["plugin_tag"], "documentation");
+    assert_eq!(result.result["plugin_tool"], "safe_tool");
+    assert_eq!(result.annotation, Some(json!({"source": "application"})));
 
     flush_subscribers().expect("worker events should flush");
     assert!(
@@ -144,7 +152,7 @@ id = "{PLUGIN_ID}"
 kind = "worker"
 
 [compat]
-relay = ">=0.6,<1.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]

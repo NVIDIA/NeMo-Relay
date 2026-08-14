@@ -12,9 +12,11 @@ wrapper, and an LLM stream wrapper at the configured priority.
 
 ## Tool and Unary Results
 
-The tool wrapper calls `next` once, awaits the downstream result, and returns a
-`ToolExecutionInterceptOutcome` with the example's pending mark. Relay owns that mark:
-it is emitted in the managed lifecycle and does not appear inside the JSON tool result.
+The tool wrapper calls `next` once, awaits the downstream `ToolExecutionResult`, and
+converts it into a `ToolExecutionInterceptOutcome` with the example's pending mark. The
+conversion preserves both the application `result` and any opaque `annotation`. Relay
+owns the pending mark: it is emitted in the managed lifecycle and does not appear in the
+application-visible result.
 The unary LLM wrapper has a deliberately smaller contract and returns provider-response
 JSON. LLM pending marks, annotations, and optimization contributions belong to the
 request-intercept outcome shown in [Control Requests](/build-plugins/native/control-requests),
@@ -28,7 +30,7 @@ context.register_tool_execution_intercept(
         let emit_pending_marks = config.execution.emit_pending_marks;
         move |_name, request, next| async move {
             let result = next.call(request).await?;
-            let mut outcome = ToolExecutionInterceptOutcome::new(result);
+            let mut outcome = ToolExecutionInterceptOutcome::from(result);
             if emit_pending_marks {
                 outcome = outcome.with_pending_mark(
                     PendingMarkSpec::builder()
@@ -44,10 +46,11 @@ context.register_tool_execution_intercept(
 )?;
 ```
 
-If downstream returns `{"answer": 42}`, the application still receives
-`{"answer": 42}`. Relay separately emits `example.native.tool_execution` under the
-managed tool call. That separation is why the callback returns an outcome instead of
-returning JSON directly.
+If downstream returns `ToolExecutionResult::annotated(json!({"answer": 42}),
+json!({"source": "provider"}))`, the application receives that same result object and
+reads `tool_result.result["answer"]`. Relay separately emits
+`example.native.tool_execution` under the managed tool call. That separation is why the
+callback returns an outcome instead of returning a plain JSON value.
 
 The continuation is reusable. A deliberate configuration or request flag in the example
 can invoke unary `next` twice concurrently, await both responses, and select one. This

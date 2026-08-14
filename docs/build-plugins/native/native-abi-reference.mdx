@@ -138,6 +138,13 @@ one-shot because the continuation result settles the middleware completion. Sett
 owner only after every started continuation call has finished. When the owner settles or
 is cancelled, the host rejects new continuation calls and cancels unfinished ones.
 
+For a tool continuation, the result callback receives canonical
+`nemo.relay.ToolExecutionResult@1` JSON with required `result` and optional opaque
+`annotation`. A raw tool-execution middleware completion returns
+`nemo.relay.ToolExecutionInterceptOutcome@2`: the same result and annotation fields plus
+optional `pending_marks`. Pending marks belong to the intercept outcome only. Release
+each host-owned result string with the matching host-table operation after decoding it.
+
 The host can poll a callback on different Tokio workers, and separate invocations can
 run concurrently. Plugin code must synchronize `user_data` and opaque handles. Do not
 race final release with settlement, cancellation inspection, stream operations, codec

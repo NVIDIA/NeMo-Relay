@@ -11,6 +11,10 @@ It validates the shared documentation configuration, registers every safe
 invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
 scopes, isolated stacks, and cancelled tasks.
 
+The worker targets the Relay 0.8 `grpc-v1` result contract. Its tool continuation returns
+`ToolExecutionResult`, and its execution intercept forwards both the application result
+and optional annotation before adding Relay-owned pending marks.
+
 Run the example's own test project from this directory:
 
 ```bash

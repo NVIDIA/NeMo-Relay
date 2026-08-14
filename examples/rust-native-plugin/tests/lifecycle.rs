@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation,
 };
@@ -61,13 +61,21 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"secret": "application-value"}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(
+                        args,
+                        json!({"source": "application"}),
+                    ))
+                })
+            }))
             .build(),
     )
     .await
     .expect("native tool middleware should execute");
-    assert_eq!(result["secret"], "application-value");
-    assert!(result.get("plugin_tag").is_none());
+    assert_eq!(result.result["secret"], "application-value");
+    assert!(result.result.get("plugin_tag").is_none());
+    assert_eq!(result.annotation, Some(json!({"source": "application"})));
 
     flush_subscribers().expect("native events should flush");
     assert!(

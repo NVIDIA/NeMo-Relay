@@ -21,6 +21,7 @@ from nemo_relay_plugin import (
     PluginContext,
     ScopeType,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     WorkerPlugin,
     serve_plugin,
 )
@@ -236,7 +237,11 @@ class ExamplePythonWorker(WorkerPlugin):
 
         async def runtime_events(_name: str, args: Json, next_call: Any) -> ToolExecutionInterceptOutcome:
             await _emit_runtime_events(ctx, tag, settings)
-            return ToolExecutionInterceptOutcome(result=await next_call.call(args))
+            downstream = await next_call.call(args)
+            return ToolExecutionInterceptOutcome(
+                result=downstream.result,
+                annotation=downstream.annotation,
+            )
 
         ctx.register_tool_execution_intercept("documentation_runtime_events", runtime_events, priority=0)
 
@@ -246,9 +251,13 @@ class ExamplePythonWorker(WorkerPlugin):
         emit_pending_marks = cast(bool, execution["emit_pending_marks"])
 
         async def tool_execution(_name: str, args: Json, next_call: Any) -> ToolExecutionInterceptOutcome:
-            result = await next_call.call(args)
+            result: ToolExecutionResult = await next_call.call(args)
             marks = [PendingMarkSpec(name="example.python_worker.tool_execution")] if emit_pending_marks else []
-            return ToolExecutionInterceptOutcome(result=result, pending_marks=marks)
+            return ToolExecutionInterceptOutcome(
+                result=result.result,
+                annotation=result.annotation,
+                pending_marks=marks,
+            )
 
         async def llm_execution(_name: str, request: dict[str, Any], next_call: Any) -> Json:
             content = request.get("content")

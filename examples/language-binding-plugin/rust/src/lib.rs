@@ -21,7 +21,7 @@ use nemo_relay::api::scope::{
 };
 use nemo_relay::api::subscriber::flush_subscribers;
 use nemo_relay::api::tool::{
-    ToolCallExecuteParams, ToolExecutionInterceptOutcome, tool_call_execute,
+    ToolCallExecuteParams, ToolExecutionInterceptOutcome, ToolExecutionResult, tool_call_execute,
 };
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, Plugin, PluginComponentSpec, PluginConfig,
@@ -243,7 +243,7 @@ impl Plugin for DocumentationPlugin {
                             let runtime = runtime.clone();
                             Box::pin(async move {
                                 emit_runtime_events(&tag, &runtime)?;
-                                Ok(ToolExecutionInterceptOutcome::new(next(args).await?))
+                                Ok(ToolExecutionInterceptOutcome::from(next(args).await?))
                             })
                         }
                     }),
@@ -258,7 +258,7 @@ impl Plugin for DocumentationPlugin {
                         move |_name, args, next| {
                             Box::pin(async move {
                                 let result = next(args).await?;
-                                let outcome = ToolExecutionInterceptOutcome::new(result);
+                                let outcome = ToolExecutionInterceptOutcome::from(result);
                                 Ok(if emit_pending_marks {
                                     outcome.with_pending_mark(
                                         PendingMarkSpec::builder()
@@ -431,12 +431,20 @@ pub async fn run_workflow() -> Result<(), Box<dyn std::error::Error>> {
         ToolCallExecuteParams::builder()
             .name("safe_tool")
             .args(json!({"value": 1}))
-            .func(Arc::new(|args| Box::pin(async move { Ok(args) })))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(
+                        args,
+                        json!({"source": "application"}),
+                    ))
+                })
+            }))
             .build(),
     )
     .await?;
-    assert_eq!(tool, json!({"value": 1, "plugin_tag": "documentation"}));
-    println!("tool: {tool}");
+    assert_eq!(tool.result, json!({"value": 1, "plugin_tag": "documentation"}));
+    assert_eq!(tool.annotation, Some(json!({"source": "application"})));
+    println!("tool: {tool:?}");
 
     let request = LlmRequest {
         headers: Map::new(),

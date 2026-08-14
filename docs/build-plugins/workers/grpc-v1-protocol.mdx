@@ -11,6 +11,11 @@ current source of truth is
 [`crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto`](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto).
 Generated protobuf types are wire material, not the recommended authoring API.
 
+Relay 0.8 retains the `grpc-v1` identifier and `nemo.relay.worker.v1` package, but it
+changes the tool-result boundary to structural protobuf messages. Rebuild workers,
+regenerate custom bindings, and declare `compat.relay` beginning at `0.8.0`; an earlier
+worker cannot decode the current `ToolNext` response or tool-execution outcome.
+
 The protocol consists of the worker-facing service implemented by the plugin process
 and the host-runtime service implemented by Relay. These are the current service
 definitions, including cancellation, codecs, and streaming continuations:
@@ -34,7 +39,7 @@ service RelayHostRuntime {
   rpc CreateScopeStack(CreateScopeStackRequest)
       returns (CreateScopeStackResponse);
   rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
-  rpc ToolNext(ToolNextRequest) returns (JsonResult);
+  rpc ToolNext(ToolNextRequest) returns (ToolExecutionResultResponse);
   rpc LlmNext(LlmNextRequest) returns (JsonResult);
   rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
   rpc DecodeLlmCodecRequest(LlmCodecDecodeRequest) returns (JsonResult);
@@ -179,6 +184,32 @@ message InvokeResponse {
 }
 ```
 
+Tool values remain JSON, but the result boundary is structural so Relay can keep an
+opaque annotation beside the application value without treating either field as a
+schema-tagged envelope.
+
+```proto
+message JsonValue {
+  bytes json = 1;
+}
+
+message ToolExecutionResultResponse {
+  ToolExecutionResult value = 1;
+  WorkerError error = 2;
+}
+
+message ToolExecutionResult {
+  JsonValue result = 1;
+  JsonValue annotation = 2;
+}
+
+message ToolExecutionInterceptOutcome {
+  JsonValue result = 1;
+  JsonValue annotation = 2;
+  JsonValue pending_marks = 3;
+}
+```
+
 `continuation_id` is present only for execution intercepts. `scope` captures the host
 context used for continuation and runtime calls. `registration_name` is the
 component-local name the worker returned in `RegisterResponse`; Relay separately owns
@@ -200,7 +231,7 @@ invocation ends.
 | `PopScope` | Closes the owned scope handle with output and metadata. |
 | `CreateScopeStack` | Allocates an isolated stack and returns its opaque ID. |
 | `DropScopeStack` | Releases an isolated stack owned by the activation. |
-| `ToolNext` | Executes a tool continuation with JSON and captured scope, returning a JSON result or worker error. |
+| `ToolNext` | Executes a tool continuation with JSON arguments and captured scope, returning a structural tool result or worker error. |
 | `LlmNext` | Executes a unary LLM continuation with a request and captured scope. |
 | `LlmStreamNext` | Executes a streaming LLM continuation and returns incremental chunks. |
 | `DecodeLlmCodecRequest` | Uses the invocation-scoped capability to decode a request into its annotated representation. |
@@ -216,7 +247,7 @@ The host-runtime request and response fields are complete in the following table
 | `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output` and `metadata` | `HostAck.ok` or `HostAck.error` |
 | `CreateScopeStack` | `activation_id` and `auth_token` | `scope_stack_id` or `error` |
 | `DropScopeStack` | `activation_id`, `auth_token`, and owned `scope_stack_id` | `HostAck.ok` or `HostAck.error` |
-| `ToolNext` | `activation_id`, `auth_token`, `continuation_id`, JSON `value`, and captured `scope` | JSON `value` or `error` |
+| `ToolNext` | `activation_id`, `auth_token`, `continuation_id`, JSON `value`, and captured `scope` | `ToolExecutionResultResponse.value` or `error` |
 | `LlmNext` | `activation_id`, `auth_token`, `continuation_id`, typed `request`, and captured `scope` | JSON `value` or `error` |
 | `LlmStreamNext` | `activation_id`, `auth_token`, `continuation_id`, typed `request`, and captured `scope` | Incremental JSON value chunks, clean stream closure, or one terminal error chunk |
 | `DecodeLlmCodecRequest` | `activation_id`, `auth_token`, `codec_capability_id`, typed `request`, and owner `invocation_id` | Annotated LLM request or `error` |
@@ -264,13 +295,17 @@ The current envelope schemas are as follows:
 | `nemo.relay.LlmRequest@1` | Provider request envelope used by LLM middleware, continuations, and request codec operations. |
 | `nemo.relay.AnnotatedLlmRequest@2` | Normalized LLM request annotation carried through request intercepts and codec operations. |
 | `nemo.relay.LlmRequestInterceptOutcome@2` | Rewritten request, optional annotation, pending marks, and optimization contributions. |
-| `nemo.relay.ToolExecutionInterceptOutcome@1` | Application tool result and Relay-owned pending marks. |
+| `nemo.relay.ToolExecutionInterceptOutcome@2` | Application tool result, optional annotation, and Relay-owned pending marks. |
 | `nemo.relay.PluginDiagnostics@1` | Diagnostics returned from worker validation. |
 
-Surface results use empty, JSON, guardrail, LLM request outcome, tool execution outcome,
-or structured error variants. Stream chunks contain one JSON value or one terminal
-error. `WorkerError` carries a stable code, human-readable message, and retryable flag;
-transport errors remain distinct from plugin callback errors.
+`JsonValue` contains exactly one JSON value and carries arbitrary tool results without
+numeric coercion. `ToolExecutionResult` requires that value in `result` and permits an
+optional `annotation`; JSON `null` annotations normalize to absence. A tool execution
+intercept returns `ToolExecutionInterceptOutcome`, which adds an optional JSON array of
+Relay-owned `pending_marks`. Surface results otherwise use empty, JSON, guardrail, LLM
+request outcome, or structured error variants. Stream chunks contain one JSON value or
+one terminal error. `WorkerError` carries a stable code, human-readable message, and
+retryable flag; transport errors remain distinct from plugin callback errors.
 
 ```proto
 message JsonEnvelope {

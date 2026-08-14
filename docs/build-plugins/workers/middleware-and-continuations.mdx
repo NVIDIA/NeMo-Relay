@@ -18,7 +18,7 @@ reader can compare runtime mechanics instead of reverse-engineering two unrelate
 | Event sanitizers | Sync or async callback over event and sanitizable fields. | Closure returning a future of `EventSanitizeFields`. | Replacement data, category profile, and metadata. |
 | Tool sanitizers and policy | Sync or async callback, normalized by the SDK. | Closure returning a boxed or inferred future. | Sanitized JSON or an optional block reason. |
 | Tool request intercept | Sync or async callback. | Async closure. | Complete rewritten JSON request. |
-| Tool execution intercept | Async callback with `ToolNext`. | Async closure with cloneable `ToolNext`. | `ToolExecutionInterceptOutcome`, including Relay-owned accounting. |
+| Tool execution intercept | Async callback with `ToolNext`. | Async closure with cloneable `ToolNext`. | `ToolExecutionInterceptOutcome`, which preserves the downstream `result` and optional `annotation` plus Relay-owned accounting. |
 | LLM sanitizers | Sync or async callback with an invocation-scoped codec context. | Async closure with typed request or response context. | Optional sanitized payload. |
 | LLM policy and request intercept | Sync or async callback. | Async closure. | Optional block reason or full request-intercept outcome with annotations. |
 | Unary LLM execution | Async callback with `LlmNext`. | Async closure with cloneable `LlmNext`. | Provider-response JSON. |
@@ -219,6 +219,11 @@ for that worker invocation. A callback can call a unary proxy zero, one, or mult
 times, including concurrently when the SDK type permits cloning. Each call can repeat
 side effects, provider charges, events, and downstream middleware.
 
+`ToolNext` returns `ToolExecutionResult`, not a raw JSON value. Forwarding middleware
+must carry both `downstream.result` and `downstream.annotation` into its outcome. A
+repeated tool continuation returns another independent structured result; it still does
+not expose downstream pending marks.
+
 The example uses one ordinary wrapper and one explicitly requested concurrent path. It
 does not retry implicitly. Tool pending marks remain in the tool execution outcome;
 LLM annotations, pending marks, and optimization contributions remain in the request
@@ -237,14 +242,15 @@ priority = execution["priority"]
 emit_pending_marks = execution["emit_pending_marks"]
 
 async def tool_execution(_name, args, next_call):
-    result = await next_call.call(args)
+    downstream = await next_call.call(args)
     marks = (
         [PendingMarkSpec(name="example.python_worker.tool_execution")]
         if emit_pending_marks
         else []
     )
     return ToolExecutionInterceptOutcome(
-        result=result,
+        result=downstream.result,
+        annotation=downstream.annotation,
         pending_marks=marks,
     )
 
@@ -291,7 +297,7 @@ context.register_tool_execution_intercept(
         let emit_marks = config.execution.emit_pending_marks;
         move |_name, request, next| async move {
             let result = next.call(request).await?;
-            let mut outcome = ToolExecutionInterceptOutcome::new(result);
+            let mut outcome = ToolExecutionInterceptOutcome::from(result);
             if emit_marks {
                 outcome = outcome.with_pending_mark(
                     PendingMarkSpec::builder()

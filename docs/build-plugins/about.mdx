@@ -66,6 +66,13 @@ That separation comes with gRPC, JSON-envelope, and scheduling overhead. The Pyt
 Rust SDKs implement the same `grpc-v1` contract. A custom command worker is an advanced
 protocol implementation path rather than a fourth plugin model.
 
+Relay 0.8 makes the tool result explicit at every dynamic boundary. A managed tool
+callback and its continuation return a `ToolExecutionResult`: the application payload in
+`result` and an optional opaque `annotation`. A tool execution intercept returns that
+same pair plus Relay-owned pending marks. Native and worker plugins built for an earlier
+release must rebuild for this contract. Workers retain the `grpc-v1` name and protobuf
+package; their tool-result fields, not their protocol identity, changed.
+
 ## Match Behavior to a Plugin
 
 | Desired Behavior | Good Starting Model | Why |

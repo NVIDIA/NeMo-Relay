@@ -25,6 +25,11 @@ Use `nemo-relay-worker` to author Rust workers. Depend on this crate directly
 only when implementing another worker SDK, a custom host, or protocol-level
 tooling.
 
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers built
+for earlier releases must regenerate their bindings, rebuild, and declare
+`compat.relay` beginning at `0.8.0`. `ToolNext` returns `ToolExecutionResultResponse`,
+and tool execution intercepts use structural `ToolExecutionInterceptOutcome` messages.
+
 ## Protocol Surface
 
 | Surface | Role |
@@ -32,8 +37,8 @@ tooling.
 | `WORKER_PROTOCOL_GRPC_V1` | Identifies the stable protocol accepted by Relay worker manifests. |
 | `v1` module | Exposes generated `PluginWorker` and `RelayHostRuntime` Tonic clients, servers, services, and messages without regenerating protobuf in a consumer. |
 | JSON envelope helpers | Serialize Relay DTOs through `json_envelope` and `decode_json_envelope`, keeping protobuf responsible for transport flow rather than runtime data modeling. |
-| JSON value helpers | Serialize opaque application values in structural tool-result messages through `json_value` and `decode_json_value`. |
-| Tool results | `ToolNext` returns `ToolExecutionResultResponse`, and `ToolExecutionInterceptResult` returns `ToolExecutionInterceptOutcome`. Both preserve the application result and optional annotation. Intercept outcomes also include ordered pending marks. |
+| JSON value helpers | Serialize application-owned fields inside structural tool-result messages through `json_value` and `decode_json_value`. |
+| Tool results | `ToolNext` returns `ToolExecutionResultResponse`, and `ToolExecutionInterceptResult` returns `ToolExecutionInterceptOutcome`. Both preserve the application result and optional annotation. Intercept outcomes also include ordered pending marks. These fields use lossless protobuf `JsonValue` wrappers rather than `google.protobuf.Value`. |
 | Mark options | `EmitMarkRequest.data_schema` carries a `nemo.relay.DataSchema@1` envelope and `severity` carries the log severity. Omitting both preserves legacy behavior. |
 | Runtime diagnostics | Authenticated `GetRuntimeDiagnostics` returns a bounded active-host `{ code, message, count }` snapshot. Older hosts return gRPC `UNIMPLEMENTED`. |
 

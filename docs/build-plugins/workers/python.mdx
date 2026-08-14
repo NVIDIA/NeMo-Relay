@@ -44,7 +44,7 @@ build-backend = "setuptools.build_meta"
 name = "nemo-relay-python-grpc-worker-example"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["nemo-relay-plugin>=0.8.0,<0.9.0"]
+dependencies = ["nemo-relay-plugin>=0.8.0"]
 
 [dependency-groups]
 test = ["pytest>=8", "pytest-asyncio>=0.26"]
@@ -111,7 +111,7 @@ id = "examples.python_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.6,<1.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [capabilities]
@@ -132,10 +132,11 @@ runtime = "python"
 entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
 ```
 
-The manifest uses `relay = ">=0.6,<1.0"` because this worker registers an LLM request
-intercept. The `grpc-v1` protocol identifies the transport contract, but it does not make
-an earlier Relay release compatible with a middleware surface that it did not expose. The
-package still pins its own authoring dependency to the 0.8 SDK line shown above.
+The manifest uses `relay = ">=0.8.0,<1.0"` because Relay 0.8 changes the `grpc-v1`
+tool-result boundary. `ToolNext.call()` returns `ToolExecutionResult`, whose `result`
+contains the application payload and whose optional `annotation` remains adjacent opaque
+metadata. The protocol identifier stays `grpc-v1`, but workers built against earlier
+generated bindings cannot decode the current structural result messages.
 
 ## Install and Activate the Package
 

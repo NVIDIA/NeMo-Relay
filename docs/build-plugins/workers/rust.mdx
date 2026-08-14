@@ -50,7 +50,7 @@ id = "examples.rust_grpc_worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.6,<1.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -73,10 +73,11 @@ runtime = "rust"
 entrypoint = "target/debug/<platform-worker-file>"
 ```
 
-The worker speaks `grpc-v1`, but it also registers an LLM request intercept. That surface
-requires a host range that excludes Relay 0.5, so the checked worker uses
-`relay = ">=0.6,<1.0"`. Its crate dependency remains 0.8.0 because that is the SDK
-version used to build this example.
+The worker speaks `grpc-v1`, whose Relay 0.8 tool-result baseline requires
+`relay = ">=0.8.0,<1.0"`. `ToolNext::call` returns `ToolExecutionResult`, preserving an
+application payload and optional opaque annotation separately from Relay-owned pending
+marks. Rebuild the worker when adopting this SDK release; the protocol name remains
+`grpc-v1`, but an earlier generated binding cannot read the structural result messages.
 
 The artifact and entrypoint paths must identify the same executable. Relay verifies the
 artifact digest before it starts the command, and the worker handshake must return the
