@@ -1,0 +1,118 @@
+---
+title: "Configure Discoverable Plugins"
+description: "Install, validate, trust, and configure manifest-backed NeMo Relay plugins."
+position: 3
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide to add a manifest-backed plugin that another author has
+packaged. Discoverable plugins are separate from built-in `[[components]]`:
+their `relay-plugin.toml` manifest describes a native shared library or a
+`grpc-v1` worker, while `plugins.toml` records where Relay can find it and
+stores its component configuration.
+
+<Warning>
+Discoverable plugins are trusted extensions. Native plugins run in the gateway
+process. Worker plugins run in a separate process, but process isolation is not
+a security sandbox. Install manifests and artifacts only from sources you
+trust.
+</Warning>
+
+## Add and Enable a Plugin
+
+Validate the manifest before registering it in project configuration:
+
+```bash
+nemo-relay plugins validate ./acme-plugin/relay-plugin.toml
+nemo-relay plugins add --project ./acme-plugin/relay-plugin.toml
+nemo-relay plugins inspect acme.plugin
+nemo-relay plugins enable acme.plugin
+nemo-relay plugins validate acme.plugin
+```
+
+`add` writes a `[[plugins.dynamic]]` reference to the selected `plugins.toml`
+scope and stores CLI lifecycle state next to it. `enable` changes that
+lifecycle state; it does not load code immediately. Relay validates and loads
+enabled plugins when the gateway starts. Use `plugins list`, `plugins inspect`,
+and `plugins validate` to review current state and diagnostics. Use `disable`
+or `remove` to stop loading a registered plugin.
+
+You can also add the reference directly when configuration is provisioned by
+automation:
+
+```toml
+[[plugins.dynamic]]
+manifest = "./acme-plugin/relay-plugin.toml"
+
+[plugins.dynamic.config]
+mode = "audit"
+```
+
+The manifest path resolves relative to the `plugins.toml` file. The `config`
+table supplies the synthesized component configuration. Before enabling or
+running a plugin, use `nemo-relay plugins validate <plugin-id>` to check the
+manifest, trust evidence, and optional static JSON Schema. During gateway
+activation, Relay loads the enabled adapter before it validates the synthesized
+component; a worker runs its `Validate` call after its process starts.
+
+Do not add a Python worker only with this TOML record. Run
+`nemo-relay plugins add <path>` to register a Python worker because Relay must
+create and retain its managed Python environment before it can activate the
+worker.
+
+## Validate Before Loading Code
+
+Relay validates a manifest before it activates plugin code. The manifest must
+declare a supported `manifest_version`, plugin ID and kind, Relay compatibility,
+the lane-specific ABI or worker protocol, supported capabilities, a disabled
+default, and one load contract. A manifest that declares `config_schema` must
+also declare the `config_schema` capability.
+
+Every discoverable plugin needs `source.artifact` and an `integrity.sha256`
+digest so Relay can verify the artifact. A host can also require an Ed25519
+signature and trusted public key. Use `nemo-relay plugins validate <plugin-id>`
+to evaluate the resolved host policy and artifact trust evidence before you run
+the gateway.
+
+```toml
+[plugins.policy.defaults]
+startup = "required"
+attestation = "signature_required"
+trusted_public_keys = ["ed25519:<base64-public-key>"]
+```
+
+`startup = "required"` makes lifecycle preflight failures for an enabled plugin
+fatal. The default is `optional`, which skips that preflight. A later native or
+worker load or activation failure still stops gateway startup; correct or
+disable the plugin to start without it. `attestation` accepts `integrity_only`,
+`signature_if_present`, or `signature_required`; integrity verification always
+checks the declared artifact digest.
+
+Use `startup = "required"` when failed integrity or signature verification must
+prevent worker startup. An optional trust failure records failed lifecycle
+state, but does not itself prevent an enabled worker from launching. The native
+loader also verifies `load.library`; the worker loader relies on lifecycle trust
+evaluation.
+
+Use `[[plugins.policy.rules]]` to apply an effect by `match_kind` or
+`match_plugin_id`, and `[plugins.policy.overrides."plugin.id"]` for one
+specific plugin. Rules and overrides can set `allowed`, `startup`,
+`attestation`, and `trusted_public_keys`.
+
+## Select the Authoring Guide
+
+Ask the plugin author for the correct manifest and artifact. Refer to these
+guides when you need to understand the package:
+
+- [Native Dynamic Plugins (Rust)](/build-plugins/dynamic-plugins/native-dynamic/about) covers
+  in-process Rust shared libraries and the native ABI.
+- [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)
+  provides the Rust SDK example for a native shared library.
+- [gRPC Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about) covers
+  Relay-managed Rust workers.
+- [gRPC Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about)
+  covers Relay-managed Python workers.
+- [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol) describes the
+  shared `grpc-v1` protocol.

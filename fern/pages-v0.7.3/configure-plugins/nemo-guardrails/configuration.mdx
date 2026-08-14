@@ -1,0 +1,381 @@
+---
+title: "NeMo Guardrails Configuration"
+sidebar-title: "Configuration"
+description: "Configure remote and local NeMo Guardrails backends for managed execution."
+position: 2
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Use this page when you want to configure the built-in NeMo Guardrails plugin
+component. The component kind is `nemo_guardrails`.
+
+For plugin file discovery, precedence, merge behavior, editor controls, and
+gateway conflict rules, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+<Note>
+NeMo Relay plugin configuration uses the generic plugin document shape, so
+field names stay `snake_case` in every binding and in `plugins.toml`.
+
+</Note>
+
+## Component Shape
+
+The top-level NeMo Guardrails object contains:
+
+| Field | Purpose |
+|---|---|
+| `version` | Guardrails config schema version. Defaults to `1`. |
+| `mode` | Backend mode. Current values are `remote` and `local`. |
+| `config_path` | Local-mode native Guardrails config directory path. |
+| `config_yaml` | Local-mode inline native Guardrails YAML config. |
+| `colang_content` | Optional inline Colang content for local mode when `config_yaml` is used. |
+| `codec` | Managed LLM provider codec. |
+| `input` | Enables managed LLM input checks. |
+| `output` | Enables managed LLM output checks. |
+| `tool_input` | Enables managed tool-argument checks before execution. |
+| `tool_output` | Enables managed tool-result checks after execution. |
+| `priority` | Middleware priority for installed execution intercepts. |
+| `remote` | Remote backend settings. |
+| `local` | Local backend settings. |
+| `request_defaults` | Default request-time Guardrails semantics passed to the remote backend. |
+| `policy` | Component-local handling for unknown fields and unsupported values. |
+
+At least one managed Guardrails surface must be enabled.
+
+## Backend Support
+
+The following table compares remote and local backend support:
+
+| Area | `remote` | `local` |
+|---|---|---|
+| Built-in component kind and config validation | Supported | Supported |
+| Managed LLM `input` | Supported | Supported |
+| Managed LLM `output` | Supported | Supported |
+| Managed streaming LLM execution | Supported over the remote HTTP(S) contract | Supported; refer to [Streaming Boundary](#streaming-boundary) |
+| Managed `tool_input` | Not supported against the stock Guardrails remote contract | Supported |
+| Managed `tool_output` | Supported | Supported |
+| `request_defaults` pass-through | Supported | Not supported |
+| Codec support | `openai_chat` | `openai_chat`, `openai_responses`, `anthropic_messages` |
+| Runtime availability | Any runtime that includes the remote backend | Runtimes that can start `python3 >= 3.11` with `nemoguardrails==0.22.0` installed |
+
+## Remote Mode
+
+Use `remote` mode when NeMo Relay should call a Guardrails service over
+HTTP(S), especially when Guardrails must be shared across runtimes, used from
+non-Python environments, or deployed independently from the application
+process.
+
+### Requirements
+
+To use `mode = "remote"`, the configured `remote.endpoint` must point at a
+Guardrails service that NeMo Relay can reach from the running process and that
+exposes the Guardrails remote HTTP(S) contract.
+
+The NeMo Relay plugin config activates Guardrails integration, but the
+Guardrails service still owns the actual policy content. In practice, NeMo
+Relay decides when managed checks run, while the Guardrails config decides what
+to block, allow, or rewrite.
+
+### Remote Settings
+
+The remote backend accepts the following settings:
+
+| Field | Default | Notes |
+|---|---|---|
+| `remote.endpoint` | Required | Base `http://` or `https://` URL for the reachable Guardrails service. |
+| `remote.config_id` | Omitted | One Guardrails configuration identifier. Set this or `remote.config_ids`, but not both. |
+| `remote.config_ids` | `[]` | Multiple Guardrails configuration identifiers to combine. Set this or `remote.config_id`, but not both. |
+| `remote.headers` | `{}` | Static string headers sent with every remote request. |
+| `remote.timeout_millis` | `3000` | Positive request timeout in milliseconds. |
+
+### `plugins.toml` Example
+
+You can write this config directly in `plugins.toml`, or create and edit it
+through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
+precedence, merge behavior, and editor controls, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+```toml
+version = 1
+
+[[components]]
+kind = "nemo_guardrails"
+enabled = true
+
+[components.config]
+version = 1
+mode = "remote"
+codec = "openai_chat"
+input = true
+output = true
+tool_output = true
+
+[components.config.remote]
+endpoint = "http://127.0.0.1:8000"
+config_id = "live-smoke"
+timeout_millis = 3000
+
+[components.config.request_defaults.context]
+tenant = "demo"
+
+[components.config.request_defaults.rails]
+input = true
+output = true
+
+[components.config.policy]
+unknown_component = "warn"
+unknown_field = "warn"
+unsupported_value = "error"
+```
+
+This example configures the built-in remote mode for a Guardrails service that
+uses `codec = "openai_chat"`, managed LLM `input` and `output`, managed
+`tool_output`, and request-default pass-through for backend context plus
+backend `input` and `output` rail selection.
+
+### Rules
+
+When `mode = "remote"`:
+
+- `remote.endpoint` is required.
+- Exactly one of `remote.config_id` or `remote.config_ids` is required.
+- `config_path`, `config_yaml`, and `colang_content` cannot be present.
+- `local` settings cannot be present.
+- The backend uses the Guardrails remote HTTP(S) contract for both non-streaming
+  and streaming LLM execution.
+
+### Codec Boundary
+
+The current built-in remote mode supports managed LLM execution only with:
+
+- `openai_chat`
+
+### Managed Tool Boundary
+
+The current remote mode supports managed `tool_output`.
+
+The current remote mode rejects managed `tool_input` explicitly because the
+stock Guardrails remote contract does not activate pre-execution tool-call
+rails from externally submitted `/v1/chat/completions` history. NeMo Relay
+rejects `tool_input` in remote mode rather than leaving a silent
+non-enforcing path.
+
+### Request Defaults
+
+`request_defaults` lets the built-in plugin pass request-time semantics through
+to the selected remote backend.
+
+Supported request-default fields are:
+
+- `context`
+- `thread_id`
+- `state`
+- `rails`
+- `llm_params`
+- `llm_output`
+- `output_vars`
+- `log`
+
+These are backend request options, not additional NeMo Relay-managed execution
+surfaces.
+
+This includes fields whose names overlap with top-level managed surfaces:
+
+| Field | Meaning |
+|---|---|
+| Top-level `input` | Managed NeMo Relay LLM input surface |
+| `request_defaults.rails.input` | Backend pass-through rail selection |
+| Top-level `output` | Managed NeMo Relay LLM output surface |
+| `request_defaults.rails.output` | Backend pass-through rail selection |
+| Top-level `tool_input` | Managed NeMo Relay tool-input surface in the plugin model; not supported by the current stock-remote backend |
+| `request_defaults.rails.tool_input` | Backend pass-through rail selection |
+| Top-level `tool_output` | Managed NeMo Relay tool-output surface |
+| `request_defaults.rails.tool_output` | Backend pass-through rail selection |
+
+The `rails` section can include:
+
+- `input`
+- `output`
+- `retrieval`
+- `dialog`
+- `tool_output`
+- `tool_input`
+
+Those values are forwarded to the remote backend as request semantics. They do
+not mean NeMo Relay owns separate managed retrieval or dialog execution
+surfaces. `dialog` and `retrieval` are pass-through request options only.
+Likewise, `request_defaults.rails.tool_input` is only a backend pass-through
+selector. It does not make managed remote `tool_input` supported in the
+stock-remote lane.
+
+For more targeted request-time pass-through, the remote backend also forwards
+selectors like these:
+
+```toml
+[components.config.request_defaults.rails]
+input = true
+output = true
+retrieval = ["retrieve_relevant_chunks"]
+dialog = true
+tool_output = ["validate_tool_output"]
+```
+
+### Observability
+
+The current remote backend emits coarse backend-level marks for remote
+Guardrails activity:
+
+- `nemo_guardrails.remote.start`
+- `nemo_guardrails.remote.end`
+- `nemo_guardrails.remote.error`
+
+## Local Mode
+
+Use `local` mode when NeMo Relay should call `nemoguardrails` through a local
+Python worker subprocess instead of a separate Guardrails service.
+
+### Requirements
+
+To use `mode = "local"`, NeMo Relay must be able to start a `python3 >= 3.11`
+executable that can import `nemoguardrails==0.22.0`.
+
+The built-in local backend starts a Python worker process and sends Guardrails
+checks over a JSON-lines protocol. Use it when the runtime has direct access to
+the Python Guardrails dependency and configuration files rather than a separate
+Guardrails service. Install the tested local-mode Guardrails dependency with
+`pip install nemoguardrails==0.22.0`.
+
+The same ownership boundary still applies:
+
+- NeMo Relay decides when managed checks run.
+- Guardrails-native config still decides what to block, allow, or rewrite.
+
+### Local Settings
+
+The local backend accepts the following settings:
+
+| Field | Default | Notes |
+|---|---|---|
+| `config_path` | Omitted | Native Guardrails configuration directory. Set this or `config_yaml`, but not both. |
+| `config_yaml` | Omitted | Inline native Guardrails YAML. Set this or `config_path`, but not both. |
+| `colang_content` | Omitted | Inline Colang content. Use only with `config_yaml`. |
+| `local.python_module` | `nemoguardrails` | Module that the local worker imports. Set a custom module only when the runtime exposes Guardrails through another import path. |
+| `local.python_executable` | `NEMO_RELAY_PYTHON`, otherwise `python3` | Python executable that starts the local worker. |
+| `local.python_path` | Omitted | Path prepended to the worker subprocess `PYTHONPATH`. |
+
+### `plugins.toml` Example
+
+You can write this config directly in `plugins.toml`, or create and edit it
+through the CLI with `nemo-relay plugins edit`. For plugin file discovery,
+precedence, merge behavior, and editor controls, refer to
+[Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
+
+```toml
+version = 1
+
+[[components]]
+kind = "nemo_guardrails"
+enabled = true
+
+[components.config]
+version = 1
+mode = "local"
+codec = "openai_chat"
+input = true
+output = true
+tool_input = true
+tool_output = true
+config_path = "./rails"
+
+[components.config.local]
+python_executable = "python3"
+
+[components.config.policy]
+unknown_component = "warn"
+unknown_field = "warn"
+unsupported_value = "error"
+```
+
+This example configures the built-in local mode for a runtime that can start
+`python3`, import `nemoguardrails`, and read a native Guardrails config
+directory from `./rails`.
+
+For example, the Guardrails-side policy can look like this:
+
+```yaml
+rails:
+  input:
+    flows:
+      - self check input
+  output:
+    flows:
+      - self check output
+```
+
+This Guardrails-side config defines the policy logic. The NeMo Relay plugin
+config decides when those checks run.
+
+### Rules
+
+When `mode = "local"`:
+
+- Exactly one of `config_path` or `config_yaml` is required.
+- `colang_content` can only be used with `config_yaml`.
+- `remote` settings cannot be present.
+- `request_defaults` is rejected.
+- `local.python_module` is optional and only needed when the runtime should
+  import the Guardrails dependency from a custom Python module path instead of
+  the default `nemoguardrails` package.
+- `local.python_executable` is optional and defaults to the
+  `NEMO_RELAY_PYTHON` environment variable when set, otherwise `python3`.
+- `local.python_path` is optional and is prepended to `PYTHONPATH` only for
+  the local Guardrails worker subprocess.
+
+### Codec Boundary
+
+The current built-in local mode supports managed LLM execution with:
+
+- `openai_chat`
+- `openai_responses`
+- `anthropic_messages`
+
+### Managed Tool Boundary
+
+The current local mode supports both:
+
+- managed `tool_input`
+- managed `tool_output`
+
+### Streaming Boundary
+
+The current local mode supports streaming LLM input checks before the stream
+callback runs.
+
+When output rails are configured, the current local mode uses Guardrails-native
+streaming output rails and lets provider chunks flow while the local output rail
+monitor evaluates the streamed text. That requires `rails.output.streaming.enabled = true`
+in the Guardrails config.
+
+Guardrails calls the main streaming-output switch
+`rails.output.streaming.stream_first`.
+
+When `stream_first = true`, the current local mode uses pass-through-first
+streaming semantics:
+
+- Provider chunks can reach the caller immediately.
+- Guardrails evaluates the streamed text in parallel.
+- If Guardrails later blocks the stream, the call fails after some chunks have
+  already reached the caller.
+
+The current local mode does not support `rails.output.streaming.stream_first = false`
+yet. That mode would require Guardrails-first chunk reconstruction:
+
+- Guardrails would need to evaluate streamed text before it releases chunks to
+  the caller.
+- The local backend would then need to convert Guardrails-approved text into
+  valid provider-shaped stream chunks.
+
+That guarded-text-to-provider-chunk adapter does not exist yet in the current
+local backend.
