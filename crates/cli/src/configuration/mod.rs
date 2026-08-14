@@ -787,6 +787,9 @@ fn load_or_create_bootstrap_hmac_key_at(
     path: &Path,
 ) -> Result<[u8; BOOTSTRAP_HMAC_KEY_BYTES], CliError> {
     if bootstrap_hmac_key_permissions_are_private(path)?
+        && fs::metadata(path)
+            .map(|metadata| metadata.len() == BOOTSTRAP_HMAC_KEY_BYTES as u64)
+            .unwrap_or(false)
         && let Some(key) = load_existing_bootstrap_hmac_key_at(path)?
     {
         return Ok(key);
