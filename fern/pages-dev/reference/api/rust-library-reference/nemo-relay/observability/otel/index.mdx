@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 OpenTelemetry subscriber support for NeMo Relay.
 
-This crate adapts NeMo Relay lifecycle events into the selected `full`, `gen_ai`, or `openinference` OpenTelemetry trace projection. Scope start and end events open and close supported spans. Mark behavior is fixed by the selected projection.
+This crate adapts NeMo Relay lifecycle events into the selected `full`, `gen_ai`, or `openinference` OpenTelemetry trace projection. Scope start and end events open and close supported spans. Non-metric mark behavior is fixed by the selected projection; reserved metric-schema marks are not projected into traces.
 
 The public API is intentionally small:
 

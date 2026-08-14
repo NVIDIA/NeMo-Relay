@@ -72,8 +72,10 @@ endpoint and transport: Relay
 rejects that configuration because their deterministic trace and span IDs would
 collide at the receiver. For `http_binary`, this comparison uses the effective
 trace destination, so a bare URL and the same URL with `/v1/traces` also
-collide. The comparison realizes HTTP port `80` and HTTPS port `443`, collapses
-repeated path slashes, ignores a non-root trailing slash, and treats standardized
+collide. A root trailing `/` is an explicit root-path destination and does not
+collide with `/v1/traces`. The comparison realizes HTTP port `80` and HTTPS
+port `443`, collapses repeated path slashes, ignores a non-root trailing slash,
+and treats standardized
 loopback forms (`localhost`, names under `.localhost`, `127.0.0.0/8`, and `::1`)
 as the same host without resolving DNS. Query strings remain part of the
 destination. All endpoints are constructed before the plugin registers its

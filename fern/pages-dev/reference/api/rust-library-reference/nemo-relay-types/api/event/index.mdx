@@ -18,18 +18,36 @@ Lifecycle event DTOs. Event types for Agent Trajectory Observability Format (ATO
 - [DataSchema](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-eventcategory): Semantic category carried by ATOF `category`.
 - [EventSanitizeFields](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-eventsanitizefields): Observability fields that event sanitizers may rewrite.
+- [FiniteF64](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-finitef64): A finite IEEE 754 double-precision value.
+- [HistogramBoundaries](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-histogramboundaries): Explicit histogram bucket boundaries that are finite and strictly increasing.
+- [InstrumentDescriptor](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-instrumentdescriptor): Descriptor fields shared by all recordings of an instrument.
+- [InstrumentName](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-instrumentname): An OpenTelemetry instrument name together with its canonical form.
 - [MarkEvent](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-markevent): ATOF point-in-time mark event.
+- [MetricAttributes](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-metricattributes): A deterministic map of typed OpenTelemetry metric attributes.
+- [MetricEnvelope](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-metricenvelope): Payload stored in a mark using [`METRIC_DATA_SCHEMA_NAME`](/reference/api/rust-library-reference/nemo-relay-types/api/event/constant-metric-data-schema-name).
+- [MetricMeasurement](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-metricmeasurement): One recording operation in a Relay metric mark.
+- [MetricValidationError](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-metricvalidationerror): Validation error for a Relay metric envelope.
+- [ParseLogSeverityError](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-parselogseverityerror): Error returned when parsing an unsupported log severity.
 - [PendingMarkSpec](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-pendingmarkspec): Mark requested by middleware for materialization by a lifecycle owner.
 - [ScopeEvent](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-scopeevent): ATOF scope lifecycle event.
+- [ValidatedMetricMeasurement](/reference/api/rust-library-reference/nemo-relay-types/api/event/struct-validatedmetricmeasurement): Parsed metric measurement that is safe for OTLP export.
 
 ## Enums
 
+- [AttributeValue](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-attributevalue): Typed OpenTelemetry attribute values, including homogeneous primitive arrays.
 - [Event](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-event): Tagged union covering the two ATOF event kinds emitted by the runtime.
+- [LogSeverity](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-logseverity): Severity attached to a mark that may be projected as an OpenTelemetry log.
+- [MetricKind](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-metrickind): OpenTelemetry instrument kind represented by a metric measurement mark.
+- [MetricValue](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-metricvalue): One typed metric value accepted by Relay's metric schema.
+- [MetricValueType](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-metricvaluetype): Numeric representation used by a metric measurement.
 - [ScopeCategory](/reference/api/rust-library-reference/nemo-relay-types/api/event/enum-scopecategory): Agent Trajectory Observability Format (ATOF) lifecycle phase for a scope event.
 
 ## Constants
 
 - [ATOF_VERSION](/reference/api/rust-library-reference/nemo-relay-types/api/event/constant-atof-version): Agent Trajectory Observability Format (ATOF) protocol version emitted by this runtime.
+- [LOG_SEVERITY_METADATA_KEY](/reference/api/rust-library-reference/nemo-relay-types/api/event/constant-log-severity-metadata-key): Reserved metadata key carrying the canonical severity of a mark exported as a log.
+- [METRIC_DATA_SCHEMA_NAME](/reference/api/rust-library-reference/nemo-relay-types/api/event/constant-metric-data-schema-name): Relay-owned schema name for mark payloads containing metric measurements.
+- [METRIC_DATA_SCHEMA_VERSION](/reference/api/rust-library-reference/nemo-relay-types/api/event/constant-metric-data-schema-version): Current Relay-owned metric measurement schema version.
 
 ## Functions
 
@@ -37,3 +55,4 @@ Lifecycle event DTOs. Event types for Agent Trajectory Observability Format (ATO
 - [llm_attributes_to_strings](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-llm-attributes-to-strings): Convert LLM bitflags into ATOF attributes.
 - [scope_attributes_to_strings](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-scope-attributes-to-strings): Convert scope bitflags into ATOF attributes.
 - [tool_attributes_to_strings](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-tool-attributes-to-strings): Convert tool bitflags into ATOF attributes.
+- [validate_metric_measurements](/reference/api/rust-library-reference/nemo-relay-types/api/event/fn-validate-metric-measurements): Validate a complete list of metric measurements atomically.

@@ -2,7 +2,7 @@
 title: "Function event"
 sidebar-title: "event"
 description: "Emit a standalone mark event under the current or provided scope."
-position: 11
+position: 12
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -20,7 +20,11 @@ This creates a point-in-time lifecycle event without pushing or popping a new sc
 - `name`: Event name to emit.
 - `parent`: Optional explicit parent scope. When `None`, the current top of stack is used.
 - `data`: Optional JSON payload recorded on the emitted event.
+- `data_schema`: Optional name and version identifying the data payload.
 - `metadata`: Optional JSON metadata recorded on the emitted event.
+- `severity`: Optional typed severity stored in reserved mark metadata.
+- `category`: Optional semantic mark category.
+- `category_profile`: Optional category-specific profile.
 - `timestamp`: Optional timestamp recorded on the emitted mark event. When `None`, the current UTC time is used.
 
 ## Returns
@@ -29,7 +33,7 @@ A [`Result`](/reference/api/rust-library-reference/nemo-relay/error/type-result)
 
 ## Errors
 
-Returns an error when the runtime owner check fails or when internal state cannot be read safely.
+Returns an error when the runtime owner check fails or when internal state cannot be read safely. Returns [`FlowError::InvalidArgument`](/reference/api/rust-library-reference/nemo-relay/error/enum-flowerror) when a typed severity is provided with non-object metadata.
 
 ## Notes
 

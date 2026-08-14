@@ -17,6 +17,7 @@ pub enum EditorFieldKind {
     Integer,
     Float,
     Enum,
+    IntegerEnum,
     StringMap,
     Json,
     List,
@@ -57,7 +58,13 @@ Floating-point number value.
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "Enum"}} /></pre>
 
-String enum with a fixed set of allowed values.
+Value selected from a fixed set of allowed choices.
+
+### `IntegerEnum`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "IntegerEnum"}} /></pre>
+
+Integer value selected from a fixed set of allowed choices.
 
 ### `StringMap`
 

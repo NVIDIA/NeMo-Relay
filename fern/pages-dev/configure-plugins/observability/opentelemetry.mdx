@@ -87,7 +87,7 @@ work or delivery to the other exporters.
 | Field | Default | Notes |
 |---|---|---|
 | `type` | Required | `full`, `gen_ai`, or `openinference`. |
-| `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
+| `endpoint` | Required | Nonblank OTLP endpoint. For OTLP/HTTP, Relay appends `/v1/traces` when the endpoint contains only a scheme, host, and optional port with no explicit path. Add a trailing `/` to export traces to the root path. Any other explicit path is preserved. gRPC endpoints are always preserved. |
 | `transport` | `http_binary` | `http_binary` or `grpc`. |
 | `service_name` | `unknown_service` | `service.name` resource attribute. |
 | `service_namespace` | Omitted | Optional `service.namespace`. |
@@ -304,6 +304,12 @@ Direct construction creates one independently managed exporter. Register the
 subscriber before instrumented work. During graceful teardown, deregister it,
 call the binding's force-flush method (`force_flush()` or `forceFlush()`), and
 then call `shutdown()`.
+
+Rust direct subscribers also expose `runtime_diagnostics()`. Its bounded
+snapshot reports each runtime condition's stable code, occurrence count, and
+most recent message. Use it to monitor rejected metric marks, capacity limits,
+and delivery failures without configuring the observability plugin. The plugin
+continues to include the same conditions in its runtime report.
 
 ## Version 2 to Version 3
 

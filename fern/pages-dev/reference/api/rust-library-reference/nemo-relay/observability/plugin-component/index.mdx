@@ -3,7 +3,7 @@ title: "Module plugin_component"
 sidebar-title: "plugin_component"
 slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component"
 description: "Built-in observability plugin component."
-position: 4
+position: 6
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -26,7 +26,10 @@ The plugin intentionally infers subscriber names from the component namespace so
 - [HttpStorageConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-httpstorageconfig): HTTP endpoint settings for ATIF trajectory upload.
 - [ObservabilityConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-observabilityconfig): Canonical config document for the observability plugin component.
 - [OpenTelemetryEndpointConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetryendpointconfig): One typed OTLP destination.
+- [OpenTelemetryLogSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetrylogsectionconfig): OTLP log pipeline settings.
+- [OpenTelemetryMetricSectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetrymetricsectionconfig): OTLP metric pipeline settings.
 - [OpenTelemetrySectionConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetrysectionconfig): Multi-endpoint OpenTelemetry export settings.
+- [OpenTelemetrySignalEndpointConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetrysignalendpointconfig): Signal-common OTLP destination fields used by logs and metrics.
 - [S3StorageConfig](/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-s3storageconfig): S3-compatible storage settings for ATIF trajectory upload.
 
 ## Enums

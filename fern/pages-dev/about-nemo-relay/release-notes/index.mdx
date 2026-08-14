@@ -110,7 +110,11 @@ for destination paths and explicit-file alternatives.
 
 ### Fixed Known Issues in 0.8
 
-- _Fixed issues will be added for the 0.8 release._
+- Restored a trailing `/` on an OTLP/HTTP trace endpoint as an explicit
+  root-path destination. A bare HTTP authority still defaults to
+  `/v1/traces`; when version 4 implicitly derives log or metric destinations
+  from either form, it uses `/v1/logs` or `/v1/metrics` respectively. Explicit
+  trace, log, and metric endpoint paths remain unchanged.
 
 ## Known Issues in 0.8
 

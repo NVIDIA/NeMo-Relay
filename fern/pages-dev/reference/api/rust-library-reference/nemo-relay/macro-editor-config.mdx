@@ -17,6 +17,7 @@ macro_rules! editor_config {
                 $field:ident => {
                     label: $label:literal,
                     kind: $kind:ident
+                    $(, name: $name:literal)?
                     $(, values: [$($value:literal),* $(,)?])?
                     $(, optional: $optional:literal)?
                     $(, nested: $nested:ty)?
@@ -28,11 +29,14 @@ macro_rules! editor_config {
             ),* $(,)?
         }
     ) => { ... };
+    (@name $field:ident) => { ... };
+    (@name $field:ident $name:literal) => { ... };
     (@kind Boolean) => { ... };
     (@kind String) => { ... };
     (@kind Integer) => { ... };
     (@kind Float) => { ... };
     (@kind Enum) => { ... };
+    (@kind IntegerEnum) => { ... };
     (@kind StringMap) => { ... };
     (@kind Json) => { ... };
     (@kind List) => { ... };

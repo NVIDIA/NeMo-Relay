@@ -3,14 +3,14 @@ title: "Struct Open Telemetry Section Config"
 sidebar-title: "OpenTelemetrySectionConfig"
 slug: "/reference/api/rust-library-reference/nemo-relay/observability/plugin_component/struct-opentelemetrysectionconfig"
 description: "Multi-endpoint OpenTelemetry export settings."
-position: 9
+position: 11
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct OpenTelemetrySectionConfig &#123;\n    pub enabled: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub endpoints: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-opentelemetryendpointconfig\">OpenTelemetryEndpointConfig</a>&gt;,\n&#125;"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub struct OpenTelemetrySectionConfig &#123;\n    pub enabled: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>,\n    pub endpoints: <a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-opentelemetryendpointconfig\">OpenTelemetryEndpointConfig</a>&gt;,\n    pub logs: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-opentelemetrylogsectionconfig\">OpenTelemetryLogSectionConfig</a>&gt;,\n    pub metrics: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;<a href=\"struct-opentelemetrymetricsectionconfig\">OpenTelemetryMetricSectionConfig</a>&gt;,\n&#125;"}} /></pre>
 
 Multi-endpoint OpenTelemetry export settings.
 
@@ -23,6 +23,14 @@ Whether OpenTelemetry export is active.
 ### `endpoints: Vec<OpenTelemetryEndpointConfig>`
 
 Independently configured OTLP destinations.
+
+### `logs: Option<OpenTelemetryLogSectionConfig>`
+
+Optional OTLP log pipeline sourced from non-metric marks.
+
+### `metrics: Option<OpenTelemetryMetricSectionConfig>`
+
+Optional OTLP metric pipeline sourced from Relay metric marks.
 
 ## Trait Implementations
 
