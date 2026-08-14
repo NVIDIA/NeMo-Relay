@@ -10,6 +10,7 @@
 //! the documented behavior fails loudly instead of silently.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::trace::{InMemorySpanExporterBuilder, SdkTracerProvider, SpanData};
@@ -23,7 +24,8 @@ use crate::api::event::{
 use crate::api::runtime::{create_scope_stack, with_scope_stack};
 use crate::codec::model_pricing::pricing_test_mutex;
 use crate::codec::response::{
-    PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
+    AnnotatedLlmResponse, CostEstimate, CostSource, PricingCatalog, PricingResolver, Usage,
+    reset_active_pricing_resolver, set_active_pricing_resolver,
 };
 use crate::json::Json;
 use crate::observability::OpenTelemetryType;
@@ -405,6 +407,75 @@ fn test_exporters_agree_on_cost_total_for_anthropic_payload() {
         openinference.get("llm.cost.total"),
         Some(&"0.000435".to_string())
     );
+}
+
+#[test]
+fn test_exporters_omit_partial_model_pricing_totals_consistently() {
+    let uuid = Uuid::now_v7();
+    let exports = export_through_all_exporters(&[
+        llm_start(
+            uuid,
+            "model-call",
+            chat_request_content("parity-priced-model"),
+        ),
+        make_scope_event(
+            ScopeCategory::End,
+            uuid,
+            "model-call",
+            EventCategory::llm(),
+            Some(json!({"message": "hello"})),
+            Some(
+                CategoryProfile::builder()
+                    .model_name("parity-priced-model")
+                    .annotated_response(Arc::new(AnnotatedLlmResponse {
+                        model: Some("parity-priced-model".to_string()),
+                        usage: Some(Usage {
+                            prompt_tokens: Some(1_000),
+                            completion_tokens: Some(500),
+                            total_tokens: Some(1_500),
+                            cache_read_tokens: Some(200),
+                            cache_write_tokens: Some(10),
+                            cost: Some(CostEstimate {
+                                total: None,
+                                currency: "USD".to_string(),
+                                input: Some(0.000_12),
+                                output: Some(0.000_3),
+                                cache_read: Some(0.000_015),
+                                cache_write: None,
+                                source: CostSource::ModelPricing,
+                                pricing_provider: Some("test".to_string()),
+                                pricing_model: Some("parity-priced-model".to_string()),
+                                pricing_as_of: Some("2026-06-05".to_string()),
+                                pricing_source: Some("test".to_string()),
+                            }),
+                        }),
+                        ..AnnotatedLlmResponse::default()
+                    }))
+                    .build(),
+            ),
+        ),
+    ]);
+
+    assert_eq!(
+        exports.agent_step().metrics.as_ref().unwrap().cost_usd,
+        None
+    );
+    assert_eq!(
+        exports
+            .trajectory
+            .final_metrics
+            .as_ref()
+            .unwrap()
+            .total_cost_usd,
+        None
+    );
+
+    let otel = exports.otel_attrs("model-call");
+    assert!(!otel.contains_key("nemo_relay.llm.cost.total"));
+    assert!(!otel.contains_key("nemo_relay.llm.cost.currency"));
+
+    let openinference = exports.openinference_attrs("model-call");
+    assert!(!openinference.contains_key("llm.cost.total"));
 }
 
 // ===================================================================

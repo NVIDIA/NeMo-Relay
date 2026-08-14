@@ -37,6 +37,21 @@ fn resolver_with_rates(baseline_input: f64, effective_input: f64) -> PricingReso
     PricingResolver::from_catalogs(vec![catalog])
 }
 
+fn resolver_without_cache_write_rate() -> PricingResolver {
+    let catalog = PricingCatalog::from_json_str(
+        &json!({
+            "version": 1,
+            "entries": [
+                {"provider":"test","model_id":"baseline","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":2.0,"output_per_million":4.0,"cache_read_per_million":0.5},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}},
+                {"provider":"test","model_id":"effective","pricing_as_of":"2026-07-08","pricing_source":"test-snapshot","rates":{"input_per_million":1.0,"output_per_million":2.0,"cache_read_per_million":0.25},"prompt_cache":{"read_accounting":"included_in_prompt_tokens"}}
+            ]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    PricingResolver::from_catalogs(vec![catalog])
+}
+
 fn contribution() -> LlmOptimizationContribution {
     let mut contribution = LlmOptimizationContribution::new(
         "test.optimizer",
@@ -1195,6 +1210,52 @@ fn incomplete_cost_object_makes_the_summary_partial() {
     let summary =
         finalize_optimization_summary(&recorder, Some(&mut response), None, &resolver()).unwrap();
     assert_eq!(summary.status, LlmOptimizationSummaryStatus::Partial);
+    assert!(
+        summary
+            .limitations
+            .contains(&"missing_actual_cost_total".to_string())
+    );
+    assert!(summary.estimated_cost_saved.is_none());
+    assert!(summary.currency.is_none());
+}
+
+#[test]
+fn missing_model_pricing_rate_makes_the_summary_partial() {
+    let recorder = LlmOptimizationRecorder::default();
+    assert!(recorder.record(contribution()));
+    let mut response = AnnotatedLlmResponse {
+        model: Some("effective".to_string()),
+        usage: Some(Usage {
+            prompt_tokens: Some(800),
+            completion_tokens: Some(100),
+            total_tokens: Some(900),
+            cache_write_tokens: Some(3),
+            ..Usage::default()
+        }),
+        ..AnnotatedLlmResponse::default()
+    };
+
+    let summary = finalize_optimization_summary(
+        &recorder,
+        Some(&mut response),
+        None,
+        &resolver_without_cache_write_rate(),
+    )
+    .unwrap();
+    assert_eq!(summary.status, LlmOptimizationSummaryStatus::Partial);
+    assert_eq!(
+        summary.baseline_cost.as_ref().and_then(|cost| cost.total),
+        None
+    );
+    assert_eq!(
+        summary.actual_cost.as_ref().and_then(|cost| cost.total),
+        None
+    );
+    assert!(
+        summary
+            .limitations
+            .contains(&"missing_baseline_cost_total".to_string())
+    );
     assert!(
         summary
             .limitations
