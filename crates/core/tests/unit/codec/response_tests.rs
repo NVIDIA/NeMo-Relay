@@ -1049,6 +1049,104 @@ fn test_pricing_catalog_rejects_empty_required_fields_and_invalid_rates() {
 }
 
 #[test]
+fn test_pricing_catalog_rejects_unknown_fields_in_nested_structures() {
+    let valid_entry = flat_pricing_entry("configured", "configured-model", 1.0, 2.0);
+
+    let mut catalog_with_unknown = json!({
+        "version": 1,
+        "entries": [valid_entry.clone()]
+    });
+    catalog_with_unknown["unexpected_catalog"] = json!(true);
+
+    let mut entry_with_unknown = valid_entry.clone();
+    entry_with_unknown["unexpected_entry"] = json!(true);
+
+    let mut rates_with_unknown = valid_entry.clone();
+    rates_with_unknown["rates"]["cache_writ_per_million"] = json!(0.1);
+
+    let mut prompt_cache_with_unknown = valid_entry.clone();
+    prompt_cache_with_unknown["prompt_cache"]["read_accountng"] = json!("separate");
+
+    let schedule_with_unknown = json!([{
+        "provider": "configured",
+        "model_id": "scheduled-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "test",
+        "rate_schedule": {
+            "type": "prompt_token_threshold",
+            "tierz": [{
+                "min_prompt_tokens": 0,
+                "rates": {
+                    "input_per_million": 1.0,
+                    "output_per_million": 2.0
+                }
+            }],
+            "tiers": [{
+                "min_prompt_tokens": 0,
+                "rates": {
+                    "input_per_million": 1.0,
+                    "output_per_million": 2.0
+                }
+            }]
+        },
+        "prompt_cache": {
+            "read_accounting": "separate"
+        }
+    }]);
+
+    let tier_with_unknown = json!([{
+        "provider": "configured",
+        "model_id": "tiered-model",
+        "pricing_as_of": "2026-06-04",
+        "pricing_source": "test",
+        "rate_schedule": {
+            "type": "prompt_token_threshold",
+            "tiers": [{
+                "min_prompt_toknes": 0,
+                "rates": {
+                    "input_per_million": 1.0,
+                    "output_per_million": 2.0
+                }
+            }]
+        },
+        "prompt_cache": {
+            "read_accounting": "separate"
+        }
+    }]);
+
+    for (payload, expected_field) in [
+        (catalog_with_unknown, "unexpected_catalog"),
+        (
+            json!({ "version": 1, "entries": [entry_with_unknown] }),
+            "unexpected_entry",
+        ),
+        (
+            json!({ "version": 1, "entries": [rates_with_unknown] }),
+            "cache_writ_per_million",
+        ),
+        (
+            json!({ "version": 1, "entries": [prompt_cache_with_unknown] }),
+            "read_accountng",
+        ),
+        (
+            json!({ "version": 1, "entries": schedule_with_unknown }),
+            "tierz",
+        ),
+        (
+            json!({ "version": 1, "entries": tier_with_unknown }),
+            "min_prompt_toknes",
+        ),
+    ] {
+        let err = PricingCatalog::from_json_str(&payload.to_string()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("unknown field `{expected_field}`")),
+            "expected unknown field `{expected_field}`, got {err}"
+        );
+    }
+}
+
+#[test]
 fn test_pricing_catalog_rejects_invalid_rate_schedules() {
     let empty_tiers = pricing_catalog_error(json!([
         {

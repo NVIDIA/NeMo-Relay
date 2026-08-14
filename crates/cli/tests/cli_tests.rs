@@ -2719,6 +2719,42 @@ fn cli_model_pricing_validate_rejects_invalid_catalog() {
 }
 
 #[test]
+fn cli_model_pricing_validate_rejects_unknown_nested_field() {
+    let temp = tempfile::tempdir().unwrap();
+    let catalog = temp.path().join("pricing.json");
+    std::fs::write(
+        &catalog,
+        r#"{
+  "version": 1,
+  "entries": [{
+    "provider": "test",
+    "model_id": "bad-model",
+    "rates": {
+      "input_per_million": 1.0,
+      "output_per_million": 2.0,
+      "cache_writ_per_million": 0.1
+    },
+    "prompt_cache": { "read_accounting": "included_in_prompt_tokens" },
+    "pricing_as_of": "2026-06-05",
+    "pricing_source": "test"
+  }]
+}"#,
+    )
+    .unwrap();
+
+    let output = Command::new(gateway_bin())
+        .args(["model-pricing", "validate"])
+        .arg(&catalog)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("invalid model pricing catalog"));
+    assert!(stderr.contains("unknown field `cache_writ_per_million`"));
+}
+
+#[test]
 fn cli_model_pricing_init_creates_user_pricing_component() {
     let temp = tempfile::tempdir().unwrap();
     let xdg = temp.path().join("xdg");
