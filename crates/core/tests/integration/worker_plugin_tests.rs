@@ -1497,19 +1497,11 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         "python_grpc_worker"
     );
 
-    let rewritten = tool_call_execute(
-        ToolCallExecuteParams::builder()
-            .name("lookup")
-            .args(json!({ "query": "relay" }))
-            .func(Arc::new(|args| {
-                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
-            }))
-            .build(),
-    )
-    .await
-    .expect("managed Python tool call should emit a mark and return its mutation");
+    let rewritten = tool_request_intercepts("lookup", json!({ "query": "relay" }))
+        .await
+        .expect("Python callback should emit a mark and return its mutation");
     assert_eq!(
-        rewritten.result["_nemo_relay_plugin"]["tag"],
+        rewritten["_nemo_relay_plugin"]["tag"],
         "managed-environment"
     );
 
