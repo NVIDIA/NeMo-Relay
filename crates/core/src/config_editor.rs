@@ -169,6 +169,7 @@ macro_rules! editor_config {
                 $field:ident => {
                     label: $label:literal,
                     kind: $kind:ident
+                    $(, name: $name:literal)?
                     $(, values: [$($value:literal),* $(,)?])?
                     $(, optional: $optional:literal)?
                     $(, nested: $nested:ty)?
@@ -192,7 +193,7 @@ macro_rules! editor_config {
                     fields: &[
                         $(
                             $crate::config_editor::EditorFieldSpec {
-                                name: stringify!($field),
+                                name: $crate::editor_config!(@name $field $($name)?),
                                 label: $label,
                                 kind: $crate::editor_config!(@kind $kind),
                                 enum_values: $crate::editor_config!(@values $($($value),*)?),
@@ -209,6 +210,9 @@ macro_rules! editor_config {
             }
         }
     };
+
+    (@name $field:ident) => { stringify!($field) };
+    (@name $field:ident $name:literal) => { $name };
 
     (@kind Boolean) => { $crate::config_editor::EditorFieldKind::Boolean };
     (@kind String) => { $crate::config_editor::EditorFieldKind::String };

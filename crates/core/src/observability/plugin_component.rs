@@ -174,7 +174,12 @@ pub struct OpenTelemetrySectionConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Independently configured OTLP destinations.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "traces",
+        alias = "endpoints",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub endpoints: Vec<OpenTelemetryEndpointConfig>,
     /// Optional OTLP log pipeline sourced from non-metric marks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -630,7 +635,7 @@ crate::editor_config! {
 crate::editor_config! {
     impl OpenTelemetrySectionConfig {
         enabled => { label: "enabled", kind: Boolean },
-        endpoints => { label: "endpoints", kind: List, list: &OPENTELEMETRY_ENDPOINT_LIST },
+        endpoints => { label: "traces", kind: List, name: "traces", list: &OPENTELEMETRY_ENDPOINT_LIST },
         logs => {
             label: "logs",
             kind: Section,
@@ -3177,6 +3182,7 @@ fn validate_observability_section_fields(
         "opentelemetry",
         &[
             "enabled",
+            "traces",
             "endpoints",
             "logs",
             "metrics",
@@ -3327,7 +3333,11 @@ fn validate_opentelemetry_endpoint_fields(
         "scheduled_delay_millis",
     ];
     const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
-    let Some(endpoints) = opentelemetry.get("endpoints").and_then(Json::as_array) else {
+    let Some(endpoints) = opentelemetry
+        .get("traces")
+        .or_else(|| opentelemetry.get("endpoints"))
+        .and_then(Json::as_array)
+    else {
         return;
     };
     for (index, endpoint) in endpoints.iter().enumerate() {

@@ -297,7 +297,7 @@ fn assert_signal_editor_sections(otlp: &EditorSchema) {
 }
 
 fn assert_trace_endpoint_editor_schema(otlp: &EditorSchema) {
-    let otlp_endpoints = otlp.field("endpoints").expect("endpoints field");
+    let otlp_endpoints = otlp.field("traces").expect("traces field");
     assert_eq!(otlp_endpoints.kind, EditorFieldKind::List);
     let otlp_endpoint = otlp_endpoints
         .list_item
@@ -786,7 +786,16 @@ fn default_config_and_component_conversion_cover_public_shape() {
     assert!(generic.enabled);
     assert_eq!(generic.config["version"], json!(4));
     assert_eq!(generic.config["atif"]["agent_name"], json!("NeMo Relay"));
-    assert_endpoint_batch_fields_omitted(&generic.config["opentelemetry"]["endpoints"][0]);
+    assert_endpoint_batch_fields_omitted(&generic.config["opentelemetry"]["traces"][0]);
+    let legacy: OpenTelemetrySectionConfig = serde_json::from_value(json!({
+        "enabled": true,
+        "endpoints": generic.config["opentelemetry"]["traces"].clone(),
+    }))
+    .expect("legacy endpoints alias should deserialize");
+    assert_eq!(
+        serde_json::to_value(legacy).unwrap()["traces"],
+        generic.config["opentelemetry"]["traces"]
+    );
 
     assert_endpoint_batch_fields_deserialize();
 }
@@ -1663,7 +1672,7 @@ fn empty_and_disabled_config_register_nothing() {
     let config = plugin_config(json!({
         "atof": {"enabled": false},
         "atif": {"enabled": false},
-        "opentelemetry": {"enabled": false, "endpoints": []}
+        "opentelemetry": {"enabled": false, "traces": []}
     }));
     assert!(!validate_plugin_config(&config).has_errors());
     futures::executor::block_on(initialize_plugins_exact(config)).unwrap();

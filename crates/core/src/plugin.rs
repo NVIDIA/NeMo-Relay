@@ -1356,7 +1356,7 @@ fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> b
                 path,
                 [section, field]
                     if (section == "atof" && field == "sinks")
-                        || (section == "opentelemetry" && field == "endpoints")
+                        || (section == "opentelemetry" && matches!(field.as_str(), "traces" | "endpoints"))
                         || (section == "atif" && field == "storage")
             ) || matches!(
                 path,

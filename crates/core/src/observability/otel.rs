@@ -456,9 +456,7 @@ impl OpenTelemetrySubscriber {
     ) -> Result<Self> {
         Self::new_with_runtime_diagnostics(
             config,
-            Some(format!(
-                "opentelemetry.endpoints[{endpoint_index}].endpoint"
-            )),
+            Some(format!("opentelemetry.traces[{endpoint_index}].endpoint")),
         )
     }
 
