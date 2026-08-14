@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, DataSchema, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent,
-    ScopeCategory, ScopeEvent,
+    BaseEvent, CategoryProfile, DataSchema, EventCategory, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent,
 };
 use crate::api::scope::ScopeType;
 use opentelemetry_sdk::logs::{InMemoryLogExporter, SdkLoggerProvider};
@@ -82,6 +82,30 @@ fn scope_lineage_bounds_active_contexts() {
 }
 
 #[test]
+fn scope_lineage_reuses_completed_parent_and_bounds_completed_contexts() {
+    let mut lineage = ScopeLineage::new();
+    let parent = Uuid::now_v7();
+    lineage.process_start(&scope(parent, ScopeCategory::Start));
+    lineage.process_end(&scope(parent, ScopeCategory::End));
+
+    let child = mark(Some(parent), "late.mark", None, None, None);
+    let context = lineage
+        .parent_context(&child)
+        .expect("completed parent context");
+    assert_eq!(context.span_id(), relay_span_id(parent));
+
+    for _ in 0..=COMPLETED_SPAN_CONTEXT_LIMIT {
+        let uuid = Uuid::now_v7();
+        lineage.process_start(&scope(uuid, ScopeCategory::Start));
+        lineage.process_end(&scope(uuid, ScopeCategory::End));
+    }
+    assert_eq!(lineage.completed.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert!(!lineage.completed.contains_key(&parent));
+
+    lineage.process_end(&scope(Uuid::now_v7(), ScopeCategory::End));
+}
+
+#[test]
 fn log_config_rejects_zero_timeout() {
     let error = OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
         .with_timeout(Duration::ZERO)
@@ -105,6 +129,32 @@ fn log_config_rejects_blank_and_padded_headers() {
             .unwrap_err();
         assert!(error.to_string().contains("surrounding whitespace"));
     }
+}
+
+#[test]
+fn log_config_validates_batch_limits_and_retains_resource_identity() {
+    for config in [
+        OpenTelemetryLogConfig::new("   "),
+        OpenTelemetryLogConfig::new("https://collector.example/v1/logs").with_max_queue_size(0),
+        OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
+            .with_max_queue_size(1)
+            .with_max_export_batch_size(2),
+        OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
+            .with_scheduled_delay(Duration::ZERO),
+    ] {
+        assert!(config.validate().is_err());
+    }
+
+    let config = OpenTelemetryLogConfig::new("https://collector.example/v1/logs")
+        .with_service_namespace("relay")
+        .with_service_version("0.8.0")
+        .with_resource_attribute("deployment.environment", "test");
+    assert_eq!(config.service_namespace.as_deref(), Some("relay"));
+    assert_eq!(config.service_version.as_deref(), Some("0.8.0"));
+    assert_eq!(
+        config.resource_attributes.get("deployment.environment"),
+        Some(&"test".to_string())
+    );
 }
 
 #[test]
@@ -230,6 +280,49 @@ fn non_metric_mark_maps_structured_body_attributes_and_scope_context() {
 }
 
 #[test]
+fn mark_projection_preserves_category_profile_schema_and_json_scalars() {
+    let (mut processor, exporter, provider) = processor(LogSeverity::Trace);
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("relay.checkpoint")
+            .data(json!(true))
+            .data_schema(
+                DataSchema::builder()
+                    .name("relay.checkpoint")
+                    .version("1")
+                    .build(),
+            )
+            .metadata(json!("opaque-metadata"))
+            .build(),
+        Some(EventCategory::custom()),
+        Some(CategoryProfile::builder().subtype("checkpoint").build()),
+    ));
+    processor.process(&event);
+    provider.force_flush().unwrap();
+
+    let logs = exporter.get_emitted_logs().unwrap();
+    let record = &logs[0].record;
+    assert_eq!(record.body(), Some(&AnyValue::Boolean(true)));
+    let attributes = record
+        .attributes_iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        attributes.get(&Key::new("nemo_relay.mark.category")),
+        Some(&AnyValue::from("custom"))
+    );
+    assert!(attributes.contains_key(&Key::new("nemo_relay.mark.category_profile")));
+    assert_eq!(
+        attributes.get(&Key::new("nemo_relay.mark.data_schema.name")),
+        Some(&AnyValue::from("relay.checkpoint"))
+    );
+    assert_eq!(
+        attributes.get(&Key::new("nemo_relay.mark.metadata")),
+        Some(&AnyValue::from("opaque-metadata"))
+    );
+}
+
+#[test]
 fn routing_and_severity_filtering_drop_without_fallback() {
     let (mut processor, exporter, provider) = processor(LogSeverity::Warn);
     processor.process(&mark(None, "default-info", Some(json!(1)), None, None));
@@ -285,5 +378,29 @@ fn json_conversion_preserves_top_level_absence_and_nested_null() {
             AnyValue::from("null"),
             AnyValue::from((i64::MAX as u64 + 1).to_string()),
         ]))
+    );
+}
+
+#[test]
+fn severity_and_json_conversion_cover_remaining_scalar_variants() {
+    assert_eq!(
+        otel_severity(LogSeverity::Trace),
+        (Severity::Trace, "TRACE")
+    );
+    assert_eq!(
+        otel_severity(LogSeverity::Debug),
+        (Severity::Debug, "DEBUG")
+    );
+    assert_eq!(
+        otel_severity(LogSeverity::Error),
+        (Severity::Error, "ERROR")
+    );
+    assert_eq!(
+        json_any_value(&json!(true), false),
+        Some(AnyValue::Boolean(true))
+    );
+    assert_eq!(
+        json_any_value(&json!(1.25), false),
+        Some(AnyValue::Double(1.25))
     );
 }

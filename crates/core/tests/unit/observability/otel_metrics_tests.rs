@@ -142,6 +142,60 @@ fn metric_endpoint_resolution_replaces_terminal_trace_path() {
 }
 
 #[test]
+fn metric_temporality_accepts_all_supported_spellings() {
+    for (value, expected, sdk) in [
+        (
+            "cumulative",
+            MetricTemporality::Cumulative,
+            Temporality::Cumulative,
+        ),
+        ("delta", MetricTemporality::Delta, Temporality::Delta),
+        (
+            "low_memory",
+            MetricTemporality::LowMemory,
+            Temporality::LowMemory,
+        ),
+        (
+            "lowmemory",
+            MetricTemporality::LowMemory,
+            Temporality::LowMemory,
+        ),
+    ] {
+        let parsed = value.parse::<MetricTemporality>().unwrap();
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.sdk(), sdk);
+    }
+    assert_eq!(MetricTemporality::Delta.as_str(), "delta");
+    assert!("instantaneous".parse::<MetricTemporality>().is_err());
+}
+
+#[test]
+fn metric_config_validates_limits_and_retains_resource_identity() {
+    for config in [
+        OpenTelemetryMetricConfig::new("   "),
+        OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+            .with_export_interval(Duration::ZERO),
+        OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+            .with_max_instruments(0),
+        OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+            .with_cardinality_limit(0),
+    ] {
+        assert!(config.validate().is_err());
+    }
+
+    let config = OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
+        .with_service_namespace("relay")
+        .with_service_version("0.8.0")
+        .with_resource_attribute("deployment.environment", "test");
+    assert_eq!(config.service_namespace.as_deref(), Some("relay"));
+    assert_eq!(config.service_version.as_deref(), Some("0.8.0"));
+    assert_eq!(
+        config.resource_attributes.get("deployment.environment"),
+        Some(&"test".to_string())
+    );
+}
+
+#[test]
 fn metric_config_rejects_cardinality_limit_that_the_sdk_cannot_build() {
     let error = OpenTelemetryMetricConfig::new("https://collector.example/v1/metrics")
         .with_cardinality_limit(usize::MAX)
@@ -281,6 +335,68 @@ fn valid_envelope_records_counter_gauge_and_negative_histogram() {
 }
 
 #[test]
+fn metric_processor_records_every_supported_instrument_type() {
+    let (mut processor, exporter, provider) = processor();
+    let mut u64_histogram = measurement(
+        "example.latency",
+        MetricKind::Histogram,
+        MetricValueType::U64,
+        json!(8),
+    );
+    u64_histogram.boundaries = Some(vec![1.0, 5.0, 10.0]);
+    let measurements = vec![
+        measurement(
+            "example.f64.counter",
+            MetricKind::Counter,
+            MetricValueType::F64,
+            json!(1.25),
+        ),
+        measurement(
+            "example.i64.updown",
+            MetricKind::UpDownCounter,
+            MetricValueType::I64,
+            json!(-3),
+        ),
+        measurement(
+            "example.f64.updown",
+            MetricKind::UpDownCounter,
+            MetricValueType::F64,
+            json!(2.5),
+        ),
+        measurement(
+            "example.u64.gauge",
+            MetricKind::Gauge,
+            MetricValueType::U64,
+            json!(4),
+        ),
+        measurement(
+            "example.f64.gauge",
+            MetricKind::Gauge,
+            MetricValueType::F64,
+            json!(5.5),
+        ),
+        u64_histogram,
+    ];
+    processor.process(&metric_event(
+        METRIC_DATA_SCHEMA_VERSION,
+        serde_json::to_value(MetricEnvelope { measurements }).unwrap(),
+    ));
+    provider.force_flush().unwrap();
+
+    let names = exporter
+        .get_finished_metrics()
+        .unwrap()
+        .iter()
+        .flat_map(|batch| batch.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .map(|metric| metric.name().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(processor.rejected_marks, 0);
+    assert_eq!(names.len(), 6);
+    assert!(names.contains(&"example.latency".to_string()));
+}
+
+#[test]
 fn case_equivalent_measurements_use_a_deterministic_lowercase_instrument_name() {
     for names in [
         ["Example.Tokens", "example.tokens"],
@@ -411,6 +527,19 @@ fn metric_attribute_arrays_preserve_supported_primitive_types() {
     }
     assert!(MetricAttributes::try_from(Some(&json!({"value": []}))).is_err());
     assert!(MetricAttributes::try_from(Some(&json!({"value": {"nested": true}}))).is_err());
+}
+
+#[test]
+fn metric_attribute_scalars_preserve_supported_primitive_types() {
+    for (json_value, expected) in [
+        (json!(true), Value::Bool(true)),
+        (json!(-3), Value::I64(-3)),
+        (json!(1.25), Value::F64(1.25)),
+    ] {
+        let attributes = MetricAttributes::try_from(Some(&json!({"value": json_value}))).unwrap();
+        let (_, value) = attributes.iter().next().unwrap();
+        assert_eq!(metric_attribute_value(value), expected);
+    }
 }
 
 struct CapturedRequest {

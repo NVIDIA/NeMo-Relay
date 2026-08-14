@@ -599,6 +599,29 @@ fn signal_endpoint_resolution_rejects_ambiguous_trace_paths_and_wrong_signal_pat
     assert!(resolve_signal_endpoints("logs", Some(&vec![explicit]), &[]).is_ok());
 }
 
+#[test]
+fn signal_endpoint_resolution_covers_missing_trace_grpc_and_invalid_transports() {
+    assert!(resolve_signal_endpoints("logs", None, &[]).is_err());
+    assert!(resolve_signal_endpoints("metrics", Some(&Vec::new()), &[]).is_err());
+
+    let mut grpc_trace = test_opentelemetry_endpoint();
+    grpc_trace.transport = "grpc".to_string();
+    grpc_trace.endpoint = "http://collector.example:4317".to_string();
+    let derived = resolve_signal_endpoints("metrics", None, &[grpc_trace]).unwrap();
+    assert_eq!(derived[0].endpoint, "http://collector.example:4317");
+    assert_eq!(derived[0].transport, "grpc");
+
+    for endpoint in ["ftp://collector.example", "not a url"] {
+        let mut trace = test_opentelemetry_endpoint();
+        trace.endpoint = endpoint.to_string();
+        assert!(resolve_signal_endpoints("logs", None, &[trace]).is_err());
+    }
+
+    let mut endpoint = test_signal_endpoint();
+    endpoint.transport = "udp".to_string();
+    assert!(resolve_signal_endpoints("logs", Some(&vec![endpoint]), &[]).is_err());
+}
+
 fn push_agent(name: &str) -> crate::api::scope::ScopeHandle {
     crate::api::scope::push_scope(
         PushScopeParams::builder()
@@ -3656,6 +3679,74 @@ fn metric_cardinality_limit_rejects_usize_max_in_plugin_validation() {
     }));
 }
 
+#[test]
+fn plugin_validation_reports_each_signal_specific_invalid_value() {
+    let mut log_endpoint = test_signal_endpoint();
+    log_endpoint.endpoint = "  ".to_string();
+    log_endpoint.transport = "udp".to_string();
+    log_endpoint
+        .headers
+        .insert("Authorization".to_string(), "token".to_string());
+    log_endpoint
+        .headers
+        .insert("authorization".to_string(), "token".to_string());
+    log_endpoint
+        .header_env
+        .insert("authorization".to_string(), "LOG_TOKEN".to_string());
+    let logs = OpenTelemetryLogSectionConfig {
+        enabled: true,
+        endpoints: Some(vec![log_endpoint]),
+        minimum_severity: "notice".to_string(),
+        max_queue_size: 0,
+        max_export_batch_size: 1,
+        scheduled_delay_millis: 0,
+    };
+    let metrics = OpenTelemetryMetricSectionConfig {
+        enabled: true,
+        endpoints: Some(vec![OpenTelemetrySignalEndpointConfig {
+            endpoint: " ".to_string(),
+            transport: "udp".to_string(),
+            ..test_signal_endpoint()
+        }]),
+        export_interval_millis: 0,
+        temporality: "instantaneous".to_string(),
+        max_instruments: 0,
+        cardinality_limit: 0,
+    };
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "logs": logs,
+            "metrics": metrics
+        }
+    }));
+
+    let report = validate_plugin_config(&config);
+    for (component, field) in [
+        ("opentelemetry.logs", "minimum_severity"),
+        ("opentelemetry.logs", "max_queue_size"),
+        ("opentelemetry.logs", "scheduled_delay_millis"),
+        ("opentelemetry.metrics", "temporality"),
+        ("opentelemetry.metrics", "export_interval_millis"),
+        ("opentelemetry.metrics", "max_instruments"),
+        ("opentelemetry.metrics", "cardinality_limit"),
+    ] {
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.component.as_deref() == Some(component)
+                && diagnostic.field.as_deref() == Some(field)
+        }));
+    }
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.component.as_deref() == Some("opentelemetry.logs")
+            && diagnostic.field.as_deref() == Some("endpoints[0].endpoint")
+    }));
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.component.as_deref() == Some("opentelemetry.metrics")
+            && diagnostic.field.as_deref() == Some("endpoints[0].transport")
+    }));
+}
+
 fn counting_callbacks(counter: &Arc<AtomicUsize>) -> Vec<crate::api::runtime::EventSubscriberFn> {
     let counter = Arc::clone(counter);
     vec![Arc::new(move |_| {
@@ -3775,6 +3866,43 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     assert_eq!(logged.load(Ordering::Relaxed), 1);
     assert_eq!(metered.load(Ordering::Relaxed), 1);
     assert_eq!(rejected_metric_marks.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn non_metric_schema_marks_keep_trace_and_log_routing() {
+    let traced = Arc::new(AtomicUsize::new(0));
+    let logged = Arc::new(AtomicUsize::new(0));
+    let metered = Arc::new(AtomicUsize::new(0));
+    let trace_callbacks = counting_callbacks(&traced);
+    let log_callbacks = counting_callbacks(&logged);
+    let metric_callbacks = counting_callbacks(&metered);
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .uuid(Uuid::now_v7())
+            .name("custom-schema-mark")
+            .data(json!({"measurements": []}))
+            .data_schema(
+                DataSchema::builder()
+                    .name("example.custom")
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+
+    deliver_opentelemetry_event(
+        &trace_callbacks,
+        &log_callbacks,
+        &metric_callbacks,
+        &AtomicU64::new(0),
+        &event,
+    );
+
+    assert_eq!(traced.load(Ordering::Relaxed), 1);
+    assert_eq!(logged.load(Ordering::Relaxed), 1);
+    assert_eq!(metered.load(Ordering::Relaxed), 0);
 }
 
 #[test]
