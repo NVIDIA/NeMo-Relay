@@ -945,6 +945,37 @@ rust_source_coverage_supported() {
     esac
 }
 
+is_windows_host() {
+    local host_os=""
+    host_os="$(uname -s 2>/dev/null || true)"
+    case "${RUNNER_OS:-}:${OSTYPE:-}:$host_os" in
+        Windows:*|*:msys*:*|*:win32*:*|*:*:MINGW*|*:*:MSYS*|*:*:CYGWIN*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+go_ffi_requires_uninstrumented_target() {
+    is_windows_host && is_true "${NEMO_RELAY_CI_COVERAGE_SESSION:-}"
+}
+
+build_go_ffi_without_rust_coverage() (
+    unset BASH_ENV
+    unset LLVM_PROFILE_FILE
+    unset RUSTC_WRAPPER
+    unset CARGO_LLVM_COV
+    unset CARGO_LLVM_COV_SHOW_ENV
+    unset CARGO_LLVM_COV_TARGET_DIR
+    unset CARGO_LLVM_COV_BUILD_DIR
+    unset __CARGO_LLVM_COV_RUSTC_WRAPPER
+    unset __CARGO_LLVM_COV_RUSTC_WRAPPER_RUSTFLAGS
+    unset __CARGO_LLVM_COV_RUSTC_WRAPPER_CRATE_NAMES
+    CARGO_TARGET_DIR="$NEMO_RELAY_REPO_ROOT/target/go-ffi" cargo build -p nemo-relay-ffi
+)
+
 configure_rust_test_args() {
     local rust=false
     local python=false
@@ -1108,7 +1139,7 @@ build-python:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-relay
     activate_project_venv
     if is_true "{{ ci }}" && rust_source_coverage_supported; then
         prepare_llvm_cov_workspace
@@ -1217,7 +1248,11 @@ build-go:
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
-        cargo build -p nemo-relay-ffi
+        if go_ffi_requires_uninstrumented_target; then
+            build_go_ffi_without_rust_coverage
+        else
+            cargo build -p nemo-relay-ffi
+        fi
     else
         cargo build --release -p nemo-relay-ffi
     fi
@@ -1600,14 +1635,19 @@ test-go:
     lib_dir="$NEMO_RELAY_REPO_ROOT/target/$target"
     host_os="$(uname -s 2>/dev/null || true)"
     is_windows=false
-    case "${RUNNER_OS:-}:${OSTYPE:-}:$host_os" in
-        Windows:*|*:msys*:*|*:win32*:*|*:*:MINGW*|*:*:MSYS*|*:*:CYGWIN*)
-            is_windows=true
-            ;;
-    esac
+    if is_windows_host; then
+        is_windows=true
+    fi
+    if is_true "{{ ci }}" && go_ffi_requires_uninstrumented_target; then
+        lib_dir="$NEMO_RELAY_REPO_ROOT/target/go-ffi/$target"
+    fi
     cd "$NEMO_RELAY_REPO_ROOT"
     if ! is_true "{{ skip_build }}"; then
-        cargo build $flag -p nemo-relay-ffi
+        if is_true "{{ ci }}" && go_ffi_requires_uninstrumented_target; then
+            build_go_ffi_without_rust_coverage
+        else
+            cargo build $flag -p nemo-relay-ffi
+        fi
     fi
     prepare_test_plugin_fixtures "{{ skip_build }}"
     if is_true "{{ ci }}"; then
