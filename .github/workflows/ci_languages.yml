@@ -175,7 +175,7 @@ jobs:
         continue-on-error: true
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-debug
+          shared-key: nemo-relay-rust-${{ matrix.platform }}-${{ steps.ci-config.outputs.rust_version }}-coverage-debug
           workspaces: . -> target
           cache-all-crates: true
           cache-bin: false
@@ -223,6 +223,32 @@ jobs:
         uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},cargo-nextest@${{ steps.ci-config.outputs.cargo_nextest_version }},just@${{ steps.ci-config.outputs.just_version }}
+
+      - name: Prepare combined Rust coverage
+        id: coverage-setup
+        if: >-
+          ${{
+            always()
+            && matrix.platform != 'windows-arm64'
+            && steps.checkout.outcome == 'success'
+            && steps.rust-setup.outcome == 'success'
+            && steps.tools-setup.outcome == 'success'
+          }}
+        continue-on-error: true
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          coverage_env="$RUNNER_TEMP/nemo-relay-llvm-cov.sh"
+          if command -v cygpath >/dev/null 2>&1; then
+            coverage_env="$(cygpath -u "$coverage_env")"
+          fi
+          cargo llvm-cov show-env --sh > "$coverage_env"
+          cargo llvm-cov clean --profraw-only
+          {
+            echo "BASH_ENV=$coverage_env"
+            echo "NEMO_RELAY_CI_COVERAGE_SESSION=true"
+            echo "NEMO_RELAY_DEFER_RUST_COVERAGE=true"
+          } >> "$GITHUB_ENV"
 
       - name: Run Rust tests with coverage
         id: rust-test
@@ -304,6 +330,17 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-go
 
+      - name: Generate combined Rust coverage
+        id: rust-coverage
+        if: ${{ always() && steps.coverage-setup.outcome == 'success' }}
+        continue-on-error: true
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: >-
+          cargo llvm-cov report
+          --ignore-filename-regex '.*/tests/.*\.rs$'
+          --cobertura
+          --output-path "${{ github.workspace }}/rust-workspace.xml"
+
       - name: Collect coverage reports
         id: coverage-files
         if: ${{ always() }}
@@ -311,7 +348,7 @@ jobs:
         shell: bash
         env:
           PLATFORM: ${{ matrix.platform }}
-          RUST_TEST: ${{ steps.rust-test.outcome }}
+          RUST_COVERAGE: ${{ steps.rust-coverage.outcome }}
           PYTHON_TEST: ${{ steps.python-test.outcome }}
           NODE_TEST: ${{ steps.node-test.outcome }}
           GO_TEST: ${{ steps.go-test.outcome }}
@@ -327,18 +364,14 @@ jobs:
             files+=("$report")
           }
 
-          if [[ "$RUST_TEST" == "success" && "$PLATFORM" != "windows-arm64" ]]; then
+          if [[ "$RUST_COVERAGE" == "success" ]]; then
             add_report rust-workspace.xml
           fi
           if [[ "$PYTHON_TEST" == "success" ]]; then
             add_report python-coverage.xml
-            if [[ "$PLATFORM" != "windows-arm64" ]]; then
-              add_report python-rust.xml
-            fi
           fi
           if [[ "$NODE_TEST" == "success" && "$PLATFORM" != windows-* ]]; then
             add_report node-coverage.xml
-            add_report node-rust.xml
           fi
           if [[ "$GO_TEST" == "success" ]]; then
             add_report go-coverage.xml
@@ -378,6 +411,7 @@ jobs:
           NODE_SETUP: ${{ steps.node-setup.outcome }}
           GO_SETUP: ${{ steps.go-setup.outcome }}
           TOOLS_SETUP: ${{ steps.tools-setup.outcome }}
+          COVERAGE_SETUP: ${{ steps.coverage-setup.outcome }}
           RUN_RUST: ${{ inputs.run_rust }}
           RUST_TEST: ${{ steps.rust-test.outcome }}
           RUN_PYTHON: ${{ inputs.run_python || inputs.run_python_integration_langchain }}
@@ -392,6 +426,7 @@ jobs:
           OPENCLAW_TEST: ${{ steps.openclaw-test.outcome }}
           RUN_GO: ${{ inputs.run_go }}
           GO_TEST: ${{ steps.go-test.outcome }}
+          RUST_COVERAGE: ${{ steps.rust-coverage.outcome }}
           COVERAGE_FILES: ${{ steps.coverage-files.outcome }}
           HAS_COVERAGE_FILES: ${{ steps.coverage-files.outputs.has_files }}
           COVERAGE: ${{ steps.coverage.outcome }}
@@ -427,6 +462,11 @@ jobs:
           report true "Rust setup" "$RUST_SETUP" success
           report true "Rust cache" "$RUST_CACHE" success
           report true "Test tools" "$TOOLS_SETUP" success
+          if [[ "$PLATFORM" == "windows-arm64" ]]; then
+            report true "Combined Rust coverage setup" "$COVERAGE_SETUP" skipped
+          else
+            report true "Combined Rust coverage setup" "$COVERAGE_SETUP" success
+          fi
           if [[ "$RUN_RUST" == "true" || "$RUN_PYTHON" == "true" ]]; then
             report true "uv setup" "$UV_SETUP" success
             report true "Python setup" "$PYTHON_SETUP" success
@@ -447,6 +487,11 @@ jobs:
             report "$RUN_OPENCLAW" "OpenClaw tests" "$OPENCLAW_TEST" success
           fi
           report "$RUN_GO" "Go tests" "$GO_TEST" success
+          if [[ "$PLATFORM" == "windows-arm64" ]]; then
+            report true "Combined Rust coverage report" "$RUST_COVERAGE" skipped
+          else
+            report true "Combined Rust coverage report" "$RUST_COVERAGE" success
+          fi
           report true "Collect coverage reports" "$COVERAGE_FILES" success
           report "$HAS_COVERAGE_FILES" "Codecov upload" "$COVERAGE" success
 

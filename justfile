@@ -921,7 +921,9 @@ prepare_test_plugin_fixtures() {
 
 prepare_llvm_cov_workspace() {
     eval "$(cargo llvm-cov show-env --sh)"
-    cargo llvm-cov clean --workspace
+    if ! is_true "${NEMO_RELAY_CI_COVERAGE_SESSION:-}"; then
+        cargo llvm-cov clean --workspace
+    fi
 }
 
 rust_source_coverage_supported() {
@@ -1249,7 +1251,7 @@ test-rust:
         prepare_test_plugin_fixtures
         cargo nextest run --locked --workspace --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
-        if rust_source_coverage_supported; then
+        if rust_source_coverage_supported && ! is_true "${NEMO_RELAY_DEFER_RUST_COVERAGE:-}"; then
             cargo llvm-cov report \
                 --ignore-filename-regex '.*/tests/.*\.rs$' \
                 --cobertura \
@@ -1281,8 +1283,10 @@ test-python:
         pytest_cmd+=(--junit-xml "$junit_out")
         export_uv_python_runtime
         if rust_source_coverage_supported; then
-            rust_coverage_out="$(prepare_artifact python-rust.xml)"
             prepare_llvm_cov_workspace
+            if ! is_true "${NEMO_RELAY_DEFER_RUST_COVERAGE:-}"; then
+                rust_coverage_out="$(prepare_artifact python-rust.xml)"
+            fi
         fi
         cargo test -p nemo-relay-python --lib
     fi
@@ -1530,8 +1534,10 @@ test-node:
         coverage_out="$(prepare_artifact node-coverage.xml)"
         junit_out="$(prepare_artifact node-junit.xml)"
         if rust_source_coverage_supported; then
-            rust_coverage_out="$(prepare_artifact node-rust.xml)"
             prepare_llvm_cov_workspace
+            if ! is_true "${NEMO_RELAY_DEFER_RUST_COVERAGE:-}"; then
+                rust_coverage_out="$(prepare_artifact node-rust.xml)"
+            fi
         fi
         cargo test -p nemo-relay-node --lib
     fi
