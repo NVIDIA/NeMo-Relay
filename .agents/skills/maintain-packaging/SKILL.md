@@ -43,6 +43,15 @@ consumed outside the source tree.
 - [ ] Release tags still use raw SemVer without a leading `v`
 - [ ] Release history and release notes still point to GitHub Releases, not `CHANGELOG.md` or docs pages
 
+## Compile-First CI Packaging
+
+- Compile enabled native package artifacts in the Package job's shared compile
+  action before staging, verification, and upload steps.
+- Pass `--set skip_build true` to `package-openclaw` only when the Node package
+  compilation step succeeded and produced the current native module.
+- Keep pure Python source and plugin wheel assembly outside the native compile
+  action because those artifacts do not compile Rust code.
+
 ## References
 
 - `pyproject.toml`

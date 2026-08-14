@@ -94,13 +94,23 @@ runs:
       working-directory: ${{ inputs.workspace }}
       env:
         PACKAGE_VERSION: ${{ inputs.package-version }}
+        WORKSPACE: ${{ inputs.workspace }}
         WORKSPACE_TMP: ${{ inputs.workspace-tmp }}
       run: |
         set -euo pipefail
         mkdir -p "$WORKSPACE_TMP/musllinux-wheels"
+        source_directory="$WORKSPACE_TMP/musllinux-source"
+        case "$source_directory" in
+          "$WORKSPACE"/*) working_directory="${source_directory#"$WORKSPACE"/}" ;;
+          *)
+            echo "Error: musllinux source must be staged under the workspace" >&2
+            exit 1
+            ;;
+        esac
         python3 scripts/package_python_musllinux.py \
           --version "$PACKAGE_VERSION" \
-          --source-out "$WORKSPACE_TMP/musllinux-source"
+          --source-out "$source_directory"
+        echo "working-directory=$working_directory" >> "$GITHUB_OUTPUT"
 
     - name: Compile musllinux Python wheel
       id: python-musl
@@ -113,7 +123,7 @@ runs:
         container: ${{ inputs.python-container-image }}
         target: ${{ inputs.python-rust-target }}
         rust-toolchain: ${{ inputs.rust-version }}
-        working-directory: tmp/musllinux-source
+        working-directory: ${{ steps.python-musl-stage.outputs.working-directory }}
         args: >-
           --locked --release
           --interpreter /opt/python/cp311-cp311/bin/python
@@ -148,7 +158,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.workspace }}
       env:
-        NODE_ALREADY_BUILT: ${{ inputs.run-node }}
+        NODE_ALREADY_BUILT: ${{ inputs.run-node == 'true' && steps.node.outcome == 'success' }}
         PACKAGE_VERSION: ${{ inputs.package-version }}
         WORKSPACE_TMP: ${{ inputs.workspace-tmp }}
       run: |

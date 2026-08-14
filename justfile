@@ -877,7 +877,7 @@ prepend_go_bin_to_path() {
 
 prepare_test_plugin_fixtures() {
     local skip_fixture_build="${1:-false}"
-    local target_dir="$NEMO_RELAY_REPO_ROOT/target/test-plugin-fixtures"
+    local target_dir="$NEMO_RELAY_REPO_ROOT/target"
     local native_library=""
     local worker_executable="nemo-relay-worker-plugin-fixture"
     local host_os=""
@@ -925,7 +925,7 @@ prepare_test_plugin_fixtures() {
 }
 
 prepare_llvm_cov_workspace() {
-    if is_true "${NEMO_RELAY_CI_COVERAGE_SESSION:-}"; then
+    if is_true "${NEMO_RELAY_CI_COVERAGE_SESSION:-}" || [[ "${RUSTC_WRAPPER:-}" == *cargo-llvm-cov* ]]; then
         return
     fi
     eval "$(cargo llvm-cov show-env --sh)"
@@ -943,6 +943,78 @@ rust_source_coverage_supported() {
             return 0
             ;;
     esac
+}
+
+configure_rust_test_args() {
+    local rust=false
+    local python=false
+    local node=false
+    local go=false
+    local all=false
+    local scope
+
+    for scope in "$@"; do
+        case "$scope" in
+            rust) rust=true ;;
+            python) python=true ;;
+            node) node=true ;;
+            go) go=true ;;
+            all) all=true ;;
+            *)
+                echo "ERROR: unknown Rust test scope '$scope'; expected rust, python, node, go, or all" >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    # Explicit target selectors include binding cdylibs whose manifests disable
+    # the implicit lib test target while retaining normal lib, bin, and
+    # integration-test coverage for the rest of the selected workspace.
+    rust_test_args=(--locked --profile ci --lib --bins --tests)
+    if [[ "$all" == true ]]; then
+        rust_test_args+=(--workspace)
+    elif [[ "$rust" == true ]]; then
+        rust_test_args+=(--workspace)
+        [[ "$python" == true ]] || rust_test_args+=(--exclude nemo-relay-python)
+        [[ "$node" == true ]] || rust_test_args+=(--exclude nemo-relay-node)
+        [[ "$go" == true ]] || rust_test_args+=(--exclude nemo-relay-ffi)
+    else
+        [[ "$python" != true ]] || rust_test_args+=(-p nemo-relay-python)
+        [[ "$node" != true ]] || rust_test_args+=(-p nemo-relay-node)
+        if [[ "$go" == true ]]; then
+            rust_test_args+=(-p nemo-relay-ffi)
+        fi
+    fi
+}
+
+configure_rust_test_filter() {
+    rust_test_needs_fixtures=false
+    case "$1" in
+        rust)
+            rust_test_filter='not (package(nemo-relay-python) | package(nemo-relay-node) | package(nemo-relay-ffi))'
+            rust_test_needs_fixtures=true
+            ;;
+        python) rust_test_filter='package(nemo-relay-python)' ;;
+        node) rust_test_filter='package(nemo-relay-node)' ;;
+        go) rust_test_filter='package(nemo-relay-ffi)' ;;
+        all)
+            rust_test_filter='all()'
+            rust_test_needs_fixtures=true
+            ;;
+        *)
+            echo "ERROR: unknown Rust test run scope '$1'; expected rust, python, node, go, or all" >&2
+            exit 1
+            ;;
+    esac
+}
+
+run_rust_tests_for_scope() {
+    local run_scope="$1"
+    local skip_fixture_build="${2:-false}"
+    local scope_list="${NEMO_RELAY_RUST_TEST_SCOPES:-$run_scope}"
+    local scopes=()
+    read -r -a scopes <<< "$scope_list"
+    just --set skip_build "$skip_fixture_build" run-rust-tests "$run_scope" "${scopes[@]}"
 }
 
 is_true() {
@@ -995,15 +1067,41 @@ build-rust:
     export_uv_python_runtime
     cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
-        if rust_source_coverage_supported; then
-            prepare_llvm_cov_workspace
-        fi
-        cargo test --workspace --no-run
+        just build-rust-tests rust
     else
         # Maturin supplies the platform-specific linker configuration for the
         # Python extension in build-python.
         cargo build --workspace --exclude nemo-relay-python
     fi
+
+# Compile one Rust test graph for any combination of rust, python, node, go, or all.
+build-rust-tests +scopes:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    export_uv_python_runtime
+    cd "$NEMO_RELAY_REPO_ROOT"
+    scope_list={{ quote(scopes) }}
+    read -r -a scopes <<< "$scope_list"
+    configure_rust_test_args "${scopes[@]}"
+    cargo nextest run "${rust_test_args[@]}" --no-run
+
+# Run one owner's tests from a precompiled graph containing the supplied scopes.
+run-rust-tests run_scope *scopes:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    export_uv_python_runtime
+    cd "$NEMO_RELAY_REPO_ROOT"
+    scope_list={{ quote(scopes) }}
+    read -r -a scopes <<< "$scope_list"
+    if (( ${#scopes[@]} == 0 )); then
+        scopes=({{ quote(run_scope) }})
+    fi
+    configure_rust_test_args "${scopes[@]}"
+    configure_rust_test_filter {{ quote(run_scope) }}
+    if [[ "$rust_test_needs_fixtures" == true ]]; then
+        prepare_test_plugin_fixtures "{{ skip_build }}"
+    fi
+    cargo nextest run "${rust_test_args[@]}" --no-fail-fast -E "$rust_test_filter"
 
 # --set [ci=true|false]
 build-python:
@@ -1017,7 +1115,6 @@ build-python:
     fi
     python_executable="$(project_python_executable)"
     if is_true "{{ ci }}"; then
-        cargo test -p nemo-relay-python --lib --no-run
         "$python_executable" -m maturin develop --skip-install
     else
         "$python_executable" -m maturin develop
@@ -1114,7 +1211,6 @@ build-test-plugin-fixtures:
     printf 'Native plugin fixture: %s\n' "$NEMO_RELAY_TEST_NATIVE_PLUGIN"
     printf 'Worker plugin fixture: %s\n' "$NEMO_RELAY_TEST_WORKER_PLUGIN"
 
-
 # --set [ci=true|false]
 build-go:
     #!/usr/bin/env bash
@@ -1126,7 +1222,6 @@ build-go:
         cargo build --release -p nemo-relay-ffi
     fi
 
-
 # --set [ci=true|false]
 build-node:
     #!/usr/bin/env bash
@@ -1137,7 +1232,6 @@ build-node:
     cd "$NEMO_RELAY_REPO_ROOT"
     npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then
-        cargo test -p nemo-relay-node --lib --no-run
         npm run build-debug --workspace=nemo-relay-node
     else
         npm run build --workspace=nemo-relay-node
@@ -1153,7 +1247,6 @@ build-openclaw:
     cd "$NEMO_RELAY_REPO_ROOT"
     npm ci --ignore-scripts
     if is_true "{{ ci }}"; then
-        cargo test -p nemo-relay-node --lib --no-run
         npm run build-debug --workspace=nemo-relay-node
     else
         npm run build --workspace=nemo-relay-node
@@ -1286,8 +1379,7 @@ test-rust:
         if rust_source_coverage_supported; then
             prepare_llvm_cov_workspace
         fi
-        prepare_test_plugin_fixtures "{{ skip_build }}"
-        cargo nextest run --locked --workspace --profile ci --no-fail-fast
+        run_rust_tests_for_scope rust "{{ skip_build }}"
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported && ! is_true "${NEMO_RELAY_DEFER_RUST_COVERAGE:-}"; then
             cargo llvm-cov report \
@@ -1326,7 +1418,7 @@ test-python:
                 rust_coverage_out="$(prepare_artifact python-rust.xml)"
             fi
         fi
-        cargo test -p nemo-relay-python --lib
+        run_rust_tests_for_scope python "{{ skip_build }}"
     fi
     python_executable="$(uv_python_executable)"
     sync_args=(--inexact --all-packages --no-install-project --no-install-package nemo-relay)
@@ -1518,6 +1610,9 @@ test-go:
         cargo build $flag -p nemo-relay-ffi
     fi
     prepare_test_plugin_fixtures "{{ skip_build }}"
+    if is_true "{{ ci }}"; then
+        run_rust_tests_for_scope go "{{ skip_build }}"
+    fi
 
     if [[ "$is_windows" == true ]]; then
         export CC=clang
@@ -1585,7 +1680,7 @@ test-node:
                 rust_coverage_out="$(prepare_artifact node-rust.xml)"
             fi
         fi
-        cargo test -p nemo-relay-node --lib
+        run_rust_tests_for_scope node "{{ skip_build }}"
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then

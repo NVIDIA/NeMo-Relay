@@ -272,9 +272,9 @@ jobs:
           RUN_GO: ${{ inputs.run_go }}
         run: |
           set -uo pipefail
-          echo "NEMO_RELAY_SKIP_BUILD=true" >> "$GITHUB_ENV"
           failed=false
           fixtures=success
+          native=skipped
           rust=skipped
           python=skipped
           node=skipped
@@ -304,14 +304,11 @@ jobs:
           if [[ "$RUN_RUST" == "true" || "$RUN_PYTHON" == "true" || "$RUN_GO" == "true" ]]; then
             compile fixtures just build-test-plugin-fixtures
           fi
-          if [[ "$RUN_RUST" == "true" ]]; then
-            compile rust just --set ci true build-rust
-          fi
           if [[ "$RUN_PYTHON" == "true" ]]; then
             compile python compile_python
           fi
           if [[ "$RUN_NODE" == "true" ]]; then
-            if [[ "$RUN_OPENCLAW" == "true" ]]; then
+            if [[ "$RUN_OPENCLAW" == "true" && "$PLATFORM" == "linux-amd64" ]]; then
               compile node just --set ci true build-openclaw
               openclaw="$node"
             else
@@ -320,6 +317,25 @@ jobs:
           fi
           if [[ "$RUN_GO" == "true" ]]; then
             compile go just --set ci true build-go
+          fi
+          # Resolve every enabled Rust test owner into one Cargo graph. Keep this
+          # last so the language-specific native builds cannot invalidate it.
+          native_scopes=()
+          [[ "$RUN_RUST" != "true" ]] || native_scopes+=(rust)
+          [[ "$RUN_PYTHON" != "true" ]] || native_scopes+=(python)
+          [[ "$RUN_NODE" != "true" ]] || native_scopes+=(node)
+          [[ "$RUN_GO" != "true" ]] || native_scopes+=(go)
+          if (( ${#native_scopes[@]} > 0 )); then
+            echo "NEMO_RELAY_RUST_TEST_SCOPES=${native_scopes[*]}" >> "$GITHUB_ENV"
+            compile native just build-rust-tests "${native_scopes[@]}"
+            if [[ "$native" == "success" ]]; then
+              [[ "$RUN_RUST" != "true" ]] || rust=success
+            else
+              [[ "$RUN_RUST" != "true" ]] || rust=failure
+              [[ "$RUN_PYTHON" != "true" ]] || python=failure
+              [[ "$RUN_NODE" != "true" ]] || node=failure
+              [[ "$RUN_GO" != "true" ]] || go=failure
+            fi
           fi
 
           if [[ "$fixtures" != "success" ]]; then
@@ -537,7 +553,7 @@ jobs:
           report() {
             local enabled="$1"
             local name="$2"
-            local result="$3"
+            local result="${3:-skipped}"
             local expected="$4"
             if [[ "$enabled" != "true" ]]; then
               return
@@ -1080,7 +1096,7 @@ jobs:
           report() {
             local enabled="$1"
             local name="$2"
-            local result="$3"
+            local result="${3:-skipped}"
             if [[ "$enabled" != "true" ]]; then
               return
             fi
@@ -1617,7 +1633,7 @@ jobs:
           report() {
             local enabled="$1"
             local name="$2"
-            local result="$3"
+            local result="${3:-skipped}"
             local expected="${4:-success}"
             if [[ "$enabled" != "true" ]]; then
               return

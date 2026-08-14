@@ -50,6 +50,37 @@ just build-go
 just build-node
 ```
 
+For CI-aligned Rust test compilation and execution, select one or more owning
+language scopes explicitly:
+
+```bash
+just build-rust-tests rust
+just run-rust-tests rust
+
+just build-rust-tests python
+just run-rust-tests python
+
+just build-rust-tests node
+just run-rust-tests node
+
+just build-rust-tests go
+just run-rust-tests go
+
+# Build or run one Cargo graph for several enabled languages.
+just build-rust-tests rust python node go
+just run-rust-tests rust rust python node go
+just run-rust-tests python rust python node go
+just run-rust-tests node rust python node go
+just run-rust-tests go rust python node go
+```
+
+The `rust` scope covers workspace crates other than the Python, Node.js, and FFI
+binding crates. Those crates belong to the `python`, `node`, and `go` scopes.
+Supplying several graph scopes deduplicates them into one Cargo selection. The
+first argument to `run-rust-tests` is the owner to execute; its remaining
+arguments must match the graph passed to `build-rust-tests`. Use the `all` scope
+as shorthand for the complete workspace graph.
+
 ## Common Commands
 
 These commands cover the most common language-specific validation loops.

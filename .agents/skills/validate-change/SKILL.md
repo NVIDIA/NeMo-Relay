@@ -80,11 +80,15 @@ just test-node
 just build-rust
 just test-rust
 just ci=true test-rust
+just build-rust-tests rust
+just run-rust-tests rust
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Python
 just build-python
+just build-rust-tests python
+just run-rust-tests python
 just build-python-plugin
 just test-python
 just test-python-plugin
@@ -93,13 +97,24 @@ uv run pytest -k "<pattern>"
 
 # Go
 just build-go
+just build-rust-tests go
+just run-rust-tests go
 just test-go
 cd go/nemo_relay && go fmt ./...
 
 # Node
 just build-node
+just build-rust-tests node
+just run-rust-tests node
 just test-node
 npm run format --workspace=nemo-relay-node
+
+# Compile or run several binding-owned Rust test graphs together
+just build-rust-tests rust python node go
+just run-rust-tests rust rust python node go
+just run-rust-tests python rust python node go
+just run-rust-tests node rust python node go
+just run-rust-tests go rust python node go
 
 # Docs site
 just docs

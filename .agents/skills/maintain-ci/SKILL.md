@@ -58,6 +58,20 @@ reliability, or reproducibility.
 - Avoid caching generated outputs that can hide stale behavior unless the repo
   already relies on them deliberately.
 
+## Compile-First Language CI
+
+- In the centralized language workflow, compile enabled native test artifacts
+  before the independent test steps. Pass `--set skip_build true` only after the
+  matching build recipe and `just build-test-plugin-fixtures` have succeeded.
+- Use `just build-rust-tests <scope...>` before execution and
+  `just run-rust-tests <run-scope> [graph-scope...]` afterward. The supported
+  scopes are `rust`, `python`, `node`, `go`, and `all`. Multiple graph scopes are
+  resolved into one Cargo selection; pass the same list to each run and select
+  only the owning tests with `run-scope`. CI exports the enabled list through
+  `NEMO_RELAY_RUST_TEST_SCOPES` so language recipes reuse the compiled graph.
+- `build-python-plugin-e2e` prepares the CLI and worker integration target;
+  `build-openclaw` prepares the shared Node native module and OpenClaw workspace.
+
 ## Review Checklist
 
 - [ ] Each job has the minimum permissions it needs
