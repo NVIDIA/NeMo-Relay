@@ -1147,6 +1147,33 @@ fn test_pricing_catalog_rejects_unknown_fields_in_nested_structures() {
 }
 
 #[test]
+fn test_pricing_source_config_rejects_unknown_fields_on_variants() {
+    let valid_entry = flat_pricing_entry("configured", "configured-model", 1.0, 2.0);
+
+    for source in [
+        json!({
+            "type": "inline",
+            "catalog": {
+                "version": 1,
+                "entries": [valid_entry.clone()]
+            },
+            "unexpected": true
+        }),
+        json!({
+            "type": "file",
+            "path": "pricing.json",
+            "unexpected": true
+        }),
+    ] {
+        let err = serde_json::from_value::<PricingSourceConfig>(source).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field `unexpected`"),
+            "expected unknown field `unexpected`, got {err}"
+        );
+    }
+}
+
+#[test]
 fn test_pricing_catalog_rejects_invalid_rate_schedules() {
     let empty_tiers = pricing_catalog_error(json!([
         {
