@@ -387,6 +387,14 @@ nemo-relay model-pricing resolve gpt-4o-mini \
 and an estimated total when token counts are supplied. Use it to debug
 overlapping system, explicit, and user model pricing sources.
 
+Relay now treats missing rates for nonzero cache usage as unknown totals, not
+free usage. If a response reports nonzero cache-read or cache-write tokens and
+the matching catalog omits `cache_read_per_million` or
+`cache_write_per_million`, Relay omits the aggregate total instead of
+undercounting it. Set either rate to `0.0` when that category is intentionally
+free. Catalogs that define only input and output rates therefore emit no total
+for responses that report cached tokens.
+
 Run doctor to validate the active model pricing sources alongside exporter
 checks:
 

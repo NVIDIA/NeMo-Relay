@@ -56,6 +56,12 @@ Use `type = "file"` with a JSON catalog path or `type = "inline"` with the
 catalog in `plugins.toml`. Relay checks sources and catalog entries in listed
 order, and it uses the first entry that matches the provider and model.
 
+Relay publishes a numeric total only when every nonzero usage category has a
+configured rate. If a response reports nonzero cache-read or cache-write usage
+and the matching catalog entry omits `cache_read_per_million` or
+`cache_write_per_million`, Relay keeps the priced components but omits the
+aggregate total. Set a rate to `0.0` when a category is intentionally free.
+
 When Relay merges explicit-or-user and system configuration files, it prepends
 higher-priority `sources` instead of replacing lower-priority sources. The
 effective order is system, then explicit-or-user. This lets an
