@@ -277,6 +277,7 @@ jobs:
           native=skipped
           rust=skipped
           python=skipped
+          python_plugin=skipped
           node=skipped
           openclaw=skipped
           go=skipped
@@ -292,21 +293,14 @@ jobs:
             fi
           }
 
-          compile_python() {
-            local python_failed=false
-            just --set ci true build-python || python_failed=true
-            if [[ "$PLATFORM" == "linux-amd64" || "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "windows-amd64" ]]; then
-              just build-python-plugin-e2e || python_failed=true
-            fi
-            [[ "$python_failed" == "false" ]]
-          }
-
           if [[ "$RUN_RUST" == "true" || "$RUN_PYTHON" == "true" || "$RUN_GO" == "true" ]]; then
             compile fixtures just build-test-plugin-fixtures
           fi
           if [[ "$RUN_PYTHON" == "true" ]]; then
-            compile python compile_python
+            compile python just --set ci true build-python
           fi
+          # Python and Node request the same core feature graph. Keep their
+          # binding builds adjacent so Node can reuse Python's dependencies.
           if [[ "$RUN_NODE" == "true" ]]; then
             if [[ "$RUN_OPENCLAW" == "true" && "$PLATFORM" == "linux-amd64" ]]; then
               compile node just --set ci true build-openclaw
@@ -314,6 +308,10 @@ jobs:
             else
               compile node just --set ci true build-node
             fi
+          fi
+          if [[ "$RUN_PYTHON" == "true" && ( "$PLATFORM" == "linux-amd64" || "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "windows-amd64" ) ]]; then
+            compile python_plugin just build-python-plugin-e2e
+            [[ "$python_plugin" == "success" ]] || python=failure
           fi
           if [[ "$RUN_GO" == "true" ]]; then
             compile go just --set ci true build-go
