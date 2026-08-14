@@ -1163,10 +1163,10 @@ async fn opentelemetry_doctor_resolves_bare_http_endpoints_and_warns_on_missing_
     assert!(
         checks[0]
             .details
-            .contains("/ (live HTTP reachability probe returned HTTP 405)")
+            .contains("/v1/traces (live HTTP reachability probe returned HTTP 405)")
     );
     let request = accept.join().unwrap();
-    assert!(request.starts_with("GET / HTTP/1.1"));
+    assert!(request.starts_with("GET /v1/traces HTTP/1.1"));
 
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}/wrong", listener.local_addr().unwrap());
