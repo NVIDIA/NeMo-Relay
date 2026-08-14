@@ -241,7 +241,7 @@ fn typed_editor_model_contains_observability_sections() {
             .iter()
             .any(|field| field.name == "filename_template")
     );
-    let otel_endpoints = opentelemetry.field("endpoints").unwrap();
+    let otel_endpoints = opentelemetry.field("traces").unwrap();
     assert_eq!(otel_endpoints.kind, EditorFieldKind::List);
     let endpoint = otel_endpoints.list_item.unwrap();
     assert_eq!(endpoint.kind, EditorFieldKind::Section);
