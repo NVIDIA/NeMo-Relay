@@ -1165,6 +1165,31 @@ build-language-test-artifacts +scopes:
             test -f "$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay.exe"
     fi
 
+# Compile compatible native release artifacts in one Cargo graph before packaging.
+# Supported scopes: node, rust.
+build-language-package-artifacts +scopes:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    scope_list={{ quote(scopes) }}
+    read -r -a scopes <<< "$scope_list"
+    cargo_packages=()
+    for scope in "${scopes[@]}"; do
+        case "$scope" in
+            node) cargo_packages+=(-p nemo-relay-node) ;;
+            rust) cargo_packages+=(-p nemo-relay-cli) ;;
+            *)
+                echo "ERROR: unknown language package artifact scope '$scope'; expected node or rust" >&2
+                exit 1
+                ;;
+        esac
+    done
+    if (( ${#cargo_packages[@]} == 0 )); then
+        echo "ERROR: at least one language package artifact scope is required" >&2
+        exit 1
+    fi
+    cargo build --locked --release "${cargo_packages[@]}"
+
 # Run one owner's tests from a precompiled graph containing the supplied scopes.
 run-rust-tests run_scope *scopes:
     #!/usr/bin/env bash

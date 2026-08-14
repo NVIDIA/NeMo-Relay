@@ -71,6 +71,16 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Set Rust package version
+      id: rust-version
+      if: ${{ inputs.run-rust == 'true' }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        PACKAGE_VERSION: ${{ inputs.package-version }}
+      run: just set-cargo-version "$PACKAGE_VERSION"
+
     - name: Compile native Python wheel
       id: python-native
       if: ${{ inputs.run-python == 'true' && !contains(inputs.platform, 'musl') }}
@@ -129,6 +139,21 @@ runs:
           --interpreter /opt/python/cp311-cp311/bin/python
           --out ${{ inputs.workspace-tmp }}/musllinux-wheels
 
+    - name: Compile shared native Node and Rust artifacts
+      id: native-shared
+      if: >-
+        ${{
+          inputs.run-node == 'true'
+          && inputs.run-rust == 'true'
+          && inputs.node-target == ''
+          && inputs.rust-build-image == ''
+          && steps.rust-version.outcome == 'success'
+        }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      run: just build-language-package-artifacts node rust
+
     - name: Compile Node package artifacts
       id: node
       if: ${{ inputs.run-node == 'true' }}
@@ -173,16 +198,6 @@ runs:
         fi
         just "${args[@]}" package-openclaw
 
-    - name: Set Rust package version
-      id: rust-version
-      if: ${{ inputs.run-rust == 'true' }}
-      continue-on-error: true
-      shell: bash
-      working-directory: ${{ inputs.workspace }}
-      env:
-        PACKAGE_VERSION: ${{ inputs.package-version }}
-      run: just set-cargo-version "$PACKAGE_VERSION"
-
     - name: Compile native Rust CLI
       id: rust-native
       if: ${{ inputs.run-rust == 'true' && inputs.rust-build-image == '' && steps.rust-version.outcome == 'success' }}
@@ -190,8 +205,23 @@ runs:
       shell: bash
       working-directory: ${{ inputs.workspace }}
       env:
+        NATIVE_SHARED: ${{ steps.native-shared.outcome }}
         RUST_TARGET: ${{ inputs.rust-target }}
-      run: cargo build --release --target "$RUST_TARGET" -p nemo-relay-cli
+      run: |
+        set -euo pipefail
+        if [[ "$NATIVE_SHARED" == "success" ]]; then
+          binary="nemo-relay"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            binary="${binary}.exe"
+          fi
+          source="target/release/${binary}"
+          destination="target/${RUST_TARGET}/release/${binary}"
+          test -f "$source"
+          mkdir -p "$(dirname "$destination")"
+          cp "$source" "$destination"
+        else
+          cargo build --release --target "$RUST_TARGET" -p nemo-relay-cli
+        fi
 
     - name: Compile manylinux Rust CLI
       id: rust-manylinux
@@ -235,6 +265,7 @@ runs:
         PYTHON_MUSL: ${{ steps.python-musl.outcome }}
         NODE: ${{ steps.node.outcome }}
         OPENCLAW: ${{ steps.openclaw.outcome }}
+        NATIVE_SHARED: ${{ steps.native-shared.outcome }}
         RUST_VERSION: ${{ steps.rust-version.outcome }}
         RUST_NATIVE: ${{ steps.rust-native.outcome }}
         RUST_MANYLINUX: ${{ steps.rust-manylinux.outcome }}
@@ -271,6 +302,9 @@ runs:
           fi
           [[ "$RUST_VERSION" == "success" && "$rust" == "success" ]] || rust=failure
           [[ "$rust" == "success" ]] || failed=true
+        fi
+        if [[ "$RUN_NODE" == "true" && "$RUN_RUST" == "true" && "$NATIVE_SHARED" != "skipped" ]]; then
+          [[ "$NATIVE_SHARED" == "success" ]] || failed=true
         fi
         {
           echo "python=$python"

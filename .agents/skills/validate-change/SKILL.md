@@ -112,6 +112,7 @@ npm run format --workspace=nemo-relay-node
 # Compile or run several binding-owned Rust test graphs together
 just build-rust-tests rust python node go
 just build-language-test-artifacts node go python-plugin
+just build-language-package-artifacts node rust
 just run-rust-tests rust rust python node go
 just run-rust-tests python rust python node go
 just run-rust-tests node rust python node go

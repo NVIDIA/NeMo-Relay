@@ -77,6 +77,10 @@ reliability, or reproducibility.
   during coverage runs.
 - `build-python-plugin-e2e` prepares the CLI and worker integration target;
   `build-openclaw` prepares the shared Node native module and OpenClaw workspace.
+- Use `just build-language-package-artifacts node rust` on compatible native
+  package runners so the Node module and CLI share one release Cargo graph.
+  Keep Linux GNU and musl packaging separate where their container, linker, or
+  target ABI contracts differ.
 
 ## Review Checklist
 
