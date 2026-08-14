@@ -9,6 +9,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::api::event::{
+    AttributeValue, Event, MetricAttributes, MetricKind, MetricValue, MetricValueType,
+    ValidatedMetricMeasurement,
+};
+#[cfg(test)]
+use crate::api::event::{MetricEnvelope, MetricMeasurement};
+use crate::api::runtime::EventSubscriberFn;
+use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use opentelemetry::metrics::{Counter, Gauge, Histogram, Meter, MeterProvider as _, UpDownCounter};
 use opentelemetry::{Array, InstrumentationScope, KeyValue, Value};
 use opentelemetry_otlp::{
@@ -20,11 +28,8 @@ use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Stream, Temporality};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
 use serde_json::Value as Json;
-
-use crate::api::event::{Event, MetricEnvelope, MetricKind, MetricMeasurement, MetricValueType};
-use crate::api::runtime::EventSubscriberFn;
-use crate::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 
 use super::otel::{OpenTelemetryError, OtlpTransport, Result};
 use super::otel_signal::{
@@ -509,7 +514,7 @@ impl<E: PushMetricExporter> PushMetricExporter for DiagnosticMetricExporter<E> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct MetricDescriptor {
     kind: MetricKind,
     value_type: MetricValueType,
@@ -519,14 +524,24 @@ struct MetricDescriptor {
 }
 
 impl MetricDescriptor {
-    fn from_measurement(measurement: &MetricMeasurement) -> Self {
+    fn from_measurement(measurement: &ValidatedMetricMeasurement) -> Self {
         Self {
-            kind: measurement.kind,
-            value_type: measurement.value_type,
-            unit: measurement.unit.clone(),
-            description: measurement.description.clone(),
-            boundaries: measurement.boundaries.clone(),
+            kind: measurement.descriptor.kind,
+            value_type: measurement.value.value_type(),
+            unit: measurement.descriptor.unit.clone(),
+            description: measurement.descriptor.description.clone(),
+            boundaries: measurement
+                .descriptor
+                .boundaries
+                .as_ref()
+                .map(|boundaries| boundaries.values()),
         }
+    }
+
+    fn has_same_identity(&self, other: &Self) -> bool {
+        // Description and boundaries are advisory OpenTelemetry fields. The first
+        // descriptor to create an instrument supplies them for that process.
+        self.kind == other.kind && self.value_type == other.value_type && self.unit == other.unit
     }
 }
 
@@ -590,31 +605,21 @@ impl MetricEventProcessor {
 
     fn record_envelope(
         &mut self,
-        envelope: &MetricEnvelope,
+        measurements: &[ValidatedMetricMeasurement],
     ) -> std::result::Result<(), MetricRecordError> {
-        let mut proposed: HashMap<String, (&MetricMeasurement, MetricDescriptor)> = HashMap::new();
-        for measurement in &envelope.measurements {
-            let key = measurement.name.to_ascii_lowercase();
+        let mut proposed: HashMap<String, (&ValidatedMetricMeasurement, MetricDescriptor)> =
+            HashMap::new();
+        for measurement in measurements {
+            let key = measurement.descriptor.descriptor_key();
             let descriptor = MetricDescriptor::from_measurement(measurement);
             if let Some(existing) = self.instruments.get(&key)
-                && existing.descriptor != descriptor
+                && !existing.descriptor.has_same_identity(&descriptor)
             {
                 return Err(MetricRecordError::new(
                     MetricRejection::DescriptorConflict,
                     format!(
                         "metric {:?} conflicts with its existing instrument descriptor",
-                        measurement.name
-                    ),
-                ));
-            }
-            if let Some((_, existing)) = proposed.get(&key)
-                && *existing != descriptor
-            {
-                return Err(MetricRecordError::new(
-                    MetricRejection::DescriptorConflict,
-                    format!(
-                        "metric {:?} has conflicting descriptors within one mark",
-                        measurement.name
+                        measurement.descriptor.name.as_str()
                     ),
                 ));
             }
@@ -635,9 +640,9 @@ impl MetricEventProcessor {
             ));
         }
 
-        for (key, (measurement, descriptor)) in proposed {
+        for (key, (_measurement, descriptor)) in proposed {
             if !self.instruments.contains_key(&key) {
-                let instrument = build_instrument(&self.meter, &key, measurement, &descriptor);
+                let instrument = build_instrument(&self.meter, &key, &descriptor);
                 self.instruments.insert(
                     key,
                     InstrumentEntry {
@@ -649,13 +654,13 @@ impl MetricEventProcessor {
             }
         }
 
-        for measurement in &envelope.measurements {
-            let key = measurement.name.to_ascii_lowercase();
+        for measurement in measurements {
+            let key = measurement.descriptor.descriptor_key();
             let entry = self
                 .instruments
                 .get_mut(&key)
                 .expect("metric instrument was preflighted and constructed");
-            if let Some(attribute_key) = metric_attribute_set_key(measurement.attributes.as_ref())
+            if let Some(attribute_key) = metric_attribute_set_key(&measurement.attributes)
                 && !entry.attribute_sets.contains(&attribute_key)
             {
                 if entry.attribute_sets.len() >= self.cardinality_limit {
@@ -664,7 +669,8 @@ impl MetricEventProcessor {
                         self.diagnostic_field.clone(),
                         format!(
                             "OpenTelemetry metric {:?} exceeded the endpoint cardinality limit of {}; additional attribute sets use the SDK overflow series",
-                            measurement.name, self.cardinality_limit
+                            measurement.descriptor.name.as_str(),
+                            self.cardinality_limit
                         ),
                         1,
                     );
@@ -699,12 +705,11 @@ impl MetricEventProcessor {
     }
 }
 
-fn metric_attribute_set_key(attributes: Option<&Json>) -> Option<String> {
-    let attributes = attributes?.as_object()?;
+fn metric_attribute_set_key(attributes: &MetricAttributes) -> Option<String> {
     if attributes.is_empty() {
         return None;
     }
-    serde_json::to_string(attributes).ok()
+    Some(format!("{attributes:?}"))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -735,17 +740,12 @@ impl MetricRecordError {
     }
 }
 
-fn build_instrument(
-    meter: &Meter,
-    name: &str,
-    measurement: &MetricMeasurement,
-    descriptor: &MetricDescriptor,
-) -> CachedInstrument {
-    match measurement.kind {
-        MetricKind::Counter => build_counter(meter, name, measurement, descriptor),
-        MetricKind::UpDownCounter => build_up_down_counter(meter, name, measurement, descriptor),
-        MetricKind::Gauge => build_gauge(meter, name, measurement, descriptor),
-        MetricKind::Histogram => build_histogram(meter, name, measurement, descriptor),
+fn build_instrument(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -> CachedInstrument {
+    match descriptor.kind {
+        MetricKind::Counter => build_counter(meter, name, descriptor),
+        MetricKind::UpDownCounter => build_up_down_counter(meter, name, descriptor),
+        MetricKind::Gauge => build_gauge(meter, name, descriptor),
+        MetricKind::Histogram => build_histogram(meter, name, descriptor),
     }
 }
 
@@ -762,47 +762,38 @@ macro_rules! configured_instrument {
     }};
 }
 
-fn build_counter(
-    meter: &Meter,
-    name: &str,
-    measurement: &MetricMeasurement,
-    descriptor: &MetricDescriptor,
-) -> CachedInstrument {
-    match measurement.value_type {
+fn build_counter(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -> CachedInstrument {
+    match descriptor.value_type {
         MetricValueType::U64 => CachedInstrument::U64Counter(
             configured_instrument!(meter.u64_counter(name.to_string()), descriptor).build(),
         ),
         MetricValueType::F64 => CachedInstrument::F64Counter(
             configured_instrument!(meter.f64_counter(name.to_string()), descriptor).build(),
         ),
-        MetricValueType::I64 => unreachable!("counter validation rejected i64"),
+        MetricValueType::I64 => unreachable!("validated counter has a supported value type"),
     }
 }
 
 fn build_up_down_counter(
     meter: &Meter,
     name: &str,
-    measurement: &MetricMeasurement,
     descriptor: &MetricDescriptor,
 ) -> CachedInstrument {
-    match measurement.value_type {
+    match descriptor.value_type {
         MetricValueType::I64 => CachedInstrument::I64UpDownCounter(
             configured_instrument!(meter.i64_up_down_counter(name.to_string()), descriptor).build(),
         ),
         MetricValueType::F64 => CachedInstrument::F64UpDownCounter(
             configured_instrument!(meter.f64_up_down_counter(name.to_string()), descriptor).build(),
         ),
-        MetricValueType::U64 => unreachable!("up/down counter validation rejected u64"),
+        MetricValueType::U64 => {
+            unreachable!("validated up/down counter has a supported value type")
+        }
     }
 }
 
-fn build_gauge(
-    meter: &Meter,
-    name: &str,
-    measurement: &MetricMeasurement,
-    descriptor: &MetricDescriptor,
-) -> CachedInstrument {
-    match measurement.value_type {
+fn build_gauge(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -> CachedInstrument {
+    match descriptor.value_type {
         MetricValueType::U64 => CachedInstrument::U64Gauge(
             configured_instrument!(meter.u64_gauge(name.to_string()), descriptor).build(),
         ),
@@ -815,13 +806,8 @@ fn build_gauge(
     }
 }
 
-fn build_histogram(
-    meter: &Meter,
-    name: &str,
-    measurement: &MetricMeasurement,
-    descriptor: &MetricDescriptor,
-) -> CachedInstrument {
-    match measurement.value_type {
+fn build_histogram(meter: &Meter, name: &str, descriptor: &MetricDescriptor) -> CachedInstrument {
+    match descriptor.value_type {
         MetricValueType::U64 => {
             let mut builder =
                 configured_instrument!(meter.u64_histogram(name.to_string()), descriptor);
@@ -838,121 +824,65 @@ fn build_histogram(
             }
             CachedInstrument::F64Histogram(builder.build())
         }
-        MetricValueType::I64 => unreachable!("histogram validation rejected i64"),
+        MetricValueType::I64 => unreachable!("validated histogram has a supported value type"),
     }
 }
 
-fn record_measurement(instrument: &CachedInstrument, measurement: &MetricMeasurement) {
-    let attributes = metric_attributes(measurement.attributes.as_ref());
-    match instrument {
-        CachedInstrument::U64Counter(instrument) => {
-            instrument.add(
-                measurement.value.as_u64().expect("validated u64"),
-                &attributes,
-            );
+fn record_measurement(instrument: &CachedInstrument, measurement: &ValidatedMetricMeasurement) {
+    let attributes = metric_attributes(&measurement.attributes);
+    match (instrument, measurement.value) {
+        (CachedInstrument::U64Counter(instrument), MetricValue::U64(value)) => {
+            instrument.add(value, &attributes);
         }
-        CachedInstrument::F64Counter(instrument) => {
-            instrument.add(
-                measurement.value.as_f64().expect("validated f64"),
-                &attributes,
-            );
+        (CachedInstrument::F64Counter(instrument), MetricValue::F64(value)) => {
+            instrument.add(value.get(), &attributes);
         }
-        CachedInstrument::I64UpDownCounter(instrument) => {
-            instrument.add(
-                measurement.value.as_i64().expect("validated i64"),
-                &attributes,
-            );
+        (CachedInstrument::I64UpDownCounter(instrument), MetricValue::I64(value)) => {
+            instrument.add(value, &attributes);
         }
-        CachedInstrument::F64UpDownCounter(instrument) => {
-            instrument.add(
-                measurement.value.as_f64().expect("validated f64"),
-                &attributes,
-            );
+        (CachedInstrument::F64UpDownCounter(instrument), MetricValue::F64(value)) => {
+            instrument.add(value.get(), &attributes);
         }
-        CachedInstrument::U64Gauge(instrument) => {
-            instrument.record(
-                measurement.value.as_u64().expect("validated u64"),
-                &attributes,
-            );
+        (CachedInstrument::U64Gauge(instrument), MetricValue::U64(value)) => {
+            instrument.record(value, &attributes);
         }
-        CachedInstrument::I64Gauge(instrument) => {
-            instrument.record(
-                measurement.value.as_i64().expect("validated i64"),
-                &attributes,
-            );
+        (CachedInstrument::I64Gauge(instrument), MetricValue::I64(value)) => {
+            instrument.record(value, &attributes);
         }
-        CachedInstrument::F64Gauge(instrument) => {
-            instrument.record(
-                measurement.value.as_f64().expect("validated f64"),
-                &attributes,
-            );
+        (CachedInstrument::F64Gauge(instrument), MetricValue::F64(value)) => {
+            instrument.record(value.get(), &attributes);
         }
-        CachedInstrument::U64Histogram(instrument) => {
-            instrument.record(
-                measurement.value.as_u64().expect("validated u64"),
-                &attributes,
-            );
+        (CachedInstrument::U64Histogram(instrument), MetricValue::U64(value)) => {
+            instrument.record(value, &attributes);
         }
-        CachedInstrument::F64Histogram(instrument) => {
-            instrument.record(
-                measurement.value.as_f64().expect("validated f64"),
-                &attributes,
-            );
+        (CachedInstrument::F64Histogram(instrument), MetricValue::F64(value)) => {
+            instrument.record(value.get(), &attributes);
         }
+        _ => unreachable!("cached instrument matches its validated metric value"),
     }
 }
 
-fn metric_attributes(attributes: Option<&Json>) -> Vec<KeyValue> {
-    let Some(attributes) = attributes.and_then(Json::as_object) else {
-        return Vec::new();
-    };
+fn metric_attributes(attributes: &MetricAttributes) -> Vec<KeyValue> {
     attributes
         .iter()
-        .filter_map(|(key, value)| {
-            metric_attribute_value(value).map(|value| KeyValue::new(key.clone(), value))
-        })
+        .map(|(key, value)| KeyValue::new(key.clone(), metric_attribute_value(value)))
         .collect()
 }
 
-fn metric_attribute_value(value: &Json) -> Option<Value> {
+fn metric_attribute_value(value: &AttributeValue) -> Value {
     match value {
-        Json::String(value) => Some(Value::String(value.clone().into())),
-        Json::Bool(value) => Some(Value::Bool(*value)),
-        Json::Number(value) if value.as_i64().is_some() => Some(Value::I64(value.as_i64()?)),
-        Json::Number(value) => Some(Value::F64(value.as_f64()?)),
-        Json::Array(values) => {
-            let first = values.first()?;
-            match first {
-                Json::String(_) => Some(Value::Array(Array::String(
-                    values
-                        .iter()
-                        .map(|value| value.as_str().map(|value| value.to_string().into()))
-                        .collect::<Option<Vec<_>>>()?,
-                ))),
-                Json::Bool(_) => Some(Value::Array(Array::Bool(
-                    values
-                        .iter()
-                        .map(Json::as_bool)
-                        .collect::<Option<Vec<_>>>()?,
-                ))),
-                Json::Number(number) if number.as_i64().is_some() => {
-                    Some(Value::Array(Array::I64(
-                        values
-                            .iter()
-                            .map(Json::as_i64)
-                            .collect::<Option<Vec<_>>>()?,
-                    )))
-                }
-                Json::Number(_) => Some(Value::Array(Array::F64(
-                    values
-                        .iter()
-                        .map(Json::as_f64)
-                        .collect::<Option<Vec<_>>>()?,
-                ))),
-                _ => None,
-            }
+        AttributeValue::String(value) => Value::String(value.clone().into()),
+        AttributeValue::Bool(value) => Value::Bool(*value),
+        AttributeValue::I64(value) => Value::I64(*value),
+        AttributeValue::F64(value) => Value::F64(value.get()),
+        AttributeValue::StringArray(values) => Value::Array(Array::String(
+            values.iter().cloned().map(Into::into).collect(),
+        )),
+        AttributeValue::BoolArray(values) => Value::Array(Array::Bool(values.clone())),
+        AttributeValue::I64Array(values) => Value::Array(Array::I64(values.clone())),
+        AttributeValue::F64Array(values) => {
+            Value::Array(Array::F64(values.iter().map(|value| value.get()).collect()))
         }
-        Json::Null | Json::Object(_) => None,
     }
 }
 

@@ -237,6 +237,17 @@ impl MetricEnvelope {
     /// Returns a [`MetricValidationError`] when any field violates the Relay
     /// metric schema. The complete envelope must be rejected on error.
     pub fn validate(&self) -> Result<(), MetricValidationError> {
+        self.validated_measurements().map(|_| ())
+    }
+
+    /// Parse this wire envelope into metric measurements safe for export.
+    ///
+    /// # Errors
+    /// Returns a [`MetricValidationError`] when any field violates the Relay
+    /// metric schema. The complete envelope is rejected on error.
+    pub fn validated_measurements(
+        &self,
+    ) -> Result<Vec<ValidatedMetricMeasurement>, MetricValidationError> {
         validate_metric_measurements(&self.measurements)
     }
 }
@@ -268,168 +279,392 @@ impl fmt::Display for MetricValidationError {
 
 impl std::error::Error for MetricValidationError {}
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum AttributeValueKind {
-    String,
-    Bool,
-    I64,
-    F64,
-}
+const MAX_HISTOGRAM_BOUNDARIES: usize = 64;
 
-fn validate_attribute_value(
-    value: &Json,
-    path: &str,
-) -> Result<AttributeValueKind, MetricValidationError> {
-    match value {
-        Json::String(_) => Ok(AttributeValueKind::String),
-        Json::Bool(_) => Ok(AttributeValueKind::Bool),
-        Json::Number(number) if number.as_i64().is_some() => Ok(AttributeValueKind::I64),
-        Json::Number(number) if number.as_u64().is_some() => Err(MetricValidationError::new(
-            format!("{path} exceeds the maximum signed 64-bit attribute value"),
-        )),
-        Json::Number(number) => match number.as_f64() {
-            Some(value) if value.is_finite() => Ok(AttributeValueKind::F64),
-            _ => Err(MetricValidationError::new(format!(
-                "{path} must be a finite number"
-            ))),
-        },
-        Json::Null => Err(MetricValidationError::new(format!(
-            "{path} must not be null"
-        ))),
-        Json::Array(_) | Json::Object(_) => Err(MetricValidationError::new(format!(
-            "{path} must be a primitive value"
-        ))),
+/// A finite IEEE 754 double-precision value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FiniteF64(f64);
+
+impl FiniteF64 {
+    /// Return the contained finite value.
+    pub const fn get(self) -> f64 {
+        self.0
     }
 }
 
-fn validate_attributes(
-    attributes: &Json,
-    measurement_index: usize,
-) -> Result<(), MetricValidationError> {
-    let path = format!("measurements[{measurement_index}].attributes");
-    let object = attributes
-        .as_object()
-        .ok_or_else(|| MetricValidationError::new(format!("{path} must be a JSON object")))?;
-    for (key, value) in object {
-        if key.trim().is_empty() {
-            return Err(MetricValidationError::new(format!(
-                "{path} contains a blank attribute key"
-            )));
-        }
-        let value_path = format!("{path}.{key}");
-        if let Json::Array(values) = value {
-            let Some(first) = values.first() else {
-                return Err(MetricValidationError::new(format!(
-                    "{value_path} must not be an empty untyped array"
-                )));
-            };
-            let expected = validate_attribute_value(first, &format!("{value_path}[0]"))?;
-            for (index, value) in values.iter().enumerate().skip(1) {
-                let actual = validate_attribute_value(value, &format!("{value_path}[{index}]"))?;
-                if actual != expected {
-                    return Err(MetricValidationError::new(format!(
-                        "{value_path} must contain values of one primitive type"
-                    )));
-                }
-            }
-        } else {
-            validate_attribute_value(value, &value_path)?;
-        }
+impl TryFrom<f64> for FiniteF64 {
+    type Error = MetricValidationError;
+
+    fn try_from(value: f64) -> Result<Self, Self::Error> {
+        value
+            .is_finite()
+            .then_some(Self(value))
+            .ok_or_else(|| MetricValidationError::new("must be finite"))
     }
-    Ok(())
 }
 
-fn validate_measurement_value(
-    measurement: &MetricMeasurement,
-    index: usize,
-) -> Result<(), MetricValidationError> {
-    let path = format!("measurements[{index}].value");
-    let combination_allowed = matches!(
-        (measurement.kind, measurement.value_type),
-        (
-            MetricKind::Counter,
-            MetricValueType::U64 | MetricValueType::F64
-        ) | (
-            MetricKind::UpDownCounter,
-            MetricValueType::I64 | MetricValueType::F64
-        ) | (MetricKind::Gauge, _)
-            | (
-                MetricKind::Histogram,
-                MetricValueType::U64 | MetricValueType::F64
+/// An OpenTelemetry instrument name together with its canonical form.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InstrumentName(String);
+
+impl InstrumentName {
+    /// Return the original valid instrument name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Return the case-insensitive canonical instrument name.
+    pub fn canonical(&self) -> String {
+        self.0.to_ascii_lowercase()
+    }
+}
+
+impl FromStr for InstrumentName {
+    type Err = MetricValidationError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        let bytes = name.as_bytes();
+        let valid = matches!(bytes.first(), Some(first) if first.is_ascii_alphabetic())
+            && bytes.len() <= 255
+            && bytes[1..].iter().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'/')
+            });
+        valid.then(|| Self(name.to_owned())).ok_or_else(|| {
+            MetricValidationError::new(
+                "name must be 1-255 ASCII bytes, start with a letter, and contain only letters, digits, '_', '.', '-', or '/'",
             )
-    );
-    if !combination_allowed {
-        return Err(MetricValidationError::new(format!(
-            "measurements[{index}] kind {} does not support value_type {}",
-            measurement.kind, measurement.value_type
-        )));
+        })
     }
-
-    match measurement.value_type {
-        MetricValueType::U64 => {
-            let value = measurement.value.as_u64().ok_or_else(|| {
-                MetricValidationError::new(format!("{path} must be an unsigned integer"))
-            })?;
-            if value > i64::MAX as u64 {
-                return Err(MetricValidationError::new(format!(
-                    "{path} must not exceed i64::MAX"
-                )));
-            }
-        }
-        MetricValueType::I64 => {
-            measurement.value.as_i64().ok_or_else(|| {
-                MetricValidationError::new(format!("{path} must be a signed integer"))
-            })?;
-        }
-        MetricValueType::F64 => {
-            let value = measurement
-                .value
-                .as_f64()
-                .ok_or_else(|| MetricValidationError::new(format!("{path} must be a number")))?;
-            if !value.is_finite() {
-                return Err(MetricValidationError::new(format!("{path} must be finite")));
-            }
-            if measurement.kind == MetricKind::Counter && value < 0.0 {
-                return Err(MetricValidationError::new(format!(
-                    "{path} must be nonnegative for {} measurements",
-                    measurement.kind
-                )));
-            }
-        }
-    }
-    Ok(())
 }
 
-fn validate_histogram_boundaries(
-    measurement: &MetricMeasurement,
-    index: usize,
-) -> Result<(), MetricValidationError> {
-    let Some(boundaries) = measurement.boundaries.as_ref() else {
-        return Ok(());
+/// One typed metric value accepted by Relay's metric schema.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MetricValue {
+    /// Unsigned integer value.
+    U64(u64),
+    /// Signed integer value.
+    I64(i64),
+    /// Finite floating-point value.
+    F64(FiniteF64),
+}
+
+impl MetricValue {
+    /// Return the matching metric wire value type.
+    pub const fn value_type(self) -> MetricValueType {
+        match self {
+            Self::U64(_) => MetricValueType::U64,
+            Self::I64(_) => MetricValueType::I64,
+            Self::F64(_) => MetricValueType::F64,
+        }
+    }
+
+    fn parse(value_type: MetricValueType, value: &Json) -> Result<Self, MetricValidationError> {
+        match value_type {
+            MetricValueType::U64 => value
+                .as_u64()
+                .filter(|value| *value <= i64::MAX as u64)
+                .map(Self::U64)
+                .ok_or_else(|| {
+                    MetricValidationError::new(
+                        "value must be an unsigned integer no greater than i64::MAX",
+                    )
+                }),
+            MetricValueType::I64 => value
+                .as_i64()
+                .map(Self::I64)
+                .ok_or_else(|| MetricValidationError::new("value must be a signed integer")),
+            MetricValueType::F64 => value
+                .as_f64()
+                .ok_or_else(|| MetricValidationError::new("value must be a number"))
+                .and_then(FiniteF64::try_from)
+                .map(Self::F64),
+        }
+    }
+}
+
+/// Explicit histogram bucket boundaries that are finite and strictly increasing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HistogramBoundaries(Vec<FiniteF64>);
+
+impl HistogramBoundaries {
+    /// Return the validated boundaries as floating-point values.
+    pub fn values(&self) -> Vec<f64> {
+        self.0.iter().map(|boundary| boundary.get()).collect()
+    }
+}
+
+impl TryFrom<Vec<f64>> for HistogramBoundaries {
+    type Error = MetricValidationError;
+
+    fn try_from(boundaries: Vec<f64>) -> Result<Self, Self::Error> {
+        if boundaries.len() > MAX_HISTOGRAM_BOUNDARIES {
+            return Err(MetricValidationError::new(
+                "boundaries must contain at most 64 entries",
+            ));
+        }
+        let boundaries = boundaries
+            .into_iter()
+            .map(FiniteF64::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        if boundaries
+            .windows(2)
+            .any(|pair| pair[0].get() >= pair[1].get())
+        {
+            return Err(MetricValidationError::new(
+                "boundaries must be strictly increasing without duplicates",
+            ));
+        }
+        Ok(Self(boundaries))
+    }
+}
+
+/// Descriptor fields shared by all recordings of an instrument.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstrumentDescriptor {
+    /// Valid instrument name.
+    pub name: InstrumentName,
+    /// OpenTelemetry instrument kind.
+    pub kind: MetricKind,
+    /// Optional OpenTelemetry instrument unit.
+    pub unit: Option<String>,
+    /// Optional non-identifying description.
+    pub description: Option<String>,
+    /// Optional non-identifying histogram bucket boundaries.
+    pub boundaries: Option<HistogramBoundaries>,
+}
+
+impl InstrumentDescriptor {
+    fn new(
+        name: InstrumentName,
+        kind: MetricKind,
+        unit: Option<String>,
+        description: Option<String>,
+        boundaries: Option<HistogramBoundaries>,
+    ) -> Result<Self, MetricValidationError> {
+        if boundaries.is_some() && kind != MetricKind::Histogram {
+            return Err(MetricValidationError::new(
+                "boundaries are only valid for histogram measurements",
+            ));
+        }
+        if unit
+            .as_ref()
+            .is_some_and(|unit| !unit.is_ascii() || unit.len() > 63)
+        {
+            return Err(MetricValidationError::new(
+                "unit must be ASCII and at most 63 bytes",
+            ));
+        }
+        Ok(Self {
+            name,
+            kind,
+            unit,
+            description,
+            boundaries,
+        })
+    }
+
+    /// Return the canonical name used to group an instrument within an envelope.
+    pub fn descriptor_key(&self) -> String {
+        self.name.canonical()
+    }
+
+    fn accepts(&self, value: MetricValue) -> Result<(), MetricValidationError> {
+        let accepted = match (self.kind, value) {
+            (MetricKind::Counter, MetricValue::U64(_))
+            | (MetricKind::UpDownCounter, MetricValue::I64(_))
+            | (MetricKind::UpDownCounter, MetricValue::F64(_))
+            | (MetricKind::Gauge, _)
+            | (MetricKind::Histogram, MetricValue::U64(_))
+            | (MetricKind::Histogram, MetricValue::F64(_)) => true,
+            (MetricKind::Counter, MetricValue::F64(value)) => value.get() >= 0.0,
+            _ => false,
+        };
+        accepted.then_some(()).ok_or_else(|| {
+            MetricValidationError::new(format!(
+                "kind {} does not support value_type {}",
+                self.kind,
+                value.value_type()
+            ))
+        })
+    }
+
+    fn has_same_identity(&self, other: &Self) -> bool {
+        self.kind == other.kind && self.unit == other.unit
+    }
+}
+
+/// Typed OpenTelemetry attribute values, including homogeneous primitive arrays.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttributeValue {
+    /// String scalar.
+    String(String),
+    /// Boolean scalar.
+    Bool(bool),
+    /// Signed integer scalar.
+    I64(i64),
+    /// Finite floating-point scalar.
+    F64(FiniteF64),
+    /// String array.
+    StringArray(Vec<String>),
+    /// Boolean array.
+    BoolArray(Vec<bool>),
+    /// Signed integer array.
+    I64Array(Vec<i64>),
+    /// Finite floating-point array.
+    F64Array(Vec<FiniteF64>),
+}
+
+/// A deterministic map of typed OpenTelemetry metric attributes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MetricAttributes(BTreeMap<String, AttributeValue>);
+
+impl MetricAttributes {
+    /// Iterate over validated attribute name and value pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &AttributeValue)> {
+        self.0.iter()
+    }
+
+    /// Return whether this attribute set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl TryFrom<Option<&Json>> for MetricAttributes {
+    type Error = MetricValidationError;
+
+    fn try_from(attributes: Option<&Json>) -> Result<Self, Self::Error> {
+        let Some(attributes) = attributes else {
+            return Ok(Self::default());
+        };
+        let object = attributes
+            .as_object()
+            .ok_or_else(|| MetricValidationError::new("attributes must be a JSON object"))?;
+        object
+            .iter()
+            .map(|(key, value)| {
+                if key.trim().is_empty() {
+                    return Err(MetricValidationError::new(
+                        "attributes contains a blank attribute key",
+                    ));
+                }
+                parse_attribute_value(value).map(|value| (key.clone(), value))
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .map(Self)
+    }
+}
+
+fn parse_attribute_value(value: &Json) -> Result<AttributeValue, MetricValidationError> {
+    match value {
+        Json::String(value) => Ok(AttributeValue::String(value.clone())),
+        Json::Bool(value) => Ok(AttributeValue::Bool(*value)),
+        Json::Number(number) if number.as_i64().is_some() => Ok(AttributeValue::I64(
+            number.as_i64().expect("checked signed integer"),
+        )),
+        Json::Number(number) if number.as_u64().is_some() => Err(MetricValidationError::new(
+            "attribute values must not exceed the maximum signed 64-bit integer",
+        )),
+        Json::Number(number) => number
+            .as_f64()
+            .ok_or_else(|| MetricValidationError::new("attribute values must be finite numbers"))
+            .and_then(FiniteF64::try_from)
+            .map(AttributeValue::F64),
+        Json::Array(values) => parse_attribute_array(values),
+        Json::Null => Err(MetricValidationError::new(
+            "attribute values must not be null",
+        )),
+        Json::Object(_) => Err(MetricValidationError::new(
+            "attribute values must be primitive values or homogeneous primitive arrays",
+        )),
+    }
+}
+
+fn parse_attribute_array(values: &[Json]) -> Result<AttributeValue, MetricValidationError> {
+    let Some(first) = values.first() else {
+        return Err(MetricValidationError::new(
+            "attribute arrays must not be empty and untyped",
+        ));
     };
-    if measurement.kind != MetricKind::Histogram {
-        return Err(MetricValidationError::new(format!(
-            "measurements[{index}].boundaries is only valid for histogram measurements"
-        )));
+    match parse_attribute_value(first)? {
+        AttributeValue::String(_) => values
+            .iter()
+            .map(|value| value.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .map(AttributeValue::StringArray)
+            .ok_or_else(|| {
+                MetricValidationError::new("attribute arrays must contain one primitive type")
+            }),
+        AttributeValue::Bool(_) => values
+            .iter()
+            .map(Json::as_bool)
+            .collect::<Option<Vec<_>>>()
+            .map(AttributeValue::BoolArray)
+            .ok_or_else(|| {
+                MetricValidationError::new("attribute arrays must contain one primitive type")
+            }),
+        AttributeValue::I64(_) => values
+            .iter()
+            .map(Json::as_i64)
+            .collect::<Option<Vec<_>>>()
+            .map(AttributeValue::I64Array)
+            .ok_or_else(|| {
+                MetricValidationError::new("attribute arrays must contain one primitive type")
+            }),
+        AttributeValue::F64(_) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_f64()
+                    .and_then(|value| FiniteF64::try_from(value).ok())
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(AttributeValue::F64Array)
+            .ok_or_else(|| {
+                MetricValidationError::new("attribute arrays must contain one primitive type")
+            }),
+        AttributeValue::StringArray(_)
+        | AttributeValue::BoolArray(_)
+        | AttributeValue::I64Array(_)
+        | AttributeValue::F64Array(_) => Err(MetricValidationError::new(
+            "attribute arrays must contain primitive values",
+        )),
     }
-    if boundaries.len() > 64 {
-        return Err(MetricValidationError::new(format!(
-            "measurements[{index}].boundaries must contain at most 64 entries"
-        )));
+}
+
+/// Parsed metric measurement that is safe for OTLP export.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValidatedMetricMeasurement {
+    /// Validated instrument descriptor.
+    pub descriptor: InstrumentDescriptor,
+    /// Validated typed metric value.
+    pub value: MetricValue,
+    /// Validated typed metric attributes.
+    pub attributes: MetricAttributes,
+}
+
+impl TryFrom<&MetricMeasurement> for ValidatedMetricMeasurement {
+    type Error = MetricValidationError;
+
+    fn try_from(wire: &MetricMeasurement) -> Result<Self, Self::Error> {
+        let descriptor = InstrumentDescriptor::new(
+            wire.name.parse()?,
+            wire.kind,
+            wire.unit.clone(),
+            wire.description.clone(),
+            wire.boundaries
+                .clone()
+                .map(HistogramBoundaries::try_from)
+                .transpose()?,
+        )?;
+        let value = MetricValue::parse(wire.value_type, &wire.value)?;
+        descriptor.accepts(value)?;
+        Ok(Self {
+            descriptor,
+            value,
+            attributes: MetricAttributes::try_from(wire.attributes.as_ref())?,
+        })
     }
-    for (boundary_index, boundary) in boundaries.iter().enumerate() {
-        if !boundary.is_finite() {
-            return Err(MetricValidationError::new(format!(
-                "measurements[{index}].boundaries[{boundary_index}] must be finite"
-            )));
-        }
-        if boundary_index > 0 && *boundary <= boundaries[boundary_index - 1] {
-            return Err(MetricValidationError::new(format!(
-                "measurements[{index}].boundaries must be strictly increasing without duplicates"
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Validate a complete list of metric measurements atomically.
@@ -439,49 +674,32 @@ fn validate_histogram_boundaries(
 /// must reject the entire list when validation fails.
 pub fn validate_metric_measurements(
     measurements: &[MetricMeasurement],
-) -> Result<(), MetricValidationError> {
+) -> Result<Vec<ValidatedMetricMeasurement>, MetricValidationError> {
     if measurements.is_empty() {
         return Err(MetricValidationError::new(
             "measurements must contain at least one entry",
         ));
     }
 
-    let mut descriptors = BTreeMap::<String, usize>::new();
-    for (index, measurement) in measurements.iter().enumerate() {
-        let name = measurement.name.as_bytes();
-        if name.is_empty()
-            || name.len() > 255
-            || !name[0].is_ascii_alphabetic()
-            || !name[1..].iter().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'/')
+    let parsed = measurements
+        .iter()
+        .enumerate()
+        .map(|(index, measurement)| {
+            ValidatedMetricMeasurement::try_from(measurement).map_err(|error| {
+                MetricValidationError::new(format!("measurements[{index}] {error}"))
             })
-        {
-            return Err(MetricValidationError::new(format!(
-                "measurements[{index}].name must be 1-255 ASCII bytes, start with a letter, and contain only letters, digits, '_', '.', '-', or '/'"
-            )));
-        }
-        validate_measurement_value(measurement, index)?;
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-        if let Some(unit) = measurement.unit.as_ref()
-            && (!unit.is_ascii() || unit.len() > 63)
-        {
-            return Err(MetricValidationError::new(format!(
-                "measurements[{index}].unit must be ASCII and at most 63 bytes"
-            )));
-        }
-        validate_histogram_boundaries(measurement, index)?;
-        if let Some(attributes) = measurement.attributes.as_ref() {
-            validate_attributes(attributes, index)?;
-        }
-
-        let canonical_name = measurement.name.to_ascii_lowercase();
-        if let Some(previous_index) = descriptors.insert(canonical_name, index) {
-            let previous = &measurements[previous_index];
-            if previous.kind != measurement.kind
-                || previous.value_type != measurement.value_type
-                || previous.unit != measurement.unit
-                || previous.description != measurement.description
-                || previous.boundaries != measurement.boundaries
+    let mut descriptors = BTreeMap::<String, usize>::new();
+    for (index, measurement) in parsed.iter().enumerate() {
+        let key = measurement.descriptor.descriptor_key();
+        if let Some(previous_index) = descriptors.insert(key, index) {
+            let previous = &parsed[previous_index];
+            if !previous
+                .descriptor
+                .has_same_identity(&measurement.descriptor)
+                || previous.value.value_type() != measurement.value.value_type()
             {
                 return Err(MetricValidationError::new(format!(
                     "measurements[{index}] conflicts with the descriptor for measurements[{previous_index}]"
@@ -489,7 +707,7 @@ pub fn validate_metric_measurements(
             }
         }
     }
-    Ok(())
+    Ok(parsed)
 }
 
 /// Identifier for the schema that describes an event's opaque `data` payload.

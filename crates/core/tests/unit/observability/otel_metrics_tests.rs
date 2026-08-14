@@ -405,13 +405,12 @@ fn metric_attribute_arrays_preserve_supported_primitive_types() {
         json!([1, 2]),
         json!([1.0, 2.5]),
     ] {
-        assert!(matches!(
-            metric_attribute_value(&value),
-            Some(Value::Array(_))
-        ));
+        let attributes = MetricAttributes::try_from(Some(&json!({"value": value}))).unwrap();
+        let (_, value) = attributes.iter().next().unwrap();
+        assert!(matches!(metric_attribute_value(value), Value::Array(_)));
     }
-    assert_eq!(metric_attribute_value(&json!([])), None);
-    assert_eq!(metric_attribute_value(&json!({"nested": true})), None);
+    assert!(MetricAttributes::try_from(Some(&json!({"value": []}))).is_err());
+    assert!(MetricAttributes::try_from(Some(&json!({"value": {"nested": true}}))).is_err());
 }
 
 struct CapturedRequest {

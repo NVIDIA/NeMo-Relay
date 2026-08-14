@@ -14,6 +14,7 @@ use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
 
 use crate::api::event::{
     Event, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope,
+    ValidatedMetricMeasurement,
 };
 use crate::plugin::{RuntimeDiagnostic, record_active_plugin_runtime_diagnostic};
 
@@ -21,7 +22,7 @@ use super::otel::{OpenTelemetryError, Result};
 
 pub(super) enum MetricMarkClassification {
     NotMetric,
-    Valid(MetricEnvelope),
+    Valid(Vec<ValidatedMetricMeasurement>),
     Invalid(String),
 }
 
@@ -41,7 +42,7 @@ pub(super) fn classify_metric_mark(event: &Event) -> MetricMarkClassification {
             schema.version
         ));
     }
-    let envelope = match event
+    let measurements = match event
         .data()
         .cloned()
         .ok_or_else(|| "metric mark data is missing".to_string())
@@ -51,14 +52,13 @@ pub(super) fn classify_metric_mark(event: &Event) -> MetricMarkClassification {
         })
         .and_then(|envelope| {
             envelope
-                .validate()
+                .validated_measurements()
                 .map_err(|error| error.to_string())
-                .map(|()| envelope)
         }) {
-        Ok(envelope) => envelope,
+        Ok(measurements) => measurements,
         Err(error) => return MetricMarkClassification::Invalid(error),
     };
-    MetricMarkClassification::Valid(envelope)
+    MetricMarkClassification::Valid(measurements)
 }
 
 /// Tokio runtime retained for the lifetime of an OTLP provider.

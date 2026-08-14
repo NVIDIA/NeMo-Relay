@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use nemo_relay_types::api::event::{
-    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, LogSeverity,
-    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, MetricKind,
-    MetricMeasurement, MetricValueType, PendingMarkSpec, ScopeCategory, ScopeEvent,
+    AttributeValue, BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, FiniteF64,
+    LogSeverity, METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, MetricKind,
+    MetricMeasurement, MetricValue, MetricValueType, PendingMarkSpec, ScopeCategory, ScopeEvent,
     llm_attributes_to_strings,
 };
 use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
@@ -213,6 +213,37 @@ fn metric_validation_enforces_attribute_and_descriptor_contracts() {
         .validate()
         .is_err()
     );
+}
+
+#[test]
+fn metric_wire_data_parses_once_into_typed_export_measurements() {
+    let mut first = measurement(MetricKind::Histogram, MetricValueType::F64, json!(1.5));
+    first.name = "Example.Latency".into();
+    first.description = Some("first description".into());
+    first.boundaries = Some(vec![0.5, 1.0]);
+    first.attributes = Some(json!({"regions": ["us", "eu"]}));
+    let mut second = first.clone();
+    second.name = "example.latency".into();
+    second.description = Some("advisory description".into());
+    second.boundaries = Some(vec![1.0, 2.0]);
+
+    let parsed = MetricEnvelope {
+        measurements: vec![first, second],
+    }
+    .validated_measurements()
+    .unwrap();
+
+    assert_eq!(parsed[0].descriptor.name.canonical(), "example.latency");
+    assert_eq!(
+        parsed[0].descriptor.boundaries.as_ref().unwrap().values(),
+        [0.5, 1.0]
+    );
+    assert!(matches!(parsed[0].value, MetricValue::F64(value) if value.get() == 1.5));
+    assert!(matches!(
+        parsed[0].attributes.iter().next(),
+        Some((key, AttributeValue::StringArray(values))) if key == "regions" && values == &["us", "eu"]
+    ));
+    assert!(FiniteF64::try_from(f64::NAN).is_err());
 }
 
 #[test]
