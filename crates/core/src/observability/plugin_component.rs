@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
-use crate::api::event::{Event, LogSeverity, ScopeCategory};
+use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{
@@ -1434,7 +1434,14 @@ fn register_opentelemetry(
         .collect::<Vec<_>>();
     let metric_callbacks = metric_subscribers
         .iter()
-        .map(|subscriber| subscriber.subscriber())
+        .map(|subscriber| {
+            let subscriber = Arc::clone(subscriber);
+            Arc::new(
+                move |event: &Event, measurements: &[ValidatedMetricMeasurement]| {
+                    subscriber.process_validated(event, measurements)
+                },
+            ) as MetricEventCallback
+        })
         .collect::<Vec<_>>();
     // Retain the subscribers as long as the registered fan-out callback exists.
     // Their providers and exporter runtimes must outlive event delivery.
@@ -1515,7 +1522,7 @@ fn shutdown_all_opentelemetry_subscribers(
 fn deliver_opentelemetry_event(
     trace_callbacks: &[EventSubscriberFn],
     log_callbacks: &[EventSubscriberFn],
-    metric_callbacks: &[EventSubscriberFn],
+    metric_callbacks: &[MetricEventCallback],
     rejected_metric_marks: &AtomicU64,
     event: &Event,
 ) {
@@ -1524,11 +1531,12 @@ fn deliver_opentelemetry_event(
             deliver_opentelemetry_callbacks(trace_callbacks, 0, event);
             deliver_opentelemetry_callbacks(log_callbacks, trace_callbacks.len(), event);
         }
-        MetricMarkClassification::Valid(_) => {
-            deliver_opentelemetry_callbacks(
+        MetricMarkClassification::Valid(measurements) => {
+            deliver_opentelemetry_metric_callbacks(
                 metric_callbacks,
                 trace_callbacks.len() + log_callbacks.len(),
                 event,
+                &measurements,
             );
         }
         MetricMarkClassification::Invalid(error) => {
@@ -1536,6 +1544,12 @@ fn deliver_opentelemetry_event(
         }
     }
 }
+
+type MetricEventCallback = Arc<
+    dyn for<'event, 'measurements> Fn(&'event Event, &'measurements [ValidatedMetricMeasurement])
+        + Send
+        + Sync,
+>;
 
 fn deliver_opentelemetry_callbacks(
     callbacks: &[EventSubscriberFn],
@@ -1545,6 +1559,27 @@ fn deliver_opentelemetry_callbacks(
     for (relative_index, callback) in callbacks.iter().enumerate() {
         let index = index_offset + relative_index;
         if catch_unwind(AssertUnwindSafe(|| callback(event))).is_err() {
+            log::error!(
+                target: "nemo_relay.plugin",
+                event = "opentelemetry_endpoint_callback_panicked",
+                plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                resource_kind = "otlp_endpoint",
+                resource_index = index;
+                "OpenTelemetry endpoint callback panicked; delivery continued to remaining endpoints"
+            );
+        }
+    }
+}
+
+fn deliver_opentelemetry_metric_callbacks(
+    callbacks: &[MetricEventCallback],
+    index_offset: usize,
+    event: &Event,
+    measurements: &[ValidatedMetricMeasurement],
+) {
+    for (relative_index, callback) in callbacks.iter().enumerate() {
+        let index = index_offset + relative_index;
+        if catch_unwind(AssertUnwindSafe(|| callback(event, measurements))).is_err() {
             log::error!(
                 target: "nemo_relay.plugin",
                 event = "opentelemetry_endpoint_callback_panicked",

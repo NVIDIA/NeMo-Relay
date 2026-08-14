@@ -3762,6 +3762,13 @@ fn counting_callbacks(counter: &Arc<AtomicUsize>) -> Vec<crate::api::runtime::Ev
     })]
 }
 
+fn counting_metric_callbacks(counter: &Arc<AtomicUsize>) -> Vec<MetricEventCallback> {
+    let counter = Arc::clone(counter);
+    vec![Arc::new(move |_, _| {
+        counter.fetch_add(1, Ordering::Relaxed);
+    })]
+}
+
 fn reserved_metric_mark(version: &str, data: serde_json::Value) -> crate::api::event::Event {
     crate::api::event::Event::Mark(MarkEvent::new(
         BaseEvent::builder()
@@ -3811,7 +3818,15 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     let metered = Arc::new(AtomicUsize::new(0));
     let trace_callbacks = counting_callbacks(&traced);
     let log_callbacks = counting_callbacks(&logged);
-    let metric_callbacks = counting_callbacks(&metered);
+    let metered_for_callback = Arc::clone(&metered);
+    let metric_callbacks: Vec<MetricEventCallback> = vec![Arc::new(move |_, measurements| {
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(
+            measurements[0].descriptor.name.as_str(),
+            "example.tokens.saved"
+        );
+        metered_for_callback.fetch_add(1, Ordering::Relaxed);
+    })];
     let rejected_metric_marks = AtomicU64::new(0);
 
     let ordinary_mark = crate::api::event::Event::Mark(MarkEvent::new(
@@ -3883,7 +3898,7 @@ fn non_metric_schema_marks_keep_trace_and_log_routing() {
     let metered = Arc::new(AtomicUsize::new(0));
     let trace_callbacks = counting_callbacks(&traced);
     let log_callbacks = counting_callbacks(&logged);
-    let metric_callbacks = counting_callbacks(&metered);
+    let metric_callbacks = counting_metric_callbacks(&metered);
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
             .uuid(Uuid::now_v7())

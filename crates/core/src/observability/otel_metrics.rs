@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use crate::api::event::{
@@ -255,6 +255,7 @@ pub struct OpenTelemetryMetricSubscriber {
 struct MetricSubscriberInner {
     // Drop instruments and meter before the provider, then stop its runtime.
     _processor: Arc<Mutex<MetricEventProcessor>>,
+    processor_lock_recovery_warned: Arc<AtomicBool>,
     provider: SdkMeterProvider,
     delivery_diagnostics: Arc<MetricDeliveryDiagnostics>,
     subscriber: EventSubscriberFn,
@@ -300,27 +301,19 @@ impl OpenTelemetryMetricSubscriber {
             cardinality_limit,
         )));
         let callback_processor = Arc::clone(&processor);
-        let callback_recovery_warned = Arc::new(AtomicBool::new(false));
-        let callback_recovery_warned_for_callback = Arc::clone(&callback_recovery_warned);
+        let processor_lock_recovery_warned = Arc::new(AtomicBool::new(false));
+        let callback_recovery_warned_for_callback = Arc::clone(&processor_lock_recovery_warned);
         let subscriber: EventSubscriberFn = Arc::new(move |event| {
-            let mut processor = match callback_processor.lock() {
-                Ok(processor) => processor,
-                Err(poisoned) => {
-                    if !callback_recovery_warned_for_callback.swap(true, Ordering::Relaxed) {
-                        log::warn!(
-                            target: "nemo_relay.observability",
-                            event = "otel_metric_processor_lock_recovered";
-                            "OpenTelemetry metric subscriber recovered a poisoned processor lock"
-                        );
-                    }
-                    poisoned.into_inner()
-                }
-            };
-            processor.process(event);
+            process_metric_event(
+                &callback_processor,
+                &callback_recovery_warned_for_callback,
+                event,
+            );
         });
         Ok(Self {
             inner: Arc::new(MetricSubscriberInner {
                 _processor: processor,
+                processor_lock_recovery_warned,
                 provider,
                 delivery_diagnostics,
                 subscriber,
@@ -332,6 +325,19 @@ impl OpenTelemetryMetricSubscriber {
     /// Return the raw Relay subscriber callback.
     pub fn subscriber(&self) -> EventSubscriberFn {
         Arc::clone(&self.inner.subscriber)
+    }
+
+    pub(crate) fn process_validated(
+        &self,
+        event: &Event,
+        measurements: &[ValidatedMetricMeasurement],
+    ) {
+        process_validated_metric_measurements(
+            &self.inner._processor,
+            &self.inner.processor_lock_recovery_warned,
+            event,
+            measurements,
+        );
     }
 
     /// Register the subscriber globally.
@@ -589,16 +595,25 @@ impl MetricEventProcessor {
         }
     }
 
+    #[cfg(test)]
     fn process(&mut self, event: &Event) {
-        let envelope = match classify_metric_mark(event) {
+        self.process_classification(event, classify_metric_mark(event));
+    }
+
+    fn process_classification(&mut self, event: &Event, classification: MetricMarkClassification) {
+        let measurements = match classification {
             MetricMarkClassification::NotMetric => return,
-            MetricMarkClassification::Valid(envelope) => envelope,
+            MetricMarkClassification::Valid(measurements) => measurements,
             MetricMarkClassification::Invalid(error) => {
                 self.reject(event, MetricRejection::InvalidEnvelope, error);
                 return;
             }
         };
-        if let Err(error) = self.record_envelope(&envelope) {
+        self.process_validated(event, &measurements);
+    }
+
+    fn process_validated(&mut self, event: &Event, measurements: &[ValidatedMetricMeasurement]) {
+        if let Err(error) = self.record_envelope(measurements) {
             self.reject(event, error.kind, error.message);
         }
     }
@@ -702,6 +717,45 @@ impl MetricEventProcessor {
             ),
             1,
         );
+    }
+}
+
+fn process_metric_event(
+    processor: &Mutex<MetricEventProcessor>,
+    recovery_warned: &AtomicBool,
+    event: &Event,
+) {
+    let classification = classify_metric_mark(event);
+    let mut processor = lock_metric_processor(processor, recovery_warned);
+    processor.process_classification(event, classification);
+}
+
+fn process_validated_metric_measurements(
+    processor: &Mutex<MetricEventProcessor>,
+    recovery_warned: &AtomicBool,
+    event: &Event,
+    measurements: &[ValidatedMetricMeasurement],
+) {
+    let mut processor = lock_metric_processor(processor, recovery_warned);
+    processor.process_validated(event, measurements);
+}
+
+fn lock_metric_processor<'a>(
+    processor: &'a Mutex<MetricEventProcessor>,
+    recovery_warned: &AtomicBool,
+) -> MutexGuard<'a, MetricEventProcessor> {
+    match processor.lock() {
+        Ok(processor) => processor,
+        Err(poisoned) => {
+            if !recovery_warned.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "otel_metric_processor_lock_recovered";
+                    "OpenTelemetry metric subscriber recovered a poisoned processor lock"
+                );
+            }
+            poisoned.into_inner()
+        }
     }
 }
 
