@@ -562,6 +562,42 @@ fn test_custom_pricing_catalog_supports_future_models_without_code_changes() {
 }
 
 #[test]
+fn test_model_pricing_omits_total_when_nonzero_usage_lacks_a_rate() {
+    let catalog = pricing_catalog(json!([
+        {
+            "provider": "future-ai",
+            "model_id": "future-model",
+            "pricing_as_of": "2026-06-04",
+            "pricing_source": "https://example.test/pricing",
+            "rates": {
+                "input_per_million": 1.0,
+                "output_per_million": 2.0,
+                "cache_read_per_million": 0.25
+            },
+            "prompt_cache": {
+                "read_accounting": "separate"
+            }
+        }
+    ]));
+    let usage = Usage {
+        prompt_tokens: Some(1_000),
+        completion_tokens: Some(2_000),
+        cache_read_tokens: Some(3_000),
+        cache_write_tokens: Some(4_000),
+        ..Usage::default()
+    };
+
+    let cost = estimate_cost_with_catalog(&catalog, "future-model", &usage).unwrap();
+
+    assert_eq!(cost.total, None);
+    assert_eq!(cost.input, Some(0.001));
+    assert_eq!(cost.output, Some(0.004));
+    assert_eq!(cost.cache_read, Some(0.000_75));
+    assert_eq!(cost.cache_write, None);
+    assert_eq!(cost.source, CostSource::ModelPricing);
+}
+
+#[test]
 fn test_prompt_threshold_pricing_applies_selected_tier_to_full_request() {
     let catalog = threshold_pricing_catalog("included_in_prompt_tokens");
     let usage = Usage {
@@ -1245,6 +1281,8 @@ fn test_attach_estimated_cost_preserves_existing_or_incomplete_responses() {
 
     let mut priced = full_response();
     priced.model = Some("configured-model".into());
+    priced.usage.as_mut().unwrap().cache_read_tokens = None;
+    priced.usage.as_mut().unwrap().cache_write_tokens = None;
     attach_estimated_cost_for_provider(&mut priced, Some("configured"));
     assert_eq!(
         priced.usage.as_ref().unwrap().cost.as_ref().unwrap().total,
@@ -1350,6 +1388,25 @@ fn test_cost_estimate_total_helpers_sum_components_and_match_currency() {
     assert_eq!(component_cost.total_for_currency("USD"), None);
     assert_eq!(
         component_cost.total_or_component_sum_for_currency("EUR"),
+        None
+    );
+
+    let partial_model_pricing_cost = CostEstimate {
+        total: None,
+        currency: "USD".to_string(),
+        input: Some(0.12),
+        output: Some(0.30),
+        cache_read: Some(0.01),
+        cache_write: None,
+        source: CostSource::ModelPricing,
+        pricing_provider: Some("test".to_string()),
+        pricing_model: Some("model".to_string()),
+        pricing_as_of: Some("2026-06-04".to_string()),
+        pricing_source: Some("test".to_string()),
+    };
+    assert_eq!(partial_model_pricing_cost.total_or_component_sum(), None);
+    assert_eq!(
+        partial_model_pricing_cost.total_or_component_sum_for_currency("USD"),
         None
     );
 

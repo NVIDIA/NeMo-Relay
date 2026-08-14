@@ -3563,6 +3563,39 @@ fn assert_otel_catalog_cost_branches() {
             Some(&"USD".to_string())
         );
     }
+
+    {
+        let _pricing_guard = pricing_test_mutex().lock().unwrap();
+        install_test_pricing("priced-model");
+        let _reset_guard = ResetPricingResolverGuard;
+        let partial_cost_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "test",
+            ScopeType::Llm,
+            Some(json!({"answer": "ok"})),
+            Some(
+                CategoryProfile::builder()
+                    .model_name("priced-model")
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(Usage {
+                            prompt_tokens: Some(1_000),
+                            completion_tokens: Some(500),
+                            total_tokens: Some(1_500),
+                            cache_read_tokens: Some(200),
+                            cache_write_tokens: Some(10),
+                            cost: None,
+                        }),
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+        let partial_cost_attributes = attr_map(&end_attributes(&partial_cost_event));
+        assert!(!partial_cost_attributes.contains_key("nemo_relay.llm.cost.total"));
+        assert!(!partial_cost_attributes.contains_key("nemo_relay.llm.cost.currency"));
+    }
 }
 
 fn assert_otel_normalized_cost_branches() {

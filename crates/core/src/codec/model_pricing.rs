@@ -327,13 +327,16 @@ impl ModelPricing {
             .cache_write_per_million
             .and_then(|price| cost_component_if_nonzero(cache_write_tokens, price));
 
-        let total: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
+        let has_unpriced_nonzero_usage = (cache_read_tokens > 0
+            && rates.cache_read_per_million.is_none())
+            || (cache_write_tokens > 0 && rates.cache_write_per_million.is_none());
+        let component_sum: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
             .into_iter()
             .flatten()
             .sum();
 
         Some(CostEstimate {
-            total: Some(round_cost_amount(total)),
+            total: (!has_unpriced_nonzero_usage).then_some(round_cost_amount(component_sum)),
             currency: self.currency.clone(),
             input: input_cost,
             output: output_cost,
