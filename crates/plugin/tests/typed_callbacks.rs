@@ -3375,10 +3375,10 @@ fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
         .unwrap()["content"],
         json!({ "prompt": "hello" })
     );
-    unsafe { registration.free() };
     // The context's retained codec capability is released on the SDK executor
     // after the result completion is delivered, so poll instead of asserting
-    // immediately.
+    // immediately. Keep the registration alive until that executor cleanup
+    // finishes so its callback state cannot be freed while still in use.
     let deadline = Instant::now() + Duration::from_secs(5);
     while live_host_strings() != 0 {
         assert!(
@@ -3387,6 +3387,7 @@ fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
         );
         std::thread::yield_now();
     }
+    unsafe { registration.free() };
 }
 
 #[test]
@@ -3427,8 +3428,6 @@ fn typed_async_llm_sanitize_context_decodes_all_builtin_identities() {
             .unwrap()["content"],
             json!({ "prompt": "hello" })
         );
-        unsafe { registration.free() };
-
         let deadline = Instant::now() + Duration::from_secs(5);
         while live_host_strings() != 0 {
             assert!(
@@ -3437,6 +3436,7 @@ fn typed_async_llm_sanitize_context_decodes_all_builtin_identities() {
             );
             std::thread::yield_now();
         }
+        unsafe { registration.free() };
     }
 }
 
