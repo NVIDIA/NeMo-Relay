@@ -340,7 +340,7 @@ fn assert_trace_endpoint_editor_schema(otlp: &EditorSchema) {
 fn editor_schema_tracks_observability_config_types() {
     let schema = ObservabilityConfig::editor_schema();
     let version = schema.field("version").expect("config version field");
-    assert_eq!(version.kind, EditorFieldKind::Enum);
+    assert_eq!(version.kind, EditorFieldKind::IntegerEnum);
     assert_eq!(version.enum_values, &["3", "4"]);
     assert_eq!(
         schema

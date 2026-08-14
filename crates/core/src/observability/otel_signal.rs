@@ -336,9 +336,6 @@ pub(super) fn record_signal_runtime_diagnostic(
     message: String,
     count: u64,
 ) {
-    if field.is_none() {
-        return;
-    }
     record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
         code: code.to_string(),
         component: "observability".to_string(),
