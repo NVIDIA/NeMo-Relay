@@ -251,15 +251,102 @@ jobs:
             echo "NEMO_RELAY_DEFER_RUST_COVERAGE=true"
           } >> "$GITHUB_ENV"
 
+      - name: Compile test artifacts
+        id: test-compile
+        if: >-
+          ${{
+            always()
+            && steps.checkout.outcome == 'success'
+            && steps.rust-setup.outcome == 'success'
+            && steps.tools-setup.outcome == 'success'
+            && (matrix.platform == 'windows-arm64' || steps.coverage-setup.outcome == 'success')
+          }}
+        continue-on-error: true
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          RUN_RUST: ${{ inputs.run_rust }}
+          RUN_PYTHON: ${{ inputs.run_python || inputs.run_python_integration_langchain }}
+          RUN_NODE: ${{ inputs.run_node || inputs.run_openclaw }}
+          RUN_OPENCLAW: ${{ inputs.run_openclaw }}
+          RUN_GO: ${{ inputs.run_go }}
+        run: |
+          set -uo pipefail
+          echo "NEMO_RELAY_SKIP_BUILD=true" >> "$GITHUB_ENV"
+          failed=false
+          fixtures=success
+          rust=skipped
+          python=skipped
+          node=skipped
+          openclaw=skipped
+          go=skipped
+
+          compile() {
+            local output="$1"
+            shift
+            if "$@"; then
+              printf -v "$output" '%s' success
+            else
+              printf -v "$output" '%s' failure
+              failed=true
+            fi
+          }
+
+          compile_python() {
+            local python_failed=false
+            just --set ci true build-python || python_failed=true
+            if [[ "$PLATFORM" == "linux-amd64" || "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "windows-amd64" ]]; then
+              just build-python-plugin-e2e || python_failed=true
+            fi
+            [[ "$python_failed" == "false" ]]
+          }
+
+          if [[ "$RUN_RUST" == "true" || "$RUN_PYTHON" == "true" || "$RUN_GO" == "true" ]]; then
+            compile fixtures just build-test-plugin-fixtures
+          fi
+          if [[ "$RUN_RUST" == "true" ]]; then
+            compile rust just --set ci true build-rust
+          fi
+          if [[ "$RUN_PYTHON" == "true" ]]; then
+            compile python compile_python
+          fi
+          if [[ "$RUN_NODE" == "true" ]]; then
+            if [[ "$RUN_OPENCLAW" == "true" ]]; then
+              compile node just --set ci true build-openclaw
+              openclaw="$node"
+            else
+              compile node just --set ci true build-node
+            fi
+          fi
+          if [[ "$RUN_GO" == "true" ]]; then
+            compile go just --set ci true build-go
+          fi
+
+          if [[ "$fixtures" != "success" ]]; then
+            [[ "$RUN_RUST" != "true" ]] || rust=failure
+            [[ "$RUN_PYTHON" != "true" ]] || python=failure
+            [[ "$RUN_GO" != "true" ]] || go=failure
+            failed=true
+          fi
+          {
+            echo "rust=$rust"
+            echo "python=$python"
+            echo "node=$node"
+            echo "openclaw=$openclaw"
+            echo "go=$go"
+          } >> "$GITHUB_OUTPUT"
+          [[ "$failed" == "false" ]]
+
       - name: Run Rust tests with coverage
         id: rust-test
-        if: ${{ always() && inputs.run_rust }}
+        if: ${{ always() && inputs.run_rust && steps.test-compile.outputs.rust == 'success' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
           set -e
           args=(
             --set ci true
+            --set skip_build true
             --set output_dir "${{ github.workspace }}"
           )
           if [ "${{ matrix.run_redis_tests }}" = "true" ]; then
@@ -279,10 +366,10 @@ jobs:
 
       - name: Run Python tests with coverage
         id: python-test
-        if: ${{ always() && (inputs.run_python || inputs.run_python_integration_langchain) }}
+        if: ${{ always() && (inputs.run_python || inputs.run_python_integration_langchain) && steps.test-compile.outputs.python == 'success' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just --set ci true --set output_dir "${{ github.workspace }}" test-python
+        run: just --set ci true --set skip_build true --set output_dir "${{ github.workspace }}" test-python
 
       - name: Run Python plugin end-to-end test
         id: python-plugin-test
@@ -290,18 +377,19 @@ jobs:
           ${{
             always()
             && (inputs.run_python || inputs.run_python_integration_langchain)
+            && steps.test-compile.outputs.python == 'success'
             && (matrix.platform == 'linux-amd64' || matrix.platform == 'macos-arm64' || matrix.platform == 'windows-amd64')
           }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just test-python-plugin-e2e
+        run: just --set skip_build true test-python-plugin-e2e
 
       - name: Run Python LangChain integration tests
         id: python-integration-test
-        if: ${{ always() && inputs.run_python_integration_langchain && matrix.platform != 'windows-arm64' }}
+        if: ${{ always() && inputs.run_python_integration_langchain && steps.test-compile.outputs.python == 'success' && matrix.platform != 'windows-arm64' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-langchain
+        run: just --set ci true --set skip_build true --set output_dir "${{ github.workspace }}" test-python-langchain
 
       - name: Prune uv cache
         id: uv-prune
@@ -312,24 +400,24 @@ jobs:
 
       - name: Run Node tests with coverage
         id: node-test
-        if: ${{ always() && (inputs.run_node || inputs.run_openclaw) }}
+        if: ${{ always() && (inputs.run_node || inputs.run_openclaw) && steps.test-compile.outputs.node == 'success' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just --set ci true --set output_dir "${{ github.workspace }}" test-node
+        run: just --set ci true --set skip_build true --set output_dir "${{ github.workspace }}" test-node
 
       - name: Run OpenClaw integration checks
         id: openclaw-test
-        if: ${{ always() && inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
+        if: ${{ always() && inputs.run_openclaw && steps.test-compile.outputs.openclaw == 'success' && matrix.platform == 'linux-amd64' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just --set ci true test-openclaw
+        run: just --set ci true --set skip_build true test-openclaw
 
       - name: Run Go tests with coverage
         id: go-test
-        if: ${{ always() && inputs.run_go }}
+        if: ${{ always() && inputs.run_go && steps.test-compile.outputs.go == 'success' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just --set ci true --set output_dir "${{ github.workspace }}" test-go
+        run: just --set ci true --set skip_build true --set output_dir "${{ github.workspace }}" test-go
 
       - name: Generate combined Rust coverage
         id: rust-coverage
@@ -413,6 +501,12 @@ jobs:
           GO_SETUP: ${{ steps.go-setup.outcome }}
           TOOLS_SETUP: ${{ steps.tools-setup.outcome }}
           COVERAGE_SETUP: ${{ steps.coverage-setup.outcome }}
+          TEST_COMPILE: ${{ steps.test-compile.outcome }}
+          RUST_COMPILE: ${{ steps.test-compile.outputs.rust }}
+          PYTHON_COMPILE: ${{ steps.test-compile.outputs.python }}
+          NODE_COMPILE: ${{ steps.test-compile.outputs.node }}
+          OPENCLAW_COMPILE: ${{ steps.test-compile.outputs.openclaw }}
+          GO_COMPILE: ${{ steps.test-compile.outputs.go }}
           RUN_RUST: ${{ inputs.run_rust }}
           RUST_TEST: ${{ steps.rust-test.outcome }}
           RUN_PYTHON: ${{ inputs.run_python || inputs.run_python_integration_langchain }}
@@ -468,12 +562,18 @@ jobs:
           else
             report true "Combined Rust coverage setup" "$COVERAGE_SETUP" success
           fi
+          report true "Compile test artifacts" "$TEST_COMPILE" success
           if [[ "$RUN_RUST" == "true" || "$RUN_PYTHON" == "true" ]]; then
             report true "uv setup" "$UV_SETUP" success
             report true "Python setup" "$PYTHON_SETUP" success
           fi
           report "$RUN_NODE" "Node.js setup" "$NODE_SETUP" success
           report "$RUN_GO" "Go setup" "$GO_SETUP" success
+          report "$RUN_RUST" "Rust compilation" "$RUST_COMPILE" success
+          report "$RUN_PYTHON" "Python compilation" "$PYTHON_COMPILE" success
+          report "$RUN_NODE" "Node.js compilation" "$NODE_COMPILE" success
+          report "$RUN_OPENCLAW" "OpenClaw compilation" "$OPENCLAW_COMPILE" success
+          report "$RUN_GO" "Go compilation" "$GO_COMPILE" success
           report "$RUN_RUST" "Rust tests" "$RUST_TEST" success
           report "$RUN_PYTHON" "Python tests" "$PYTHON_TEST" success
           if [[ "$PLATFORM" == "linux-amd64" || "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "windows-amd64" ]]; then
@@ -1235,21 +1335,75 @@ jobs:
           fi
           printf 'NEMO_RELAY_PACKAGE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
 
-      - name: Package Python wheel
-        id: python-package
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && !contains(matrix.platform, 'musl') }}
+      - name: Derive Maturin version
+        id: maturin-version
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') }}
         continue-on-error: true
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
-          set -e
-          just \
-            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
-            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
-            package-python
+          set -euo pipefail
+          maturin_version="$(awk '
+            $0 == "name = \"maturin\"" { found = 1; next }
+            found && /^version = / {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' uv.lock)"
+          if [[ -z "$maturin_version" ]]; then
+            echo "Error: failed to read maturin version from uv.lock" >&2
+            exit 1
+          fi
+          printf 'NEMO_RELAY_MATURIN_VERSION=%s\n' "$maturin_version" >> "$GITHUB_ENV"
+
+      - name: Install Node Rust target
+        id: node-target
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package && startsWith(matrix.platform, 'linux-') }}
+        continue-on-error: true
+        run: rustup target add ${{ matrix.node_target }}
+
+      - name: Install Rust musl tools
+        id: rust-musl-tools
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && contains(matrix.platform, 'musl') }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.arch }}" = "ARM64" ]; then
+            for sources in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+              if [ -f "$sources" ]; then
+                sudo sed -i 's|http://ports.ubuntu.com/ubuntu-ports|https://ports.ubuntu.com/ubuntu-ports|g' "$sources"
+              fi
+            done
+          fi
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y musl-tools
+          rustup target add "${{ matrix.rust_target }}"
+
+      - name: Compile package artifacts
+        id: package-compile
+        if: ${{ always() && steps.package-version.outcome == 'success' }}
+        continue-on-error: true
+        uses: ./.github/actions/compile-packages
+        with:
+          platform: ${{ matrix.platform }}
+          rust-target: ${{ matrix.rust_target }}
+          rust-build-image: ${{ matrix.rust_build_image }}
+          rust-version: ${{ steps.ci-config.outputs.rust_version }}
+          node-target: ${{ matrix.node_target }}
+          node-build-strategy: ${{ matrix.node_build_strategy }}
+          python-rust-target: ${{ matrix.python_rust_target }}
+          python-container-image: ${{ matrix.python_container_image }}
+          maturin-version: ${{ env.NEMO_RELAY_MATURIN_VERSION }}
+          package-version: ${{ env.NEMO_RELAY_PACKAGE_VERSION }}
+          workspace: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+          workspace-tmp: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}
+          run-python: ${{ inputs.run_python_package }}
+          run-node: ${{ inputs.run_node_package }}
+          run-openclaw: ${{ inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
+          run-rust: ${{ inputs.run_rust_package }}
 
       - name: Upload Python wheel artifact
         id: python-upload
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && !contains(matrix.platform, 'musl') && steps.python-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && !contains(matrix.platform, 'musl') && steps.package-compile.outputs.python == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1301,66 +1455,9 @@ jobs:
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/plugin-wheels/*.whl
           if-no-files-found: error
 
-      - name: Derive Maturin version
-        id: maturin-version
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') }}
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          maturin_version="$(awk '
-            $0 == "name = \"maturin\"" { found = 1; next }
-            found && /^version = / {
-              gsub(/"/, "", $3)
-              print $3
-              exit
-            }
-          ' uv.lock)"
-          if [[ -z "$maturin_version" ]]; then
-            echo "Error: failed to read maturin version from uv.lock" >&2
-            exit 1
-          fi
-          printf 'NEMO_RELAY_MATURIN_VERSION=%s\n' "$maturin_version" >> "$GITHUB_ENV"
-
-      - name: Stage musllinux Python packaging source
-        id: python-musl-stage
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') }}
-        continue-on-error: true
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -euo pipefail
-          mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels"
-          python3 scripts/package_python_musllinux.py \
-            --version "$NEMO_RELAY_PACKAGE_VERSION" \
-            --source-out "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-source"
-
-      - name: Build musllinux Python wheel
-        id: python-musl-package
-        if: >-
-          ${{
-            always()
-            && steps.package-version.outcome == 'success'
-            && inputs.run_python_package
-            && contains(matrix.platform, 'musl')
-            && steps.maturin-version.outcome == 'success'
-            && steps.python-musl-stage.outcome == 'success'
-          }}
-        continue-on-error: true
-        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
-        with:
-          maturin-version: v${{ env.NEMO_RELAY_MATURIN_VERSION }}
-          manylinux: musllinux_1_2
-          container: ${{ matrix.python_container_image }}
-          target: ${{ matrix.python_rust_target }}
-          rust-toolchain: ${{ steps.ci-config.outputs.rust_version }}
-          working-directory: tmp/musllinux-source
-          args: >-
-            --locked --release
-            --interpreter /opt/python/cp311-cp311/bin/python
-            --out ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/musllinux-wheels
-
       - name: Verify musllinux Python wheel platform tag
         id: python-musl-verify
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') && steps.python-musl-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') && steps.package-compile.outputs.python == 'success' }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1388,32 +1485,9 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: uv cache prune --ci
 
-      - name: Install Node Rust target
-        id: node-target
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package && startsWith(matrix.platform, 'linux-') }}
-        continue-on-error: true
-        run: rustup target add ${{ matrix.node_target }}
-
-      - name: Package Node.js
-        id: node-package
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package }}
-        continue-on-error: true
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -e
-          mkdir -p "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm"
-          just \
-            --set ci true \
-            --set output_dir "${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}" \
-            --set node_platform "${{ matrix.platform }}" \
-            --set node_target "${{ matrix.node_target }}" \
-            --set node_build_strategy "${{ matrix.node_build_strategy }}" \
-            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
-            package-node
-
       - name: Upload split Node npm package artifacts
         id: node-upload
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package && steps.node-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package && steps.package-compile.outputs.node == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1421,78 +1495,15 @@ jobs:
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/npm/*.tgz
           if-no-files-found: error
 
-      - name: Package OpenClaw plugin
-        id: openclaw-package
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
-        continue-on-error: true
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -euo pipefail
-          just \
-            --set ci true \
-            --set output_dir "${NEMO_RELAY_CI_WORKSPACE_TMP}" \
-            --set ref_name "${NEMO_RELAY_PACKAGE_VERSION}" \
-            package-openclaw
-
       - name: Upload OpenClaw plugin artifact
         id: openclaw-upload
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_openclaw && matrix.platform == 'linux-amd64' && steps.openclaw-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_openclaw && matrix.platform == 'linux-amd64' && steps.package-compile.outputs.openclaw == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: openclaw-npm
           path: ${{ env.NEMO_RELAY_CI_WORKSPACE_TMP }}/openclaw/*.tgz
           if-no-files-found: error
-
-      - name: Set Rust package version
-        id: rust-version
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package }}
-        continue-on-error: true
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: just set-cargo-version "$NEMO_RELAY_PACKAGE_VERSION"
-
-      - name: Install Rust musl tools
-        id: rust-musl-tools
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && contains(matrix.platform, 'musl') }}
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          if [ "${{ runner.arch }}" = "ARM64" ]; then
-            for sources in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
-              if [ -f "$sources" ]; then
-                sudo sed -i 's|http://ports.ubuntu.com/ubuntu-ports|https://ports.ubuntu.com/ubuntu-ports|g' "$sources"
-              fi
-            done
-          fi
-          sudo apt-get -o Acquire::Retries=5 update
-          sudo apt-get -o Acquire::Retries=5 install -y musl-tools
-          rustup target add "${{ matrix.rust_target }}"
-
-      - name: Build Rust CLI release binary
-        id: rust-package
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && matrix.rust_build_image == '' }}
-        continue-on-error: true
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: cargo build --release --target "${{ matrix.rust_target }}" -p nemo-relay-cli
-
-      - name: Build Rust CLI release binary in manylinux
-        id: rust-manylinux-package
-        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && matrix.rust_build_image != '' }}
-        continue-on-error: true
-        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            --volume "${{ env.NEMO_RELAY_CI_WORKSPACE }}:${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
-            --workdir "${{ env.NEMO_RELAY_CI_WORKSPACE }}" \
-            --env NEMO_RELAY_RUST_VERSION="${{ steps.ci-config.outputs.rust_version }}" \
-            "${{ matrix.rust_build_image }}" \
-            /bin/bash -ec '
-              curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
-                sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
-              export PATH="$HOME/.cargo/bin:$PATH"
-              cargo build --release --target "${{ matrix.rust_target }}" -p nemo-relay-cli
-            '
 
       - name: Stage Rust CLI artifacts
         id: rust-stage
@@ -1501,7 +1512,7 @@ jobs:
             always()
             && steps.package-version.outcome == 'success'
             && inputs.run_rust_package
-            && (steps.rust-package.outcome == 'success' || steps.rust-manylinux-package.outcome == 'success')
+            && steps.package-compile.outputs.rust == 'success'
           }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
@@ -1569,31 +1580,28 @@ jobs:
           NODE_SETUP: ${{ steps.node-setup.outcome }}
           TOOLS_SETUP: ${{ steps.tools-setup.outcome }}
           PACKAGE_VERSION: ${{ steps.package-version.outcome }}
+          PACKAGE_COMPILE: ${{ steps.package-compile.outcome }}
           RUN_PYTHON: ${{ inputs.run_python_package }}
-          PYTHON_PACKAGE: ${{ steps.python-package.outcome }}
+          PYTHON_COMPILE: ${{ steps.package-compile.outputs.python }}
           PYTHON_UPLOAD: ${{ steps.python-upload.outcome }}
           PYTHON_SDIST_PACKAGE: ${{ steps.python-sdist-package.outcome }}
           PYTHON_SDIST_UPLOAD: ${{ steps.python-sdist-upload.outcome }}
           PYTHON_PLUGIN_PACKAGE: ${{ steps.python-plugin-package.outcome }}
           PYTHON_PLUGIN_UPLOAD: ${{ steps.python-plugin-upload.outcome }}
           MATURIN_VERSION: ${{ steps.maturin-version.outcome }}
-          PYTHON_MUSL_STAGE: ${{ steps.python-musl-stage.outcome }}
-          PYTHON_MUSL_PACKAGE: ${{ steps.python-musl-package.outcome }}
           PYTHON_MUSL_VERIFY: ${{ steps.python-musl-verify.outcome }}
           PYTHON_MUSL_UPLOAD: ${{ steps.python-musl-upload.outcome }}
           UV_PRUNE: ${{ steps.uv-prune.outcome }}
           RUN_NODE: ${{ inputs.run_node_package }}
           NODE_TARGET: ${{ steps.node-target.outcome }}
-          NODE_PACKAGE: ${{ steps.node-package.outcome }}
+          NODE_COMPILE: ${{ steps.package-compile.outputs.node }}
           NODE_UPLOAD: ${{ steps.node-upload.outcome }}
           RUN_OPENCLAW: ${{ inputs.run_openclaw }}
-          OPENCLAW_PACKAGE: ${{ steps.openclaw-package.outcome }}
+          OPENCLAW_COMPILE: ${{ steps.package-compile.outputs.openclaw }}
           OPENCLAW_UPLOAD: ${{ steps.openclaw-upload.outcome }}
           RUN_RUST: ${{ inputs.run_rust_package }}
-          RUST_VERSION: ${{ steps.rust-version.outcome }}
           RUST_MUSL_TOOLS: ${{ steps.rust-musl-tools.outcome }}
-          RUST_PACKAGE: ${{ steps.rust-package.outcome }}
-          RUST_MANYLINUX_PACKAGE: ${{ steps.rust-manylinux-package.outcome }}
+          RUST_COMPILE: ${{ steps.package-compile.outputs.rust }}
           RUST_STAGE: ${{ steps.rust-stage.outcome }}
           RUST_BINARY_UPLOAD: ${{ steps.rust-binary-upload.outcome }}
           RUST_WHEEL_UPLOAD: ${{ steps.rust-wheel-upload.outcome }}
@@ -1635,14 +1643,13 @@ jobs:
             report true "Node.js setup" "$NODE_SETUP"
           fi
           report true "Package version" "$PACKAGE_VERSION"
+          report true "Compile package artifacts" "$PACKAGE_COMPILE"
+          report "$RUN_PYTHON" "Python compilation" "$PYTHON_COMPILE"
           if [[ "$PLATFORM" == *musl* ]]; then
             report "$RUN_PYTHON" "Maturin version" "$MATURIN_VERSION"
-            report "$RUN_PYTHON" "Python musllinux staging" "$PYTHON_MUSL_STAGE"
-            report "$RUN_PYTHON" "Python musllinux package" "$PYTHON_MUSL_PACKAGE"
             report "$RUN_PYTHON" "Python musllinux tag" "$PYTHON_MUSL_VERIFY"
             report "$RUN_PYTHON" "Python musllinux upload" "$PYTHON_MUSL_UPLOAD"
           else
-            report "$RUN_PYTHON" "Python wheel package" "$PYTHON_PACKAGE"
             report "$RUN_PYTHON" "Python wheel upload" "$PYTHON_UPLOAD"
           fi
           if [[ "$RUN_PYTHON" == "true" && "$PLATFORM" != *musl* ]]; then
@@ -1657,21 +1664,16 @@ jobs:
           if [[ "$PLATFORM" == linux-* ]]; then
             report "$RUN_NODE" "Node.js Rust target" "$NODE_TARGET"
           fi
-          report "$RUN_NODE" "Node.js package" "$NODE_PACKAGE"
+          report "$RUN_NODE" "Node.js compilation" "$NODE_COMPILE"
           report "$RUN_NODE" "Node.js upload" "$NODE_UPLOAD"
           if [[ "$PLATFORM" == "linux-amd64" ]]; then
-            report "$RUN_OPENCLAW" "OpenClaw package" "$OPENCLAW_PACKAGE"
+            report "$RUN_OPENCLAW" "OpenClaw compilation" "$OPENCLAW_COMPILE"
             report "$RUN_OPENCLAW" "OpenClaw upload" "$OPENCLAW_UPLOAD"
           fi
-          report "$RUN_RUST" "Rust package version" "$RUST_VERSION"
           if [[ "$PLATFORM" == *musl* ]]; then
             report "$RUN_RUST" "Rust musl tools" "$RUST_MUSL_TOOLS"
           fi
-          if [[ -n "${RUST_MANYLINUX_PACKAGE:-}" && "$RUST_MANYLINUX_PACKAGE" != "skipped" ]]; then
-            report "$RUN_RUST" "Rust CLI package" "$RUST_MANYLINUX_PACKAGE"
-          else
-            report "$RUN_RUST" "Rust CLI package" "$RUST_PACKAGE"
-          fi
+          report "$RUN_RUST" "Rust compilation" "$RUST_COMPILE"
           report "$RUN_RUST" "Rust CLI staging" "$RUST_STAGE"
           report "$RUN_RUST" "Rust CLI binary upload" "$RUST_BINARY_UPLOAD"
           report "$RUN_RUST" "Rust CLI wheel upload" "$RUST_WHEEL_UPLOAD"

@@ -1,0 +1,271 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Compile package artifacts
+description: Compile all enabled language package artifacts before upload and smoke validation
+
+inputs:
+  platform:
+    required: true
+    description: Package matrix platform
+  rust-target:
+    required: true
+    description: Rust compilation target
+  rust-build-image:
+    required: false
+    description: Container image for manylinux Rust builds
+  rust-version:
+    required: true
+    description: Rust toolchain version
+  node-target:
+    required: false
+    description: Node native module target
+  node-build-strategy:
+    required: true
+    description: Node native module build strategy
+  python-rust-target:
+    required: false
+    description: Python Rust compilation target
+  python-container-image:
+    required: false
+    description: Container image for musllinux Python builds
+  maturin-version:
+    required: false
+    description: Maturin version for musllinux Python builds
+  package-version:
+    required: true
+    description: Canonical package version
+  workspace:
+    required: true
+    description: Repository workspace
+  workspace-tmp:
+    required: true
+    description: Package output directory
+  run-python:
+    required: true
+    description: Whether to compile Python package artifacts
+  run-node:
+    required: true
+    description: Whether to compile Node package artifacts
+  run-openclaw:
+    required: true
+    description: Whether to compile the OpenClaw package artifact
+  run-rust:
+    required: true
+    description: Whether to compile Rust package artifacts
+
+outputs:
+  python:
+    description: Python compilation outcome
+    value: ${{ steps.results.outputs.python }}
+  node:
+    description: Node compilation outcome
+    value: ${{ steps.results.outputs.node }}
+  openclaw:
+    description: OpenClaw compilation outcome
+    value: ${{ steps.results.outputs.openclaw }}
+  rust:
+    description: Rust compilation outcome
+    value: ${{ steps.results.outputs.rust }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compile native Python wheel
+      id: python-native
+      if: ${{ inputs.run-python == 'true' && !contains(inputs.platform, 'musl') }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        PACKAGE_VERSION: ${{ inputs.package-version }}
+        WORKSPACE_TMP: ${{ inputs.workspace-tmp }}
+      run: >-
+        just
+        --set output_dir "$WORKSPACE_TMP"
+        --set ref_name "$PACKAGE_VERSION"
+        package-python
+
+    - name: Stage musllinux Python source
+      id: python-musl-stage
+      if: ${{ inputs.run-python == 'true' && contains(inputs.platform, 'musl') }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        PACKAGE_VERSION: ${{ inputs.package-version }}
+        WORKSPACE_TMP: ${{ inputs.workspace-tmp }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$WORKSPACE_TMP/musllinux-wheels"
+        python3 scripts/package_python_musllinux.py \
+          --version "$PACKAGE_VERSION" \
+          --source-out "$WORKSPACE_TMP/musllinux-source"
+
+    - name: Compile musllinux Python wheel
+      id: python-musl
+      if: ${{ inputs.run-python == 'true' && contains(inputs.platform, 'musl') && steps.python-musl-stage.outcome == 'success' }}
+      continue-on-error: true
+      uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+      with:
+        maturin-version: v${{ inputs.maturin-version }}
+        manylinux: musllinux_1_2
+        container: ${{ inputs.python-container-image }}
+        target: ${{ inputs.python-rust-target }}
+        rust-toolchain: ${{ inputs.rust-version }}
+        working-directory: tmp/musllinux-source
+        args: >-
+          --locked --release
+          --interpreter /opt/python/cp311-cp311/bin/python
+          --out ${{ inputs.workspace-tmp }}/musllinux-wheels
+
+    - name: Compile Node package artifacts
+      id: node
+      if: ${{ inputs.run-node == 'true' }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        NODE_BUILD_STRATEGY: ${{ inputs.node-build-strategy }}
+        NODE_TARGET: ${{ inputs.node-target }}
+        PACKAGE_VERSION: ${{ inputs.package-version }}
+        PLATFORM: ${{ inputs.platform }}
+        WORKSPACE_TMP: ${{ inputs.workspace-tmp }}
+      run: >-
+        just
+        --set ci true
+        --set output_dir "$WORKSPACE_TMP"
+        --set node_platform "$PLATFORM"
+        --set node_target "$NODE_TARGET"
+        --set node_build_strategy "$NODE_BUILD_STRATEGY"
+        --set ref_name "$PACKAGE_VERSION"
+        package-node
+
+    - name: Compile OpenClaw package artifact
+      id: openclaw
+      if: ${{ inputs.run-openclaw == 'true' }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        NODE_ALREADY_BUILT: ${{ inputs.run-node }}
+        PACKAGE_VERSION: ${{ inputs.package-version }}
+        WORKSPACE_TMP: ${{ inputs.workspace-tmp }}
+      run: |
+        set -euo pipefail
+        args=(
+          --set ci true
+          --set output_dir "$WORKSPACE_TMP"
+          --set ref_name "$PACKAGE_VERSION"
+        )
+        if [[ "$NODE_ALREADY_BUILT" == "true" ]]; then
+          args+=(--set skip_build true)
+        fi
+        just "${args[@]}" package-openclaw
+
+    - name: Set Rust package version
+      id: rust-version
+      if: ${{ inputs.run-rust == 'true' }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        PACKAGE_VERSION: ${{ inputs.package-version }}
+      run: just set-cargo-version "$PACKAGE_VERSION"
+
+    - name: Compile native Rust CLI
+      id: rust-native
+      if: ${{ inputs.run-rust == 'true' && inputs.rust-build-image == '' && steps.rust-version.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        RUST_TARGET: ${{ inputs.rust-target }}
+      run: cargo build --release --target "$RUST_TARGET" -p nemo-relay-cli
+
+    - name: Compile manylinux Rust CLI
+      id: rust-manylinux
+      if: ${{ inputs.run-rust == 'true' && inputs.rust-build-image != '' && steps.rust-version.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      working-directory: ${{ inputs.workspace }}
+      env:
+        RUST_BUILD_IMAGE: ${{ inputs.rust-build-image }}
+        RUST_TARGET: ${{ inputs.rust-target }}
+        RUST_VERSION: ${{ inputs.rust-version }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: |
+        set -euo pipefail
+        docker run --rm \
+          --volume "$WORKSPACE:$WORKSPACE" \
+          --workdir "$WORKSPACE" \
+          --env NEMO_RELAY_RUST_TARGET="$RUST_TARGET" \
+          --env NEMO_RELAY_RUST_VERSION="$RUST_VERSION" \
+          "$RUST_BUILD_IMAGE" \
+          /bin/bash -ec '
+            curl --proto "=https" --tlsv1.2 --silent --show-error --fail https://sh.rustup.rs | \
+              sh -s -- -y --profile minimal --default-toolchain "$NEMO_RELAY_RUST_VERSION"
+            export PATH="$HOME/.cargo/bin:$PATH"
+            cargo build --release --target "$NEMO_RELAY_RUST_TARGET" -p nemo-relay-cli
+          '
+
+    - name: Report package compilation
+      id: results
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        RUN_PYTHON: ${{ inputs.run-python }}
+        RUN_NODE: ${{ inputs.run-node }}
+        RUN_OPENCLAW: ${{ inputs.run-openclaw }}
+        RUN_RUST: ${{ inputs.run-rust }}
+        RUST_BUILD_IMAGE: ${{ inputs.rust-build-image }}
+        PYTHON_NATIVE: ${{ steps.python-native.outcome }}
+        PYTHON_MUSL_STAGE: ${{ steps.python-musl-stage.outcome }}
+        PYTHON_MUSL: ${{ steps.python-musl.outcome }}
+        NODE: ${{ steps.node.outcome }}
+        OPENCLAW: ${{ steps.openclaw.outcome }}
+        RUST_VERSION: ${{ steps.rust-version.outcome }}
+        RUST_NATIVE: ${{ steps.rust-native.outcome }}
+        RUST_MANYLINUX: ${{ steps.rust-manylinux.outcome }}
+      run: |
+        set -euo pipefail
+        python=skipped
+        node=skipped
+        openclaw=skipped
+        rust=skipped
+        failed=false
+
+        if [[ "$RUN_PYTHON" == "true" ]]; then
+          if [[ "$PLATFORM" == *musl* ]]; then
+            python="$PYTHON_MUSL"
+            [[ "$PYTHON_MUSL_STAGE" == "success" && "$PYTHON_MUSL" == "success" ]] || python=failure
+          else
+            python="$PYTHON_NATIVE"
+          fi
+          [[ "$python" == "success" ]] || failed=true
+        fi
+        if [[ "$RUN_NODE" == "true" ]]; then
+          node="$NODE"
+          [[ "$node" == "success" ]] || failed=true
+        fi
+        if [[ "$RUN_OPENCLAW" == "true" ]]; then
+          openclaw="$OPENCLAW"
+          [[ "$openclaw" == "success" ]] || failed=true
+        fi
+        if [[ "$RUN_RUST" == "true" ]]; then
+          if [[ -n "$RUST_BUILD_IMAGE" ]]; then
+            rust="$RUST_MANYLINUX"
+          else
+            rust="$RUST_NATIVE"
+          fi
+          [[ "$RUST_VERSION" == "success" && "$rust" == "success" ]] || rust=failure
+          [[ "$rust" == "success" ]] || failed=true
+        fi
+        {
+          echo "python=$python"
+          echo "node=$node"
+          echo "openclaw=$openclaw"
+          echo "rust=$rust"
+        } >> "$GITHUB_OUTPUT"
+        [[ "$failed" == "false" ]]

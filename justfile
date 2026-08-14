@@ -17,6 +17,8 @@ linux_glibc_version := "2.17"
 node_platform := ""
 node_target := ""
 node_build_strategy := "native"
+# CI can compile all enabled test targets once before running language tests.
+skip_build := "false"
 
 bash_helpers := '''
 set -euo pipefail
@@ -874,6 +876,7 @@ prepend_go_bin_to_path() {
 }
 
 prepare_test_plugin_fixtures() {
+    local skip_fixture_build="${1:-false}"
     local target_dir="$NEMO_RELAY_REPO_ROOT/target/test-plugin-fixtures"
     local native_library=""
     local worker_executable="nemo-relay-worker-plugin-fixture"
@@ -893,13 +896,15 @@ prepare_test_plugin_fixtures() {
             ;;
     esac
 
-    cd "$NEMO_RELAY_REPO_ROOT"
-    cargo build --quiet --locked \
-        --manifest-path crates/core/tests/fixtures/native_plugin/Cargo.toml \
-        --target-dir "$target_dir"
-    cargo build --quiet --locked \
-        --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml \
-        --target-dir "$target_dir"
+    if ! is_true "$skip_fixture_build"; then
+        cd "$NEMO_RELAY_REPO_ROOT"
+        cargo build --quiet --locked \
+            --manifest-path crates/core/tests/fixtures/native_plugin/Cargo.toml \
+            --target-dir "$target_dir"
+        cargo build --quiet --locked \
+            --manifest-path crates/core/tests/fixtures/worker_plugin/Cargo.toml \
+            --target-dir "$target_dir"
+    fi
 
     export NEMO_RELAY_TEST_NATIVE_PLUGIN="$target_dir/debug/$native_library"
     export NEMO_RELAY_TEST_WORKER_PLUGIN="$target_dir/debug/$worker_executable"
@@ -920,10 +925,11 @@ prepare_test_plugin_fixtures() {
 }
 
 prepare_llvm_cov_workspace() {
-    eval "$(cargo llvm-cov show-env --sh)"
-    if ! is_true "${NEMO_RELAY_CI_COVERAGE_SESSION:-}"; then
-        cargo llvm-cov clean --workspace
+    if is_true "${NEMO_RELAY_CI_COVERAGE_SESSION:-}"; then
+        return
     fi
+    eval "$(cargo llvm-cov show-env --sh)"
+    cargo llvm-cov clean --workspace
 }
 
 rust_source_coverage_supported() {
@@ -989,7 +995,9 @@ build-rust:
     export_uv_python_runtime
     cd "$NEMO_RELAY_REPO_ROOT"
     if is_true "{{ ci }}"; then
-        prepare_llvm_cov_workspace
+        if rust_source_coverage_supported; then
+            prepare_llvm_cov_workspace
+        fi
         cargo test --workspace --no-run
     else
         # Maturin supplies the platform-specific linker configuration for the
@@ -1004,11 +1012,24 @@ build-python:
     cd "$NEMO_RELAY_REPO_ROOT"
     uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
     activate_project_venv
-    if is_true "{{ ci }}"; then
+    if is_true "{{ ci }}" && rust_source_coverage_supported; then
         prepare_llvm_cov_workspace
     fi
     python_executable="$(project_python_executable)"
-    "$python_executable" -m maturin develop
+    if is_true "{{ ci }}"; then
+        cargo test -p nemo-relay-python --lib --no-run
+        "$python_executable" -m maturin develop --skip-install
+    else
+        "$python_executable" -m maturin develop
+    fi
+
+# Compile the CLI and worker integration test used by test-python-plugin-e2e.
+build-python-plugin-e2e:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    cargo build -p nemo-relay-cli
+    cargo test -p nemo-relay --features worker-grpc --test worker_plugin_integration --no-run
 
 build-python-plugin:
     #!/usr/bin/env bash
@@ -1110,12 +1131,29 @@ build-go:
 build-node:
     #!/usr/bin/env bash
     {{ bash_helpers }}
-    if is_true "{{ ci }}"; then
+    if is_true "{{ ci }}" && rust_source_coverage_supported; then
         prepare_llvm_cov_workspace
     fi
     cd "$NEMO_RELAY_REPO_ROOT"
     npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then
+        cargo test -p nemo-relay-node --lib --no-run
+        npm run build-debug --workspace=nemo-relay-node
+    else
+        npm run build --workspace=nemo-relay-node
+    fi
+
+# Install the full npm workspace and compile the Node module used by OpenClaw.
+build-openclaw:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    if is_true "{{ ci }}" && rust_source_coverage_supported; then
+        prepare_llvm_cov_workspace
+    fi
+    cd "$NEMO_RELAY_REPO_ROOT"
+    npm ci --ignore-scripts
+    if is_true "{{ ci }}"; then
+        cargo test -p nemo-relay-node --lib --no-run
         npm run build-debug --workspace=nemo-relay-node
     else
         npm run build --workspace=nemo-relay-node
@@ -1248,7 +1286,7 @@ test-rust:
         if rust_source_coverage_supported; then
             prepare_llvm_cov_workspace
         fi
-        prepare_test_plugin_fixtures
+        prepare_test_plugin_fixtures "{{ skip_build }}"
         cargo nextest run --locked --workspace --profile ci --no-fail-fast
         cp "$NEMO_RELAY_REPO_ROOT/target/nextest/ci/rust_junit_report.xml" "$junit_out"
         if rust_source_coverage_supported && ! is_true "${NEMO_RELAY_DEFER_RUST_COVERAGE:-}"; then
@@ -1258,7 +1296,7 @@ test-rust:
                 --output-path "$coverage_out"
         fi
     else
-        prepare_test_plugin_fixtures
+        prepare_test_plugin_fixtures "{{ skip_build }}"
         cargo test --workspace --exclude nemo-relay-ffi
         cargo test -p nemo-relay-ffi -- --test-threads=1
     fi
@@ -1307,8 +1345,10 @@ test-python:
         pytest_cmd+=(--ignore=python/tests/plugin)
     fi
     use_project_python_source "$python_executable"
-    "$python_executable" -m maturin develop --skip-install
-    prepare_test_plugin_fixtures
+    if ! is_true "{{ skip_build }}"; then
+        "$python_executable" -m maturin develop --skip-install
+    fi
+    prepare_test_plugin_fixtures "{{ skip_build }}"
     pytest_cmd+=(--durations=25)
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
@@ -1376,7 +1416,9 @@ test-python-plugin-e2e:
     trap cleanup EXIT
 
     uv build --wheel --out-dir "$tmp/wheels" python/plugin
-    cargo build -p nemo-relay-cli
+    if ! is_true "{{ skip_build }}"; then
+        cargo build -p nemo-relay-cli
+    fi
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
     # Explicit --config paths must exist; plugin state is written to sibling files.
@@ -1439,7 +1481,9 @@ test-python-langchain:
     export_uv_python_runtime
     python_executable="$(project_python_executable)"
     use_project_python_source "$python_executable"
-    "$python_executable" -m maturin develop --skip-install
+    if ! is_true "{{ skip_build }}"; then
+        "$python_executable" -m maturin develop --skip-install
+    fi
     "$python_executable" -m "${pytest_cmd[@]}" \
         python/tests/integrations/deepagents_tests \
         python/tests/integrations/langchain_tests \
@@ -1470,8 +1514,10 @@ test-go:
             ;;
     esac
     cd "$NEMO_RELAY_REPO_ROOT"
-    cargo build $flag -p nemo-relay-ffi
-    prepare_test_plugin_fixtures
+    if ! is_true "{{ skip_build }}"; then
+        cargo build $flag -p nemo-relay-ffi
+    fi
+    prepare_test_plugin_fixtures "{{ skip_build }}"
 
     if [[ "$is_windows" == true ]]; then
         export CC=clang
@@ -1543,7 +1589,11 @@ test-node:
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     if is_true "{{ ci }}"; then
-        npm run coverage --workspace=nemo-relay-node
+        if is_true "{{ skip_build }}"; then
+            npm run coverage --workspace=nemo-relay-node --ignore-scripts
+        else
+            npm run coverage --workspace=nemo-relay-node
+        fi
         cp crates/node/coverage/cobertura-coverage.xml "$coverage_out"
         cp crates/node/junit.xml "$junit_out"
         cd "$NEMO_RELAY_REPO_ROOT"
@@ -1563,10 +1613,10 @@ test-openclaw:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    if is_true "{{ ci }}"; then
+    if is_true "{{ ci }}" && ! is_true "{{ skip_build }}"; then
         npm ci --ignore-scripts
         npm run build-debug --workspace=nemo-relay-node
-    else
+    elif ! is_true "{{ ci }}"; then
         npm install --ignore-scripts
     fi
     npm run typecheck --workspace=nemo-relay-openclaw
@@ -1793,9 +1843,9 @@ package-openclaw:
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     fi
     npm install --workspace=nemo-relay-node --workspace=nemo-relay-openclaw --ignore-scripts
-    if is_true "{{ ci }}"; then
+    if is_true "{{ ci }}" && ! is_true "{{ skip_build }}"; then
         npm run build-debug --workspace=nemo-relay-node
-    else
+    elif ! is_true "{{ ci }}"; then
         npm run build --workspace=nemo-relay-node
     fi
     npm pack --workspace=nemo-relay-openclaw --pack-destination "$package_dir"
