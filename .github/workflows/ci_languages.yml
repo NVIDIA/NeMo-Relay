@@ -274,7 +274,9 @@ jobs:
           set -uo pipefail
           failed=false
           fixtures=success
+          language_native=skipped
           native=skipped
+          node_dependencies=skipped
           rust=skipped
           python=skipped
           python_plugin=skipped
@@ -299,25 +301,46 @@ jobs:
           if [[ "$RUN_PYTHON" == "true" ]]; then
             compile python just --set ci true build-python
           fi
-          # Python and Node request the same core feature graph. Keep their
-          # binding builds adjacent so Node can reuse Python's dependencies.
+
+          language_scopes=()
           if [[ "$RUN_NODE" == "true" ]]; then
             if [[ "$RUN_OPENCLAW" == "true" && "$PLATFORM" == "linux-amd64" ]]; then
-              compile node just --set ci true build-openclaw
-              openclaw="$node"
+              compile node_dependencies just prepare-node-test-dependencies true
+              language_scopes+=(openclaw)
             else
-              compile node just --set ci true build-node
+              compile node_dependencies just prepare-node-test-dependencies false
+              language_scopes+=(node)
             fi
           fi
           if [[ "$RUN_PYTHON" == "true" && ( "$PLATFORM" == "linux-amd64" || "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "windows-amd64" ) ]]; then
-            compile python_plugin just build-python-plugin-e2e
+            language_scopes+=(python-plugin)
+          fi
+          if [[ "$RUN_GO" == "true" ]]; then
+            language_scopes+=(go)
+          fi
+          if (( ${#language_scopes[@]} > 0 )); then
+            compile language_native just build-language-test-artifacts "${language_scopes[@]}"
+          fi
+          if [[ "$RUN_NODE" == "true" ]]; then
+            if [[ "$node_dependencies" == "success" && "$language_native" == "success" ]]; then
+              node=success
+            else
+              node=failure
+            fi
+            if [[ "$RUN_OPENCLAW" == "true" && "$PLATFORM" == "linux-amd64" ]]; then
+              openclaw="$node"
+            fi
+          fi
+          if [[ "$RUN_PYTHON" == "true" && ( "$PLATFORM" == "linux-amd64" || "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "windows-amd64" ) ]]; then
+            python_plugin="$language_native"
             [[ "$python_plugin" == "success" ]] || python=failure
           fi
           if [[ "$RUN_GO" == "true" ]]; then
-            compile go just --set ci true build-go
+            go="$language_native"
           fi
-          # Resolve every enabled Rust test owner into one Cargo graph. Keep this
-          # last so the language-specific native builds cannot invalidate it.
+
+          # Resolve every enabled Rust test owner into one Cargo graph after the
+          # normal language artifacts so test execution never triggers a build.
           native_scopes=()
           [[ "$RUN_RUST" != "true" ]] || native_scopes+=(rust)
           [[ "$RUN_PYTHON" != "true" ]] || native_scopes+=(python)

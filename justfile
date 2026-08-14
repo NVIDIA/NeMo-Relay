@@ -976,6 +976,49 @@ build_go_ffi_without_rust_coverage() (
     CARGO_TARGET_DIR="$NEMO_RELAY_REPO_ROOT/target/go-ffi" cargo build -p nemo-relay-ffi
 )
 
+stage_node_native_module() {
+    local source=""
+    local destination=""
+    local target_dir="${CARGO_TARGET_DIR:-$NEMO_RELAY_REPO_ROOT/target}"
+    local host=""
+
+    if [[ "$target_dir" != /* ]]; then
+        target_dir="$NEMO_RELAY_REPO_ROOT/$target_dir"
+    fi
+    host="$(rustc -vV | sed -n 's/^host: //p')"
+    case "$host" in
+        x86_64-pc-windows-msvc)
+            source="$target_dir/debug/nemo_relay_node.dll"
+            destination="nemo-relay.win32-x64-msvc.node"
+            ;;
+        aarch64-pc-windows-msvc)
+            source="$target_dir/debug/nemo_relay_node.dll"
+            destination="nemo-relay.win32-arm64-msvc.node"
+            ;;
+        aarch64-apple-darwin)
+            source="$target_dir/debug/libnemo_relay_node.dylib"
+            destination="nemo-relay.darwin-arm64.node"
+            ;;
+        aarch64-unknown-linux-gnu)
+            source="$target_dir/debug/libnemo_relay_node.so"
+            destination="nemo-relay.linux-arm64-gnu.node"
+            ;;
+        x86_64-unknown-linux-gnu)
+            source="$target_dir/debug/libnemo_relay_node.so"
+            destination="nemo-relay.linux-x64-gnu.node"
+            ;;
+        *)
+            echo "ERROR: unsupported Node test host: $host" >&2
+            exit 1
+            ;;
+    esac
+    if [[ ! -f "$source" ]]; then
+        echo "ERROR: missing compiled Node native module: $source" >&2
+        exit 1
+    fi
+    cp "$source" "$NEMO_RELAY_REPO_ROOT/crates/node/$destination"
+}
+
 configure_rust_test_args() {
     local rust=false
     local python=false
@@ -1116,6 +1159,52 @@ build-rust-tests +scopes:
     configure_rust_test_args "${scopes[@]}"
     cargo nextest run "${rust_test_args[@]}" --no-run
 
+# Compile the normal native artifacts needed by language tests in one Cargo graph.
+# Supported scopes: node, openclaw, go, python-plugin.
+build-language-test-artifacts +scopes:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    scope_list={{ quote(scopes) }}
+    read -r -a scopes <<< "$scope_list"
+    node=false
+    go=false
+    python_plugin=false
+    cargo_packages=()
+    for scope in "${scopes[@]}"; do
+        case "$scope" in
+            node|openclaw) node=true ;;
+            go) go=true ;;
+            python-plugin) python_plugin=true ;;
+            *)
+                echo "ERROR: unknown language test artifact scope '$scope'; expected node, openclaw, go, or python-plugin" >&2
+                exit 1
+                ;;
+        esac
+    done
+    if [[ "$node" == true ]]; then
+        cargo_packages+=(-p nemo-relay-node)
+    fi
+    if [[ "$python_plugin" == true ]]; then
+        cargo_packages+=(-p nemo-relay-cli)
+    fi
+    if [[ "$go" == true ]] && ! go_ffi_requires_uninstrumented_target; then
+        cargo_packages+=(-p nemo-relay-ffi)
+    fi
+    if (( ${#cargo_packages[@]} > 0 )); then
+        cargo build --locked "${cargo_packages[@]}"
+    fi
+    if [[ "$go" == true ]] && go_ffi_requires_uninstrumented_target; then
+        build_go_ffi_without_rust_coverage
+    fi
+    if [[ "$node" == true ]]; then
+        stage_node_native_module
+    fi
+    if [[ "$python_plugin" == true ]]; then
+        test -f "$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay" || \
+            test -f "$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay.exe"
+    fi
+
 # Run one owner's tests from a precompiled graph containing the supplied scopes.
 run-rust-tests run_scope *scopes:
     #!/usr/bin/env bash
@@ -1156,8 +1245,10 @@ build-python-plugin-e2e:
     #!/usr/bin/env bash
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
-    cargo build -p nemo-relay-cli
-    cargo test -p nemo-relay --features worker-grpc --test worker_plugin_integration --no-run
+    just build-language-test-artifacts python-plugin
+    scope_list="${NEMO_RELAY_RUST_TEST_SCOPES:-rust}"
+    read -r -a scopes <<< "$scope_list"
+    just build-rust-tests "${scopes[@]}"
 
 build-python-plugin:
     #!/usr/bin/env bash
@@ -1270,6 +1361,17 @@ build-node:
         npm run build-debug --workspace=nemo-relay-node
     else
         npm run build --workspace=nemo-relay-node
+    fi
+
+# Install Node dependencies without compiling the native module.
+prepare-node-test-dependencies openclaw="false":
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    if is_true {{ quote(openclaw) }}; then
+        npm ci --ignore-scripts
+    else
+        npm install --workspace=nemo-relay-node --ignore-scripts
     fi
 
 # Install the full npm workspace and compile the Node module used by OpenClaw.
@@ -1544,7 +1646,7 @@ test-python-plugin-e2e:
 
     uv build --wheel --out-dir "$tmp/wheels" python/plugin
     if ! is_true "{{ skip_build }}"; then
-        cargo build -p nemo-relay-cli
+        just build-python-plugin-e2e
     fi
     cli="$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay"
     config="$tmp/gateway.toml"
@@ -1587,11 +1689,15 @@ test-python-plugin-e2e:
         cat "$tmp/gateway.log"
         exit 1
     fi
+    scope_list="${NEMO_RELAY_RUST_TEST_SCOPES:-rust}"
+    read -r -a scopes <<< "$scope_list"
+    export_uv_python_runtime
+    configure_rust_test_args "${scopes[@]}"
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
-        cargo test -p nemo-relay --features worker-grpc \
-        --test worker_plugin_integration \
-        python_worker_host_runtime_mark_and_mutated_request_round_trip \
-        -- --nocapture
+        cargo nextest run "${rust_test_args[@]}" \
+        --no-fail-fast \
+        --no-capture \
+        -E 'test(python_worker_host_runtime_mark_and_mutated_request_round_trip)'
     kill "$gateway_pid" 2>/dev/null || true
     wait "$gateway_pid" 2>/dev/null || true
     gateway_pid=""

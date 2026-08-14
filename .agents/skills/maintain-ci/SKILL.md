@@ -69,6 +69,11 @@ reliability, or reproducibility.
   resolved into one Cargo selection; pass the same list to each run and select
   only the owning tests with `run-scope`. CI exports the enabled list through
   `NEMO_RELAY_RUST_TEST_SCOPES` so language recipes reuse the compiled graph.
+- Use `just build-language-test-artifacts <scope...>` to compile normal-profile
+  Node, Go FFI, and Python plugin CLI artifacts in one Cargo graph. The
+  supported scopes are `node`, `openclaw`, `go`, and `python-plugin`; the recipe
+  also stages the Node native module and preserves the isolated Windows Go FFI
+  target required during coverage runs.
 - `build-python-plugin-e2e` prepares the CLI and worker integration target;
   `build-openclaw` prepares the shared Node native module and OpenClaw workspace.
 
