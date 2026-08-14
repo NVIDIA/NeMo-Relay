@@ -139,33 +139,22 @@ jobs:
       base: ${{ needs.ci_changes.outputs.base }}
       default_branch: ${{ github.event.repository.default_branch }}
 
-  ci_rust:
-    name: Rust
+  ci_languages:
+    name: Languages
     needs: [prepare, ci_changes]
-    uses: ./.github/workflows/ci_rust.yml
-    if: ${{ needs.ci_changes.outputs.run_rust == 'true' }}
-    permissions:
-      contents: read
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-    with:
-      run_package: ${{ needs.ci_changes.outputs.run_rust_package == 'true' }}
-
-  ci_go:
-    name: Go
-    needs: [prepare, ci_changes]
-    uses: ./.github/workflows/ci_go.yml
-    if: ${{ needs.ci_changes.outputs.run_go == 'true' }}
-    permissions:
-      contents: read
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  ci_node:
-    name: Node.js
-    needs: [prepare, ci_changes]
-    uses: ./.github/workflows/ci_node.yml
-    if: ${{ needs.ci_changes.outputs.run_node == 'true' }}
+    uses: ./.github/workflows/ci_languages.yml
+    if: >-
+      ${{
+        needs.ci_changes.outputs.run_rust == 'true'
+        || needs.ci_changes.outputs.run_rust_package == 'true'
+        || needs.ci_changes.outputs.run_python == 'true'
+        || needs.ci_changes.outputs.run_python_package == 'true'
+        || needs.ci_changes.outputs.run_python_integration_langchain == 'true'
+        || needs.ci_changes.outputs.run_node == 'true'
+        || needs.ci_changes.outputs.run_node_package == 'true'
+        || needs.ci_changes.outputs.run_openclaw == 'true'
+        || needs.ci_changes.outputs.run_go == 'true'
+      }}
     permissions:
       contents: read
     secrets:
@@ -173,23 +162,15 @@ jobs:
     with:
       ref_type: ${{ github.ref_type }}
       ref_name: ${{ github.ref_name }}
-      run_package: ${{ needs.ci_changes.outputs.run_node_package == 'true' }}
+      run_rust: ${{ needs.ci_changes.outputs.run_rust == 'true' }}
+      run_rust_package: ${{ needs.ci_changes.outputs.run_rust_package == 'true' }}
+      run_python: ${{ needs.ci_changes.outputs.run_python == 'true' }}
+      run_python_package: ${{ needs.ci_changes.outputs.run_python_package == 'true' }}
+      run_python_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
+      run_node: ${{ needs.ci_changes.outputs.run_node == 'true' }}
+      run_node_package: ${{ needs.ci_changes.outputs.run_node_package == 'true' }}
       run_openclaw: ${{ needs.ci_changes.outputs.run_openclaw == 'true' }}
-
-  ci_python:
-    name: Python
-    needs: [prepare, ci_changes]
-    uses: ./.github/workflows/ci_python.yml
-    if: ${{ needs.ci_changes.outputs.run_python == 'true' || needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
-    permissions:
-      contents: read
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-    with:
-      ref_type: ${{ github.ref_type }}
-      ref_name: ${{ github.ref_name }}
-      run_package: ${{ needs.ci_changes.outputs.run_python_package == 'true' }}
-      run_integration_langchain: ${{ needs.ci_changes.outputs.run_python_integration_langchain == 'true' }}
+      run_go: ${{ needs.ci_changes.outputs.run_go == 'true' }}
 
   ci_required:
     name: CI Pipeline
@@ -197,10 +178,7 @@ jobs:
       - prepare
       - ci_changes
       - ci_check
-      - ci_rust
-      - ci_go
-      - ci_node
-      - ci_python
+      - ci_languages
     if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
     runs-on: ubuntu-latest
     permissions:
@@ -210,10 +188,7 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.ci_changes.result }}
           CHECK_RESULT: ${{ needs.ci_check.result }}
-          RUST_RESULT: ${{ needs.ci_rust.result }}
-          GO_RESULT: ${{ needs.ci_go.result }}
-          NODE_RESULT: ${{ needs.ci_node.result }}
-          PYTHON_RESULT: ${{ needs.ci_python.result }}
+          LANGUAGES_RESULT: ${{ needs.ci_languages.result }}
           publish_packages: ${{ needs.prepare.outputs.publish_packages }}
         run: |
           set -euo pipefail
@@ -241,16 +216,10 @@ jobs:
           require_success "Check" "$CHECK_RESULT"
 
           if [[ "$publish_packages" == "true" ]]; then
-            require_success "Rust" "$RUST_RESULT"
-            require_success "Node.js" "$NODE_RESULT"
-            require_success "Python" "$PYTHON_RESULT"
+            require_success "Languages" "$LANGUAGES_RESULT"
           else
-            allow_success_or_skipped "Rust" "$RUST_RESULT"
-            allow_success_or_skipped "Node.js" "$NODE_RESULT"
-            allow_success_or_skipped "Python" "$PYTHON_RESULT"
+            allow_success_or_skipped "Languages" "$LANGUAGES_RESULT"
           fi
-
-          allow_success_or_skipped "Go" "$GO_RESULT"
 
           if [[ "$failed" == "true" ]]; then
             exit 1

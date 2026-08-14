@@ -52,7 +52,7 @@ consumed outside the source tree.
 - `package-lock.json`
 - `crates/node/package.json`
 - `RELEASING.md`
-- `.github/workflows/ci_python.yml`
+- `.github/workflows/ci_languages.yml`
 - `.github/workflows/ci.yaml`
 - `.gitlab-ci.yml`
 - `maintain-dynamic-plugins`

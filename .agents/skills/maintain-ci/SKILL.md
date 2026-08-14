@@ -79,7 +79,7 @@ Start with the narrowest useful checks:
 
 ```bash
 ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |f| YAML.load_file(f) }; puts "yaml-ok"'
-uv run pre-commit run --files .github/workflows/ci.yaml .github/workflows/ci_python.yml
+uv run pre-commit run --files .github/workflows/ci.yaml .github/workflows/ci_languages.yml
 ```
 
 Use ripgrep to inspect the workflow graph before editing:
@@ -95,7 +95,7 @@ source instead of assuming local success proves remote success.
 ## Canonical References
 
 - `.github/workflows/ci.yaml`
-- `.github/workflows/ci_python.yml`
+- `.github/workflows/ci_languages.yml`
 - `RELEASING.md`
 - `.pre-commit-config.yaml`
 - `maintain-packaging`
