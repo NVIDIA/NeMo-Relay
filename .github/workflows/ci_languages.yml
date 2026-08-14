@@ -588,7 +588,11 @@ jobs:
           report "$RUN_RUST" "Rust compilation" "$RUST_COMPILE" success
           report "$RUN_PYTHON" "Python compilation" "$PYTHON_COMPILE" success
           report "$RUN_NODE" "Node.js compilation" "$NODE_COMPILE" success
-          report "$RUN_OPENCLAW" "OpenClaw compilation" "$OPENCLAW_COMPILE" success
+          if [[ "$PLATFORM" == "linux-amd64" ]]; then
+            report "$RUN_OPENCLAW" "OpenClaw compilation" "$OPENCLAW_COMPILE" success
+          else
+            report "$RUN_OPENCLAW" "OpenClaw compilation" "$OPENCLAW_COMPILE" skipped
+          fi
           report "$RUN_GO" "Go compilation" "$GO_COMPILE" success
           report "$RUN_RUST" "Rust tests" "$RUST_TEST" success
           report "$RUN_PYTHON" "Python tests" "$PYTHON_TEST" success
