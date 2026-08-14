@@ -1001,7 +1001,7 @@ configure_rust_test_args() {
     # Explicit target selectors include binding cdylibs whose manifests disable
     # the implicit lib test target while retaining normal lib, bin, and
     # integration-test coverage for the rest of the selected workspace.
-    rust_test_args=(--locked --profile ci --cargo-profile dev --lib --bins --tests)
+    rust_test_args=(--locked --profile ci --lib --bins --tests)
     if [[ "$all" == true ]]; then
         rust_test_args+=(--workspace)
     elif [[ "$rust" == true ]]; then
@@ -1157,7 +1157,7 @@ build-python-plugin-e2e:
     {{ bash_helpers }}
     cd "$NEMO_RELAY_REPO_ROOT"
     cargo build -p nemo-relay-cli
-    cargo test --profile dev -p nemo-relay --features worker-grpc --test worker_plugin_integration --no-run
+    cargo test -p nemo-relay --features worker-grpc --test worker_plugin_integration --no-run
 
 build-python-plugin:
     #!/usr/bin/env bash
@@ -1588,7 +1588,7 @@ test-python-plugin-e2e:
         exit 1
     fi
     NEMO_RELAY_PYTHON_PLUGIN_TEST_ENVIRONMENT="$environment_ref" \
-        cargo test --profile dev -p nemo-relay --features worker-grpc \
+        cargo test -p nemo-relay --features worker-grpc \
         --test worker_plugin_integration \
         python_worker_host_runtime_mark_and_mutated_request_round_trip \
         -- --nocapture
