@@ -13,7 +13,7 @@ and emit marks or manage scope stacks through host-runtime RPCs.
 
 Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Tool callbacks
 and `ToolNext` continuations preserve an application `result` and optional opaque
-`annotation`; an execution intercept adds only Relay-owned pending marks. Rebuild every
+`annotation`; an execution intercept can add Relay-owned pending marks. Rebuild every
 SDK worker, regenerate custom protobuf bindings, and declare `compat.relay` beginning at
 `0.8.0`. The protocol remains named `grpc-v1`; this is a changed tool-result contract,
 not a new protocol family.
@@ -73,7 +73,7 @@ class ExamplePythonWorker(WorkerPlugin):
             )
         self._register_runtime(context, settings["tag"], settings["runtime"])
         if settings["execution"]["enabled"]:
-            self._register_execution(context, settings["execution"])
+            self._register_execution(context, settings["tag"], settings["execution"])
 
 async def main():
     await serve_plugin(ExamplePythonWorker())

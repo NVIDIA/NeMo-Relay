@@ -87,10 +87,10 @@ class ExamplePythonWorker(WorkerPlugin):
                 settings["tag"],
                 settings["requests"],
                 settings["execution"],
-                settings["runtime"],
             )
+        self._register_runtime(ctx, settings["tag"], settings["runtime"])
         if settings["execution"]["enabled"]:
-            self._register_execution(ctx, settings["execution"])
+            self._register_execution(ctx, settings["tag"], settings["execution"])
 
 async def main():
     await serve_plugin(ExamplePythonWorker())

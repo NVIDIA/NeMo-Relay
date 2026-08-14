@@ -220,9 +220,11 @@ times, including concurrently when the SDK type permits cloning. Each call can r
 side effects, provider charges, events, and downstream middleware.
 
 `ToolNext` returns `ToolExecutionResult`, not a raw JSON value. Forwarding middleware
-must carry both `downstream.result` and `downstream.annotation` into its outcome. A
-repeated tool continuation returns another independent structured result; it still does
-not expose downstream pending marks.
+must preserve both `downstream.result` and `downstream.annotation` in its outcome. The
+Python example keeps the downstream annotation under `upstream` while adding its own
+worker metadata; the Rust example forwards it unchanged. A repeated tool continuation
+returns another independent structured result; it still does not expose downstream
+pending marks.
 
 The example uses one ordinary wrapper and one explicitly requested concurrent path. It
 does not retry implicitly. Tool pending marks remain in the tool execution outcome;
@@ -240,17 +242,24 @@ does not prove that external blocking work has stopped.
 ```python
 priority = execution["priority"]
 emit_pending_marks = execution["emit_pending_marks"]
+tag = settings["tag"]
 
-async def tool_execution(_name, args, next_call):
+async def tool_execution(name, args, next_call):
     downstream = await next_call.call(args)
     marks = (
-        [PendingMarkSpec(name="example.python_worker.tool_execution")]
+        [PendingMarkSpec(
+            name="example.python_worker.tool_execution",
+            data={"tool_name": name, "tag": tag},
+        )]
         if emit_pending_marks
         else []
     )
     return ToolExecutionInterceptOutcome(
         result=downstream.result,
-        annotation=downstream.annotation,
+        annotation={
+            "upstream": downstream.annotation,
+            "worker": {"tool_name": name, "tag": tag},
+        },
         pending_marks=marks,
     )
 

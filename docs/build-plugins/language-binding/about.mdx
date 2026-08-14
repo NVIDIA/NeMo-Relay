@@ -29,6 +29,7 @@ component-local JSON, installs component-owned middleware, the host activates a
 <Tab title="Python" language="python">
 ```python
 import asyncio
+import nemo_relay
 from nemo_relay import plugin, tools
 
 class AddTagPlugin:
@@ -65,8 +66,12 @@ async def main():
     try:
         report = await plugin.initialize(config)
         print("activation:", report)
-        result = await tools.execute("lookup", {"id": 7}, lambda request: request)
-        assert result == {"id": 7, "plugin_tag": "documentation"}
+        result = await tools.execute(
+            "lookup",
+            {"id": 7},
+            lambda request: nemo_relay.ToolExecutionResult(request),
+        )
+        assert result.result == {"id": 7, "plugin_tag": "documentation"}
     finally:
         await plugin.clear_async()
         plugin.deregister("example.add-tag")
@@ -113,8 +118,10 @@ const config = {
 try {
   const report = await plugin.initialize(config);
   console.log('activation:', report);
-  const result = await relay.toolCallExecute('lookup', { id: 7 }, (request) => request);
-  if (result.plugin_tag !== 'documentation') throw new Error('plugin did not rewrite the request');
+  const result = await relay.toolCallExecute('lookup', { id: 7 }, (request) => ({ result: request }));
+  if (result.result.plugin_tag !== 'documentation') {
+    throw new Error('plugin did not rewrite the request');
+  }
 } finally {
   await relay.flushSubscribers();
   plugin.clear();
@@ -128,7 +135,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
     PluginRegistrationContext, Result as PluginResult, clear_plugin_configuration,
@@ -197,11 +204,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ToolCallExecuteParams::builder()
                 .name("lookup")
                 .args(json!({ "id": 7 }))
-                .func(Arc::new(|request| Box::pin(async move { Ok(request) })))
+                .func(Arc::new(|request| {
+                    Box::pin(async move { Ok(ToolExecutionResult::new(request)) })
+                }))
                 .build(),
         )
         .await?;
-        assert_eq!(result["plugin_tag"], "documentation");
+        assert_eq!(result.result["plugin_tag"], "documentation");
         Ok::<_, Box<dyn std::error::Error>>(())
     }
     .await;

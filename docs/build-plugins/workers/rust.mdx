@@ -158,9 +158,7 @@ impl WorkerPlugin for DocumentationWorker {
         if settings.requests.enabled {
             register_requests(context, &settings);
         }
-        if settings.execution.enabled {
-            register_execution(context, &settings);
-        }
+        register_execution(context, &settings);
         Ok(())
     }
 }

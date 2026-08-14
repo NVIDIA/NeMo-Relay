@@ -12,8 +12,8 @@ invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
 scopes, isolated stacks, and cancelled tasks.
 
 The worker targets the Relay 0.8 `grpc-v1` result contract. Its tool continuation returns
-`ToolExecutionResult`, and its execution intercept forwards both the application result
-and optional annotation before adding Relay-owned pending marks.
+`ToolExecutionResult`. Its execution intercept preserves the application result, carries
+the upstream annotation under worker metadata, and adds Relay-owned pending marks.
 
 Run the example's own test project from this directory:
 

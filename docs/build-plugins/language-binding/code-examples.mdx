@@ -1,6 +1,6 @@
 ---
 title: "Runnable Examples"
-description: "Run equivalent Rust, Python, and Node.js language-binding plugin hosts."
+description: "Run equivalent Python, Node.js, and Rust language-binding plugin hosts."
 position: 9
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -15,25 +15,6 @@ deliberately narrower: each test creates or directly captures only the plugin st
 needs, asserts one behavior, and cleans up its registrations. You can therefore run any
 test by name without relying on test order or on another example having prepared files,
 configuration, or process state.
-
-## Rust Host
-
-Run and inspect the Rust host as follows:
-
-1. Run the Rust example and its lifecycle test.
-
-   ```bash
-   cd rust
-   cargo test --locked
-   cargo run --locked
-   ```
-
-2. Read the printed invalid report, active report, canonical allowed-tool result, rewritten LLM
-   headers, streamed chunks, and teardown confirmation.
-
-Success means the invalid configuration reports `documentation-plugin.unsupported_mode`,
-the valid report is active, representative tool, LLM, stream, and event paths carry the
-documentation behavior, and the final kind list no longer contains the example.
 
 ## Python Host
 
@@ -74,6 +55,25 @@ Run and inspect the Node.js host as follows:
    callbacks receive an array of downstream chunks rather than a lazy downstream stream.
    Before it clears the component, it awaits `relay.flushSubscribers()` so queued scope-end
    sanitizers finish before their callbacks are deregistered.
+
+## Rust Host
+
+Run and inspect the Rust host as follows:
+
+1. Run the Rust example and its lifecycle test.
+
+   ```bash
+   cd rust
+   cargo test --locked
+   cargo run --locked
+   ```
+
+2. Read the printed invalid report, active report, canonical allowed-tool result, rewritten LLM
+   headers, streamed chunks, and teardown confirmation.
+
+Success means the invalid configuration reports `documentation-plugin.unsupported_mode`,
+the valid report is active, representative tool, LLM, stream, and event paths carry the
+documentation behavior, and the final kind list no longer contains the example.
 
 ## Compare the Host Output
 
