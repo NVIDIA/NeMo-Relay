@@ -976,49 +976,6 @@ build_go_ffi_without_rust_coverage() (
     CARGO_TARGET_DIR="$NEMO_RELAY_REPO_ROOT/target/go-ffi" cargo build -p nemo-relay-ffi
 )
 
-stage_node_native_module() {
-    local source=""
-    local destination=""
-    local target_dir="${CARGO_TARGET_DIR:-$NEMO_RELAY_REPO_ROOT/target}"
-    local host=""
-
-    if [[ "$target_dir" != /* ]]; then
-        target_dir="$NEMO_RELAY_REPO_ROOT/$target_dir"
-    fi
-    host="$(rustc -vV | sed -n 's/^host: //p')"
-    case "$host" in
-        x86_64-pc-windows-msvc)
-            source="$target_dir/debug/nemo_relay_node.dll"
-            destination="nemo-relay.win32-x64-msvc.node"
-            ;;
-        aarch64-pc-windows-msvc)
-            source="$target_dir/debug/nemo_relay_node.dll"
-            destination="nemo-relay.win32-arm64-msvc.node"
-            ;;
-        aarch64-apple-darwin)
-            source="$target_dir/debug/libnemo_relay_node.dylib"
-            destination="nemo-relay.darwin-arm64.node"
-            ;;
-        aarch64-unknown-linux-gnu)
-            source="$target_dir/debug/libnemo_relay_node.so"
-            destination="nemo-relay.linux-arm64-gnu.node"
-            ;;
-        x86_64-unknown-linux-gnu)
-            source="$target_dir/debug/libnemo_relay_node.so"
-            destination="nemo-relay.linux-x64-gnu.node"
-            ;;
-        *)
-            echo "ERROR: unsupported Node test host: $host" >&2
-            exit 1
-            ;;
-    esac
-    if [[ ! -f "$source" ]]; then
-        echo "ERROR: missing compiled Node native module: $source" >&2
-        exit 1
-    fi
-    cp "$source" "$NEMO_RELAY_REPO_ROOT/crates/node/$destination"
-}
-
 configure_rust_test_args() {
     local rust=false
     local python=false
@@ -1198,7 +1155,10 @@ build-language-test-artifacts +scopes:
         build_go_ffi_without_rust_coverage
     fi
     if [[ "$node" == true ]]; then
-        stage_node_native_module
+        # NAPI generates the platform loader and declarations in addition to
+        # staging the native module. The shared build above leaves only the
+        # binding crate itself to relink here.
+        npm run build-debug --workspace=nemo-relay-node
     fi
     if [[ "$python_plugin" == true ]]; then
         test -f "$NEMO_RELAY_REPO_ROOT/target/debug/nemo-relay" || \
