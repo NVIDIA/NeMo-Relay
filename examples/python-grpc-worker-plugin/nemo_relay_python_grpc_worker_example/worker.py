@@ -89,7 +89,7 @@ class ExamplePythonWorker(WorkerPlugin):
             self._register_requests(ctx, tag, requests, execution)
         self._register_runtime(ctx, tag, runtime_settings)
         if execution["enabled"]:
-            self._register_execution(ctx, execution)
+            self._register_execution(ctx, tag, execution)
 
     @staticmethod
     def _register_observation(ctx: PluginContext, tag: str, observe: dict[str, Json]) -> None:
@@ -246,16 +246,28 @@ class ExamplePythonWorker(WorkerPlugin):
         ctx.register_tool_execution_intercept("documentation_runtime_events", runtime_events, priority=0)
 
     @staticmethod
-    def _register_execution(ctx: PluginContext, execution: dict[str, Json]) -> None:
+    def _register_execution(ctx: PluginContext, tag: str, execution: dict[str, Json]) -> None:
         priority = cast(int, execution["priority"])
         emit_pending_marks = cast(bool, execution["emit_pending_marks"])
 
-        async def tool_execution(_name: str, args: Json, next_call: Any) -> ToolExecutionInterceptOutcome:
+        async def tool_execution(name: str, args: Json, next_call: Any) -> ToolExecutionInterceptOutcome:
             result: ToolExecutionResult = await next_call.call(args)
-            marks = [PendingMarkSpec(name="example.python_worker.tool_execution")] if emit_pending_marks else []
+            marks = (
+                [
+                    PendingMarkSpec(
+                        name="example.python_worker.tool_execution",
+                        data={"tool_name": name, "tag": tag},
+                    )
+                ]
+                if emit_pending_marks
+                else []
+            )
             return ToolExecutionInterceptOutcome(
                 result=result.result,
-                annotation=result.annotation,
+                annotation={
+                    "upstream": result.annotation,
+                    "worker": {"tool_name": name, "tag": tag},
+                },
                 pending_marks=marks,
             )
 

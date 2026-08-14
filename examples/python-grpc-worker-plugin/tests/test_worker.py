@@ -381,7 +381,10 @@ async def test_tool_execution_returns_pending_mark(example: Any) -> None:
     outcome = await intercept("safe_tool", {"value": 1}, next_call)
 
     assert outcome.result == {"ok": True}
-    assert outcome.annotation == {"source": "application"}
+    assert outcome.annotation == {
+        "upstream": {"source": "application"},
+        "worker": {"tool_name": "safe_tool", "tag": "documentation"},
+    }
     assert len(outcome.pending_marks) == 1
 
 
