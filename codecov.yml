@@ -4,15 +4,8 @@
 codecov:
   require_ci_to_pass: true
   notify:
-    # Codecov counts one build per upload step in a full CI run:
-    # | Binding     | Platforms that upload coverage                                      | Uploads |
-    # |-------------|----------------------------------------------------------------------|---------|
-    # | Rust        | linux-amd64, linux-arm64, macos-arm64, windows-amd64                 | 4       |
-    # | Python      | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
-    # | Go          | linux-amd64, linux-arm64, macos-arm64, windows-amd64, windows-arm64  | 5       |
-    # | Node.js     | linux-amd64, linux-arm64, macos-arm64                                | 3       |
-    # | Total       |                                                                      | 17      |
-    after_n_builds: 17
+    # Full CI uploads one combined coverage build from each native test platform.
+    after_n_builds: 5
     wait_for_ci: true
 
 coverage:
@@ -121,7 +114,7 @@ component_management:
           if_ci_failed: error
 
 comment:
-  after_n_builds: 17
+  after_n_builds: 5
   layout: "header, diff, components, files, footer"
   behavior: default
   require_changes: false

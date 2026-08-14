@@ -250,19 +250,6 @@ jobs:
           fi
           just "${args[@]}" test-rust
 
-      - name: Upload Rust coverage to Codecov
-        id: rust-coverage
-        if: ${{ always() && inputs.run_rust && steps.rust-test.outcome == 'success' && matrix.platform != 'windows-arm64' }}
-        continue-on-error: true
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          disable_search: true
-          files: rust-workspace.xml
-          flags: rust-${{ matrix.platform }}
-          name: rust-${{ matrix.platform }}
-          verbose: true
-
       - name: Run Python tests with coverage
         id: python-test
         if: ${{ always() && (inputs.run_python || inputs.run_python_integration_langchain) }}
@@ -289,19 +276,6 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-python-langchain
 
-      - name: Upload Python coverage to Codecov
-        id: python-coverage
-        if: ${{ always() && (inputs.run_python || inputs.run_python_integration_langchain) && steps.python-test.outcome == 'success' }}
-        continue-on-error: true
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          disable_search: true
-          files: ${{ matrix.platform == 'windows-arm64' && 'python-coverage.xml' || 'python-coverage.xml,python-rust.xml' }}
-          flags: python-${{ matrix.platform }}
-          name: python-${{ matrix.platform }}
-          verbose: true
-
       - name: Prune uv cache
         id: uv-prune
         if: ${{ always() && (inputs.run_python || inputs.run_python_integration_langchain) }}
@@ -323,19 +297,6 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true test-openclaw
 
-      - name: Upload Node coverage to Codecov
-        id: node-coverage
-        if: ${{ always() && (inputs.run_node || inputs.run_openclaw) && steps.node-test.outcome == 'success' && !startsWith(matrix.platform, 'windows') }}
-        continue-on-error: true
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          disable_search: true
-          files: node-coverage.xml,node-rust.xml
-          flags: node-${{ matrix.platform }}
-          name: node-${{ matrix.platform }}
-          verbose: true
-
       - name: Run Go tests with coverage
         id: go-test
         if: ${{ always() && inputs.run_go }}
@@ -343,17 +304,65 @@ jobs:
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just --set ci true --set output_dir "${{ github.workspace }}" test-go
 
-      - name: Upload Go coverage to Codecov
-        id: go-coverage
-        if: ${{ always() && inputs.run_go && steps.go-test.outcome == 'success' }}
+      - name: Collect coverage reports
+        id: coverage-files
+        if: ${{ always() }}
+        continue-on-error: true
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          RUST_TEST: ${{ steps.rust-test.outcome }}
+          PYTHON_TEST: ${{ steps.python-test.outcome }}
+          NODE_TEST: ${{ steps.node-test.outcome }}
+          GO_TEST: ${{ steps.go-test.outcome }}
+        run: |
+          set -euo pipefail
+          files=()
+          add_report() {
+            local report="$1"
+            if [[ ! -f "$report" ]]; then
+              echo "Error: expected coverage report not found: $report" >&2
+              exit 1
+            fi
+            files+=("$report")
+          }
+
+          if [[ "$RUST_TEST" == "success" && "$PLATFORM" != "windows-arm64" ]]; then
+            add_report rust-workspace.xml
+          fi
+          if [[ "$PYTHON_TEST" == "success" ]]; then
+            add_report python-coverage.xml
+            if [[ "$PLATFORM" != "windows-arm64" ]]; then
+              add_report python-rust.xml
+            fi
+          fi
+          if [[ "$NODE_TEST" == "success" && "$PLATFORM" != windows-* ]]; then
+            add_report node-coverage.xml
+            add_report node-rust.xml
+          fi
+          if [[ "$GO_TEST" == "success" ]]; then
+            add_report go-coverage.xml
+          fi
+
+          if (( ${#files[@]} == 0 )); then
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf -v file_list '%s,' "${files[@]}"
+          echo "files=${file_list%,}" >> "$GITHUB_OUTPUT"
+          echo "has_files=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload coverage to Codecov
+        id: coverage
+        if: ${{ always() && steps.coverage-files.outcome == 'success' && steps.coverage-files.outputs.has_files == 'true' }}
         continue-on-error: true
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           disable_search: true
-          files: go-coverage.xml
-          flags: go-${{ matrix.platform }}
-          name: go-${{ matrix.platform }}
+          files: ${{ steps.coverage-files.outputs.files }}
+          flags: platform-${{ matrix.platform }}
+          name: platform-${{ matrix.platform }}
           verbose: true
 
       - name: Report test results
@@ -371,22 +380,21 @@ jobs:
           TOOLS_SETUP: ${{ steps.tools-setup.outcome }}
           RUN_RUST: ${{ inputs.run_rust }}
           RUST_TEST: ${{ steps.rust-test.outcome }}
-          RUST_COVERAGE: ${{ steps.rust-coverage.outcome }}
           RUN_PYTHON: ${{ inputs.run_python || inputs.run_python_integration_langchain }}
           RUN_PYTHON_INTEGRATION: ${{ inputs.run_python_integration_langchain }}
           PYTHON_TEST: ${{ steps.python-test.outcome }}
           PYTHON_PLUGIN_TEST: ${{ steps.python-plugin-test.outcome }}
           PYTHON_INTEGRATION_TEST: ${{ steps.python-integration-test.outcome }}
-          PYTHON_COVERAGE: ${{ steps.python-coverage.outcome }}
           UV_PRUNE: ${{ steps.uv-prune.outcome }}
           RUN_NODE: ${{ inputs.run_node || inputs.run_openclaw }}
           RUN_OPENCLAW: ${{ inputs.run_openclaw }}
           NODE_TEST: ${{ steps.node-test.outcome }}
           OPENCLAW_TEST: ${{ steps.openclaw-test.outcome }}
-          NODE_COVERAGE: ${{ steps.node-coverage.outcome }}
           RUN_GO: ${{ inputs.run_go }}
           GO_TEST: ${{ steps.go-test.outcome }}
-          GO_COVERAGE: ${{ steps.go-coverage.outcome }}
+          COVERAGE_FILES: ${{ steps.coverage-files.outcome }}
+          HAS_COVERAGE_FILES: ${{ steps.coverage-files.outputs.has_files }}
+          COVERAGE: ${{ steps.coverage.outcome }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -euo pipefail
@@ -426,11 +434,6 @@ jobs:
           report "$RUN_NODE" "Node.js setup" "$NODE_SETUP" success
           report "$RUN_GO" "Go setup" "$GO_SETUP" success
           report "$RUN_RUST" "Rust tests" "$RUST_TEST" success
-          if [[ "$PLATFORM" == "windows-arm64" ]]; then
-            report "$RUN_RUST" "Rust coverage" "$RUST_COVERAGE" skipped
-          else
-            report "$RUN_RUST" "Rust coverage" "$RUST_COVERAGE" success
-          fi
           report "$RUN_PYTHON" "Python tests" "$PYTHON_TEST" success
           if [[ "$PLATFORM" == "linux-amd64" || "$PLATFORM" == "macos-arm64" || "$PLATFORM" == "windows-amd64" ]]; then
             report "$RUN_PYTHON" "Python plugin end-to-end test" "$PYTHON_PLUGIN_TEST" success
@@ -438,19 +441,14 @@ jobs:
           if [[ "$PLATFORM" != "windows-arm64" ]]; then
             report "$RUN_PYTHON_INTEGRATION" "Python integration tests" "$PYTHON_INTEGRATION_TEST" success
           fi
-          report "$RUN_PYTHON" "Python coverage" "$PYTHON_COVERAGE" success
           report "$RUN_PYTHON" "uv cache prune" "$UV_PRUNE" success
           report "$RUN_NODE" "Node.js tests" "$NODE_TEST" success
           if [[ "$PLATFORM" == "linux-amd64" ]]; then
             report "$RUN_OPENCLAW" "OpenClaw tests" "$OPENCLAW_TEST" success
           fi
-          if [[ "$PLATFORM" == windows-* ]]; then
-            report "$RUN_NODE" "Node.js coverage" "$NODE_COVERAGE" skipped
-          else
-            report "$RUN_NODE" "Node.js coverage" "$NODE_COVERAGE" success
-          fi
           report "$RUN_GO" "Go tests" "$GO_TEST" success
-          report "$RUN_GO" "Go coverage" "$GO_COVERAGE" success
+          report true "Collect coverage reports" "$COVERAGE_FILES" success
+          report "$HAS_COVERAGE_FILES" "Codecov upload" "$COVERAGE" success
 
           if [[ "$failed" == "true" ]]; then
             exit 1
