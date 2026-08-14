@@ -170,7 +170,16 @@ pub fn resolve_http_trace_endpoint(endpoint: &str) -> Cow<'_, str> {
         return Cow::Borrowed(endpoint);
     };
 
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.path() != "/" {
+    // A trailing slash deliberately selects the collector root. A bare authority
+    // is the only form that receives the conventional OTLP trace path.
+    let has_explicit_root_path = endpoint
+        .split(['?', '#'])
+        .next()
+        .is_some_and(|url| url.ends_with('/'));
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.path() != "/"
+        || has_explicit_root_path
+    {
         return Cow::Borrowed(endpoint);
     }
     parsed.set_path("/v1/traces");

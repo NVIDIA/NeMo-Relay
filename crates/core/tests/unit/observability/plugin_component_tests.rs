@@ -3376,7 +3376,13 @@ fn opentelemetry_rejects_canonical_equivalent_destinations() {
 
 #[test]
 fn opentelemetry_allows_distinct_canonical_destinations() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     for (first, second) in [
+        ("http://collector.example", "http://collector.example/"),
+        (
+            "http://collector.example/",
+            "http://collector.example/v1/traces",
+        ),
         (
             "http://collector.example:4318/v1/traces",
             "http://collector.example:4319/v1/traces",

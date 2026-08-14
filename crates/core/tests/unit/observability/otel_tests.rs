@@ -771,17 +771,21 @@ fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
 }
 
 #[test]
-fn http_trace_endpoint_resolution_completes_only_bare_http_urls() {
+fn http_trace_endpoint_resolution_preserves_an_explicit_root_path() {
     for (endpoint, expected) in [
         ("http://localhost:4318", "http://localhost:4318/v1/traces"),
-        ("http://localhost:4318/", "http://localhost:4318/v1/traces"),
+        ("http://localhost:4318/", "http://localhost:4318/"),
         (
             "https://collector.example?tenant=one",
             "https://collector.example/v1/traces?tenant=one",
         ),
         (
             "https://collector.example/?tenant=one",
-            "https://collector.example/v1/traces?tenant=one",
+            "https://collector.example/?tenant=one",
+        ),
+        (
+            "https://collector.example/#root",
+            "https://collector.example/#root",
         ),
         (
             "http://localhost:4318/v1/traces",
