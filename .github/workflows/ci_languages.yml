@@ -68,7 +68,6 @@ defaults:
     shell: bash
 
 env:
-  GH_TOKEN: "${{ github.token }}"
   GIT_COMMIT: "${{ github.sha }}"
   NEMO_RELAY_CI_WORKSPACE: "${{ github.workspace }}"
   NEMO_RELAY_CI_WORKSPACE_TMP: "${{ github.workspace }}/tmp"
@@ -153,6 +152,8 @@ jobs:
         id: checkout
         continue-on-error: true
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -1151,6 +1152,8 @@ jobs:
         id: checkout
         continue-on-error: true
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
 
       - name: Load CI tool versions
         id: ci-config
@@ -1234,7 +1237,7 @@ jobs:
 
       - name: Package Python wheel
         id: python-package
-        if: ${{ always() && inputs.run_python_package && !contains(matrix.platform, 'musl') }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && !contains(matrix.platform, 'musl') }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -1246,7 +1249,7 @@ jobs:
 
       - name: Upload Python wheel artifact
         id: python-upload
-        if: ${{ always() && inputs.run_python_package && !contains(matrix.platform, 'musl') && steps.python-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && !contains(matrix.platform, 'musl') && steps.python-package.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1256,7 +1259,7 @@ jobs:
 
       - name: Package Python source distribution
         id: python-sdist-package
-        if: ${{ always() && inputs.run_python_package && matrix.platform == 'linux-amd64' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && matrix.platform == 'linux-amd64' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -1268,7 +1271,7 @@ jobs:
 
       - name: Upload Python source distribution artifact
         id: python-sdist-upload
-        if: ${{ always() && inputs.run_python_package && matrix.platform == 'linux-amd64' && steps.python-sdist-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && matrix.platform == 'linux-amd64' && steps.python-sdist-package.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1278,7 +1281,7 @@ jobs:
 
       - name: Package Python plugin SDK wheel
         id: python-plugin-package
-        if: ${{ always() && inputs.run_python_package && matrix.platform == 'linux-amd64' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && matrix.platform == 'linux-amd64' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -1290,7 +1293,7 @@ jobs:
 
       - name: Upload Python plugin SDK wheel artifact
         id: python-plugin-upload
-        if: ${{ always() && inputs.run_python_package && matrix.platform == 'linux-amd64' && steps.python-plugin-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && matrix.platform == 'linux-amd64' && steps.python-plugin-package.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1300,7 +1303,7 @@ jobs:
 
       - name: Derive Maturin version
         id: maturin-version
-        if: ${{ always() && inputs.run_python_package && contains(matrix.platform, 'musl') }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1320,7 +1323,7 @@ jobs:
 
       - name: Stage musllinux Python packaging source
         id: python-musl-stage
-        if: ${{ always() && inputs.run_python_package && contains(matrix.platform, 'musl') }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -1335,6 +1338,7 @@ jobs:
         if: >-
           ${{
             always()
+            && steps.package-version.outcome == 'success'
             && inputs.run_python_package
             && contains(matrix.platform, 'musl')
             && steps.maturin-version.outcome == 'success'
@@ -1356,7 +1360,7 @@ jobs:
 
       - name: Verify musllinux Python wheel platform tag
         id: python-musl-verify
-        if: ${{ always() && inputs.run_python_package && contains(matrix.platform, 'musl') && steps.python-musl-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') && steps.python-musl-package.outcome == 'success' }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1369,7 +1373,7 @@ jobs:
 
       - name: Upload musllinux Python wheel artifact
         id: python-musl-upload
-        if: ${{ always() && inputs.run_python_package && contains(matrix.platform, 'musl') && steps.python-musl-verify.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_python_package && contains(matrix.platform, 'musl') && steps.python-musl-verify.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1386,13 +1390,13 @@ jobs:
 
       - name: Install Node Rust target
         id: node-target
-        if: ${{ always() && inputs.run_node_package && startsWith(matrix.platform, 'linux-') }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package && startsWith(matrix.platform, 'linux-') }}
         continue-on-error: true
         run: rustup target add ${{ matrix.node_target }}
 
       - name: Package Node.js
         id: node-package
-        if: ${{ always() && inputs.run_node_package }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -1409,7 +1413,7 @@ jobs:
 
       - name: Upload split Node npm package artifacts
         id: node-upload
-        if: ${{ always() && inputs.run_node_package && steps.node-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_node_package && steps.node-package.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1419,7 +1423,7 @@ jobs:
 
       - name: Package OpenClaw plugin
         id: openclaw-package
-        if: ${{ always() && inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_openclaw && matrix.platform == 'linux-amd64' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -1432,7 +1436,7 @@ jobs:
 
       - name: Upload OpenClaw plugin artifact
         id: openclaw-upload
-        if: ${{ always() && inputs.run_openclaw && matrix.platform == 'linux-amd64' && steps.openclaw-package.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_openclaw && matrix.platform == 'linux-amd64' && steps.openclaw-package.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1442,14 +1446,14 @@ jobs:
 
       - name: Set Rust package version
         id: rust-version
-        if: ${{ always() && inputs.run_rust_package }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: just set-cargo-version "$NEMO_RELAY_PACKAGE_VERSION"
 
       - name: Install Rust musl tools
         id: rust-musl-tools
-        if: ${{ always() && inputs.run_rust_package && contains(matrix.platform, 'musl') }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && contains(matrix.platform, 'musl') }}
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1466,14 +1470,14 @@ jobs:
 
       - name: Build Rust CLI release binary
         id: rust-package
-        if: ${{ always() && inputs.run_rust_package && matrix.rust_build_image == '' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && matrix.rust_build_image == '' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: cargo build --release --target "${{ matrix.rust_target }}" -p nemo-relay-cli
 
       - name: Build Rust CLI release binary in manylinux
         id: rust-manylinux-package
-        if: ${{ always() && inputs.run_rust_package && matrix.rust_build_image != '' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && matrix.rust_build_image != '' }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
         run: |
@@ -1495,21 +1499,26 @@ jobs:
         if: >-
           ${{
             always()
+            && steps.package-version.outcome == 'success'
             && inputs.run_rust_package
             && (steps.rust-package.outcome == 'success' || steps.rust-manylinux-package.outcome == 'success')
           }}
         continue-on-error: true
         working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        env:
+          REF_NAME: ${{ inputs.ref_name }}
+          REF_TYPE: ${{ inputs.ref_type }}
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
           set -euo pipefail
-          target="${{ matrix.rust_target }}"
-          asset_version="${{ inputs.ref_name }}"
+          target="$RUST_TARGET"
+          asset_version="$REF_NAME"
           binary="nemo-relay"
-          if [ "${{ inputs.ref_type }}" != "tag" ]; then
+          if [ "$REF_TYPE" != "tag" ]; then
             asset_version="dev-${GIT_COMMIT::8}"
           fi
           asset="nemo-relay-cli-${target}-${asset_version}"
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$RUNNER_OS" = "Windows" ]; then
             binary="${binary}.exe"
             asset="${asset}.exe"
           fi
@@ -1529,7 +1538,7 @@ jobs:
 
       - name: Upload Rust CLI binary artifact
         id: rust-binary-upload
-        if: ${{ always() && inputs.run_rust_package && steps.rust-stage.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && steps.rust-stage.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -1539,7 +1548,7 @@ jobs:
 
       - name: Upload Rust CLI wheel artifact
         id: rust-wheel-upload
-        if: ${{ always() && inputs.run_rust_package && steps.rust-stage.outcome == 'success' }}
+        if: ${{ always() && steps.package-version.outcome == 'success' && inputs.run_rust_package && steps.rust-stage.outcome == 'success' }}
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
