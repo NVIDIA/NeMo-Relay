@@ -3307,6 +3307,7 @@ fn opentelemetry_endpoints_fan_out_to_heterogeneous_and_repeated_types() {
 
 #[test]
 fn opentelemetry_rejects_canonical_equivalent_destinations() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     for (first, second) in [
         (
             "http://collector.example/v1/traces",
@@ -3681,6 +3682,7 @@ fn metric_cardinality_limit_rejects_usize_max_in_plugin_validation() {
 
 #[test]
 fn plugin_validation_reports_each_signal_specific_invalid_value() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
     let mut log_endpoint = test_signal_endpoint();
     log_endpoint.endpoint = "  ".to_string();
     log_endpoint.transport = "udp".to_string();
