@@ -1,40 +1,78 @@
 ---
 title: "Tool Execution Intercept Outcomes"
-description: "Canonical result returned by tool execution intercepts and its managed lifecycle behavior."
+description: "Canonical tool execution results, intercept outcomes, and managed lifecycle behavior."
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-A tool execution intercept wraps or short-circuits a managed tool callback.
-Every intercept returns one canonical outcome so Relay can keep lifecycle
-control data separate from the application-visible tool result.
+A managed tool callback and every execution-intercept continuation return one
+canonical application-visible result:
 
 ```json
 {
   "result": {},
+  "annotation": {}
+}
+```
+
+`result` is required and contains the application-owned tool payload.
+`annotation` is optional opaque adjacent metadata. It can be any JSON value.
+An absent or JSON `null` annotation means that the result has no annotation.
+Relay transports the annotation without interpreting its schema.
+
+A tool execution intercept wraps or short-circuits that callback and returns a
+canonical outcome:
+
+```json
+{
+  "result": {},
+  "annotation": {},
   "pending_marks": []
 }
 ```
 
-`result` is required and is the value that reaches the remaining middleware and
-the application. `pending_marks` defaults to an empty list. Each pending mark
-contains `name`, optional `category` and `category_profile`, and optional
-`data` and `metadata`. Relay assigns event UUIDs, parent UUIDs, and timestamps.
+`result` and `annotation` form the application-visible result passed to the
+remaining middleware. `pending_marks` defaults to an empty list and remains
+Relay-owned lifecycle data. Each pending mark contains `name`, optional
+`category` and `category_profile`, and optional `data` and `metadata`. Relay
+assigns event UUIDs, parent UUIDs, and timestamps.
 
 ## Continuation Semantics
 
 The default tool callback and an intercept's `next(args)` continuation both
-remain raw JSON APIs. `next(args)` returns only the downstream tool result; it
-does not expose downstream pending marks. Relay retains those marks, combines
-them in effective middleware order, and materializes them only after the final
-outcome succeeds.
+return `ToolExecutionResult`. The continuation exposes the downstream `result`
+and `annotation`, but not downstream pending marks. An intercept can preserve,
+replace, or remove the annotation in its returned outcome. Relay retains
+pending marks separately, combines them in effective middleware order, and
+materializes them only after the final outcome succeeds.
 
 Use the existing global, scope-local, or plugin-context tool execution
 registration APIs to produce pending marks, and return the canonical outcome
 from every registered callback. Use a
 [mark event sanitizer](/reference/event-sanitizers) when the emitted pending
-mark's `data`, `category_profile`, or `metadata` must be sanitized. Legacy raw
-intercept returns are rejected at public and dynamic-plugin boundaries.
+mark's `data`, `category_profile`, or `metadata` must be sanitized. Public APIs,
+native API 1 plugins, and `grpc-v1` workers require canonical tool callback and
+intercept returns. Relay 0.8 does not provide a legacy raw-result adapter.
+
+## Event and Exporter Projection
+
+For a successful tool end event, Relay records `result` as the event output and
+places a non-null annotation at
+`category_profile.tool_result_annotation`. Tool sanitize-response guardrails
+receive and sanitize only `result`. They cannot read or rewrite the annotation.
+The scope-end event sanitizer runs after the tool response sanitizer and can
+replace or remove `category_profile.tool_result_annotation` before subscribers
+or exporters receive the event.
+
+ATOF preserves the annotation in the tool end event's category profile. ATIF
+places it in the observation result's `extra.tool_result_annotation` field.
+The `full` and `openinference` OpenTelemetry projections serialize it as one
+opaque JSON-valued `nemo_relay.tool.result.annotation` attribute rather than
+flattening application-defined keys. The standards-only `gen_ai` projection
+does not emit Relay-private attributes.
+
+Relay returns the unsanitized `ToolExecutionResult` to the application. Event
+sanitizers affect observability only.
 
 ## Managed Lifecycle
 
@@ -44,35 +82,69 @@ tool start timestamp. Relay emits pending marks in their resolved middleware
 order, assigns each mark the managed tool UUID as its parent, and gives each
 mark a timestamp after the tool end event.
 
-If execution or an intercept fails, Relay emits the error end event and
-discards accumulated pending marks. Pending marks are never included in the
-application-visible tool result or passed to tool sanitize-response
-guardrails. They pass through the mark sanitizer registry when materialized.
+If execution or an intercept fails, Relay emits the error end event without a
+tool result annotation and discards accumulated pending marks. Pending marks
+are never included in the application-visible tool result or passed to tool
+sanitize-response guardrails. They pass through the mark sanitizer registry
+when materialized.
 
 ## Binding Contract
 
-The following callbacks return the same logical outcome in their native type
-or object shape:
+Managed callbacks, continuations, and execute helpers use the same logical
+result in their native type or object shape:
+
+- Python uses `ToolExecutionResult(result, annotation=None)`.
+- Rust uses `ToolExecutionResult { result, annotation }` and its constructors.
+- Go uses `ToolExecutionResult { Result, Annotation }`.
+- Node.js uses `{ result, annotation? }`.
+- Public C callbacks use canonical JSON with required `result` and optional
+  `annotation`.
+
+Execution intercepts add lifecycle-owned pending marks to that shape:
 
 - Python callbacks return `ToolExecutionInterceptOutcome`.
-- Rust callbacks and native plugins return `ToolExecutionInterceptOutcome`.
+- Rust callbacks and native API 1 plugins return
+  `ToolExecutionInterceptOutcome`.
 - Go callbacks return `ToolExecutionInterceptOutcome`.
-- Node.js callbacks return `{ result, pendingMarks? }`, where JavaScript
-  pending-mark DTOs use `categoryProfile`.
-- Public C callbacks return canonical JSON with `result` and optional
-  `pending_marks`.
-- `grpc-v1` worker SDKs return a `ToolExecutionInterceptOutcome` in a
-  `JsonEnvelope` with schema `nemo.relay.ToolExecutionInterceptOutcome@1`.
+- Node.js callbacks return `{ result, annotation?, pendingMarks? }`, where
+  JavaScript pending-mark DTOs use `categoryProfile`.
+- Public C intercept callbacks return canonical JSON with `result`, optional
+  `annotation`, and optional `pending_marks`.
+- `grpc-v1` worker SDKs exchange protobuf `ToolExecutionResult` and
+  `ToolExecutionInterceptOutcome` messages. Their arbitrary JSON fields use
+  lossless protobuf `JsonValue` wrappers.
 
-Canonical JSON uses `pending_marks` and `category_profile` across bindings.
+Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
+across bindings.
+
+Relay 0.8 establishes this canonical result as the native API 1 and `grpc-v1`
+baseline. Rebuild every dynamic plugin and declare a `compat.relay` range that
+excludes Relay versions before 0.8. The recommended range is
+`>=0.8.0,<1.0`; open-ended ranges such as `>=0.8.0` are valid. The native ABI
+remains v4. Workers retain the `grpc-v1` identifier and
+`nemo.relay.worker.v1` package, but Relay 0.8 changes the `ToolNext` response
+type and tool-execution outcome field type. Regenerate worker protobuf bindings
+as part of the required rebuild. Future incompatible contract changes must
+increment the corresponding native API or worker protocol version.
 
 ## Migration
 
-This finalizes the unpublished tool execution intercept contract. Update every
-registered tool execution intercept to return the canonical outcome, while
-leaving the default tool callback and `next(args)` continuation as raw JSON.
-Rebuild development native plugins and workers against the same NeMo Relay
-release that hosts them.
+This release deliberately replaces raw tool execution results. Make these
+changes together:
+
+1. Wrap every managed tool callback return in `ToolExecutionResult`.
+2. Treat every execution intercept's `next(args)` return as
+   `ToolExecutionResult`.
+3. Return the downstream `result` and `annotation` from forwarding intercepts,
+   or deliberately replace or remove the annotation.
+4. Read `.result` when an application or framework needs the original business
+   payload.
+5. Wrap the result passed to a manual tool end helper in
+   `ToolExecutionResult`.
+
+Rebuild native plugins and workers against the same NeMo Relay release that
+hosts them. For binding-specific examples, refer to the
+[Migration Guides](/reference/migration-guides#return-canonical-tool-execution-results).
 
 ## Related Topics
 

@@ -30,6 +30,103 @@ NeMo Relay is built into Hermes Agent. Do not install Relay separately or
 enable an observability plugin. Hermes Agent understands NeMo Relay plugin
 configurations.
 
+### Return Canonical Tool Execution Results
+
+<Warning title="Breaking Change">
+NeMo Relay 0.8 replaces raw managed tool results with
+`ToolExecutionResult`. Update managed tool callbacks, execution-intercept
+continuations and outcomes, execute-helper consumers, and manual tool end calls
+as one cutover.
+</Warning>
+
+The canonical shape has a required application-owned `result` and an optional
+opaque JSON `annotation`. Relay transports the annotation alongside the result
+without interpreting it:
+
+```json
+{
+  "result": {"hits": 2},
+  "annotation": {"source": "cache"}
+}
+```
+
+Update Python callbacks and read `.result` where the application needs the
+business payload:
+
+```python
+async def search(args):
+    return nemo_relay.ToolExecutionResult(
+        {"hits": 2},
+        {"source": "cache"},
+    )
+
+execution_result = await nemo_relay.tools.execute("search", {"query": "weather"}, search)
+hits = execution_result.result["hits"]
+```
+
+Update Node.js callbacks to return the canonical object:
+
+```js
+const executionResult = await toolCallExecute(
+  "search",
+  { query: "weather" },
+  async () => ({
+    result: { hits: 2 },
+    annotation: { source: "cache" },
+  }),
+);
+const hits = executionResult.result.hits;
+```
+
+Update Rust callbacks to return `ToolExecutionResult`:
+
+```rust
+use nemo_relay::api::tool::ToolExecutionResult;
+
+.func(Arc::new(|_args| {
+    Box::pin(async {
+        Ok(ToolExecutionResult::annotated(
+            json!({"hits": 2}),
+            json!({"source": "cache"}),
+        ))
+    })
+}))
+```
+
+An execution intercept's `next(args)` now returns `ToolExecutionResult`.
+Forwarding intercepts must preserve both fields. Rust can use
+`ToolExecutionInterceptOutcome::from(result)`. Python, Node.js, Go, and public
+C callbacks return their binding-specific canonical outcome with `result` and
+`annotation`. Legacy raw callback and intercept returns are rejected.
+
+Relay 0.8 establishes this result contract as the native API 1 and `grpc-v1`
+baseline. Set `compat.native_api = "1"` or `compat.worker_protocol = "grpc-v1"`,
+rebuild every dynamic plugin, and declare a `compat.relay` range that excludes
+Relay versions before 0.8. Use `>=0.8.0,<1.0` unless you deliberately need a
+narrower or open-ended 0.8-or-newer range. The manifest is the plugin author's
+compatibility assertion, not proof that an artifact was rebuilt.
+
+The native ABI remains v4. Workers continue to use `grpc-v1` and the
+`nemo.relay.worker.v1` protobuf package, but this baseline changes the
+`ToolNext` response from `JsonResult` to `ToolExecutionResultResponse` and
+changes `ToolExecutionInterceptResult.outcome` from `JsonEnvelope` to
+`ToolExecutionInterceptOutcome`. Regenerate worker protobuf bindings during
+the required rebuild. Future incompatible contract changes must increment the
+corresponding native API or worker protocol version.
+
+Manual tool end helpers also require the canonical wrapper. For example, pass
+`nemo_relay.ToolExecutionResult(payload)` to Python `tools.call_end`,
+`{ result: payload }` to Node.js `toolCallEnd`, and
+`ToolExecutionResult::new(payload)` to the Rust
+`ToolCallEndParams.execution_result` builder field.
+
+Tool sanitize-response guardrails continue to receive only the business
+`result`. A successful tool end event stores a non-null annotation under
+`category_profile.tool_result_annotation`, after which a scope-end event
+sanitizer can replace or remove it. Refer to
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for the complete continuation, lifecycle, exporter, and binding contract.
+
 ### Upgrade Native Rust Plugins to NeMo Relay 0.8
 
 <Warning title="Breaking Change">
@@ -58,7 +155,7 @@ context.register_tool_request_intercept("policy", 10, false, |_name, args| {
 context.register_tool_execution_intercept("policy", 10, |_name, args, next| {
     async move {
         let result = next.call(args).await?;
-        Ok(ToolExecutionInterceptOutcome::new(result))
+        Ok(ToolExecutionInterceptOutcome::from(result))
     }
 })?;
 ```
@@ -85,9 +182,11 @@ relay = ">=0.8.0,<1.0"
 native_api = "1"
 ```
 
-Relay 0.8 prefers native ABI v4 and falls back to frozen v3 and v2 tables for
-old binaries. ABI v4 adds completion-scoped codec operations and pull-based
-downstream LLM streams; it does not change the manifest `native_api` value.
+Relay 0.8 prefers native ABI v4 and falls back to frozen v3 and v2 tables. ABI
+v4 adds completion-scoped codec operations and pull-based downstream LLM
+streams. `native_api = "1"` uses the canonical `ToolExecutionResult` contract
+without changing the ABI v4 table layout. Rebuild all native plugin artifacts;
+support for frozen table layouts does not preserve the pre-0.8 JSON semantics.
 
 ### Move Project Configuration to a Supported Location
 

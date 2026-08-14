@@ -91,9 +91,11 @@ func concurrentToolCallResult(idx int) (json.RawMessage, error) {
 		defer PopScope(handle)
 
 		argsJSON := json.RawMessage(fmt.Sprintf(`{"index": %d}`, idx))
-		result, runErr = ToolCallExecute("concurrent_tool", argsJSON, func(args json.RawMessage) (json.RawMessage, error) {
-			return args, nil
+		executionResult, err := ToolCallExecute("concurrent_tool", argsJSON, func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(args), nil
 		})
+		result = executionResult.Result
+		runErr = err
 	})
 	return result, runErr
 }

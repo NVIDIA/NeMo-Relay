@@ -17,7 +17,7 @@ use tokio_stream::Stream;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
@@ -104,9 +104,9 @@ pub type ToolInterceptFn =
 ///   chain.
 ///
 /// # Returns
-/// A future resolving to the downstream tool result JSON. Pending marks from
-/// downstream intercepts are retained by the runtime and are not exposed
-/// through this continuation.
+/// A future resolving to the downstream tool result and optional opaque
+/// annotation. Pending marks from downstream intercepts are retained by the
+/// runtime and are not exposed through this continuation.
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
@@ -116,8 +116,9 @@ pub type ToolInterceptFn =
 /// execution-intercept callback is still running. Each invocation receives an
 /// isolated snapshot of the scopes visible when `next` is called. Calls that
 /// remain unfinished or begin after the interceptor settles are rejected.
-pub type ToolExecutionNextFn =
-    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
+pub type ToolExecutionNextFn = Arc<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionResult>> + Send>> + Send + Sync,
+>;
 /// Wrap or replace tool execution.
 ///
 /// A tool execution intercept receives the tool name, the current argument

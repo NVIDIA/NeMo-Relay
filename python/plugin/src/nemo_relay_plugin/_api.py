@@ -209,7 +209,6 @@ EVENT_SCHEMA = "nemo.relay.Event@1"
 LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
 ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@2"
 LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.LlmRequestInterceptOutcome@2"
-TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA = "nemo.relay.ToolExecutionInterceptOutcome@1"
 PLUGIN_DIAGNOSTICS_SCHEMA = "nemo.relay.PluginDiagnostics@1"
 _OBJECT_SCHEMAS = frozenset(
     {
@@ -217,7 +216,6 @@ _OBJECT_SCHEMAS = frozenset(
         LLM_REQUEST_SCHEMA,
         ANNOTATED_LLM_REQUEST_SCHEMA,
         LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
-        TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     }
 )
 _UNREGISTERED = object()
@@ -341,6 +339,8 @@ class PendingMarkSpec:
         """Convert this pending mark to its canonical JSON object."""
         if not isinstance(self.name, str):
             raise WorkerSdkError("pending mark name must be a string")
+        if self.category is not None and not isinstance(self.category, str):
+            raise WorkerSdkError("pending mark category must be a string or None")
         return asdict(self)
 
 
@@ -654,14 +654,37 @@ class LlmRequestInterceptOutcome:
 
 
 @dataclass(slots=True)
+class ToolExecutionResult:
+    """Canonical application-visible result of tool execution."""
+
+    result: Json
+    annotation: Json | None = None
+
+    def to_json(self) -> dict[str, Json]:
+        """Convert this result to its canonical JSON representation."""
+        payload: dict[str, Json] = {"result": self.result}
+        if self.annotation is not None:
+            payload["annotation"] = self.annotation
+        return payload
+
+    @classmethod
+    def from_json(cls, value: Json) -> "ToolExecutionResult":
+        """Decode and validate a canonical JSON representation."""
+        if not isinstance(value, dict) or "result" not in value:
+            raise WorkerSdkError("tool execution result must be an object with a result field")
+        return cls(result=value["result"], annotation=value.get("annotation"))
+
+
+@dataclass(slots=True)
 class ToolExecutionInterceptOutcome:
     """Canonical result returned by a Python worker tool execution intercept."""
 
     result: Json
     pending_marks: list[PendingMarkSpec] = field(default_factory=list)
+    annotation: Json | None = field(default=None, kw_only=True)
 
     def to_json(self) -> dict[str, Json]:
-        """Convert this outcome to the canonical worker-envelope payload."""
+        """Convert this outcome to its canonical JSON representation."""
         marks = []
         for mark in self.pending_marks:
             if not isinstance(mark, PendingMarkSpec):
@@ -669,10 +692,13 @@ class ToolExecutionInterceptOutcome:
                     "tool execution intercept outcome pending_marks must contain PendingMarkSpec values"
                 )
             marks.append(mark.to_json())
-        return {
+        payload: dict[str, Json] = {
             "result": self.result,
             "pending_marks": marks,
         }
+        if self.annotation is not None:
+            payload["annotation"] = self.annotation
+        return payload
 
 
 def _normalize_diagnostic(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -1603,14 +1629,15 @@ class ToolNext:
         self._runtime = runtime
         self._continuation_id = continuation_id
 
-    async def call(self, value: Json) -> Json:
+    async def call(self, value: Json) -> ToolExecutionResult:
         """Call the remaining tool execution chain with replacement arguments.
 
         Args:
             value: JSON arguments passed to the next intercept or real tool.
 
         Returns:
-            JSON returned by the remaining chain.
+            Canonical result and optional annotation returned by the remaining
+            chain.
 
         Raises:
             WorkerSdkError: The continuation is invalid, complete, cancelled,
@@ -1632,7 +1659,11 @@ class ToolNext:
                 scope=self._runtime._scope_context(),
             )
         )
-        return _json_result_to_value(response)
+        if response.HasField("error"):
+            raise _worker_error_to_sdk(response.error)
+        if not response.HasField("value"):
+            raise WorkerSdkError("tool execution result is missing")
+        return _tool_execution_result_from_proto(response.value)
 
 
 class LlmNext:
@@ -2067,10 +2098,7 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     raise WorkerSdkError("tool execution intercept must return ToolExecutionInterceptOutcome")
                 return pb.InvokeResponse(
                     tool_execution=pb.ToolExecutionInterceptResult(
-                        outcome=_json_envelope(
-                            TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
-                            result.to_json(),
-                        ),
+                        outcome=_tool_execution_intercept_outcome_to_proto(result),
                     )
                 )
             raise WorkerSdkError(f"unsupported registration surface {request.surface}")
@@ -2215,6 +2243,46 @@ def _diagnostic_to_json(value: ConfigDiagnostic | dict[str, Any]) -> dict[str, A
     if isinstance(value, ConfigDiagnostic):
         return value.to_json()
     return _normalize_diagnostic(value)
+
+
+def _json_value(value: Json) -> Any:
+    _validate_json_object_keys(value)
+    return pb.JsonValue(json=json.dumps(value, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+
+
+def _decode_json_value(value: Any, field: str) -> Json:
+    try:
+        decoded = json.loads(value.json.decode("utf-8"), parse_constant=_reject_json_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise WorkerSdkError(f"{field} contains invalid JSON") from exc
+    _validate_json_object_keys(decoded)
+    return decoded
+
+
+def _tool_execution_result_from_proto(value: Any) -> ToolExecutionResult:
+    if not value.HasField("result"):
+        raise WorkerSdkError("tool execution result is missing result")
+    annotation = (
+        _decode_json_value(value.annotation, "tool execution result annotation")
+        if value.HasField("annotation")
+        else None
+    )
+    return ToolExecutionResult(
+        result=_decode_json_value(value.result, "tool execution result"),
+        annotation=annotation,
+    )
+
+
+def _tool_execution_intercept_outcome_to_proto(value: ToolExecutionInterceptOutcome) -> Any:
+    payload = value.to_json()
+    fields: dict[str, Any] = {
+        "result": _json_value(payload["result"]),
+    }
+    if "annotation" in payload:
+        fields["annotation"] = _json_value(payload["annotation"])
+    if payload["pending_marks"]:
+        fields["pending_marks"] = _json_value(payload["pending_marks"])
+    return pb.ToolExecutionInterceptOutcome(**fields)
 
 
 def _json_envelope(schema: str, value: Json) -> Any:

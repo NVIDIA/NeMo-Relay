@@ -3520,7 +3520,11 @@ fn assert_otel_tool_attribute_branches() {
         Some(&"true".to_string())
     );
 
-    let tool_end_attributes = attr_map(&end_attributes(&Event::Scope(ScopeEvent::new(
+    let tool_end_profile = CategoryProfile::builder()
+        .tool_call_id("call-456")
+        .tool_result_annotation(json!({"opaque": {"rank": 1}}))
+        .build();
+    let tool_end_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("lookup")
             .metadata(json!({"phase": "complete"}))
@@ -3529,12 +3533,37 @@ fn assert_otel_tool_attribute_branches() {
         ScopeCategory::End,
         Vec::new(),
         EventCategory::tool(),
-        Some(CategoryProfile::builder().tool_call_id("call-456").build()),
-    ))));
+        Some(tool_end_profile),
+    ));
+    let tool_end_attributes = attr_map(&end_attributes(&tool_end_event));
     assert_eq!(
         tool_end_attributes.get("nemo_relay.end.data.result"),
         Some(&"true".to_string())
     );
+    assert_eq!(
+        tool_end_attributes.get("nemo_relay.tool.result.annotation"),
+        Some(&r#"{"opaque":{"rank":1}}"#.to_string())
+    );
+
+    let llm_profile = CategoryProfile::builder()
+        .tool_result_annotation(json!({"must_not_project": true}))
+        .build();
+    let llm_end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("chat").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(llm_profile),
+    ));
+    assert!(
+        !attr_map(&end_attributes(&llm_end_event))
+            .contains_key("nemo_relay.tool.result.annotation")
+    );
+
+    let gen_ai_attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &tool_end_event,
+    ));
+    assert!(!gen_ai_attributes.contains_key("nemo_relay.tool.result.annotation"));
 }
 
 fn assert_otel_catalog_cost_branches() {

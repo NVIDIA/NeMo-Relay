@@ -28,6 +28,11 @@ run first. Your scope sanitizer then receives the already-sanitized event
 fields, which lets a general event policy inspect them without changing the
 real request or response.
 
+On a successful tool end event, an optional opaque tool result annotation is
+available at `category_profile.tool_result_annotation`. Tool
+sanitize-response guardrails govern only the business result in `data`; use the
+scope-end sanitizer to replace or remove the annotation.
+
 ## Callback Contract
 
 When the runtime calls a sanitizer, it provides the following values:
@@ -215,7 +220,7 @@ convention.
 Rust native plugins receive the three registration methods on their typed
 plugin context. Python `grpc-v1` workers receive the same methods on
 `PluginContext`, and their callbacks can be synchronous or asynchronous. The
-worker protocol remains `grpc-v1` and defines the following stable registration
+worker protocol is `grpc-v1` and defines the following stable registration
 surface values:
 
 - `MARK_SANITIZE_GUARDRAIL = 30`

@@ -201,6 +201,11 @@ annotation. The request used for provider execution remains unchanged. Refer to
 Set top-level `enable_full_payloads = true` to retain complete sanitized LLM
 request payloads on every start event.
 
+For a successful tool end event, ATOF stores `ToolExecutionResult.result` in
+`data`. When the result carries a present, non-null opaque annotation, ATOF
+stores it in `category_profile.tool_result_annotation`. The delivered event
+contains the post-sanitizer values.
+
 Register the plugin before instrumented work starts. Clear it during shutdown
 so every sink flushes pending events and stream connections close cleanly.
 Terminating the process before subscriber delivery or plugin teardown completes

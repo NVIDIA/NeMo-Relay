@@ -37,7 +37,7 @@ pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
-pub use nemo_relay_types::api::tool::ToolExecutionInterceptOutcome;
+pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
@@ -57,10 +57,15 @@ use nemo_relay_worker_proto::v1::{
     LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
     LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
     RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk, ToolExecutionInterceptResult, ToolNextRequest, ValidateRequest,
-    ValidateResponse, WorkerAck, WorkerError,
+    ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionInterceptResult, ToolExecutionResult as ProtoToolExecutionResult,
+    ToolExecutionResultResponse, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
+    WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+};
 use tokio::net::TcpListener;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -484,8 +489,8 @@ impl PluginContext {
     /// Registers a tool execution intercept.
     ///
     /// The callback returns a [`ToolExecutionInterceptOutcome`]. Calling
-    /// [`ToolNext::call`] continues the chain and returns only the raw
-    /// downstream result JSON; Relay retains downstream pending marks.
+    /// [`ToolNext::call`] continues the chain and returns the downstream
+    /// [`ToolExecutionResult`]; Relay retains downstream pending marks.
     /// `ToolNext` may be called repeatedly or concurrently while the callback
     /// is active. Each call snapshots its visible worker scope stack, and Relay
     /// rejects late calls or cancels unfinished calls when the callback settles.
@@ -919,7 +924,7 @@ impl ToolNext {
     /// Calls may be repeated or concurrent while the owning interceptor is
     /// active. Each call receives an isolated snapshot of the scope stack
     /// visible here. Calls still unfinished when the interceptor settles fail.
-    pub async fn call(&self, value: Json) -> Result<Json> {
+    pub async fn call(&self, value: Json) -> Result<ToolExecutionResult> {
         let mut client = self.runtime.host_client().await?;
         let response = client
             .tool_next(Request::new(ToolNextRequest {
@@ -932,7 +937,7 @@ impl ToolNext {
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
-        json_result_to_sdk(response)
+        tool_execution_result_to_sdk(response)
     }
 }
 
@@ -2253,13 +2258,57 @@ fn tool_execution_response(outcome: ToolExecutionInterceptOutcome) -> Result<Inv
         result: Some(
             nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(
                 ToolExecutionInterceptResult {
-                    outcome: Some(json_envelope(
-                        "nemo.relay.ToolExecutionInterceptOutcome@1",
-                        &outcome,
-                    )?),
+                    outcome: Some(tool_execution_outcome_to_proto(outcome)?),
                 },
             ),
         ),
+    })
+}
+
+fn tool_execution_result_to_sdk(
+    result: ToolExecutionResultResponse,
+) -> Result<ToolExecutionResult> {
+    if let Some(error) = result.error {
+        return Err(worker_error_to_sdk(error));
+    }
+    let value = result
+        .value
+        .ok_or_else(|| WorkerSdkError::InvalidInput("tool execution result is missing".into()))?;
+    tool_execution_result_from_proto(value)
+}
+
+fn tool_execution_outcome_to_proto(
+    outcome: ToolExecutionInterceptOutcome,
+) -> Result<ProtoToolExecutionInterceptOutcome> {
+    Ok(ProtoToolExecutionInterceptOutcome {
+        result: Some(json_value(&outcome.result)?),
+        annotation: outcome
+            .annotation
+            .as_ref()
+            .filter(|value| !value.is_null())
+            .map(json_value)
+            .transpose()?,
+        pending_marks: (!outcome.pending_marks.is_empty())
+            .then(|| json_value(&outcome.pending_marks))
+            .transpose()?,
+    })
+}
+
+fn tool_execution_result_from_proto(
+    value: ProtoToolExecutionResult,
+) -> Result<ToolExecutionResult> {
+    let result = value.result.ok_or_else(|| {
+        WorkerSdkError::InvalidInput("tool execution result.result is missing".into())
+    })?;
+    let annotation = value
+        .annotation
+        .as_ref()
+        .map(decode_json_value)
+        .transpose()?
+        .filter(|value: &Json| !value.is_null());
+    Ok(ToolExecutionResult {
+        result: decode_json_value(&result)?,
+        annotation,
     })
 }
 

@@ -24,13 +24,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from datetime import datetime
-from typing import ClassVar, Literal, Optional, TypeAlias, TypedDict
+from typing import ClassVar, Generic, Literal, Optional, TypeAlias, TypedDict, TypeVar
 
 _JsonPrimitive: TypeAlias = str | int | float | bool | None
 _JsonValue: TypeAlias = _JsonPrimitive | list["_JsonValue"] | dict[str, "_JsonValue"]
 _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
+_TToolResult = TypeVar("_TToolResult")
 
 def _shutdown_default_logging() -> None: ...
 
@@ -56,7 +57,7 @@ _EventSanitizeGuardrail: TypeAlias = Callable[
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str] | Awaitable[Optional[str]]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolExecutionIntercept: TypeAlias = Callable[
-    [str, _Json, Callable[[_Json], Awaitable[_Json]]],
+    [str, _Json, Callable[[_Json], Awaitable["ToolExecutionResult[_Json]"]]],
     "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
@@ -471,10 +472,22 @@ class LLMRequestInterceptOutcome:
         """Return ordered plugin-neutral optimization contribution objects."""
         ...
 
+class ToolExecutionResult(Generic[_TToolResult]):
+    """Canonical application-visible result of tool execution.
+
+    ``result`` is owned by the application. ``annotation`` is an optional opaque
+    adjacent metadata value that Relay transports without interpretation.
+    """
+    def __init__(self, result: _TToolResult, annotation: _Json | None = ...) -> None: ...
+    @property
+    def result(self) -> _TToolResult: ...
+    @property
+    def annotation(self) -> _Json | None: ...
+
 class ToolExecutionInterceptOutcome:
     """Canonical result returned by a tool execution intercept.
 
-    ``result`` is passed to the remaining middleware and application.
+    ``result`` and ``annotation`` are passed to the remaining middleware and application.
     ``pending_marks`` are Relay-owned lifecycle metadata emitted after the
     tool-end event and are not included in the application-visible result.
     """
@@ -482,9 +495,13 @@ class ToolExecutionInterceptOutcome:
         self,
         result: _Json,
         pending_marks: list[PendingMarkSpec] = ...,
+        *,
+        annotation: _Json | None = ...,
     ) -> None: ...
     @property
     def result(self) -> _Json: ...
+    @property
+    def annotation(self) -> _Json | None: ...
     @property
     def pending_marks(self) -> list[PendingMarkSpec]: ...
 
@@ -1494,7 +1511,7 @@ def tool_call(
 
 def tool_call_end(
     handle: ToolHandle,
-    result: _Json,
+    result: ToolExecutionResult[_Json],
     *,
     data: _Json | None = None,
     metadata: _Json | None = None,
@@ -1504,8 +1521,9 @@ def tool_call_end(
 
     Args:
         handle: Tool handle returned by ``tool_call``.
-        result: JSON-compatible tool result recorded on the end event after
-            sanitize-response guardrails unless it sanitizes to JSON null.
+        result: Canonical tool result. Its ``result`` is recorded on the end
+            event after sanitize-response guardrails, and its opaque
+            ``annotation`` is recorded in the tool category profile.
         data: Optional JSON payload used when the sanitized result is JSON null.
         metadata: Optional JSON metadata recorded on the end event.
         timestamp: Optional timezone-aware datetime recorded on the end event.
@@ -1523,19 +1541,20 @@ def tool_call_end(
 def tool_call_execute(
     name: str,
     args: _Json,
-    func: Callable[[_Json], Awaitable[_Json]],
+    func: Callable[[_Json], ToolExecutionResult[_Json] | Awaitable[ToolExecutionResult[_Json]]],
     **kwargs: object,
-) -> Awaitable[_Json]:
+) -> Awaitable[ToolExecutionResult[_Json]]:
     """Execute a tool through the managed native middleware pipeline.
 
     Args:
         name: Tool name.
         args: Initial JSON-compatible tool arguments.
-        func: Awaitable tool implementation called with final arguments.
+        func: Synchronous or asynchronous tool implementation called with final
+            arguments. It must return ``ToolExecutionResult``.
         **kwargs: Optional parent handle, attributes, data, and metadata.
 
     Returns:
-        Awaitable that resolves to the JSON-compatible tool result.
+        Awaitable that resolves to the canonical tool result.
 
     Exceptional flow:
         Conditional guardrails may reject execution. Callback and native errors
@@ -1907,8 +1926,8 @@ def register_tool_execution_intercept(name: str, priority: int, callable: _ToolE
         priority: Execution order; lower values run first.
         callable: Middleware callback returning
             ``ToolExecutionInterceptOutcome``. It may call or short-circuit
-            ``next``; ``next`` resolves to the raw downstream result while
-            Relay retains downstream pending marks.
+            ``next``; ``next`` resolves to the canonical downstream
+            ``ToolExecutionResult`` while Relay retains downstream pending marks.
 
     Returns:
         ``None``.
@@ -2157,8 +2176,8 @@ def scope_register_tool_execution_intercept(
         priority: Execution order; lower values run first.
         callable: Middleware callback returning
             ``ToolExecutionInterceptOutcome`` while the owning scope is active.
-            Its ``next`` continuation resolves to the raw downstream result
-            while Relay retains downstream pending marks.
+            Its ``next`` continuation resolves to the canonical downstream
+            ``ToolExecutionResult`` while Relay retains downstream pending marks.
 
     Returns:
         ``None``.

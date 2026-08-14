@@ -63,7 +63,7 @@ use nemo_relay::api::subscriber::{
     deregister_subscriber, flush_subscribers, register_subscriber, scope_deregister_subscriber,
     scope_register_subscriber,
 };
-use nemo_relay::api::tool::ToolAttributes;
+use nemo_relay::api::tool::{ToolAttributes, ToolExecutionResult};
 use nemo_relay::api::tool::{
     tool_call, tool_call_end, tool_call_execute, tool_conditional_execution,
     tool_request_intercepts,
@@ -230,7 +230,7 @@ fn mark_and_scope_local_sanitizers_cover_marks_and_tool_scopes() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool)
-            .result(json!({"output": true}))
+            .execution_result(json!({"output": true}).into())
             .build(),
     )
     .unwrap();
@@ -343,6 +343,48 @@ fn shared_type_reexports_keep_existing_core_paths() {
 }
 
 #[test]
+fn manual_tool_result_annotation_is_projected_on_the_end_event() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = capture_events("manual-tool-result-annotation");
+    let handle = tool_call(
+        nemo_relay::api::tool::ToolCallParams::builder()
+            .name("manual-annotated-tool")
+            .args(json!({"input": true}))
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        nemo_relay::api::tool::ToolCallEndParams::builder()
+            .handle(&handle)
+            .execution_result(ToolExecutionResult::annotated(
+                json!({"output": true}),
+                json!({"opaque": ["manual", 1]}),
+            ))
+            .build(),
+    )
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "manual-annotated-tool"
+                && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(end.data(), Some(&json!({"output": true})));
+    assert_eq!(
+        end.tool_result_annotation().unwrap(),
+        json!({"opaque": ["manual", 1]})
+    );
+
+    deregister_subscriber("manual-tool-result-annotation").unwrap();
+}
+
+#[test]
 fn tool_start_eagerly_emits_deduplicated_skill_load_marks() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
@@ -365,7 +407,7 @@ fn tool_start_eagerly_emits_deduplicated_skill_load_marks() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .build(),
     )
     .unwrap();
@@ -409,7 +451,7 @@ fn mcp_resource_read_emits_minimal_tool_parented_skill_load_mark() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .build(),
     )
     .unwrap();
@@ -451,7 +493,7 @@ fn integration_owned_skill_load_metadata_suppresses_core_detection() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .build(),
     )
     .unwrap();
@@ -486,7 +528,7 @@ fn integration_precomputed_skill_load_survives_stripped_tool_arguments() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .build(),
     )
     .unwrap();
@@ -530,7 +572,7 @@ fn skill_load_detection_uses_original_arguments_before_observability_sanitizatio
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .build(),
     )
     .unwrap();
@@ -656,7 +698,7 @@ fn test_manual_lifecycle_timestamp_overrides() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .timestamp(tool_end)
             .build(),
     )
@@ -793,7 +835,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .build(),
     )
     .unwrap();
@@ -846,7 +888,7 @@ fn test_manual_lifecycle_default_end_timestamps_follow_explicit_starts() {
 }
 
 fn noop_tool_exec() -> ToolExecutionNextFn {
-    Arc::new(|args| Box::pin(async move { Ok(args) }))
+    Arc::new(|args| Box::pin(async move { Ok(args.into()) }))
 }
 
 fn failing_tool_exec() -> ToolExecutionNextFn {
@@ -1470,7 +1512,7 @@ async fn test_tool_api_emits_sanitized_events_and_covers_error_paths() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&handle)
-            .result(json!({"ok": true}))
+            .execution_result(json!({"ok": true}).into())
             .data(json!({"phase": "end"}))
             .metadata(json!({"meta": "tool"}))
             .build(),

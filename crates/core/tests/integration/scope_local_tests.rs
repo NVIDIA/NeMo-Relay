@@ -122,7 +122,7 @@ fn test_scope_local_guardrail_registration_and_execution() {
     tool_call_end(
         nemo_relay::api::tool::ToolCallEndParams::builder()
             .handle(&tool_handle)
-            .result(json!("ok"))
+            .execution_result(json!("ok").into())
             .build(),
     )
     .unwrap();
@@ -175,7 +175,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     .unwrap();
 
     // Verify it runs before pop.
-    let func: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -185,7 +185,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     )
     .await
     .unwrap();
-    assert_eq!(result["ephemeral"], true);
+    assert_eq!(result.result["ephemeral"], true);
 
     // Pop the scope — middleware should be cleaned up.
     pop_scope(
@@ -196,7 +196,7 @@ async fn test_auto_cleanup_on_scope_pop() {
     .unwrap();
 
     // Now execute again — the field should NOT appear.
-    let func2: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func2: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let result2 = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -206,8 +206,8 @@ async fn test_auto_cleanup_on_scope_pop() {
     )
     .await
     .unwrap();
-    assert!(result2.get("ephemeral").is_none());
-    assert_eq!(result2["v"], 2);
+    assert!(result2.result.get("ephemeral").is_none());
+    assert_eq!(result2.result["v"], 2);
 }
 
 // -----------------------------------------------------------------------
@@ -275,7 +275,7 @@ async fn test_priority_merge_global_and_scope_local() {
     )
     .unwrap();
 
-    let func: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -287,9 +287,9 @@ async fn test_priority_merge_global_and_scope_local() {
     .unwrap();
 
     // All three intercepts ran.
-    assert_eq!(result["p10"], true);
-    assert_eq!(result["p20"], true);
-    assert_eq!(result["p30"], true);
+    assert_eq!(result.result["p10"], true);
+    assert_eq!(result.result["p20"], true);
+    assert_eq!(result.result["p30"], true);
 
     // Verify execution order: 10, 20, 30.
     let recorded = order.lock().unwrap();
@@ -439,7 +439,7 @@ async fn test_scope_isolation_between_stacks() {
 
     // Execute on stack A — should see agent_a's intercept only
     set_thread_scope_stack(stack_a.clone());
-    let func_a: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func_a: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let result_a = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -449,11 +449,11 @@ async fn test_scope_isolation_between_stacks() {
     )
     .await
     .unwrap();
-    assert_eq!(result_a["agent"], "a");
+    assert_eq!(result_a.result["agent"], "a");
 
     // Execute on stack B — should see agent_b's intercept only
     set_thread_scope_stack(stack_b.clone());
-    let func_b: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func_b: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let result_b = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -463,7 +463,7 @@ async fn test_scope_isolation_between_stacks() {
     )
     .await
     .unwrap();
-    assert_eq!(result_b["agent"], "b");
+    assert_eq!(result_b.result["agent"], "b");
 
     // Cleanup
     set_thread_scope_stack(stack_a);
@@ -565,7 +565,7 @@ async fn test_nested_scope_inheritance() {
     .unwrap();
 
     // Execute within scope B — should see global + scope_a + scope_b
-    let func: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("tool")
@@ -576,9 +576,9 @@ async fn test_nested_scope_inheritance() {
     .await
     .unwrap();
 
-    assert_eq!(result["global"], true);
-    assert_eq!(result["scope_a"], true);
-    assert_eq!(result["scope_b"], true);
+    assert_eq!(result.result["global"], true);
+    assert_eq!(result.result["scope_a"], true);
+    assert_eq!(result.result["scope_b"], true);
 
     // Verify all three ran in priority order: 1 (global), 5 (a), 10 (b)
     let recorded = order.lock().unwrap();
@@ -718,7 +718,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     .unwrap();
 
     // Call to banned_tool should be rejected
-    let func_banned: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func_banned: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let err = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("banned_tool")
@@ -737,7 +737,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     }
 
     // Call to a different tool should succeed
-    let func_ok: ToolExecutionNextFn = Arc::new(|args| ready(args));
+    let func_ok: ToolExecutionNextFn = Arc::new(|args| ready(args.into()));
     let result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("allowed_tool")
@@ -748,7 +748,7 @@ async fn test_scope_local_conditional_execution_guardrail() {
     .await
     .unwrap();
 
-    assert_eq!(result["input"], 2);
+    assert_eq!(result.result["input"], 2);
 
     pop_scope(
         nemo_relay::api::scope::PopScopeParams::builder()

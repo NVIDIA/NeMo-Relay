@@ -668,6 +668,38 @@ fn test_exporter_omits_null_tool_observation_content() {
 }
 
 #[test]
+fn test_exporter_preserves_annotation_when_tool_result_is_null() {
+    let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
+    let tool_uuid = Uuid::now_v7();
+    let annotation = json!({"cache": {"hit": true}});
+
+    // Managed execution normalizes a JSON-null result to absent event data,
+    // while the opaque result annotation remains in the category profile.
+    let mut end = event_builder(tool_uuid, EventType::End)
+        .name("noop")
+        .scope_type(ScopeType::Tool)
+        .tool_call_id("call_123")
+        .build();
+    end.category_profile_mut().unwrap().tool_result_annotation = Some(annotation.clone());
+
+    {
+        let mut state = exporter.state.lock().unwrap();
+        state.events.push(end);
+    }
+
+    let trajectory = exporter.export().unwrap();
+    let result = &trajectory.steps[0].observation.as_ref().unwrap().results[0];
+
+    assert_eq!(result.content, None);
+    assert_eq!(
+        result.extra.as_ref().unwrap()["tool_result_annotation"],
+        annotation
+    );
+    assert!(result.extra.as_ref().unwrap().get("tool_result").is_none());
+    assert!(observation_result_has_tool_result_extra(result));
+}
+
+#[test]
 fn test_exporter_moves_structured_tool_close_result_to_observation_extra() {
     let exporter = AtifExporter::new("session-1".to_string(), make_agent_info());
     let tool_uuid = Uuid::now_v7();

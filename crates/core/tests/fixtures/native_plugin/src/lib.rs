@@ -14,7 +14,8 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
     NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
     NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
-    PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, PendingMarkSpec, PluginContext, PluginRuntime,
+    ScopeCategory, ScopeType,
     ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
@@ -164,9 +165,10 @@ impl NativePlugin for FixtureNativePlugin {
                     } else {
                         next.call(args).await?
                     };
-                    let result = mark_json(result, "native_plugin_tool_execution");
+                    let mut result = result;
+                    result.result = mark_json(result.result, "native_plugin_tool_execution");
                     Ok(
-                        ToolExecutionInterceptOutcome::new(result).with_pending_mark(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
                             PendingMarkSpec::builder()
                                 .name("fixture.native.tool_execution.mark")
                                 .category(EventCategory::custom())
@@ -514,6 +516,29 @@ pub unsafe extern "C" fn nemo_relay_fixture_tool_outcome_errors(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_abi_v2_api1(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    if host.is_null() || out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    if unsafe { (*host).abi_version } != NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY {
+        return NemoRelayStatus::InvalidArg;
+    }
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "fixture_native",
+            None,
+            None,
+            Some(raw_register_canonical_tool_outcome),
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_event_sanitize_errors(
     host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
@@ -630,6 +655,32 @@ unsafe extern "C" fn raw_register_tool_outcome_errors(
             name,
             0,
             raw_tool_outcome_callback,
+            user_data,
+            None,
+        )
+    };
+    unsafe { (host.string_free)(name) };
+    status
+}
+
+unsafe extern "C" fn raw_register_canonical_tool_outcome(
+    user_data: *mut c_void,
+    _plugin_config_json: *const NemoRelayNativeString,
+    ctx: *mut NemoRelayNativePluginContext,
+) -> NemoRelayStatus {
+    let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let name = unsafe { raw_host_string(host, "fixture_abi_v2_api1") };
+    if name.is_null() {
+        return NemoRelayStatus::Internal;
+    }
+    let status = unsafe {
+        (host.plugin_context_register_tool_execution_intercept)(
+            ctx,
+            name,
+            0,
+            raw_canonical_tool_outcome_callback,
             user_data,
             None,
         )
@@ -1152,9 +1203,9 @@ unsafe fn reject_async_completion(
 unsafe extern "C" fn raw_tool_outcome_callback(
     user_data: *mut c_void,
     name: *const NemoRelayNativeString,
-    _args_json: *const NemoRelayNativeString,
-    _next_fn: NemoRelayNativeToolNextFn,
-    _next_ctx: *mut c_void,
+    args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
     out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     if out_outcome_json.is_null() {
@@ -1184,15 +1235,79 @@ unsafe extern "C" fn raw_tool_outcome_callback(
             NemoRelayStatus::Internal
         }
         _ => {
-            unsafe {
-                *out_outcome_json = raw_host_string(
-                    host,
-                    r#"{"result":{"raw_tool_outcome":true},"pending_marks":[]}"#,
-                );
+            let mut next_result = ptr::null_mut();
+            let status = unsafe { next_fn(args_json, next_ctx, &mut next_result) };
+            if status != NemoRelayStatus::Ok {
+                return status;
             }
+            let encoded = unsafe { raw_host_string_value(host, next_result) };
+            unsafe { (host.string_free)(next_result) };
+            let Some(encoded) = encoded else {
+                return NemoRelayStatus::InvalidUtf8;
+            };
+            let Ok(downstream) = serde_json::from_str::<Json>(&encoded) else {
+                return NemoRelayStatus::InvalidArg;
+            };
+            let Ok(encoded) = serde_json::to_string(&json!({
+                "result": {
+                    "raw_tool_outcome": true,
+                    "downstream": downstream,
+                },
+                "pending_marks": [],
+            })) else {
+                return NemoRelayStatus::Internal;
+            };
+            let output = unsafe { raw_host_string(host, &encoded) };
+            if output.is_null() {
+                return NemoRelayStatus::Internal;
+            }
+            unsafe { *out_outcome_json = output };
             NemoRelayStatus::Ok
         }
     }
+}
+
+unsafe extern "C" fn raw_canonical_tool_outcome_callback(
+    user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_outcome_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_outcome_json = ptr::null_mut() };
+    let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let mut next_result = ptr::null_mut();
+    let status = unsafe { next_fn(args_json, next_ctx, &mut next_result) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    let encoded = unsafe { raw_host_string_value(host, next_result) };
+    unsafe { (host.string_free)(next_result) };
+    let Some(encoded) = encoded else {
+        return NemoRelayStatus::InvalidUtf8;
+    };
+    let Ok(mut outcome) = serde_json::from_str::<Json>(&encoded) else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    let Some(outcome) = outcome.as_object_mut() else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    outcome.insert("pending_marks".into(), Json::Array(Vec::new()));
+    let Ok(encoded) = serde_json::to_string(&outcome) else {
+        return NemoRelayStatus::Internal;
+    };
+    let output = unsafe { raw_host_string(host, &encoded) };
+    if output.is_null() {
+        return NemoRelayStatus::Internal;
+    }
+    unsafe { *out_outcome_json = output };
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn raw_event_sanitize_error_callback(

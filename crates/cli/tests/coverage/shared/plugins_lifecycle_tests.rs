@@ -269,7 +269,7 @@ id = "{plugin_id}"
 kind = "worker"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -362,7 +362,7 @@ id = "{plugin_id}"
 kind = "worker"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -600,7 +600,7 @@ id = "{plugin_id}"
 kind = "rust_dynamic"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -751,7 +751,7 @@ id = "acme.snapshot-race"
 kind = "worker"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -907,7 +907,7 @@ id = "acme.external-native-closure"
 kind = "rust_dynamic"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]

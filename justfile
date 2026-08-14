@@ -1065,6 +1065,13 @@ check-python-worker-proto:
     }
     assert pb.SUBSCRIBER == 1
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
+    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
+    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
+    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
+    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
     PY
 
 generate-test-plugin-lockfiles:

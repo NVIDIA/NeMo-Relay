@@ -255,7 +255,8 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return ToolOutcome(await next(value))
+    downstream = await next(value)
+    return ToolOutcome(downstream.result, annotation=downstream.annotation)
 "#,
         );
 
@@ -735,7 +736,8 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return ToolOutcome(await next(value))
+    downstream = await next(value)
+    return ToolOutcome(downstream.result, annotation=downstream.annotation)
 "#,
         );
 
@@ -1019,7 +1021,8 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return ToolOutcome(await next(value))
+    downstream = await next(value)
+    return ToolOutcome(downstream.result, annotation=downstream.annotation)
 "#,
         );
 

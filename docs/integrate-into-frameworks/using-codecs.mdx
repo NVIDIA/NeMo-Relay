@@ -49,7 +49,8 @@ When a managed typed wrapper receives a codec:
 1. The wrapper converts the application input into JSON before entering the NeMo Relay runtime.
 2. NeMo Relay emits lifecycle events and runs middleware against JSON-compatible payloads.
 3. The wrapper converts JSON back into the callback type before invoking framework-owned code when needed.
-4. The wrapper converts the callback result back through the result codec before returning to the caller.
+4. The wrapper converts only `ToolExecutionResult.result` back through the
+   result codec and preserves the optional opaque `annotation` unchanged.
 
 Keep codecs deterministic and side-effect free. A codec should not open network connections, mutate framework state, or hide provider I/O.
 
@@ -121,8 +122,8 @@ from nemo_relay.typed import DataclassCodec, JsonPassthrough, tool_execute
 class SearchArgs:
     query: str
 
-async def invoke(args: SearchArgs) -> dict[str, str]:
-    return {"echo": args.query}
+async def invoke(args: SearchArgs) -> nemo_relay.ToolExecutionResult[dict[str, str]]:
+    return nemo_relay.ToolExecutionResult({"echo": args.query})
 
 result = await tool_execute(
     "search",
@@ -131,12 +132,18 @@ result = await tool_execute(
     args_codec=DataclassCodec(SearchArgs),
     result_codec=JsonPassthrough(),
 )
+search_result = result.result
 ```
 </Tab>
 
 <Tab title="Node.js" language="node">
 ```ts
-import { JsonPassthrough, typedToolExecute, type Codec, type JsonValue } from 'nemo-relay-node/typed';
+import {
+  JsonPassthrough,
+  typedToolExecute,
+  type Codec,
+  type JsonValue,
+} from 'nemo-relay-node/typed';
 
 type SearchArgs = { query: string };
 type SearchResult = { echo: string };
@@ -149,10 +156,11 @@ const argsCodec: Codec<SearchArgs, JsonValue> = {
 const result = await typedToolExecute<SearchArgs, SearchResult>(
   'search',
   { query: 'weather' },
-  async (args) => ({ echo: args.query }),
+  async (args) => ({ result: { echo: args.query } }),
   argsCodec,
   new JsonPassthrough(),
 );
+const searchResult = result.result;
 ```
 </Tab>
 
@@ -165,6 +173,8 @@ contract.
 
 - Codec output is JSON-compatible.
 - Required fields are preserved by `toJson` and `fromJson`.
+- Only the application-owned `result` passes through the result codec; an
+  opaque tool result annotation is preserved unchanged.
 - Middleware sees the expected serialized shape.
 - The framework callback receives the expected application type.
 - Error paths report conversion failures close to the framework boundary.

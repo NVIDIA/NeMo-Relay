@@ -257,7 +257,11 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
         tool_call_end(
             py,
             &tool,
-            &py_dict(py, json!({"result": 2})),
+            crate::py_types::PyToolExecutionResult::from_inner(
+                py,
+                nemo_relay::api::tool::ToolExecutionResult::new(json!({"result": 2})),
+            )
+            .unwrap(),
             Some(&py_dict(py, json!({"done": true}))),
             Some(&py_dict(py, json!({"status": "ok"}))),
             None,
@@ -338,12 +342,16 @@ def tool_request_intercept(name, args):
     return updated
 
 async def tool_exec(args):
-    return {"tool_result": args["value"]}
+    return ToolExecutionResult(
+        {"tool_result": args["value"]},
+        {"source": "python-coverage"},
+    )
 
 async def tool_exec_intercept(name, args, next):
-    result = await next({"value": args["value"] + 3})
+    downstream = await next({"value": args["value"] + 3})
+    result = dict(downstream.result)
     result["tool_intercepted"] = True
-    return ToolExecutionInterceptOutcome(result)
+    return ToolExecutionInterceptOutcome(result, annotation=downstream.annotation)
 
 def llm_sanitize_request(request, context):
     return request
@@ -518,6 +526,12 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                 types_module
                     .getattr("ToolExecutionInterceptOutcome")
                     .unwrap(),
+            )
+            .unwrap();
+        helpers
+            .setattr(
+                "ToolExecutionResult",
+                types_module.getattr("ToolExecutionResult").unwrap(),
             )
             .unwrap();
         helpers
@@ -750,9 +764,15 @@ async def run_stream(api, request, func, collector, finalizer, handle, attribute
                             .unwrap(),),
                     )
                     .unwrap();
-                let tool_json = crate::convert::py_to_json(&tool_result).unwrap();
+                let tool_json =
+                    crate::convert::py_to_json(&tool_result.getattr("result").unwrap()).unwrap();
                 assert_eq!(tool_json["tool_result"], json!(6));
                 assert_eq!(tool_json["tool_intercepted"], json!(true));
+                assert_eq!(
+                    crate::convert::py_to_json(&tool_result.getattr("annotation").unwrap())
+                        .unwrap(),
+                    json!({"source": "python-coverage"})
+                );
 
                 let codec = helpers.getattr("EchoCodec").unwrap().call0().unwrap();
                 let response_codec = types_module

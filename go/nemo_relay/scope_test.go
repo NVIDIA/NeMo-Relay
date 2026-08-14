@@ -605,7 +605,7 @@ func testEventScopeTypeMatchesEventFamily(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolCall failed: %v", err)
 	}
-	if err := ToolCallEnd(toolHandle, json.RawMessage(`{"y":2}`)); err != nil {
+	if err := ToolCallEnd(toolHandle, toolExecutionResult(json.RawMessage(`{"y":2}`))); err != nil {
 		t.Fatalf("ToolCallEnd failed: %v", err)
 	}
 

@@ -11,7 +11,14 @@ from typing import cast
 
 import pytest
 
-from nemo_relay import JsonObject, LLMRequest, intercepts, typed
+from nemo_relay import (
+    JsonObject,
+    LLMRequest,
+    ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
+    intercepts,
+    typed,
+)
 from nemo_relay.typed import BestEffortAnyCodec, Codec, DataclassCodec, JsonPassthrough
 
 # ---------------------------------------------------------------------------
@@ -230,8 +237,8 @@ class TestTypedHelpers:
 
 class TestTypedToolExecute:
     async def test_dataclass_roundtrip(self):
-        async def search(args: SearchArgs) -> SearchResult:
-            return SearchResult(items=[args.query], total=1)
+        async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:
+            return ToolExecutionResult(SearchResult(items=[args.query], total=1), {"provider": "typed"})
 
         result = await typed.tool_execute(
             "search",
@@ -240,13 +247,64 @@ class TestTypedToolExecute:
             search_args_codec,
             search_result_codec,
         )
-        assert isinstance(result, SearchResult)
-        assert result.items == ["hello"]
-        assert result.total == 1
+        assert isinstance(result.result, SearchResult)
+        assert result.result.items == ["hello"]
+        assert result.result.total == 1
+        assert result.annotation == {"provider": "typed"}
+
+    async def test_annotation_passes_through_json_intercepts_unchanged(self):
+        seen_annotations = []
+
+        async def intercept(_name, args, next):
+            downstream = await next(args)
+            seen_annotations.append(downstream.annotation)
+            return ToolExecutionInterceptOutcome(
+                downstream.result,
+                annotation=downstream.annotation,
+            )
+
+        async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:
+            return ToolExecutionResult(
+                SearchResult(items=[args.query], total=1),
+                {"provider": "typed-intercept"},
+            )
+
+        intercepts.register_tool_execution("typed_annotation", 1, intercept)
+        try:
+            result = await typed.tool_execute(
+                "typed_annotation_tool",
+                SearchArgs(query="hello"),
+                search,
+                search_args_codec,
+                search_result_codec,
+            )
+        finally:
+            intercepts.deregister_tool_execution("typed_annotation")
+
+        assert result.result == SearchResult(items=["hello"], total=1)
+        assert result.annotation == {"provider": "typed-intercept"}
+        assert seen_annotations == [{"provider": "typed-intercept"}]
+
+    async def test_rejects_legacy_raw_results(self):
+        def sync_legacy(_args):
+            return SearchResult(items=[], total=0)
+
+        async def async_legacy(_args):
+            return SearchResult(items=[], total=0)
+
+        for producer in (sync_legacy, async_legacy):
+            with pytest.raises(RuntimeError, match="typed tool callback must return ToolExecutionResult"):
+                await typed.tool_execute(
+                    "typed_legacy_result",
+                    SearchArgs(query="hello"),
+                    producer,  # type: ignore[arg-type]
+                    search_args_codec,
+                    search_result_codec,
+                )
 
     async def test_dataclass_add(self):
-        async def add(args: DcArgs) -> DcResult:
-            return DcResult(value=args.x + args.y)
+        async def add(args: DcArgs) -> ToolExecutionResult[DcResult]:
+            return ToolExecutionResult(DcResult(value=args.x + args.y))
 
         result = await typed.tool_execute(
             "add",
@@ -255,14 +313,14 @@ class TestTypedToolExecute:
             dc_args_codec,
             dc_result_codec,
         )
-        assert isinstance(result, DcResult)
-        assert result.value == 10
+        assert isinstance(result.result, DcResult)
+        assert result.result.value == 10
 
     async def test_passthrough(self):
         """With JsonPassthrough codecs, dicts pass through unchanged."""
 
         async def echo(args):
-            return {"echoed": args}
+            return ToolExecutionResult({"echoed": args})
 
         result = await typed.tool_execute(
             "echo",
@@ -271,11 +329,11 @@ class TestTypedToolExecute:
             passthrough,
             passthrough,
         )
-        assert result == {"echoed": {"key": "value"}}
+        assert result.result == {"echoed": {"key": "value"}}
 
     async def test_sync_func(self):
-        def double(args: SearchArgs) -> SearchResult:
-            return SearchResult(items=[args.query, args.query], total=2)
+        def double(args: SearchArgs) -> ToolExecutionResult[SearchResult]:
+            return ToolExecutionResult(SearchResult(items=[args.query, args.query], total=2))
 
         result = await typed.tool_execute(
             "sync_search",
@@ -284,8 +342,8 @@ class TestTypedToolExecute:
             search_args_codec,
             search_result_codec,
         )
-        assert isinstance(result, SearchResult)
-        assert result.total == 2
+        assert isinstance(result.result, SearchResult)
+        assert result.result.total == 2
 
     async def test_intercepts_see_json(self):
         """Request intercepts operate on JSON dicts, not typed objects."""
@@ -298,9 +356,9 @@ class TestTypedToolExecute:
 
         intercepts.register_tool_request("typed_req_int", 1, False, intercept_fn)
 
-        async def search(args: SearchArgs) -> SearchResult:
+        async def search(args: SearchArgs) -> ToolExecutionResult[SearchResult]:
             assert args.limit == 99
-            return SearchResult(items=[], total=0)
+            return ToolExecutionResult(SearchResult(items=[], total=0))
 
         result = await typed.tool_execute(
             "intercepted_search",
@@ -309,7 +367,7 @@ class TestTypedToolExecute:
             search_args_codec,
             search_result_codec,
         )
-        assert isinstance(result, SearchResult)
+        assert isinstance(result.result, SearchResult)
         assert len(seen_args) == 1
         assert isinstance(seen_args[0], dict)
 
@@ -318,8 +376,8 @@ class TestTypedToolExecute:
     async def test_mixed_codecs(self):
         """Use different codec types for args and result."""
 
-        async def convert(args: SearchArgs) -> DcResult:
-            return DcResult(value=len(args.query))
+        async def convert(args: SearchArgs) -> ToolExecutionResult[DcResult]:
+            return ToolExecutionResult(DcResult(value=len(args.query)))
 
         result = await typed.tool_execute(
             "mixed",
@@ -328,8 +386,8 @@ class TestTypedToolExecute:
             search_args_codec,
             dc_result_codec,
         )
-        assert isinstance(result, DcResult)
-        assert result.value == 5
+        assert isinstance(result.result, DcResult)
+        assert result.result.value == 5
 
 
 # ---------------------------------------------------------------------------
@@ -592,8 +650,8 @@ class TestTypedToolExecuteCustomCodec:
     async def test_sync_func_custom_codec(self):
         """Sync tool function with a fully custom Codec subclass."""
 
-        def repeat(value: str) -> int:
-            return len(value)
+        def repeat(value: str) -> ToolExecutionResult[int]:
+            return ToolExecutionResult(len(value))
 
         result = await typed.tool_execute(
             "repeat_tool",
@@ -602,8 +660,8 @@ class TestTypedToolExecuteCustomCodec:
             prefix_codec,
             sum_codec,
         )
-        assert isinstance(result, int)
-        assert result == 5
+        assert isinstance(result.result, int)
+        assert result.result == 5
 
 
 class TestTypedLlmExecuteCustomCodec:

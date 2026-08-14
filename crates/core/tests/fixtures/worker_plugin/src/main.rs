@@ -199,10 +199,9 @@ fn register_fixture_tool_hooks(
             let result = next
                 .call(mark_json(args, "worker_plugin_tool_execution_request"))
                 .await?;
-            Ok(ToolExecutionInterceptOutcome::new(mark_json(
-                result,
-                "worker_plugin_tool_execution",
-            ))
+            let mut result = result;
+            result.result = mark_json(result.result, "worker_plugin_tool_execution");
+            Ok(ToolExecutionInterceptOutcome::from(result)
             .with_pending_mark(
                 PendingMarkSpec::builder()
                     .name("fixture.worker.tool_execution.mark")

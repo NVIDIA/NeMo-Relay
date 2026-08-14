@@ -561,12 +561,15 @@ fn observation_content_value(value: &Json) -> Option<Json> {
     }
 }
 
-fn observation_extra(event: &Event, output: &Json) -> Json {
+fn observation_extra(event: &Event, output: Option<&Json>) -> Json {
     let mut extra = event_extra(event);
-    if let Some(tool_result) = observation_tool_result_extra(output)
-        && let Json::Object(extra_object) = &mut extra
-    {
-        extra_object.insert("tool_result".to_string(), tool_result);
+    if let Json::Object(extra_object) = &mut extra {
+        if let Some(tool_result) = output.and_then(observation_tool_result_extra) {
+            extra_object.insert("tool_result".to_string(), tool_result);
+        }
+        if let Some(annotation) = super::tool_result_annotation(event) {
+            extra_object.insert("tool_result_annotation".to_string(), annotation);
+        }
     }
     extra
 }
@@ -2744,13 +2747,14 @@ impl StepConversionState {
 
     fn handle_tool_end(&mut self, event: &Event, lookups: &EventLookupMaps) {
         let source_call_id = self.resolve_source_call_id(event, lookups);
-        if let Some(output) = event.data() {
+        let output = event.data();
+        if output.is_some() || super::tool_result_annotation(event).is_some() {
             if self.pending_obs_timestamp.is_none() {
                 self.pending_obs_timestamp = Some(event.timestamp().to_rfc3339());
             }
             self.pending_observations.push(AtifObservationResult {
                 source_call_id: source_call_id.clone(),
-                content: observation_content_value(output),
+                content: output.and_then(observation_content_value),
                 subagent_trajectory_ref: None,
                 extra: Some(observation_extra(event, output)),
             });
@@ -3162,7 +3166,9 @@ fn observation_result_has_tool_result_extra(result: &AtifObservationResult) -> b
         .extra
         .as_ref()
         .and_then(|extra| extra.as_object())
-        .is_some_and(|extra| extra.contains_key("tool_result"))
+        .is_some_and(|extra| {
+            extra.contains_key("tool_result") || extra.contains_key("tool_result_annotation")
+        })
 }
 
 fn refresh_tool_call_lookup(

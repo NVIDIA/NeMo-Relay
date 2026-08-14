@@ -21,6 +21,7 @@ from nemo_relay import (
     ScopeEvent,
     ScopeType,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     guardrails,
     llm,
     scope,
@@ -66,7 +67,7 @@ class TestScopeLocalGuardrail:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         with scope.scope("guardrail_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_sanitizer", 1, sanitizer)
@@ -76,8 +77,8 @@ class TestScopeLocalGuardrail:
 
         # Sanitize guardrails are observability-only: they do NOT modify args
         # flowing through the execution pipeline.
-        assert result["input"] == "data"
-        assert "sanitized" not in result
+        assert result.result["input"] == "data"
+        assert "sanitized" not in result.result
 
         # The sanitizer's effect is visible in the event's input field.
         start_event = _scope_event(events, "sanitized_tool", "tool", "start")
@@ -92,7 +93,7 @@ class TestScopeLocalGuardrail:
             return result
 
         def my_tool(args):
-            return {"output": "raw"}
+            return ToolExecutionResult({"output": "raw"})
 
         with scope.scope("resp_guard_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_response(handle, "sl_resp_sanitizer", 1, response_sanitizer)
@@ -102,8 +103,8 @@ class TestScopeLocalGuardrail:
 
         # Sanitize guardrails are observability-only: they do NOT modify the
         # result flowing through the execution pipeline.
-        assert result["output"] == "raw"
-        assert "response_sanitized" not in result
+        assert result.result["output"] == "raw"
+        assert "response_sanitized" not in result.result
 
         # The sanitizer's effect is visible in the event's output field.
         end_event = _scope_event(events, "resp_tool", "tool", "end")
@@ -125,7 +126,7 @@ class TestScopeLocalAutoCleanup:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         # Register guardrail inside a scope, then exit
         with scope.scope("cleanup_scope", ScopeType.Agent) as handle:
@@ -159,7 +160,7 @@ class TestScopeLocalAutoCleanup:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         with scope.scope("intercept_cleanup", ScopeType.Agent) as handle:
             scope_local.register_tool_request(handle, "sl_cleanup_int", 1, False, intercept_fn)
@@ -167,8 +168,8 @@ class TestScopeLocalAutoCleanup:
 
         result_outside = await tools.execute("tool_out_scope", {"a": 2}, my_tool)
 
-        assert result_inside["intercepted"] is True
-        assert "intercepted" not in result_outside
+        assert result_inside.result["intercepted"] is True
+        assert "intercepted" not in result_outside.result
 
     async def test_subscriber_inactive_after_scope_exit(self):
         """Scope-local subscriber stops receiving events after scope exit."""
@@ -178,13 +179,13 @@ class TestScopeLocalAutoCleanup:
             scope_local.register_subscriber(handle, "sl_cleanup_sub", lambda e: events_inside.append(e))
             # Generate some events inside the scope
             inner_handle = tools.call("sub_tool", {"k": "v"})
-            tools.call_end(inner_handle, {"done": True})
+            tools.call_end(inner_handle, ToolExecutionResult({"done": True}))
 
         # Events generated after scope exit should not reach the subscriber
         global_events = []
         subscribers.register("sl_after_sub", lambda e: global_events.append(e))
         outer_handle = tools.call("outer_tool", {})
-        tools.call_end(outer_handle, {})
+        tools.call_end(outer_handle, ToolExecutionResult({}))
         await subscribers.flush_async()
         subscribers.deregister("sl_after_sub")
 
@@ -219,7 +220,7 @@ class TestScopeLocalPriorityOrdering:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         guardrails.register_tool_sanitize_request("sl_global_guard", 10, global_sanitizer)
 
@@ -247,7 +248,7 @@ class TestScopeLocalPriorityOrdering:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         guardrails.register_tool_sanitize_request("sl_global_guard2", 10, global_sanitizer)
 
@@ -276,7 +277,7 @@ class TestScopeLocalSubscriber:
         with scope.scope("sub_scope", ScopeType.Agent) as handle:
             scope_local.register_subscriber(handle, "sl_sub", lambda e: events.append(e))
             tool_handle = tools.call("sub_test_tool", {"arg": "value"})
-            tools.call_end(tool_handle, {"result": "ok"})
+            tools.call_end(tool_handle, ToolExecutionResult({"result": "ok"}))
         await subscribers.flush_async()
 
         # Should have received at least tool start and end events
@@ -309,7 +310,7 @@ class TestScopeLocalSubscriber:
             # Events after deregistration should not be collected
             events_before = len(events)
             tool_handle = tools.call("dereg_tool", {})
-            tools.call_end(tool_handle, {})
+            tools.call_end(tool_handle, ToolExecutionResult({}))
         subscribers.flush()
 
         # No new events should have been appended after deregistration
@@ -332,7 +333,7 @@ class TestScopeLocalConditionalExecution:
             return None
 
         def my_tool(args):
-            return {"should": "not reach"}
+            return ToolExecutionResult({"should": "not reach"})
 
         with scope.scope("cond_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_conditional_execution(handle, "sl_blocker", 1, blocker)
@@ -349,13 +350,13 @@ class TestScopeLocalConditionalExecution:
             return None
 
         def my_tool(args):
-            return {"result": "success"}
+            return ToolExecutionResult({"result": "success"})
 
         with scope.scope("cond_allow_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_conditional_execution(handle, "sl_allow_blocker", 1, blocker)
             result = await tools.execute("safe_tool", {"data": 42}, my_tool)
 
-        assert result["result"] == "success"
+        assert result.result["result"] == "success"
 
     async def test_conditional_inactive_after_scope_exit(self):
         """Conditional guardrail does not reject after its scope has been popped."""
@@ -367,14 +368,14 @@ class TestScopeLocalConditionalExecution:
             return None
 
         def my_tool(args):
-            return {"ok": True}
+            return ToolExecutionResult({"ok": True})
 
         with scope.scope("cond_cleanup_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_conditional_execution(handle, "sl_cond_cleanup", 1, blocker)
 
         # After scope exit, the guardrail should no longer be active
         result = await tools.execute("blocked_tool", {}, my_tool)
-        assert result["ok"] is True
+        assert result.result["ok"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -399,7 +400,7 @@ class TestScopeLocalIsolation:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         # Scope A: registers interceptor_a
         with scope.scope("scope_a", ScopeType.Agent) as handle_a:
@@ -412,12 +413,12 @@ class TestScopeLocalIsolation:
             result_b = await tools.execute("tool_b", {"input": "b"}, my_tool)
 
         # Scope A result should only have from_scope_a
-        assert result_a["from_scope_a"] is True
-        assert "from_scope_b" not in result_a
+        assert result_a.result["from_scope_a"] is True
+        assert "from_scope_b" not in result_a.result
 
         # Scope B result should only have from_scope_b
-        assert result_b["from_scope_b"] is True
-        assert "from_scope_a" not in result_b
+        assert result_b.result["from_scope_b"] is True
+        assert "from_scope_a" not in result_b.result
 
     async def test_no_leaking_with_different_middleware_types(self):
         """Different middleware types in sequential scopes stay isolated."""
@@ -431,7 +432,7 @@ class TestScopeLocalIsolation:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         # Scope A: request intercept + subscriber
         with scope.scope("iso_scope_a", ScopeType.Agent) as handle_a:
@@ -447,9 +448,9 @@ class TestScopeLocalIsolation:
         await subscribers.flush_async()
 
         # Scope A should have had the intercept applied
-        assert result_a["intercepted"] is True
+        assert result_a.result["intercepted"] is True
         # Scope B should NOT have the intercept
-        assert "intercepted" not in result_b
+        assert "intercepted" not in result_b.result
         # Both subscribers should have received events in their respective scopes
         assert len(events_a) >= 1
         assert len(events_b) >= 1
@@ -463,7 +464,7 @@ class TestScopeLocalIsolation:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         guardrails.register_tool_sanitize_request("sl_persist_global", 1, global_guard)
 
@@ -493,7 +494,7 @@ class TestScopeLocalExecutionIntercept:
         """A scope-local execution intercept can replace the tool function entirely."""
 
         def my_tool(args):
-            return {"from": "original"}
+            return ToolExecutionResult({"from": "original"})
 
         with scope.scope("exec_int_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_execution(
@@ -504,7 +505,7 @@ class TestScopeLocalExecutionIntercept:
             )
             result = await tools.execute("exec_int_tool", {}, my_tool)
 
-        assert result["from"] == "intercept"
+        assert result.result["from"] == "intercept"
 
     async def test_execution_intercept_calls_next(self):
         """A scope-local execution intercept can modify args and return a result.
@@ -517,7 +518,7 @@ class TestScopeLocalExecutionIntercept:
         """
 
         def my_tool(args):
-            return {"value": args["x"] * 2}
+            return ToolExecutionResult({"value": args["x"] * 2})
 
         def intercept_fn(name, args, next_fn):
             # Cannot call next_fn here — it returns a Future.
@@ -529,8 +530,8 @@ class TestScopeLocalExecutionIntercept:
             result = await tools.execute("exec_next_tool", {"x": 5}, my_tool)
 
         # Intercept receives x=5, adds 1 -> x=6, returns value=12
-        assert result["value"] == 12
-        assert result["intercepted"] is True
+        assert result.result["value"] == 12
+        assert result.result["intercepted"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -548,7 +549,7 @@ class TestScopeLocalDeregistration:
             return args
 
         def my_tool(args):
-            return args
+            return ToolExecutionResult(args)
 
         with scope.scope("dereg_scope", ScopeType.Agent) as handle:
             scope_local.register_tool_sanitize_request(handle, "sl_dereg_guard", 1, sanitizer)

@@ -131,7 +131,7 @@ id = {plugin_id}
 kind = "worker"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -181,7 +181,7 @@ id = {plugin_id}
 kind = "worker"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]

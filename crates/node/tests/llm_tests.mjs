@@ -2009,6 +2009,13 @@ describe('LLM intercepts', () => {
       2,
       'global and scope-local stream intercept declarations must expose the buffered next contract',
     );
+    assert.equal(
+      declarations.split(
+        'next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>',
+      ).length - 1,
+      2,
+      'global and scope-local tool intercept declarations must expose canonical tool results',
+    );
   });
 
   it('plugin declarations expose Promise middleware and the implemented stream contract', () => {

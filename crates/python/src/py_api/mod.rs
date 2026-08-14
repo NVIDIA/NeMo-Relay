@@ -54,7 +54,7 @@ use crate::py_types::{
     PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream, PyOCIGenAIChatCodec,
     PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext, PyScopeAttributes,
     PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding, PyToolAttributes,
-    PyToolHandle,
+    PyToolExecutionResult, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -757,21 +757,21 @@ fn tool_call(
 #[pyfunction]
 #[pyo3(signature = (
     handle: "ToolHandle",
-    result: "object",
+    result: "ToolExecutionResult",
 	    *,
 	    data: "object | None"=None,
 	    metadata: "object | None"=None,
 	    timestamp: "datetime.datetime | None"=None
-) -> "None", text_signature = "(handle: ToolHandle, result: object, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+) -> "None", text_signature = "(handle: ToolHandle, result: ToolExecutionResult, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn tool_call_end(
-    _py: Python<'_>,
+    py: Python<'_>,
     handle: &PyToolHandle,
-    result: &Bound<'_, PyAny>,
+    result: PyToolExecutionResult,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
     timestamp: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
-    let result_json = py_to_json(result)?;
+    let execution_result = result.to_inner(py)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
@@ -779,7 +779,7 @@ fn tool_call_end(
         core_tool_api::tool_call_end(
             core_tool_api::ToolCallEndParams::builder()
                 .handle(&handle.inner)
-                .result(result_json)
+                .execution_result(execution_result)
                 .data_opt(data)
                 .metadata_opt(metadata)
                 .timestamp_opt(timestamp)
@@ -801,7 +801,7 @@ fn tool_call_end(
 /// Args:
 ///     name: Tool name.
 ///     args: JSON-serializable tool arguments.
-///     func: An async callable ``(args) -> result`` that performs the tool work.
+///     func: An async callable ``(args) -> ToolExecutionResult`` that performs the tool work.
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``ToolAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
@@ -866,7 +866,10 @@ fn tool_call_execute<'py>(
                     )
                     .await
                     .map_err(to_py_err)?;
-                    Python::attach(|py| json_to_py(py, &result))
+                    Python::attach(|py| {
+                        Py::new(py, PyToolExecutionResult::from_inner(py, result)?)
+                            .map(Py::into_any)
+                    })
                 }),
             ),
         )

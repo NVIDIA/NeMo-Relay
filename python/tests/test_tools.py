@@ -21,6 +21,7 @@ from nemo_relay import (
     ScopeType,
     ToolAttributes,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     ToolHandle,
     create_scope_stack,
     guardrails,
@@ -52,13 +53,30 @@ class TestTools:
         handle = tools.call("my_tool", {"input": "data"})
         assert isinstance(handle, ToolHandle)
         assert handle.name == "my_tool"
-        tools.call_end(handle, {"output": "result"})
+        tools.call_end(handle, ToolExecutionResult({"output": "result"}))
+
+    def test_call_end_preserves_result_annotation(self, subscribed_events: list[Event]):
+        handle = tools.call("manual_annotated_tool", {"input": "data"})
+        tools.call_end(
+            handle,
+            ToolExecutionResult(
+                {"output": "result"},
+                {"provider": "manual"},
+            ),
+        )
+        subscribers.flush()
+
+        end = _tool_event(subscribed_events, "manual_annotated_tool", "end")
+        assert end.data == {"output": "result"}
+        assert end.category_profile == {
+            "tool_result_annotation": {"provider": "manual"},
+        }
 
     def test_call_with_attributes(self):
         attrs = ToolAttributes(ToolAttributes.REMOTE)
         handle = tools.call("local_tool", {"x": 1}, attributes=attrs)
         assert handle.name == "local_tool"
-        tools.call_end(handle, {"y": 2})
+        tools.call_end(handle, ToolExecutionResult({"y": 2}))
 
     def test_call_with_data_metadata(self):
         handle = tools.call(
@@ -67,18 +85,18 @@ class TestTools:
             data={"custom": "info"},
             metadata={"trace_id": "abc123"},
         )
-        tools.call_end(handle, "ok", data={"end_data": True}, metadata={"end_meta": True})
+        tools.call_end(handle, ToolExecutionResult("ok"), data={"end_data": True}, metadata={"end_meta": True})
 
     def test_call_with_parent_handle(self):
         parent = scope.push("tool_parent", ScopeType.Agent)
         handle = tools.call("child_tool", {}, handle=parent)
         assert handle.parent_uuid == parent.uuid
-        tools.call_end(handle, {})
+        tools.call_end(handle, ToolExecutionResult({}))
         scope.pop(parent)
 
     def test_complete_skill_read_emits_minimal_eager_mark(self, subscribed_events: list[Event]):
         handle = tools.call("read_file", {"path": "/skills/review/SKILL.md"})
-        tools.call_end(handle, {"ok": True})
+        tools.call_end(handle, ToolExecutionResult({"ok": True}))
         subscribers.flush()
 
         start = _tool_event(subscribed_events, "read_file", "start")
@@ -94,16 +112,24 @@ class TestToolsAsync:
     async def test_execute_basic(self):
         # tools.execute wraps a Python callable; use sync func
         def my_func(args):
-            return {"result": args["x"] * 2}
+            return ToolExecutionResult({"result": args["x"] * 2})
 
         result = await tools.execute("double", {"x": 5}, my_func)
-        assert result == {"result": 10}
+        assert result.result == {"result": 10}
+
+    async def test_execute_rejects_legacy_raw_result(self):
+        with pytest.raises(RuntimeError, match="must return ToolExecutionResult"):
+            await tools.execute(
+                "legacy_raw_result",
+                {},
+                lambda _args: {"legacy": True},  # type: ignore[arg-type]
+            )
 
     async def test_execute_rejects_cyclic_results_and_remains_usable(self):
         def cyclic_result(_args):
             result = {}
             result["self"] = result
-            return result
+            return ToolExecutionResult(result)
 
         with pytest.raises(RuntimeError, match="circular reference detected"):
             await tools.execute("cyclic_result", {}, cyclic_result)
@@ -117,12 +143,12 @@ class TestToolsAsync:
         cyclic_mapping = UserDict()
         cyclic_mapping["self"] = cyclic_mapping
         with pytest.raises(RuntimeError, match="circular reference detected"):
-            await tools.execute("cyclic_mapping", {}, lambda _args: cyclic_mapping)
+            await tools.execute("cyclic_mapping", {}, lambda _args: ToolExecutionResult(cyclic_mapping))
 
         cyclic_sequence = UserList()
         cyclic_sequence.append(cyclic_sequence)
         with pytest.raises(RuntimeError, match="circular reference detected"):
-            await tools.execute("cyclic_sequence", {}, lambda _args: cyclic_sequence)
+            await tools.execute("cyclic_sequence", {}, lambda _args: ToolExecutionResult(cyclic_sequence))
 
         @dataclass
         class CyclicDataclass:
@@ -131,14 +157,14 @@ class TestToolsAsync:
         cyclic_dataclass = CyclicDataclass()
         cyclic_dataclass.child = cyclic_dataclass
         with pytest.raises(RuntimeError, match="circular reference detected"):
-            await tools.execute("cyclic_dataclass", {}, lambda _args: cyclic_dataclass)
+            await tools.execute("cyclic_dataclass", {}, lambda _args: ToolExecutionResult(cyclic_dataclass))
 
         result = await tools.execute(
             "post_cycle_result",
             {},
-            lambda _args: {"status": "ok"},
+            lambda _args: ToolExecutionResult({"status": "ok"}),
         )
-        assert result == {"status": "ok"}
+        assert result.result == {"status": "ok"}
 
     async def test_execute_allows_shared_non_cyclic_results(self):
         shared = {"value": True}
@@ -146,24 +172,24 @@ class TestToolsAsync:
         result = await tools.execute(
             "shared_result",
             {},
-            lambda _args: {"first": shared, "second": shared},
+            lambda _args: ToolExecutionResult({"first": shared, "second": shared}),
         )
 
-        assert result == {
+        assert result.result == {
             "first": {"value": True},
             "second": {"value": True},
         }
 
     async def test_execute_returns_string(self):
         def func(args):
-            return "hello"
+            return ToolExecutionResult("hello")
 
         result = await tools.execute("str_tool", {}, func)
-        assert result == "hello"
+        assert result.result == "hello"
 
     async def test_execute_with_attributes(self):
         def func(args):
-            return args
+            return ToolExecutionResult(args)
 
         attrs = ToolAttributes(ToolAttributes.REMOTE)
         result = await tools.execute(
@@ -172,27 +198,27 @@ class TestToolsAsync:
             func,
             attributes=attrs,
         )
-        assert result["test"] is True
+        assert result.result["test"] is True
 
     async def test_execute_async_func(self):
         """tools.execute should accept async functions."""
 
         async def my_async_func(args):
-            return {"result": args["x"] + 1}
+            return ToolExecutionResult({"result": args["x"] + 1})
 
         result = await tools.execute("async_tool", {"x": 10}, my_async_func)
-        assert result == {"result": 11}
+        assert result.result == {"result": 11}
 
     async def test_execute_async_func_returns_string(self):
         async def func(args):
-            return "async_hello"
+            return ToolExecutionResult("async_hello")
 
         result = await tools.execute("async_str_tool", {}, func)
-        assert result == "async_hello"
+        assert result.result == "async_hello"
 
     async def test_execute_async_func_with_attributes(self):
         async def func(args):
-            return args
+            return ToolExecutionResult(args)
 
         attrs = ToolAttributes(ToolAttributes.REMOTE)
         result = await tools.execute(
@@ -201,7 +227,7 @@ class TestToolsAsync:
             func,
             attributes=attrs,
         )
-        assert result["key"] == "value"
+        assert result.result["key"] == "value"
 
     async def test_execute_failure_emits_end_event(self):
         events = []
@@ -239,7 +265,7 @@ class TestToolGuardrails:
         events = []
         subscribers.register("py_san_req_sub", lambda e: events.append(e))
         handle = tools.call("guarded_tool", {"input": "data"})
-        tools.call_end(handle, {})
+        tools.call_end(handle, ToolExecutionResult({}))
         subscribers.flush()
         subscribers.deregister("py_san_req_sub")
         guardrails.deregister_tool_sanitize_request("py_san_req")
@@ -254,7 +280,7 @@ class TestToolGuardrails:
 
         guardrails.register_tool_sanitize_response("py_san_resp", 1, resp_sanitizer)
         handle = tools.call("tool", {})
-        tools.call_end(handle, {"output": "raw"})
+        tools.call_end(handle, ToolExecutionResult({"output": "raw"}))
         guardrails.deregister_tool_sanitize_response("py_san_resp")
 
     def test_conditional_execution_guardrail(self):
@@ -288,7 +314,7 @@ class TestToolGuardrails:
         )
         try:
             handle = tools.call("tool_sanitize_req_fail", {"value": 1})
-            tools.call_end(handle, {"ok": True})
+            tools.call_end(handle, ToolExecutionResult({"ok": True}))
         finally:
             guardrails.deregister_tool_sanitize_request("py_tool_sanitize_req_fail")
             subscribers.flush()
@@ -307,7 +333,7 @@ class TestToolGuardrails:
         )
         try:
             handle = tools.call("tool_sanitize_resp_bad", {"value": 1})
-            tools.call_end(handle, {"ok": True})
+            tools.call_end(handle, ToolExecutionResult({"ok": True}))
         finally:
             guardrails.deregister_tool_sanitize_response("py_tool_sanitize_resp_bad")
             subscribers.flush()
@@ -333,11 +359,11 @@ class TestToolGuardrailsAsync:
 
         guardrails.register_tool_conditional_execution("py_async_conditional_loop", 1, allow)
         try:
-            result = await tools.execute("allowed_tool", {}, lambda args: args)
+            result = await tools.execute("allowed_tool", {}, lambda args: ToolExecutionResult(args))
         finally:
             guardrails.deregister_tool_conditional_execution("py_async_conditional_loop")
 
-        assert result == {}
+        assert result.result == {}
 
     async def test_manual_async_sanitizers_publish_transformed_payloads_and_can_flush(self):
         events = []
@@ -363,7 +389,7 @@ class TestToolGuardrailsAsync:
         guardrails.register_tool_sanitize_response("py_manual_tool_flush_response", 1, sanitize_response)
         try:
             handle = tools.call("py_manual_tool_flush", {"original": True})
-            tools.call_end(handle, {"ok": True})
+            tools.call_end(handle, ToolExecutionResult({"ok": True}))
             await asyncio.wait_for(subscribers.flush_async(), timeout=2)
         finally:
             guardrails.deregister_tool_sanitize_request("py_manual_tool_flush_request")
@@ -453,7 +479,9 @@ class TestToolInterceptsAsync:
             return args
 
         async def scenario():
-            execution = asyncio.ensure_future(tools.execute("shutdown_tool", {}, lambda args: args))
+            execution = asyncio.ensure_future(
+                tools.execute("shutdown_tool", {}, lambda args: ToolExecutionResult(args))
+            )
             await asyncio.sleep(0.01)
             assert not execution.done()
 
@@ -487,7 +515,9 @@ class TestToolInterceptsAsync:
         guardrails.register_tool_conditional_execution("py_tool_cancel_conditional", 1, conditional)
         subscribers.register("py_tool_cancel_conditional_events", events.append)
         try:
-            execution = asyncio.ensure_future(tools.execute("cancel_conditional_tool", {}, lambda x: x))
+            execution = asyncio.ensure_future(
+                tools.execute("cancel_conditional_tool", {}, lambda x: ToolExecutionResult(x))
+            )
             await asyncio.wait_for(started.wait(), timeout=1)
             execution.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -521,7 +551,7 @@ class TestToolInterceptsAsync:
 
         def provider(args):
             provider_calls.append(args)
-            return args
+            return ToolExecutionResult(args)
 
         intercepts.register_tool_request("py_tool_cancel_request", 1, False, request_intercept)
         try:
@@ -547,14 +577,18 @@ class TestToolInterceptsAsync:
             started.set()
             try:
                 await release.wait()
-                return ToolExecutionInterceptOutcome(await next(args))
+                downstream = await next(args)
+                return ToolExecutionInterceptOutcome(
+                    downstream.result,
+                    annotation=downstream.annotation,
+                )
             except asyncio.CancelledError:
                 cancelled.set()
                 raise
 
         def provider(args):
             provider_calls.append(args)
-            return args
+            return ToolExecutionResult(args)
 
         intercepts.register_tool_execution("py_tool_cancel_intercept", 1, middleware)
         subscribers.register("py_tool_cancel_events", events.append)
@@ -598,7 +632,8 @@ class TestToolInterceptsAsync:
         intercepts.register_tool_execution("py_tool_context_execution", 1, execution_intercept)
         token = request_id.set("emitter")
         try:
-            assert await tools.execute("context_tool", {"ok": True}, lambda args: args) == {"ok": True}
+            result = await tools.execute("context_tool", {"ok": True}, lambda args: ToolExecutionResult(args))
+            assert result.result == {"ok": True}
             await tools.conditional_execution("context_tool_standalone", {})
             assert await tools.request_intercepts("context_tool_standalone", {"ok": True}) == {"ok": True}
         finally:
@@ -625,11 +660,11 @@ class TestToolInterceptsAsync:
 
         intercepts.register_tool_request("py_async_request_loop", 1, False, intercept_fn)
         try:
-            result = await tools.execute("intercepted_tool", {}, lambda args: args)
+            result = await tools.execute("intercepted_tool", {}, lambda args: ToolExecutionResult(args))
         finally:
             intercepts.deregister_tool_request("py_async_request_loop")
 
-        assert result == {"intercepted": True}
+        assert result.result == {"intercepted": True}
 
     async def test_request_intercept_modifies_args(self):
         def intercept_fn(name, args):
@@ -639,11 +674,11 @@ class TestToolInterceptsAsync:
         intercepts.register_tool_request("py_req_mod", 1, False, intercept_fn)
 
         def func(args):
-            return args
+            return ToolExecutionResult(args)
 
         result = await tools.execute("intercepted_tool", {"original": True}, func)
-        assert result["original"] is True
-        assert result["intercepted"] is True
+        assert result.result["original"] is True
+        assert result.result["intercepted"] is True
 
         intercepts.deregister_tool_request("py_req_mod")
 
@@ -655,11 +690,11 @@ class TestToolInterceptsAsync:
         )
 
         def original_func(args):
-            return {"from_original": True}
+            return ToolExecutionResult({"from_original": True})
 
         result = await tools.execute("replaced_tool", {}, original_func)
-        assert result["from_intercept"] is True
-        assert "from_original" not in result
+        assert result.result["from_intercept"] is True
+        assert "from_original" not in result.result
 
         intercepts.deregister_tool_execution("py_exec_replace")
 
@@ -667,22 +702,31 @@ class TestToolInterceptsAsync:
         events = []
 
         async def middleware(name, args, next):
-            result = await next({"value": args["value"] + 1})
+            downstream = await next({"value": args["value"] + 1})
+            result = dict(downstream.result)
             result["from_intercept"] = True
-            return ToolExecutionInterceptOutcome(result, [PendingMarkSpec("python.tool.execution")])
+            return ToolExecutionInterceptOutcome(
+                result,
+                [PendingMarkSpec("python.tool.execution")],
+                annotation=downstream.annotation,
+            )
 
         intercepts.register_tool_execution("py_exec_next", 1, middleware)
         subscribers.register("py_exec_mark_sub", lambda event: events.append(event))
 
         def original(args):
-            return {"value": args["value"] * 2}
+            return ToolExecutionResult({"value": args["value"] * 2}, {"source": "provider"})
 
         try:
             result = await tools.execute("next_tool", {"value": 2}, original)
-            assert result == {"value": 6, "from_intercept": True}
+            assert result.result == {"value": 6, "from_intercept": True}
+            assert result.annotation == {"source": "provider"}
             await subscribers.flush_async()
             start = _tool_event(events, "next_tool", "start")
             end = _tool_event(events, "next_tool", "end")
+            assert end.category_profile == {
+                "tool_result_annotation": {"source": "provider"},
+            }
             mark = next(
                 event for event in events if isinstance(event, MarkEvent) and event.name == "python.tool.execution"
             )
@@ -709,12 +753,12 @@ class TestToolInterceptsAsync:
 
         def provider(args):
             provider_calls.append(args)
-            return args
+            return ToolExecutionResult(args)
 
         intercepts.register_tool_execution("py_exec_late_next", 1, middleware)
         try:
             result = await tools.execute("late_next_tool", {"value": 1}, provider)
-            assert result == {"source": "intercept"}
+            assert result.result == {"source": "intercept"}
             assert late_task is not None
             release_late_next.set()
             with pytest.raises(RuntimeError, match="execution continuation is no longer active"):
@@ -736,7 +780,7 @@ class TestToolInterceptsAsync:
                 next({"branch": "first"}),
                 next({"branch": "second"}),
             )
-            return ToolExecutionInterceptOutcome([first, second])
+            return ToolExecutionInterceptOutcome([first.result, second.result])
 
         async def provider(args):
             nonlocal pushed
@@ -749,14 +793,14 @@ class TestToolInterceptsAsync:
                 if args["branch"] == "first":
                     await asyncio.sleep(0)
                 assert scope.get_handle().uuid == handle.uuid
-                return args
+                return ToolExecutionResult(args)
             finally:
                 scope.pop(handle)
 
         intercepts.register_tool_execution("py_exec_concurrent_next_scopes", 1, middleware)
         try:
             result = await tools.execute("concurrent_next_tool", {}, provider)
-            assert result == [{"branch": "first"}, {"branch": "second"}]
+            assert result.result == [{"branch": "first"}, {"branch": "second"}]
         finally:
             intercepts.deregister_tool_execution("py_exec_concurrent_next_scopes")
 
@@ -785,16 +829,16 @@ class TestToolInterceptsAsync:
                 invoke(first_stack, "first"),
                 invoke(second_stack, "second"),
             )
-            return ToolExecutionInterceptOutcome([first, second])
+            return ToolExecutionInterceptOutcome([first.result, second.result])
 
         async def provider(args):
             await asyncio.sleep(0)
-            return {"branch": args["branch"], "scope": scope.get_handle().uuid}
+            return ToolExecutionResult({"branch": args["branch"], "scope": scope.get_handle().uuid})
 
         intercepts.register_tool_execution("py_exec_replaced_next_scopes", 1, middleware)
         try:
             result = await tools.execute("replaced_next_scopes", {}, provider)
-            assert result == [
+            assert result.result == [
                 {"branch": "first", "scope": first_scope},
                 {"branch": "second", "scope": second_scope},
             ]
@@ -814,11 +858,15 @@ class TestToolInterceptsAsync:
                 both_entered.set()
             await both_entered.wait()
             await asyncio.sleep(0)
-            return ToolExecutionInterceptOutcome(await next(args))
+            downstream = await next(args)
+            return ToolExecutionInterceptOutcome(
+                downstream.result,
+                annotation=downstream.annotation,
+            )
 
         async def provider(args):
             await asyncio.sleep(0)
-            return {"branch": args["branch"], "scope": scope.get_handle().uuid}
+            return ToolExecutionResult({"branch": args["branch"], "scope": scope.get_handle().uuid})
 
         async def invoke(stack, branch):
             with use_scope_stack(stack):
@@ -828,7 +876,7 @@ class TestToolInterceptsAsync:
                     {"branch": branch},
                     provider,
                 )
-                return result, expected_scope
+                return result.result, expected_scope
 
         intercepts.register_tool_execution("py_exec_plain_next_scopes", 1, middleware)
         try:
@@ -849,7 +897,7 @@ class TestToolInterceptsAsync:
         )
         try:
             with pytest.raises(RuntimeError, match="must return ToolExecutionInterceptOutcome"):
-                await tools.execute("legacy_tool", {}, lambda args: args)
+                await tools.execute("legacy_tool", {}, lambda args: ToolExecutionResult(args))
         finally:
             intercepts.deregister_tool_execution("py_exec_legacy")
 
@@ -866,11 +914,11 @@ class TestToolInterceptsAsync:
         intercepts.register_tool_request("py_chain2", 2, False, second_fn)
 
         def func(args):
-            return args
+            return ToolExecutionResult(args)
 
         result = await tools.execute("chain_tool", {}, func)
-        assert result["from_first"] is True
-        assert "from_second" not in result
+        assert result.result["from_first"] is True
+        assert "from_second" not in result.result
 
         intercepts.deregister_tool_request("py_chain1")
         intercepts.deregister_tool_request("py_chain2")

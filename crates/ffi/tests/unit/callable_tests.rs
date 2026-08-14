@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
+use nemo_relay::api::tool::ToolExecutionResult;
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -70,7 +71,9 @@ unsafe extern "C" fn tool_exec_cb(
     )
     .unwrap();
     args["executed"] = json!(true);
-    CString::new(args.to_string()).unwrap().into_raw()
+    CString::new(json!({ "result": args, "annotation": { "source": "ffi" } }).to_string())
+        .unwrap()
+        .into_raw()
 }
 
 unsafe extern "C" fn tool_exec_error_cb(
@@ -79,6 +82,15 @@ unsafe extern "C" fn tool_exec_error_cb(
 ) -> *mut c_char {
     set_last_error("tool callback failed");
     std::ptr::null_mut()
+}
+
+unsafe extern "C" fn legacy_tool_exec_cb(
+    _user_data: *mut libc::c_void,
+    _args_json: *const c_char,
+) -> *mut c_char {
+    CString::new(r#"{"legacy_result":true}"#)
+        .unwrap()
+        .into_raw()
 }
 
 unsafe extern "C" fn tool_exec_intercept_cb(
@@ -91,13 +103,14 @@ unsafe extern "C" fn tool_exec_intercept_cb(
     if result_ptr.is_null() {
         return std::ptr::null_mut();
     }
-    let mut result: Json =
+    let mut execution_result: Json =
         serde_json::from_str(unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap()).unwrap();
     unsafe { nemo_relay_string_free_internal(result_ptr) };
-    result["intercepted"] = json!(true);
+    execution_result["result"]["intercepted"] = json!(true);
     CString::new(
         json!({
-            "result": result,
+            "result": execution_result["result"],
+            "annotation": execution_result["annotation"],
             "pending_marks": [{
                 "name": "ffi.tool.execution",
                 "category": "custom",
@@ -358,20 +371,35 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
 
     let exec = wrap_tool_exec_fn(tool_exec_cb, std::ptr::null_mut(), None);
     let result = runtime.block_on(exec(json!({"value": 2}))).unwrap();
-    assert_eq!(result["executed"], json!(true));
+    assert_eq!(result.result["executed"], json!(true));
+    assert_eq!(result.annotation, Some(json!({ "source": "ffi" })));
 
     let exec_err = wrap_tool_exec_fn(tool_exec_error_cb, std::ptr::null_mut(), None);
     let err = runtime.block_on(exec_err(json!({}))).unwrap_err();
     assert!(err.to_string().contains("tool callback failed"));
 
+    let legacy_exec = wrap_tool_exec_fn(legacy_tool_exec_cb, std::ptr::null_mut(), None);
+    let err = runtime.block_on(legacy_exec(json!({}))).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("invalid tool execution result JSON")
+    );
+
     let intercept = wrap_tool_exec_intercept_fn(tool_exec_intercept_cb, std::ptr::null_mut(), None);
-    let next: ToolExecutionNextFn =
-        Arc::new(|args| Box::pin(async move { Ok(json!({"from_next": args})) }));
+    let next: ToolExecutionNextFn = Arc::new(|args| {
+        Box::pin(async move {
+            Ok(ToolExecutionResult {
+                result: json!({"from_next": args}),
+                annotation: Some(json!({ "from": "next" })),
+            })
+        })
+    });
     let intercepted = runtime
         .block_on(intercept("tool", json!({"v": 1}), next))
         .unwrap();
     assert_eq!(intercepted.result["intercepted"], json!(true));
     assert_eq!(intercepted.result["from_next"]["v"], json!(1));
+    assert_eq!(intercepted.annotation, Some(json!({ "from": "next" })));
     assert_eq!(intercepted.pending_marks.len(), 1);
     let mark = &intercepted.pending_marks[0];
     assert_eq!(mark.name, "ffi.tool.execution");
@@ -390,7 +418,8 @@ fn test_wrap_tool_exec_and_intercept_callbacks() {
 
     let legacy_intercept =
         wrap_tool_exec_intercept_fn(tool_exec_legacy_intercept_cb, std::ptr::null_mut(), None);
-    let next: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let next: ToolExecutionNextFn =
+        Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) }));
     let err = runtime
         .block_on(legacy_intercept("tool", json!({}), next))
         .unwrap_err();

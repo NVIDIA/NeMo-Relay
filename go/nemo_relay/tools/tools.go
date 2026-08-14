@@ -12,9 +12,9 @@
 //
 //	// Execute a tool call with an inline function.
 //	result, err := tools.Execute("search", json.RawMessage(`{"q":"hello"}`),
-//	    func(args json.RawMessage) (json.RawMessage, error) {
+//	    func(args json.RawMessage) (nemo_relay.ToolExecutionResult, error) {
 //	        // ... perform the search ...
-//	        return json.RawMessage(`{"results":[]}`), nil
+//	        return nemo_relay.ToolExecutionResult{Result: json.RawMessage(`{"results":[]}`)}, nil
 //	    },
 //	)
 package tools
@@ -34,16 +34,16 @@ func Call(name string, args json.RawMessage, opts ...nemo_relay.ToolCallOption) 
 
 // CallEnd completes a tool call that was started with [Call], emitting an End
 // event. This is a shorthand for [nemo_relay.ToolCallEnd].
-func CallEnd(handle *nemo_relay.ToolHandle, result json.RawMessage, opts ...nemo_relay.ToolCallOption) error {
+func CallEnd(handle *nemo_relay.ToolHandle, result nemo_relay.ToolExecutionResult, opts ...nemo_relay.ToolCallOption) error {
 	return nemo_relay.ToolCallEnd(handle, result, opts...)
 }
 
 // Execute runs a complete tool call lifecycle with the full middleware pipeline
 // (conditional-execution guardrails, request intercepts, sanitize-request
 // guardrails, execution intercepts, fn, sanitize-response guardrails) and
-// returns the final result JSON. This is a shorthand for
-// [nemo_relay.ToolCallExecute].
-func Execute(name string, args json.RawMessage, fn nemo_relay.ToolExecutionFunc, opts ...nemo_relay.ToolCallOption) (json.RawMessage, error) {
+// returns the final canonical result and optional annotation. This is a
+// shorthand for [nemo_relay.ToolCallExecute].
+func Execute(name string, args json.RawMessage, fn nemo_relay.ToolExecutionFunc, opts ...nemo_relay.ToolCallOption) (nemo_relay.ToolExecutionResult, error) {
 	return nemo_relay.ToolCallExecute(name, args, fn, opts...)
 }
 

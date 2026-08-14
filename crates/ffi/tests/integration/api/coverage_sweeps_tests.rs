@@ -142,7 +142,7 @@ fn test_ffi_tool_and_llm_parent_utf8_and_shape_paths() {
 
         let tool_name = cstring("ffi_tool_call_utf8");
         let tool_args = cstring(r#"{"value":1}"#);
-        let tool_result = cstring(r#"{"done":true}"#);
+        let tool_result = cstring(r#"{"result":{"done":true}}"#);
         let tool_data = cstring(r#"{"source":"tool-call"}"#);
         let tool_metadata = cstring(r#"{"trace":"tool-call"}"#);
         let tool_call_id = cstring("tool-call-id");

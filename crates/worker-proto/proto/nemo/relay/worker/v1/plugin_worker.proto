@@ -22,7 +22,7 @@ service RelayHostRuntime {
   rpc PopScope(PopScopeRequest) returns (HostAck);
   rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
   rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
-  rpc ToolNext(ToolNextRequest) returns (JsonResult);
+  rpc ToolNext(ToolNextRequest) returns (ToolExecutionResultResponse);
   rpc LlmNext(LlmNextRequest) returns (JsonResult);
   rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
   rpc DecodeLlmCodecRequest(LlmCodecDecodeRequest) returns (JsonResult);
@@ -33,6 +33,11 @@ service RelayHostRuntime {
 message JsonEnvelope {
   string schema = 1;
   bytes json = 2;
+}
+
+// A lossless JSON value. The bytes MUST contain exactly one JSON value.
+message JsonValue {
+  bytes json = 1;
 }
 
 enum RegistrationSurface {
@@ -213,6 +218,27 @@ message JsonResult {
   WorkerError error = 2;
 }
 
+message ToolExecutionResultResponse {
+  ToolExecutionResult value = 1;
+  WorkerError error = 2;
+}
+
+message ToolExecutionResult {
+  // Required. Application-owned tool result.
+  JsonValue result = 1;
+  // Optional opaque metadata. JSON null MUST be treated as absent.
+  JsonValue annotation = 2;
+}
+
+message ToolExecutionInterceptOutcome {
+  // Required. Application-owned tool result.
+  JsonValue result = 1;
+  // Optional opaque metadata. JSON null MUST be treated as absent.
+  JsonValue annotation = 2;
+  // Optional Relay-owned pending-mark array. An absent value means no marks.
+  JsonValue pending_marks = 3;
+}
+
 message GuardrailResult {
   string block_reason = 1;
 }
@@ -222,7 +248,8 @@ message LlmRequestInterceptResult {
 }
 
 message ToolExecutionInterceptResult {
-  JsonEnvelope outcome = 1;
+  // Required.
+  ToolExecutionInterceptOutcome outcome = 1;
 }
 
 message StreamChunk {

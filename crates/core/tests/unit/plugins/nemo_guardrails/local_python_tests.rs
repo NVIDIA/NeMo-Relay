@@ -1299,14 +1299,18 @@ async fn registered_local_backend_rewrites_llm_requests_and_tool_payloads() {
             .func(Arc::new(|args| {
                 Box::pin(async move {
                     assert_eq!(args, json!({"safe": true}));
-                    Ok(json!({"original": true}))
+                    Ok(crate::api::tool::ToolExecutionResult::annotated(
+                        json!({"original": true}),
+                        json!({"source": "provider"}),
+                    ))
                 })
             }))
             .build(),
     )
     .await
     .unwrap();
-    assert_eq!(tool_result, json!({"original": true}));
+    assert_eq!(tool_result.result, json!({"original": true}));
+    assert_eq!(tool_result.annotation, Some(json!({"source": "provider"})));
 }
 
 #[cfg(unix)]
@@ -1364,7 +1368,7 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
             .args(json!({"block": true}))
             .func(Arc::new(move |_| {
                 tool_callback_marker.store(true, Ordering::SeqCst);
-                Box::pin(async { Ok(json!({})) })
+                Box::pin(async { Ok(json!({}).into()) })
             }))
             .build(),
     )

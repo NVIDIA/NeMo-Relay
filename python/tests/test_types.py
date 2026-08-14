@@ -26,6 +26,7 @@ from nemo_relay import (
     ScopeEvent,
     ScopeType,
     ToolAttributes,
+    ToolExecutionResult,
     llm,
     scope,
     subscribers,
@@ -304,7 +305,7 @@ class TestHandleTypes:
                 assert handle.metadata == {"tool": "meta"}
                 assert "ToolHandle" in repr(handle)
             finally:
-                tools.call_end(handle, {"ok": True})
+                tools.call_end(handle, ToolExecutionResult({"ok": True}))
         finally:
             scope.pop(parent)
 
@@ -349,7 +350,12 @@ class TestConcreteEvents:
                 metadata={"tool_meta": True},
                 tool_call_id="tool-call-123",
             )
-            tools.call_end(tool_handle, {"y": 2}, data={"tool": "end"}, metadata={"tool_end": True})
+            tools.call_end(
+                tool_handle,
+                ToolExecutionResult({"y": 2}),
+                data={"tool": "end"},
+                metadata={"tool_end": True},
+            )
 
             llm_handle = llm.call(
                 "event_llm",
@@ -401,7 +407,7 @@ class TestConcreteEvents:
         try:
             child = scope.push("scope_contract_child", ScopeType.Function)
             tool_handle = tools.call("scope_contract_tool", {"x": 1})
-            tools.call_end(tool_handle, {"y": 2})
+            tools.call_end(tool_handle, ToolExecutionResult({"y": 2}))
             llm_handle = llm.call("scope_contract_llm", LLMRequest({}, {"messages": [], "model": "m"}))
             llm.call_end(llm_handle, {"done": True})
             scope.pop(child)

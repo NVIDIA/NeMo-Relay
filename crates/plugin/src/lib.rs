@@ -26,7 +26,10 @@ pub use nemo_relay_types::api::event::{
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
-pub use nemo_relay_types::api::tool::{ToolAttributes, ToolExecutionInterceptOutcome};
+pub use nemo_relay_types::api::tool::{
+    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA, TOOL_EXECUTION_RESULT_SCHEMA, ToolAttributes,
+    ToolExecutionInterceptOutcome, ToolExecutionResult,
+};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 pub use nemo_relay_types::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationEvidenceQuality, LlmOptimizationKind,
@@ -43,7 +46,8 @@ use serde_json::Map;
 /// Native plugin ABI version supported by this crate.
 ///
 /// Version 4 adds completion-scoped codecs and pull-based LLM streams. Hosts
-/// retain frozen version-3 and version-2 tables for already-built plugins.
+/// retain frozen version-3 and version-2 tables for Relay 0.8-built plugins
+/// that target those layouts.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 4;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
@@ -340,6 +344,10 @@ pub type NemoRelayNativeWithScopeStackCb =
     unsafe extern "C" fn(user_data: *mut c_void) -> NemoRelayStatus;
 
 /// Runtime-provided continuation for tool execution intercepts.
+///
+/// On success, `out_json` contains canonical [`ToolExecutionResult`] JSON. The
+/// returned host-owned string must be released with the active host table's
+/// `string_free` hook.
 pub type NemoRelayNativeToolNextFn = unsafe extern "C" fn(
     args_json: *const NemoRelayNativeString,
     next_ctx: *mut c_void,
@@ -435,6 +443,11 @@ pub type NemoRelayNativeToolConditionalCb = unsafe extern "C" fn(
 ) -> NemoRelayStatus;
 
 /// Native tool execution intercept callback.
+///
+/// A successful callback must set `out_outcome_json` to canonical
+/// [`ToolExecutionInterceptOutcome`] JSON allocated through the host. The
+/// `next_ctx` capability is valid only while this callback is active and must
+/// not be retained.
 pub type NemoRelayNativeToolExecutionCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     name: *const NemoRelayNativeString,
@@ -931,7 +944,8 @@ pub type NemoRelayNativeAsyncNextStreamCb = unsafe extern "C" fn(
 /// Exactly one of `value_json` and `error` is non-null. The callback owns its
 /// `user_data` and is invoked exactly once after a successful
 /// `async_next_invoke_result` call, including when the owning interceptor
-/// settles and cancels unfinished downstream work.
+/// settles and cancels unfinished downstream work. For a tool continuation,
+/// `value_json` contains canonical [`ToolExecutionResult`] JSON.
 pub type NemoRelayNativeAsyncNextResultCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     value_json: *const NemoRelayNativeString,
@@ -977,7 +991,9 @@ pub type NemoRelayNativeAsyncStreamMiddlewareCb = unsafe extern "C" fn(
 /// must finish before resolving or rejecting the completion; Relay rejects or
 /// cancels unfinished and later continuation calls. The plugin must synchronize
 /// shared `user_data` and callback state and serialize each handle's final
-/// release after its last operation returns.
+/// release after its last operation returns. A tool-execution callback must
+/// resolve its completion with canonical [`ToolExecutionInterceptOutcome`]
+/// JSON.
 pub type NemoRelayNativeAsyncMiddlewareCb = unsafe extern "C" fn(
     user_data: *mut c_void,
     invocation_json: *const NemoRelayNativeString,
@@ -995,6 +1011,9 @@ pub struct NemoRelayNativeHostApiV3 {
     /// Compatibility prefix for ABI-v1/v2 plugins.
     pub v1: NemoRelayNativeHostApiV1,
     /// Resolves an async callback completion with a JSON value.
+    ///
+    /// Tool-execution middleware must supply canonical
+    /// [`ToolExecutionInterceptOutcome`] JSON.
     pub async_completion_resolve_json: unsafe extern "C" fn(
         completion: *const NemoRelayNativeAsyncCompletion,
         value_json: *const NemoRelayNativeString,
@@ -1015,7 +1034,8 @@ pub struct NemoRelayNativeHostApiV3 {
     /// Cancellation of that completion aborts an in-flight continuation. This
     /// legacy convenience hook is one-shot because its result settles the
     /// middleware completion; use `async_next_invoke_result` for repeated or
-    /// concurrent calls.
+    /// concurrent calls. For a tool continuation, the host resolves the
+    /// completion with canonical [`ToolExecutionInterceptOutcome`] JSON.
     pub async_next_invoke: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,
@@ -1093,7 +1113,9 @@ pub struct NemoRelayNativeHostApiV3 {
     /// Invokes a unary execution continuation with an independent result sink.
     ///
     /// Unlike the legacy completion-coupled `async_next_invoke`, this hook may
-    /// be called repeatedly or concurrently with distinct `user_data`.
+    /// be called repeatedly or concurrently with distinct `user_data`. For a
+    /// tool continuation, the result callback receives canonical
+    /// [`ToolExecutionResult`] JSON.
     pub async_next_invoke_result: unsafe extern "C" fn(
         next: *const NemoRelayNativeAsyncNext,
         invocation_json: *const NemoRelayNativeString,

@@ -47,6 +47,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
 use nemo_relay::api::llm::LlmRequest;
+use nemo_relay::api::tool::ToolExecutionResult;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
 use nemo_relay::codec::response::AnnotatedLlmResponse as AnnotatedLLMResponse;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
@@ -55,7 +56,7 @@ use crate::convert::{json_to_py, py_to_json};
 use crate::py_types::{
     PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyLLMRequest, PyLLMRequestInterceptOutcome,
     PyLlmSanitizeRequestContext, PyLlmSanitizeResponseContext, PyScopeStack,
-    PyToolExecutionInterceptOutcome,
+    PyToolExecutionInterceptOutcome, PyToolExecutionResult,
 };
 
 type PyValueFuture = Pin<Box<dyn Future<Output = PyResult<Py<PyAny>>> + Send>>;
@@ -955,19 +956,23 @@ pub fn wrap_py_tool_request_intercept_fn(py_fn: Py<PyAny>) -> ToolInterceptFn {
     })
 }
 
-/// Wrap a Python callable `(Json) -> Json` for tool execution intercepts.
+/// Wrap a Python callable `(Json) -> ToolExecutionResult` for tool execution.
 /// Supports both sync and async Python callables. If the callable returns a
 /// coroutine, it is awaited via the pyo3-async-runtimes bridge.
 pub fn wrap_py_tool_exec_fn(
     py_fn: Py<PyAny>,
-) -> Box<dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> + Send + Sync> {
+) -> Box<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = FlowResult<ToolExecutionResult>> + Send>>
+        + Send
+        + Sync,
+> {
     let py_fn = std::sync::Arc::new(py_fn);
     let registered_task_locals = capture_python_task_locals();
     Box::new(move |args: Json| {
         let py_fn = py_fn.clone();
         let task_locals = task_locals_with_running_loop(registered_task_locals.as_ref());
         Box::pin(async move {
-            resolve_json_or_future(Python::attach(|py| {
+            let result = resolve_py_object_or_future(Python::attach(|py| {
                 let (invocation_context, task_locals) = copy_middleware_invocation(py, task_locals)
                     .map_err(|error| FlowError::Internal(error.to_string()))?;
                 let py_args =
@@ -980,9 +985,25 @@ pub fn wrap_py_tool_exec_fn(
                     None => callback.bind(py).call1((py_args,)),
                 }
                 .map_err(python_callback_error)?;
-                split_json_or_future_with_locals(py, result.unbind(), task_locals.as_ref())
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    invocation_context.as_ref(),
+                )
             }))
-            .await
+            .await?;
+            Python::attach(|py| {
+                result
+                    .extract::<PyToolExecutionResult>(py)
+                    .map_err(|error| {
+                        FlowError::Internal(format!(
+                            "tool execution callback must return ToolExecutionResult: {error}"
+                        ))
+                    })?
+                    .to_inner(py)
+                    .map_err(|error| FlowError::Internal(error.to_string()))
+            })
         })
     })
 }
@@ -1048,7 +1069,7 @@ impl PyToolNextFn {
                 .invoke(move || next(json_args))
                 .await
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-            Python::attach(|py| json_to_py(py, &result))
+            Python::attach(|py| PyToolExecutionResult::from_inner(py, result))
         })
     }
 }
