@@ -476,16 +476,16 @@ impl InstrumentDescriptor {
                 "counter values must be non-negative",
             ));
         }
-        let accepted = match (self.kind, value) {
+        let accepted = matches!(
+            (self.kind, value),
             (MetricKind::Counter, MetricValue::U64(_))
-            | (MetricKind::UpDownCounter, MetricValue::I64(_))
-            | (MetricKind::UpDownCounter, MetricValue::F64(_))
-            | (MetricKind::Gauge, _)
-            | (MetricKind::Histogram, MetricValue::U64(_))
-            | (MetricKind::Histogram, MetricValue::F64(_)) => true,
-            (MetricKind::Counter, MetricValue::F64(_)) => true,
-            _ => false,
-        };
+                | (MetricKind::UpDownCounter, MetricValue::I64(_))
+                | (MetricKind::UpDownCounter, MetricValue::F64(_))
+                | (MetricKind::Gauge, _)
+                | (MetricKind::Histogram, MetricValue::U64(_))
+                | (MetricKind::Histogram, MetricValue::F64(_))
+                | (MetricKind::Counter, MetricValue::F64(_))
+        );
         accepted.then_some(()).ok_or_else(|| {
             MetricValidationError::new(format!(
                 "kind {} does not support value_type {}",
