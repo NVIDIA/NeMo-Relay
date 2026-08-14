@@ -35,14 +35,22 @@ fn mark(
     ))
 }
 
-fn scope(uuid: Uuid, category: ScopeCategory) -> Event {
+fn scope_with_parent(uuid: Uuid, parent_uuid: Option<Uuid>, category: ScopeCategory) -> Event {
     Event::Scope(ScopeEvent::new(
-        BaseEvent::builder().uuid(uuid).name("agent").build(),
+        BaseEvent::builder()
+            .uuid(uuid)
+            .parent_uuid_opt(parent_uuid)
+            .name("agent")
+            .build(),
         category,
         Vec::new(),
         ScopeType::Agent.into(),
         None,
     ))
+}
+
+fn scope(uuid: Uuid, category: ScopeCategory) -> Event {
+    scope_with_parent(uuid, None, category)
 }
 
 fn processor(
@@ -61,24 +69,36 @@ fn processor(
 }
 
 #[test]
-fn scope_lineage_bounds_active_contexts() {
+fn scope_lineage_retains_active_contexts_and_preserves_root_trace_id() {
     let mut lineage = ScopeLineage::new();
-    let first = Uuid::now_v7();
-    lineage.process_start(&scope(first, ScopeCategory::Start));
+    let root = Uuid::now_v7();
+    lineage.process_start(&scope(root, ScopeCategory::Start));
     for _ in 0..COMPLETED_SPAN_CONTEXT_LIMIT {
         lineage.process_start(&scope(Uuid::now_v7(), ScopeCategory::Start));
     }
 
-    assert_eq!(lineage.active.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
-    assert_eq!(lineage.active_order.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
-    assert!(!lineage.active.contains_key(&first));
-    assert!(!lineage.active_order.contains(&first));
+    assert_eq!(lineage.active.len(), COMPLETED_SPAN_CONTEXT_LIMIT + 1);
+    assert!(lineage.active.contains_key(&root));
 
-    let active = *lineage.active_order.back().unwrap();
-    lineage.process_end(&scope(active, ScopeCategory::End));
-    assert!(!lineage.active.contains_key(&active));
-    assert!(!lineage.active_order.contains(&active));
-    assert!(lineage.completed.contains_key(&active));
+    let child = Uuid::now_v7();
+    lineage.process_start(&scope_with_parent(child, Some(root), ScopeCategory::Start));
+    assert_eq!(lineage.active[&child].trace_id(), relay_trace_id(root));
+
+    lineage.process_end(&scope(child, ScopeCategory::End));
+    assert!(!lineage.active.contains_key(&child));
+    assert!(lineage.completed.contains_key(&child));
+}
+
+#[test]
+fn log_processor_reports_active_lineage_high_water_once() {
+    let (mut processor, _exporter, _provider) = processor(LogSeverity::Info);
+    for _ in 0..=COMPLETED_SPAN_CONTEXT_LIMIT {
+        processor.process(&scope(Uuid::now_v7(), ScopeCategory::Start));
+    }
+    assert!(processor.active_lineage_high_water_reported);
+
+    processor.process(&scope(Uuid::now_v7(), ScopeCategory::Start));
+    assert!(processor.active_lineage_high_water_reported);
 }
 
 #[test]
@@ -103,6 +123,26 @@ fn scope_lineage_reuses_completed_parent_and_bounds_completed_contexts() {
     assert!(!lineage.completed.contains_key(&parent));
 
     lineage.process_end(&scope(Uuid::now_v7(), ScopeCategory::End));
+}
+
+#[test]
+fn scope_lineage_tombstones_replaced_completed_contexts() {
+    let mut lineage = ScopeLineage::new();
+    let reused = Uuid::now_v7();
+    lineage.process_start(&scope(reused, ScopeCategory::Start));
+    lineage.process_end(&scope(reused, ScopeCategory::End));
+    lineage.process_start(&scope(reused, ScopeCategory::Start));
+    lineage.process_end(&scope(reused, ScopeCategory::End));
+
+    for _ in 1..COMPLETED_SPAN_CONTEXT_LIMIT {
+        let uuid = Uuid::now_v7();
+        lineage.process_start(&scope(uuid, ScopeCategory::Start));
+        lineage.process_end(&scope(uuid, ScopeCategory::End));
+    }
+
+    assert_eq!(lineage.completed.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
+    assert!(lineage.completed.contains_key(&reused));
+    assert_eq!(lineage.completed_order.len(), COMPLETED_SPAN_CONTEXT_LIMIT);
 }
 
 #[test]

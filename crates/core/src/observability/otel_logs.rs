@@ -520,24 +520,23 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
 
 struct ScopeLineage {
     active: HashMap<Uuid, SpanContext>,
-    active_order: VecDeque<Uuid>,
-    completed: HashMap<Uuid, SpanContext>,
-    completed_order: VecDeque<Uuid>,
+    completed: HashMap<Uuid, (u64, SpanContext)>,
+    completed_order: VecDeque<(Uuid, u64)>,
+    next_completed_generation: u64,
 }
 
 impl ScopeLineage {
     fn new() -> Self {
         Self {
             active: HashMap::new(),
-            active_order: VecDeque::new(),
             completed: HashMap::new(),
             completed_order: VecDeque::new(),
+            next_completed_generation: 0,
         }
     }
 
     fn process_start(&mut self, event: &Event) {
         self.remove_completed(event.uuid());
-        self.remove_active(event.uuid());
         let parent = self.parent_context(event);
         let trace_id = parent
             .as_ref()
@@ -553,25 +552,23 @@ impl ScopeLineage {
                 TraceState::default(),
             ),
         );
-        self.active_order.push_back(event.uuid());
-        while self.active_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
-            if let Some(expired) = self.active_order.pop_front() {
-                self.active.remove(&expired);
-            }
-        }
     }
 
     fn process_end(&mut self, event: &Event) {
         let Some(context) = self.active.remove(&event.uuid()) else {
             return;
         };
-        self.active_order
-            .retain(|active_uuid| *active_uuid != event.uuid());
-        if self.completed.insert(event.uuid(), context).is_none() {
-            self.completed_order.push_back(event.uuid());
-        }
+        let generation = self.next_completed_generation;
+        self.next_completed_generation = self.next_completed_generation.wrapping_add(1);
+        self.completed.insert(event.uuid(), (generation, context));
+        self.completed_order.push_back((event.uuid(), generation));
         while self.completed_order.len() > COMPLETED_SPAN_CONTEXT_LIMIT {
-            if let Some(expired) = self.completed_order.pop_front() {
+            if let Some((expired, generation)) = self.completed_order.pop_front()
+                && self
+                    .completed
+                    .get(&expired)
+                    .is_some_and(|(current_generation, _)| *current_generation == generation)
+            {
                 self.completed.remove(&expired);
             }
         }
@@ -582,7 +579,7 @@ impl ScopeLineage {
         if let Some(context) = self.active.get(&parent_uuid) {
             return Some(context.clone());
         }
-        if let Some(context) = self.completed.get(&parent_uuid) {
+        if let Some((_, context)) = self.completed.get(&parent_uuid) {
             return Some(context.clone());
         }
         let stack = current_scope_stack();
@@ -600,12 +597,6 @@ impl ScopeLineage {
 
     fn remove_completed(&mut self, uuid: Uuid) {
         self.completed.remove(&uuid);
-        self.completed_order.retain(|candidate| *candidate != uuid);
-    }
-
-    fn remove_active(&mut self, uuid: Uuid) {
-        self.active.remove(&uuid);
-        self.active_order.retain(|candidate| *candidate != uuid);
     }
 }
 
@@ -615,6 +606,7 @@ struct LogEventProcessor {
     lineage: ScopeLineage,
     invalid_severity_count: u64,
     invalid_metric_count: u64,
+    active_lineage_high_water_reported: bool,
     diagnostic_field: Option<String>,
 }
 
@@ -630,16 +622,44 @@ impl LogEventProcessor {
             lineage: ScopeLineage::new(),
             invalid_severity_count: 0,
             invalid_metric_count: 0,
+            active_lineage_high_water_reported: false,
             diagnostic_field,
         }
     }
 
     fn process(&mut self, event: &Event) {
         match event.scope_category() {
-            Some(crate::api::event::ScopeCategory::Start) => self.lineage.process_start(event),
+            Some(crate::api::event::ScopeCategory::Start) => {
+                self.lineage.process_start(event);
+                self.report_active_lineage_high_water();
+            }
             Some(crate::api::event::ScopeCategory::End) => self.lineage.process_end(event),
             None => self.process_mark(event),
         }
+    }
+
+    fn report_active_lineage_high_water(&mut self) {
+        let active_scope_count = self.lineage.active.len();
+        if active_scope_count <= COMPLETED_SPAN_CONTEXT_LIMIT
+            || self.active_lineage_high_water_reported
+        {
+            return;
+        }
+        self.active_lineage_high_water_reported = true;
+        log::warn!(
+            target: "nemo_relay.observability",
+            event = "otel_log_active_scope_high_water",
+            active_scope_count;
+            "OpenTelemetry log lineage retained more than {COMPLETED_SPAN_CONTEXT_LIMIT} active scopes to preserve trace context"
+        );
+        record_signal_runtime_diagnostic(
+            "otel.log_active_scope_high_water",
+            self.diagnostic_field.clone(),
+            format!(
+                "OpenTelemetry log lineage retained {active_scope_count} active scopes to preserve trace context"
+            ),
+            active_scope_count as u64,
+        );
     }
 
     fn process_mark(&mut self, event: &Event) {
