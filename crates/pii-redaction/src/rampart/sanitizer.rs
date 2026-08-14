@@ -6,7 +6,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nemo_relay::api::event::{Event, EventSanitizeFields};
+use nemo_relay::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{
     BuiltinLlmCodec, EventSanitizeFn, LlmCodecIdentity, LlmSanitizeRequestFn,
@@ -250,6 +250,7 @@ enum SanitizeError {
 enum EventField {
     Data,
     CategoryProfile,
+    ToolResultAnnotation,
     Metadata,
 }
 
@@ -1022,19 +1023,31 @@ pub(super) fn event_sanitize_callback(
         if skips_event_sanitization(event.as_ref(), scope_categories) {
             return Box::pin(async move { Ok(fields) });
         }
-        if !event_has_candidate_fields(event.as_ref(), &fields) {
+        let tool_annotation_selection =
+            selected_tool_result_annotation(&backend, event.as_ref(), &fields, scope_categories);
+        if !event_has_candidate_fields(event.as_ref(), &fields, tool_annotation_selection.is_some())
+        {
             return Box::pin(async move { Ok(fields) });
         }
-        if !event_fields_have_selected_strings(&backend, event.as_ref(), &fields) {
+        if !event_fields_have_selected_strings(
+            &backend,
+            event.as_ref(),
+            &fields,
+            tool_annotation_selection.is_some(),
+        ) {
             return Box::pin(async move { Ok(fields) });
         }
-        let fallback = fail_closed_event_fields(event.as_ref(), fields.clone());
+        let annotation_fallback = tool_annotation_selection
+            .is_some()
+            .then(|| backend.fail_closed_payload());
+        let fallback =
+            fail_closed_event_fields(event.as_ref(), fields.clone(), annotation_fallback);
         Box::pin(async move {
             let Some(permit) = backend.admit("event").await else {
                 return Ok(fallback);
             };
             run_inference("event fields", permit, fallback, move || {
-                let mut selected = Vec::with_capacity(3);
+                let mut selected = Vec::with_capacity(4);
                 if let Some(selection) =
                     event_field_selection(&backend, event.as_ref(), EventField::Data)
                     && let Some(data) = fields.data.take()
@@ -1047,6 +1060,14 @@ pub(super) fn event_sanitize_callback(
                     && let Ok(profile) = serde_json::to_value(profile)
                 {
                     selected.push((EventField::CategoryProfile, profile, selection));
+                }
+                if let Some(selection) = tool_annotation_selection
+                    && let Some(annotation) = fields
+                        .category_profile
+                        .as_mut()
+                        .and_then(|profile| profile.tool_result_annotation.take())
+                {
+                    selected.push((EventField::ToolResultAnnotation, annotation, selection));
                 }
                 if let Some(selection) =
                     event_field_selection(&backend, event.as_ref(), EventField::Metadata)
@@ -1065,6 +1086,11 @@ pub(super) fn event_sanitize_callback(
                         EventField::Data => fields.data = Some(value),
                         EventField::CategoryProfile => {
                             fields.category_profile = serde_json::from_value(value).ok();
+                        }
+                        EventField::ToolResultAnnotation => {
+                            if let Some(profile) = fields.category_profile.as_mut() {
+                                profile.tool_result_annotation = Some(value);
+                            }
                         }
                         EventField::Metadata => fields.metadata = Some(value),
                     }
@@ -1250,18 +1276,31 @@ fn skips_event_sanitization(event: &Event, scope_categories: Option<(bool, bool)
     })
 }
 
-fn fail_closed_event_fields(event: &Event, mut fields: EventSanitizeFields) -> EventSanitizeFields {
+fn fail_closed_event_fields(
+    event: &Event,
+    mut fields: EventSanitizeFields,
+    tool_annotation_fallback: Option<Json>,
+) -> EventSanitizeFields {
     if is_specialized_scope(event) {
         fields.metadata = None;
+        if let Some(fallback) = tool_annotation_fallback
+            && let Some(profile) = fields.category_profile.as_mut()
+        {
+            profile.tool_result_annotation = Some(fallback);
+        }
         fields
     } else {
         EventSanitizeFields::default()
     }
 }
 
-fn event_has_candidate_fields(event: &Event, fields: &EventSanitizeFields) -> bool {
+fn event_has_candidate_fields(
+    event: &Event,
+    fields: &EventSanitizeFields,
+    has_selected_tool_annotation: bool,
+) -> bool {
     if is_specialized_scope(event) {
-        fields.metadata.is_some()
+        fields.metadata.is_some() || has_selected_tool_annotation
     } else {
         fields.data.is_some() || fields.category_profile.is_some() || fields.metadata.is_some()
     }
@@ -1271,6 +1310,7 @@ fn event_fields_have_selected_strings(
     backend: &RampartSanitizer,
     event: &Event,
     fields: &EventSanitizeFields,
+    has_selected_tool_annotation: bool,
 ) -> bool {
     let has_selected = |field, value: &Json| {
         event_field_selection(backend, event, field)
@@ -1290,6 +1330,36 @@ fn event_fields_have_selected_strings(
             .metadata
             .as_ref()
             .is_some_and(|metadata| has_selected(EventField::Metadata, metadata))
+        || has_selected_tool_annotation
+}
+
+fn selected_tool_result_annotation(
+    backend: &RampartSanitizer,
+    event: &Event,
+    fields: &EventSanitizeFields,
+    scope_categories: Option<(bool, bool)>,
+) -> Option<StringSelection> {
+    let (_, sanitize_tool) = scope_categories?;
+    if !sanitize_tool
+        || event.scope_category() != Some(ScopeCategory::End)
+        || event
+            .category()
+            .is_none_or(|category| category.as_str() != "tool")
+    {
+        return None;
+    }
+    let selection = if backend.trajectory_policy.is_some() {
+        StringSelection::All
+    } else {
+        StringSelection::Configured
+    };
+    fields
+        .category_profile
+        .as_ref()
+        .and_then(|profile| profile.tool_result_annotation.as_ref())
+        .filter(|annotation| !annotation.is_null())
+        .is_some_and(|annotation| backend.has_selected_string_with_selection(annotation, selection))
+        .then_some(selection)
 }
 
 fn event_field_selection(

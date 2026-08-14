@@ -12,7 +12,7 @@ use nemo_relay::api::llm::{LlmCallExecuteParams, LlmRequest, llm_call_execute};
 use nemo_relay::api::runtime::{LlmCodecIdentity, TASK_SCOPE_STACK, create_scope_stack};
 use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::codec::gemini_generate_content::GeminiGenerateContentCodec;
 use nemo_relay::codec::oci_genai::OCIGenAIChatCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
@@ -32,6 +32,7 @@ const SUBSCRIBER_NAME: &str = "pii-rampart-native-live";
 const EXPLICIT_SUBSCRIBER_NAME: &str = "pii-rampart-native-v4-codec-live";
 const REQUEST_EMAIL: &str = "alex.fournier@example.com";
 const RESPONSE_EMAIL: &str = "reviewer@example.org";
+const TOOL_ANNOTATION_EMAIL: &str = "annotation-owner@example.net";
 const RUNTIME_CODEC_ID: &str = "test.rampart.openai.v4";
 static NATIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -406,7 +407,11 @@ async fn run_explicit_codec_live_test() {
     let runtime_start = runtime_start
         .input()
         .expect("typed ABI-v4 runtime request capability remains observable");
-    assert!(runtime_start.to_string().contains("safe-runtime-v4-request"));
+    assert!(
+        runtime_start
+            .to_string()
+            .contains("safe-runtime-v4-request")
+    );
     assert!(runtime_start.to_string().contains("[REDACTED]"));
     assert!(
         runtime_end.output().is_none(),
@@ -522,7 +527,13 @@ async fn run_live_test() {
                         *tool_arguments_capture.lock().expect("tool capture lock") =
                             Some(arguments);
                         Box::pin(async {
-                            Ok(json!({"email": RESPONSE_EMAIL, "safe": "tool-output"}))
+                            Ok(ToolExecutionResult::annotated(
+                                json!({"email": RESPONSE_EMAIL, "safe": "tool-output"}),
+                                json!({
+                                    "email": TOOL_ANNOTATION_EMAIL,
+                                    "safe": "tool-annotation"
+                                }),
+                            ))
                         })
                     }))
                     .build(),
@@ -685,7 +696,14 @@ async fn run_live_test() {
             .expect("tool callback ran")["email"],
         REQUEST_EMAIL
     );
-    assert_eq!(tool_result["email"], RESPONSE_EMAIL);
+    assert_eq!(tool_result.result["email"], RESPONSE_EMAIL);
+    assert_eq!(
+        tool_result
+            .annotation
+            .as_ref()
+            .expect("tool annotation remains visible to the caller")["email"],
+        TOOL_ANNOTATION_EMAIL
+    );
     assert!(
         llm_request_seen
             .lock()
@@ -736,6 +754,10 @@ async fn run_live_test() {
         .expect("serialize captured events");
     assert!(!serialized.contains(REQUEST_EMAIL), "request PII leaked");
     assert!(!serialized.contains(RESPONSE_EMAIL), "response PII leaked");
+    assert!(
+        !serialized.contains(TOOL_ANNOTATION_EMAIL),
+        "tool annotation PII leaked"
+    );
     for email in &concurrent_emails {
         assert!(
             !serialized.contains(email),
@@ -748,6 +770,7 @@ async fn run_live_test() {
         "scope-output",
         "tool-input",
         "tool-output",
+        "tool-annotation",
         "safe-gemini-input",
         "safe-gemini-output",
         "ordinary first request segment",
@@ -805,9 +828,11 @@ async fn run_concurrent_tool_calls(count: usize) -> Vec<String> {
                                 .func(Arc::new(move |arguments| {
                                     assert_eq!(arguments["safe"], index);
                                     let output = callback_output.clone();
-                                    Box::pin(
-                                        async move { Ok(json!({"email": output, "safe": index})) },
-                                    )
+                                    Box::pin(async move {
+                                        Ok(ToolExecutionResult::new(
+                                            json!({"email": output, "safe": index}),
+                                        ))
+                                    })
                                 }))
                                 .build(),
                         ),
@@ -815,7 +840,7 @@ async fn run_concurrent_tool_calls(count: usize) -> Vec<String> {
                     .await
                     .expect("concurrent tool call timed out")
                     .expect("concurrent tool call failed");
-                    assert_eq!(result["email"], output_email);
+                    assert_eq!(result.result["email"], output_email);
                 })
                 .await;
         }));

@@ -163,6 +163,27 @@ fn trajectory_sanitizer(
     .unwrap()
 }
 
+fn tool_end_event(annotation: Json) -> Event {
+    use nemo_relay::api::event::{
+        BaseEvent, CategoryProfile, EventCategory, ScopeCategory, ScopeEvent,
+    };
+
+    Event::Scope(ScopeEvent::new(
+        BaseEvent::builder()
+            .name("lookup_contact")
+            .data(serde_json::json!({"contact": "José result"}))
+            .build(),
+        ScopeCategory::End,
+        Default::default(),
+        EventCategory::tool(),
+        Some(CategoryProfile {
+            tool_call_id: Some("provider-call-José".into()),
+            tool_result_annotation: Some(annotation),
+            ..CategoryProfile::default()
+        }),
+    ))
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn trajectory_preset_sanitizes_multi_message_anthropic_request_without_projection() {
     use nemo_relay::api::runtime::LlmSanitizeRequestContext;
@@ -1284,6 +1305,121 @@ async fn unselected_specialized_metadata_bypasses_full_admission_queue() {
     drop(permits);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn configured_tool_output_sanitizes_annotation_as_an_independent_json_root() {
+    let backend = sanitizer(Arc::new(NameDetector), vec!["/contact"]);
+    let event = Arc::new(tool_end_event(serde_json::json!({
+        "contact": "José",
+        "outside": "José"
+    })));
+    let output = event_sanitize_callback(backend, Some((false, true)))(
+        Arc::clone(&event),
+        event.sanitize_fields(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(output.data, event.sanitize_fields().data);
+    let profile = output.category_profile.unwrap();
+    assert_eq!(profile.tool_call_id.as_deref(), Some("provider-call-José"));
+    assert_eq!(
+        profile.tool_result_annotation.unwrap(),
+        serde_json::json!({
+            "contact": "[REDACTED]",
+            "outside": "José"
+        })
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn trajectory_tool_output_sanitizes_every_annotation_string() {
+    let backend = trajectory_sanitizer(Arc::new(NameDetector), "preserve");
+    let event = Arc::new(tool_end_event(serde_json::json!({
+        "contact": "José",
+        "nested": ["Owned by José"]
+    })));
+    let output = event_sanitize_callback(backend, Some((false, true)))(
+        Arc::clone(&event),
+        event.sanitize_fields(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(output.data, event.sanitize_fields().data);
+    let profile = output.category_profile.unwrap();
+    assert_eq!(profile.tool_call_id.as_deref(), Some("provider-call-José"));
+    assert_eq!(
+        profile.tool_result_annotation.unwrap(),
+        serde_json::json!({
+            "contact": "[REDACTED]",
+            "nested": ["Owned by [REDACTED]"]
+        })
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disabled_tool_output_preserves_annotation_without_inference() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = sanitizer(
+        Arc::new(CountingNameDetector(Arc::clone(&calls))),
+        vec!["/contact"],
+    );
+    let event = Arc::new(tool_end_event(serde_json::json!({"contact": "José"})));
+    let fields = event.sanitize_fields();
+    let output = event_sanitize_callback(backend, Some((true, false)))(event, fields.clone())
+        .await
+        .unwrap();
+
+    assert_eq!(output, fields);
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn failed_tool_annotation_inference_replaces_only_the_annotation() {
+    let backend = sanitizer(Arc::new(PanickingDetector), vec!["/contact"]);
+    let event = Arc::new(tool_end_event(serde_json::json!({"contact": "José"})));
+    let output = event_sanitize_callback(backend, Some((false, true)))(
+        Arc::clone(&event),
+        event.sanitize_fields(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(output.data, event.sanitize_fields().data);
+    let profile = output.category_profile.unwrap();
+    assert_eq!(profile.tool_call_id.as_deref(), Some("provider-call-José"));
+    assert_eq!(
+        profile.tool_result_annotation.unwrap(),
+        Json::String(FailClosedReason::SanitizerFailure.placeholder().into())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tool_annotation_model_limit_replaces_only_affected_fields() {
+    let backend = sanitizer(Arc::new(PayloadLimitedDetector), vec!["/contact"]);
+    let event = Arc::new(tool_end_event(serde_json::json!({
+        "contact": "José",
+        "outside": "visible"
+    })));
+    let output = event_sanitize_callback(backend, Some((false, true)))(
+        Arc::clone(&event),
+        event.sanitize_fields(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(output.data, event.sanitize_fields().data);
+    let profile = output.category_profile.unwrap();
+    assert_eq!(profile.tool_call_id.as_deref(), Some("provider-call-José"));
+    assert_eq!(
+        profile.tool_result_annotation.unwrap(),
+        serde_json::json!({
+            "contact": FailClosedReason::ModelWindowLimit.placeholder(),
+            "outside": "visible"
+        })
+    );
+}
+
 #[test]
 fn empty_specialized_scope_does_not_require_admission() {
     use nemo_relay::api::event::{
@@ -1301,9 +1437,9 @@ fn empty_specialized_scope_does_not_require_admission() {
         Some(CategoryProfile::default()),
     ));
     let fields = event.sanitize_fields();
-    assert!(!event_has_candidate_fields(&event, &fields));
+    assert!(!event_has_candidate_fields(&event, &fields, false));
     assert_eq!(
-        fail_closed_event_fields(&event, fields.clone()),
+        fail_closed_event_fields(&event, fields.clone(), None),
         fields,
         "specialized data already handled by the tool sanitizer must be preserved"
     );
