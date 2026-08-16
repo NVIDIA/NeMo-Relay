@@ -176,6 +176,35 @@ fn test_decode_response_provider_reported_cost() {
 }
 
 #[test]
+fn test_decode_response_openrouter_scalar_provider_reported_cost() {
+    let codec = OpenAIChatCodec;
+    let response = json!({
+        "id": "gen-openrouter-cost",
+        "object": "chat.completion",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "provider": "Nvidia",
+        "choices": [{
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "cost": 0,
+            "cost_details": {"upstream_inference_cost": 0}
+        }
+    });
+
+    let resp = codec.decode_response(&response).unwrap();
+    let cost = resp.usage.unwrap().cost.unwrap();
+
+    assert_eq!(cost.total, Some(0.0));
+    assert_eq!(cost.currency, "USD");
+    assert_eq!(cost.source, CostSource::ProviderReported);
+}
+
+#[test]
 fn test_decode_response_finish_reason_stop() {
     let codec = OpenAIChatCodec;
     let response = json!({
