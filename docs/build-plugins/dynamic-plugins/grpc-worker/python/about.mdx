@@ -165,6 +165,24 @@ registers a tool request intercept that updates the request JSON and emits a
 mark through `PluginContext.runtime`. The `main` entrypoint blocks until Relay
 requests shutdown.
 
+## Read Host Runtime Diagnostics
+
+Use the runtime handle inside an asynchronous callback to inspect the active
+host-level snapshot:
+
+```python
+diagnostics = await ctx.runtime.runtime_diagnostics()
+diagnostic = diagnostics.get("otel.metric_mark_invalid")
+if diagnostic is not None:
+    print(f"{diagnostic.message} occurred {diagnostic.count} times")
+```
+
+`RuntimeDiagnostics.entries` is an immutable tuple ordered by code. The host
+aggregates repeated codes, retains the latest message, saturates counts, and
+returns at most 32 entries. Entries do not identify the emitting plugin. If a
+worker connects to an older Relay host, the SDK translates gRPC `UNIMPLEMENTED`
+into an unsupported-runtime-diagnostics error.
+
 ## Create the Manifest
 
 Create `relay-plugin.toml` with the following content:

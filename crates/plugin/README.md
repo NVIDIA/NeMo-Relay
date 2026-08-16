@@ -56,6 +56,9 @@ the dynamic-library boundary on the stable C-compatible ABI.
 - **Typed telemetry marks**: `PluginRuntime::emit_mark_with_options` carries a
   `DataSchema` and `LogSeverity`; `emit_metric` validates and emits typed
   `MetricMeasurement` values through the reserved Relay metric schema.
+- **Runtime diagnostics**: `PluginRuntime::runtime_diagnostics()` reads the
+  active host-level `RuntimeDiagnostics` snapshot, with ordered entries and
+  `get(code)` lookup.
 
 ## Installation
 
@@ -153,6 +156,15 @@ can override that method when they need different configuration rules.
 
 During plugin teardown, the SDK stops accepting new callbacks and drains
 already accepted typed middleware before the plugin library unloads.
+
+## Runtime Diagnostics
+
+`PluginRuntime::runtime_diagnostics()` returns `RuntimeDiagnostic { code,
+message, count }` entries for the active host configuration. Relay aggregates
+repeated codes, retains the latest message, saturates counts, orders entries by
+code, and caps the snapshot at 32 entries. The result is host-level and does
+not attribute an entry to the plugin that emitted it. The ABI remains v4; an
+older, shorter v4 host table returns an explicit unsupported-capability error.
 
 Relay scope context is restored around every poll of a registered middleware
 future. Child tasks created with `tokio::spawn` do not automatically inherit

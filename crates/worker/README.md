@@ -98,6 +98,13 @@ server configuration is intended for tests and custom launchers.
 `emit_metric` validates typed `MetricMeasurement` values before emitting the
 reserved Relay metric schema.
 
+`PluginRuntime::runtime_diagnostics().await` returns an ordered host-level
+snapshot with `RuntimeDiagnostic { code, message, count }` entries and
+`get(code)` lookup. Relay aggregates repeated codes, retains the latest
+message, saturates counts, and returns at most 32 entries. It does not provide
+per-plugin attribution. An older host returns `UNIMPLEMENTED`, which the SDK
+reports as an unsupported-runtime-diagnostics error.
+
 ## Concurrency and Cancellation
 
 Unary and streaming callbacks run concurrently. Cancellation is cooperative:

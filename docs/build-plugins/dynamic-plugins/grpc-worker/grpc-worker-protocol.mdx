@@ -148,6 +148,7 @@ Relay implements these RPCs for worker callbacks:
 | --- | --- |
 | Marks and scopes | `EmitMark`, `PushScope`, `PopScope` |
 | Isolated scope stacks | `CreateScopeStack`, `DropScopeStack` |
+| Runtime diagnostics | `GetRuntimeDiagnostics` |
 | Execution continuations | `ToolNext`, `LlmNext`, `LlmStreamNext` |
 | Codec capabilities | `DecodeLlmCodecRequest`, `EncodeLlmCodecRequest`, `DecodeLlmCodecResponse` |
 
@@ -185,6 +186,15 @@ empty severity and an absent schema preserve legacy behavior. Worker SDKs keep
 the original `emit_mark(name, data, metadata)` call and expose optional fields;
 the Rust SDK also provides `emit_metric` for validated
 `nemo.relay.metric_measurements` marks.
+
+`GetRuntimeDiagnosticsRequest` carries the activation ID and token. Its closed
+response contains repeated `RuntimeDiagnostic { code, message, count }`
+entries. Relay returns the active host-level snapshot only: it aggregates by
+code, retains the latest message, saturates counts, sorts by code, and limits
+the response to 32 entries. There is no per-plugin attribution. The RPC was
+added without changing the `grpc-v1` handshake; an older host naturally returns
+gRPC `UNIMPLEMENTED`, which SDKs translate into an unsupported-runtime-
+diagnostics error.
 
 A worker may call an execution continuation repeatedly or concurrently while
 the corresponding `Invoke` or `InvokeStream` callback is active. Each call gets

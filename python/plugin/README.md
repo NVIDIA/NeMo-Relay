@@ -127,6 +127,14 @@ Use `emit_metric(name, measurements, metadata)` to attach the reserved Relay
 metric schema; authoritative metric validation remains in Relay after mark
 sanitization.
 
+Use `await ctx.runtime.runtime_diagnostics()` in an asynchronous callback to
+read an immutable, host-level `RuntimeDiagnostics` snapshot. Each entry has
+`code`, `message`, and `count`; `entries` is ordered by code and `get(code)`
+looks up one entry. Relay aggregates repeated codes, retains the latest
+message, saturates counts, and caps the snapshot at 32 entries. Entries do not
+identify the emitting plugin. An older host returns gRPC `UNIMPLEMENTED`, which
+the SDK reports as an unsupported-runtime-diagnostics error.
+
 Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
 worker process.

@@ -69,6 +69,29 @@ identity from `WorkerPlugin::plugin_id()`; custom launchers can use
 credentials and runs until Relay requests shutdown. Do not start the worker
 directly for normal operation.
 
+## Read Host Runtime Diagnostics
+
+Use the runtime handle inside an asynchronous callback to read the active
+host-level diagnostic snapshot:
+
+```rust
+let diagnostics = context
+    .runtime()
+    .expect("Relay provides a runtime handle")
+    .runtime_diagnostics()
+    .await?;
+
+if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
+    eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
+}
+```
+
+`entries()` is stable in code order. The snapshot aggregates by code, retains
+the latest message, saturates counts, and has at most 32 entries. It is a
+host-level view and has no per-plugin attribution. An older Relay host returns
+`UNIMPLEMENTED`; the SDK reports that as an unsupported-runtime-diagnostics
+error.
+
 ## Package the Worker
 
 Create `relay-plugin.toml` with the following content. The artifact digest must
