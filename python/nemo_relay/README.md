@@ -51,6 +51,8 @@ The Python package provides the following capabilities:
   `OpenTelemetryLogSubscriber` and `OpenTelemetryMetricSubscriber` export
   severity-tagged marks and typed metric measurements. Bare OTLP/HTTP origins
   resolve to `/v1/traces`, `/v1/logs`, or `/v1/metrics` for the selected signal.
+  Each direct OTLP subscriber exposes `runtime_diagnostics()` for bounded
+  exporter and event-processing failure summaries.
   The `nemo_relay.observability` helpers configure plugin-owned endpoint fan-out.
 - **Plugin and typed helpers**: Public modules for plugins, codecs, typed
   wrappers, adaptive runtime behavior, and observability plugin configuration.

@@ -177,6 +177,8 @@ fn register_event_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 fn register_observability_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyOpenTelemetryRuntimeDiagnostic>()?;
+    m.add_class::<PyOpenTelemetryRuntimeDiagnostics>()?;
     m.add_class::<PyAtifExporter>()?;
     m.add_class::<PyAtofExporterMode>()?;
     m.add_class::<PyAtofEndpointConfig>()?;

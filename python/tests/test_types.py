@@ -30,6 +30,7 @@ from nemo_relay import (
     OpenTelemetryLogSubscriber,
     OpenTelemetryMetricConfig,
     OpenTelemetryMetricSubscriber,
+    OpenTelemetryRuntimeDiagnostics,
     OpenTelemetrySubscriber,
     ScopeAttributes,
     ScopeEvent,
@@ -579,6 +580,37 @@ class TestAtofExporterType:
 
 
 class TestOpenTelemetryTypes:
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics"])
+    def test_signal_subscribers_expose_runtime_diagnostics(self, signal):
+        if signal == "traces":
+            subscriber = OpenTelemetrySubscriber(OpenTelemetryConfig("full", "http://127.0.0.1:4318"))
+        elif signal == "logs":
+            subscriber = OpenTelemetryLogSubscriber(OpenTelemetryLogConfig("http://127.0.0.1:4318"))
+        else:
+            subscriber = OpenTelemetryMetricSubscriber(OpenTelemetryMetricConfig("http://127.0.0.1:4318"))
+
+        subscriber_name = f"py_otel_{signal}_diagnostics_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            for _ in range(3):
+                scope.event(
+                    "invalid_metric",
+                    data={"measurements": []},
+                    data_schema={"name": "nemo.relay.metric_measurements", "version": "999"},
+                )
+            subscribers.flush()
+
+            diagnostics = subscriber.runtime_diagnostics()
+            assert isinstance(diagnostics, OpenTelemetryRuntimeDiagnostics)
+            diagnostic = diagnostics.get("otel.metric_mark_invalid")
+            assert diagnostic is not None
+            assert diagnostic.count == 3
+            assert "unsupported metric schema version" in diagnostic.message
+            assert [entry.code for entry in diagnostics.entries] == ["otel.metric_mark_invalid"]
+        finally:
+            subscriber.deregister(subscriber_name)
+            subscriber.shutdown()
+
     def test_signal_config_defaults_and_lifecycle(self):
         log_config = OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
         assert log_config.minimum_severity == LogSeverity.Info

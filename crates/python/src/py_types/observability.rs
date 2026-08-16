@@ -18,6 +18,60 @@ use super::{
 // AtifExporter
 // ---------------------------------------------------------------------------
 
+/// One bounded runtime diagnostic from an OpenTelemetry subscriber.
+#[pyclass(name = "OpenTelemetryRuntimeDiagnostic", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyOpenTelemetryRuntimeDiagnostic {
+    inner: nemo_relay::observability::OpenTelemetryRuntimeDiagnostic,
+}
+
+#[pymethods]
+impl PyOpenTelemetryRuntimeDiagnostic {
+    #[getter]
+    fn code(&self) -> &str {
+        &self.inner.code
+    }
+
+    #[getter]
+    fn message(&self) -> &str {
+        &self.inner.message
+    }
+
+    #[getter]
+    fn count(&self) -> u64 {
+        self.inner.count
+    }
+}
+
+/// Bounded snapshot of runtime diagnostics from an OpenTelemetry subscriber.
+#[pyclass(name = "OpenTelemetryRuntimeDiagnostics", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyOpenTelemetryRuntimeDiagnostics {
+    inner: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+}
+
+#[pymethods]
+impl PyOpenTelemetryRuntimeDiagnostics {
+    /// Return diagnostics in stable code order.
+    #[getter]
+    fn entries(&self) -> Vec<PyOpenTelemetryRuntimeDiagnostic> {
+        self.inner
+            .entries()
+            .iter()
+            .cloned()
+            .map(|inner| PyOpenTelemetryRuntimeDiagnostic { inner })
+            .collect()
+    }
+
+    /// Return the diagnostic with ``code``, when present.
+    fn get(&self, code: &str) -> Option<PyOpenTelemetryRuntimeDiagnostic> {
+        self.inner
+            .get(code)
+            .cloned()
+            .map(|inner| PyOpenTelemetryRuntimeDiagnostic { inner })
+    }
+}
+
 /// ATIF trajectory exporter that collects events and exports ATIF trajectories.
 ///
 /// Create an exporter, register it as an event subscriber, then call
@@ -666,6 +720,15 @@ impl PyOpenTelemetrySubscriber {
         })
     }
 
+    /// Return a bounded snapshot of exporter and event-processing diagnostics.
+    pub(crate) fn runtime_diagnostics(&self) -> PyResult<PyOpenTelemetryRuntimeDiagnostics> {
+        self.with_runtime_context(|| {
+            Ok(PyOpenTelemetryRuntimeDiagnostics {
+                inner: self.inner.runtime_diagnostics(),
+            })
+        })
+    }
+
     pub(crate) fn __repr__(&self) -> String {
         "<OpenTelemetrySubscriber>".to_string()
     }
@@ -854,6 +917,13 @@ impl PyOpenTelemetryLogSubscriber {
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
     }
 
+    /// Return a bounded snapshot of exporter and event-processing diagnostics.
+    fn runtime_diagnostics(&self) -> PyOpenTelemetryRuntimeDiagnostics {
+        PyOpenTelemetryRuntimeDiagnostics {
+            inner: self.inner.runtime_diagnostics(),
+        }
+    }
+
     fn __repr__(&self) -> &'static str {
         "<OpenTelemetryLogSubscriber>"
     }
@@ -1038,6 +1108,13 @@ impl PyOpenTelemetryMetricSubscriber {
     fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| self.inner.shutdown())
             .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// Return a bounded snapshot of exporter and event-processing diagnostics.
+    fn runtime_diagnostics(&self) -> PyOpenTelemetryRuntimeDiagnostics {
+        PyOpenTelemetryRuntimeDiagnostics {
+            inner: self.inner.runtime_diagnostics(),
+        }
     }
 
     fn __repr__(&self) -> &'static str {

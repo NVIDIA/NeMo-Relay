@@ -121,6 +121,12 @@ from nemo_relay._native import (
     OpenTelemetryMetricSubscriber as OpenTelemetryMetricSubscriber,
 )
 from nemo_relay._native import (
+    OpenTelemetryRuntimeDiagnostic as OpenTelemetryRuntimeDiagnostic,
+)
+from nemo_relay._native import (
+    OpenTelemetryRuntimeDiagnostics as OpenTelemetryRuntimeDiagnostics,
+)
+from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
 )
 from nemo_relay._native import (
