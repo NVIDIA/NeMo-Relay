@@ -178,6 +178,64 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 	}
 }
 
+func TestOpenTelemetrySubscribersExposeRuntimeDiagnostics(t *testing.T) {
+	endpoint := "http://127.0.0.1:4318/v1/traces"
+	traceSubscriber, err := NewOpenTelemetrySubscriber(NewOpenTelemetryConfig(OpenTelemetryTypeFull, endpoint))
+	requireNoError(t, err, "NewOpenTelemetrySubscriber failed")
+	defer traceSubscriber.Close()
+	logSubscriber, err := NewOpenTelemetryLogSubscriber(NewOpenTelemetryLogConfig(endpoint))
+	requireNoError(t, err, "NewOpenTelemetryLogSubscriber failed")
+	defer logSubscriber.Close()
+	metricSubscriber, err := NewOpenTelemetryMetricSubscriber(NewOpenTelemetryMetricConfig(endpoint))
+	requireNoError(t, err, "NewOpenTelemetryMetricSubscriber failed")
+	defer metricSubscriber.Close()
+
+	subscribers := []struct {
+		name               string
+		register           func(string) error
+		deregister         func(string) error
+		runtimeDiagnostics func() ([]OpenTelemetryRuntimeDiagnostic, error)
+	}{
+		{"trace", traceSubscriber.Register, traceSubscriber.Deregister, traceSubscriber.RuntimeDiagnostics},
+		{"log", logSubscriber.Register, logSubscriber.Deregister, logSubscriber.RuntimeDiagnostics},
+		{"metric", metricSubscriber.Register, metricSubscriber.Deregister, metricSubscriber.RuntimeDiagnostics},
+	}
+	for index := range subscribers {
+		subscribers[index].name = "go_otel_" + subscribers[index].name + "_diagnostics_" + time.Now().Format(otelTimeFormat)
+		requireNoError(t, subscribers[index].register(subscribers[index].name), "subscriber Register failed")
+		defer func(subscriberName string, deregister func(string) error) {
+			_ = deregister(subscriberName)
+		}(subscribers[index].name, subscribers[index].deregister)
+	}
+
+	runWithTestScopeStack(t, func() {
+		requireNoError(t, EmitEvent(
+			"invalid_metric",
+			WithEventData(json.RawMessage(`{"measurements":[]}`)),
+			WithEventDataSchema(DataSchema{Name: "nemo.relay.metric_measurements", Version: "999"}),
+		), "EmitEvent failed")
+	})
+	requireNoError(t, FlushSubscribers(), "FlushSubscribers failed")
+
+	for _, subscriber := range subscribers {
+		diagnostics, err := subscriber.runtimeDiagnostics()
+		requireNoError(t, err, "RuntimeDiagnostics failed")
+		var invalidMetric *OpenTelemetryRuntimeDiagnostic
+		for index := range diagnostics {
+			if diagnostics[index].Code == "otel.metric_mark_invalid" {
+				invalidMetric = &diagnostics[index]
+				break
+			}
+		}
+		if invalidMetric == nil {
+			t.Fatalf("expected invalid metric diagnostic for %s subscriber, got %#v", subscriber.name, diagnostics)
+		}
+		if invalidMetric.Count != 1 || !bytes.Contains([]byte(invalidMetric.Message), []byte("unsupported metric schema version")) {
+			t.Fatalf("unexpected invalid metric diagnostic for %s subscriber: %#v", subscriber.name, invalidMetric)
+		}
+	}
+}
+
 func TestOpenTelemetryLogSubscriberLifecycleAndDerivation(t *testing.T) {
 	requests := make(chan otelRequest, 4)
 	server := NewOtelTestServer(t, requests)

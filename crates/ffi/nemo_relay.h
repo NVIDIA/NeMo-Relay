@@ -1720,6 +1720,19 @@ NemoRelayStatus nemo_relay_otel_subscriber_deregister(const char *name);
 NemoRelayStatus nemo_relay_otel_subscriber_force_flush(const struct FfiOpenTelemetrySubscriber *subscriber);
 
 /**
+ * Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries in stable code order. The caller owns `out_json` and must free it
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `subscriber` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_runtime_diagnostics_json(const struct FfiOpenTelemetrySubscriber *subscriber,
+                                                                    char **out_json);
+
+/**
  * Shuts down the underlying tracer provider.
  *
  * # Safety
@@ -1776,6 +1789,19 @@ NemoRelayStatus nemo_relay_otel_log_subscriber_deregister(const char *name);
 NemoRelayStatus nemo_relay_otel_log_subscriber_force_flush(const struct FfiOpenTelemetryLogSubscriber *subscriber);
 
 /**
+ * Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries in stable code order. The caller owns `out_json` and must free it
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `subscriber` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_runtime_diagnostics_json(const struct FfiOpenTelemetryLogSubscriber *subscriber,
+                                                                        char **out_json);
+
+/**
  * Shuts down the OpenTelemetry logger provider.
  *
  * # Safety
@@ -1830,6 +1856,19 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_deregister(const char *name);
  * `subscriber` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_otel_metric_subscriber_force_flush(const struct FfiOpenTelemetryMetricSubscriber *subscriber);
+
+/**
+ * Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries in stable code order. The caller owns `out_json` and must free it
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `subscriber` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(const struct FfiOpenTelemetryMetricSubscriber *subscriber,
+                                                                           char **out_json);
 
 /**
  * Shuts down the OpenTelemetry meter provider and performs final collection.

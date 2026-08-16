@@ -31,6 +31,27 @@ fn status_from_atof_error(error: &AtofExporterError) -> NemoRelayStatus {
     }
 }
 
+fn write_runtime_diagnostics(
+    diagnostics: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+    out_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    let entries = serde_json::Value::Array(
+        diagnostics
+            .entries()
+            .iter()
+            .map(|diagnostic| {
+                serde_json::json!({
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "count": diagnostic.count,
+                })
+            })
+            .collect(),
+    );
+    unsafe { *out_json = json_to_c_string(&entries) };
+    NemoRelayStatus::Ok
+}
+
 // ---------------------------------------------------------------------------
 // Observability plugin component helpers
 // ---------------------------------------------------------------------------
@@ -960,6 +981,30 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_force_flush(
     }
 }
 
+/// Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+///
+/// The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+/// entries in stable code order. The caller owns `out_json` and must free it
+/// with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `subscriber` and `out_json` must be valid, non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_runtime_diagnostics_json(
+    subscriber: *const FfiOpenTelemetrySubscriber,
+    out_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if let Err(status) = required_out_ptr(out_json) {
+        return status;
+    }
+    write_runtime_diagnostics(unsafe { &*subscriber }.0.runtime_diagnostics(), out_json)
+}
+
 /// Shuts down the underlying tracer provider.
 ///
 /// # Safety
@@ -1192,6 +1237,30 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_force_flush(
     }
 }
 
+/// Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+///
+/// The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+/// entries in stable code order. The caller owns `out_json` and must free it
+/// with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `subscriber` and `out_json` must be valid, non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_runtime_diagnostics_json(
+    subscriber: *const FfiOpenTelemetryLogSubscriber,
+    out_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if let Err(status) = required_out_ptr(out_json) {
+        return status;
+    }
+    write_runtime_diagnostics(unsafe { &*subscriber }.0.runtime_diagnostics(), out_json)
+}
+
 /// Shuts down the OpenTelemetry logger provider.
 ///
 /// # Safety
@@ -1405,6 +1474,30 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_force_flush(
             NemoRelayStatus::Internal
         }
     }
+}
+
+/// Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+///
+/// The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+/// entries in stable code order. The caller owns `out_json` and must free it
+/// with `nemo_relay_string_free`.
+///
+/// # Safety
+/// `subscriber` and `out_json` must be valid, non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(
+    subscriber: *const FfiOpenTelemetryMetricSubscriber,
+    out_json: *mut *mut c_char,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if subscriber.is_null() {
+        set_last_error("subscriber pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    if let Err(status) = required_out_ptr(out_json) {
+        return status;
+    }
+    write_runtime_diagnostics(unsafe { &*subscriber }.0.runtime_diagnostics(), out_json)
 }
 
 /// Shuts down the OpenTelemetry meter provider and performs final collection.

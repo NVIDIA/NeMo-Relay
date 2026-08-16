@@ -956,6 +956,177 @@ fn test_ffi_open_telemetry_log_and_metric_subscribers_export_signals() {
 }
 
 #[test]
+fn test_ffi_open_telemetry_subscribers_return_runtime_diagnostics() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = cstring("http://127.0.0.1:4318/v1/traces");
+        let mut trace_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+        let mut log_subscriber: *mut types::FfiOpenTelemetryLogSubscriber = ptr::null_mut();
+        let mut metric_subscriber: *mut types::FfiOpenTelemetryMetricSubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create(
+                c"full".as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                &mut trace_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let trace_name = cstring(&unique_name("ffi_otel_trace_diagnostics"));
+        let log_name = cstring(&unique_name("ffi_otel_log_diagnostics"));
+        let metric_name = cstring(&unique_name("ffi_otel_metric_diagnostics"));
+        assert_status!(
+            nemo_relay_otel_subscriber_register(trace_subscriber, trace_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(log_subscriber, log_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(metric_subscriber, metric_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+
+        let stack = fresh_scope_stack();
+        let event_name = cstring("invalid_metric");
+        let data = cstring(r#"{"measurements":[]}"#);
+        let data_schema = cstring(r#"{"name":"nemo.relay.metric_measurements","version":"999"}"#);
+        assert_status!(
+            api::nemo_relay_event_v2(
+                event_name.as_ptr(),
+                ptr::null(),
+                data.as_ptr(),
+                data_schema.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let mut trace_diagnostics = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_runtime_diagnostics_json(
+                trace_subscriber,
+                &mut trace_diagnostics,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut log_diagnostics = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_log_subscriber_runtime_diagnostics_json(
+                log_subscriber,
+                &mut log_diagnostics,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let mut metric_diagnostics = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(
+                metric_subscriber,
+                &mut metric_diagnostics,
+            ),
+            NemoRelayStatus::Ok
+        );
+        for diagnostics in [trace_diagnostics, log_diagnostics, metric_diagnostics] {
+            let entries = returned_json(diagnostics);
+            let diagnostic = entries
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["code"] == "otel.metric_mark_invalid")
+                .unwrap();
+            assert_eq!(diagnostic["count"], 1);
+            assert!(
+                diagnostic["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("unsupported metric schema version")
+            );
+        }
+
+        assert_status!(
+            nemo_relay_otel_subscriber_deregister(trace_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_deregister(log_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_deregister(metric_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_subscriber_shutdown(trace_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_otel_subscriber_free(trace_subscriber);
+        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
+        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
 fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

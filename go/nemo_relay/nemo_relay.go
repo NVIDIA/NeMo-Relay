@@ -269,18 +269,21 @@ extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const c
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
+extern int32_t nemo_relay_otel_subscriber_runtime_diagnostics_json(const void*, char**);
 extern int32_t nemo_relay_otel_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_subscriber_free(void*);
 extern int32_t nemo_relay_otel_log_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, void**);
 extern int32_t nemo_relay_otel_log_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_log_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_log_subscriber_force_flush(const void*);
+extern int32_t nemo_relay_otel_log_subscriber_runtime_diagnostics_json(const void*, char**);
 extern int32_t nemo_relay_otel_log_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_log_subscriber_free(void*);
 extern int32_t nemo_relay_otel_metric_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
 extern int32_t nemo_relay_otel_metric_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_metric_subscriber_force_flush(const void*);
+extern int32_t nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(const void*, char**);
 extern int32_t nemo_relay_otel_metric_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_metric_subscriber_free(void*);
 
@@ -2259,6 +2262,23 @@ type OpenTelemetrySubscriber struct {
 	ptr unsafe.Pointer
 }
 
+// OpenTelemetryRuntimeDiagnostic is one bounded aggregate of an OTLP exporter
+// or event-processing failure.
+type OpenTelemetryRuntimeDiagnostic struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Count   uint64 `json:"count"`
+}
+
+func decodeOpenTelemetryRuntimeDiagnostics(out *C.char) ([]OpenTelemetryRuntimeDiagnostic, error) {
+	defer C.nemo_relay_string_free(out)
+	var diagnostics []OpenTelemetryRuntimeDiagnostic
+	if err := jsonUnmarshal([]byte(C.GoString(out)), &diagnostics); err != nil {
+		return nil, err
+	}
+	return diagnostics, nil
+}
+
 func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConfig, error) {
 	if config.Transport == "" {
 		config.Transport = OpenTelemetryTransportHTTPBinary
@@ -2401,6 +2421,15 @@ func (s *OpenTelemetrySubscriber) Deregister(name string) error {
 func (s *OpenTelemetrySubscriber) ForceFlush() error {
 	status := C.nemo_relay_otel_subscriber_force_flush(s.ptr)
 	return checkStatus(status)
+}
+
+// RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
+func (s *OpenTelemetrySubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_otel_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+		return nil, err
+	}
+	return decodeOpenTelemetryRuntimeDiagnostics(out)
 }
 
 // Shutdown shuts down the underlying tracer provider.
@@ -2668,6 +2697,15 @@ func (s *OpenTelemetryLogSubscriber) ForceFlush() error {
 	return checkStatus(C.nemo_relay_otel_log_subscriber_force_flush(s.ptr))
 }
 
+// RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
+func (s *OpenTelemetryLogSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_otel_log_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+		return nil, err
+	}
+	return decodeOpenTelemetryRuntimeDiagnostics(out)
+}
+
 // Shutdown drains and shuts down the logger provider.
 func (s *OpenTelemetryLogSubscriber) Shutdown() error {
 	return checkStatus(C.nemo_relay_otel_log_subscriber_shutdown(s.ptr))
@@ -2784,6 +2822,15 @@ func (s *OpenTelemetryMetricSubscriber) Deregister(name string) error {
 // ForceFlush drains Relay delivery and collects current metric aggregates.
 func (s *OpenTelemetryMetricSubscriber) ForceFlush() error {
 	return checkStatus(C.nemo_relay_otel_metric_subscriber_force_flush(s.ptr))
+}
+
+// RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
+func (s *OpenTelemetryMetricSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+		return nil, err
+	}
+	return decodeOpenTelemetryRuntimeDiagnostics(out)
 }
 
 // Shutdown performs final collection and shuts down the meter provider.
