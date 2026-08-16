@@ -205,6 +205,34 @@ fn test_decode_response_openrouter_scalar_provider_reported_cost() {
 }
 
 #[test]
+fn test_decode_response_scalar_provider_reported_cost_honors_cost_usd_precedence() {
+    let codec = OpenAIChatCodec;
+    let scalar_response = json!({"usage": {"cost": 0.0123}});
+    let scalar_cost = codec
+        .decode_response(&scalar_response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert_eq!(scalar_cost.total, Some(0.0123));
+    assert_eq!(scalar_cost.source, CostSource::ProviderReported);
+
+    let conflicting_response = json!({"usage": {"cost_usd": 0.0456, "cost": 0.0123}});
+    let conflicting_cost = codec
+        .decode_response(&conflicting_response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert_eq!(conflicting_cost.total, Some(0.0456));
+    assert_eq!(conflicting_cost.source, CostSource::ProviderReported);
+}
+
+#[test]
 fn test_decode_response_finish_reason_stop() {
     let codec = OpenAIChatCodec;
     let response = json!({
