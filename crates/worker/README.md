@@ -93,6 +93,11 @@ Relay supplies the socket, activation ID, and authentication token through the
 worker environment. Use `serve_plugin` for Relay-spawned workers; explicit
 server configuration is intended for tests and custom launchers.
 
+`PluginRuntime::emit_mark` retains its original positional contract.
+`emit_mark_with_options` adds an optional `DataSchema` and `LogSeverity`, and
+`emit_metric` validates typed `MetricMeasurement` values before emitting the
+reserved Relay metric schema.
+
 ## Concurrency and Cancellation
 
 Unary and streaming callbacks run concurrently. Cancellation is cooperative:

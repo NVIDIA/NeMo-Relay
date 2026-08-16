@@ -240,12 +240,21 @@ The [Agent Trajectory Observability Format (ATOF) JSONL exporter](/configure-plu
 writes the canonical event stream to a native filesystem path as one raw ATOF
 event per line.
 
-### OpenTelemetry Subscriber
+### OpenTelemetry Subscribers
 
-The OpenTelemetry subscriber maps runtime events into OTLP traces for tracing
-backends. Each subscriber uses one `full`, `gen_ai`, or `openinference`
-projection. Select `openinference` for model-centric OpenInference semantics;
-there is no separate OpenInference subscriber.
+The trace subscriber maps runtime events into OTLP traces. Each trace
+subscriber uses one `full`, `gen_ai`, or `openinference` projection. Select
+`openinference` for model-centric OpenInference semantics; there is no separate
+OpenInference subscriber.
+
+Independent log and metric subscribers consume the same sanitized event
+stream. The log subscriber exports non-metric marks with typed severity and
+scope correlation. Valid marks that use the Relay-owned
+`nemo.relay.metric_measurements` schema route exclusively to the metric
+subscriber and are not projected as traces or logs. Invalid reserved metric
+marks reach no OTLP signal and produce an operational diagnostic. Scope events
+maintain log lineage but do not become logs or metrics. Operational stderr and
+file records are not input to either telemetry subscriber.
 
 Detailed setup, configuration, and API behavior for this subscriber belongs in
 [Observability](/configure-plugins/observability/about).

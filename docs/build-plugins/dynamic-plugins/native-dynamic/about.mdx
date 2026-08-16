@@ -138,10 +138,20 @@ extern "C" fn nemo_relay_register_plugin(
 ) -> NemoRelayStatus
 ```
 
-The v4 host table contains the complete frozen v3 table as its prefix and adds
-completion-scoped codecs plus pull-based downstream LLM streams. Relay
-negotiates v4, then a separately frozen v3 table, then the legacy v2 table.
-Raw ABI plugins can use
+Relay 0.8's current v4 host table contains the complete frozen v3 table as its
+prefix. It includes typed asynchronous middleware operations such as
+completion-scoped codecs and pull-based downstream LLM streams, then appends
+`emit_mark_v2`, which accepts optional data-schema JSON and log severity in
+addition to the legacy mark fields.
+`PluginRuntime::emit_mark_with_options` uses this function, and
+`PluginRuntime::emit_metric` constructs and validates Relay metric marks. The
+original `emit_mark` function and the complete v1 and v3 layouts remain
+unchanged.
+
+Relay negotiates v4, then the separately frozen v3 table, then the legacy v2
+table. An entry that rejects a newer table with `InvalidArg` is retried with the
+next older table. Rust plugins using the typed `NativePlugin` APIs continue to
+work unchanged. Raw ABI plugins can use
 `PluginContext::register_async_middleware_raw` when a callback must complete
 later. The callback receives a JSON invocation, an optional continuation for
 execution intercepts, and a one-shot completion handle.

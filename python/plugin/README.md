@@ -107,6 +107,26 @@ async def main() -> None:
     await serve_plugin(PolicyPlugin())
 ```
 
+Marks can also declare a typed data schema and exported-log severity without
+changing the stable `grpc-v1` protocol identifier:
+
+```python
+from nemo_relay_plugin import DataSchema, LogSeverity
+
+await ctx.runtime.emit_mark(
+    "acme.policy.decision",
+    {"allowed": True},
+    data_schema=DataSchema("acme.policy.decision", "1"),
+    severity=LogSeverity.INFO,
+)
+```
+
+The original positional `emit_mark(name, data, metadata)` form remains
+supported. Relay validates the schema and severity again at the host boundary.
+Use `emit_metric(name, measurements, metadata)` to attach the reserved Relay
+metric schema; authoritative metric validation remains in Relay after mark
+sanitization.
+
 Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
 worker process.

@@ -178,6 +178,14 @@ baseline. The package and RPC method names remain v1, but workers must
 regenerate their protobuf bindings and rebuild. Future incompatible worker
 protobuf or payload semantic changes must increment `worker_protocol`.
 
+`EmitMarkRequest` keeps its original `name`, `data`, and `metadata` fields and
+additively supports `data_schema` (a `nemo.relay.DataSchema@1` JSON envelope)
+and canonical `severity` (`trace`, `debug`, `info`, `warn`, or `error`). An
+empty severity and an absent schema preserve legacy behavior. Worker SDKs keep
+the original `emit_mark(name, data, metadata)` call and expose optional fields;
+the Rust SDK also provides `emit_metric` for validated
+`nemo.relay.metric_measurements` marks.
+
 A worker may call an execution continuation repeatedly or concurrently while
 the corresponding `Invoke` or `InvokeStream` callback is active. Each call gets
 an isolated scope-stack branch containing the scopes visible at invocation.

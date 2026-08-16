@@ -182,11 +182,14 @@ relay = ">=0.8.0,<1.0"
 native_api = "1"
 ```
 
-Relay 0.8 prefers native ABI v4 and falls back to frozen v3 and v2 tables. ABI
-v4 adds completion-scoped codec operations and pull-based downstream LLM
-streams. `native_api = "1"` uses the canonical `ToolExecutionResult` contract
-without changing the ABI v4 table layout. Rebuild all native plugin artifacts;
-support for frozen table layouts does not preserve the pre-0.8 JSON semantics.
+Relay 0.8's current native ABI is v4, with fallback to frozen v3 and v2 tables
+for old binaries. ABI v4 includes typed asynchronous middleware operations such
+as completion-scoped codecs and pull-based downstream LLM streams, then appends
+`emit_mark_v2` for typed data-schema and log-severity options. This does not
+change the manifest `native_api` value. `native_api = "1"` uses the canonical
+`ToolExecutionResult` contract without changing the ABI v4 table layout. Rebuild
+all native plugin artifacts; support for frozen table layouts does not preserve
+the pre-0.8 JSON semantics.
 
 ### Move Project Configuration to a Supported Location
 

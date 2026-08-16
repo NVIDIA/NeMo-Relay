@@ -53,6 +53,9 @@ the dynamic-library boundary on the stable C-compatible ABI.
   continuations use a pull-based host handle.
 - **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, keeping
   application results and opaque annotations adjacent across native API 1.
+- **Typed telemetry marks**: `PluginRuntime::emit_mark_with_options` carries a
+  `DataSchema` and `LogSeverity`; `emit_metric` validates and emits typed
+  `MetricMeasurement` values through the reserved Relay metric schema.
 
 ## Installation
 

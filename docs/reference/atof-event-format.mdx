@@ -431,6 +431,7 @@ The following capabilities have been deliberately deferred from v0.1. They may b
 - **Terminal status on scope end.** A `status` field on `scope` events with `scope_category: "end"` — valued in `"ok"` / `"error"` / `"cancelled"` — to carry the scope's terminal outcome on the wire. Consumers currently infer outcome (when needed) from `data` contents defined by the producer.
 - **Structured error payload.** An `error` field pairing with `status == "error"`, carrying `{message, type, traceback}` for structured error reporting.
 - **Cascading cancellation semantics.** Normative guidance for how parent and child cancellation flows through the scope stack — contingent on `status` being adopted.
+- **Metric routing semantics.** Whether the Relay-owned `nemo.relay.metric_measurements` schema should become an ATOF-wide convention, including schema ownership, versioning, timestamps, aggregation, and exemplars. In ATOF `0.1`, `data_schema` remains opaque and ATOF does not normalize metrics.
 
 Producers and consumers experimenting with these fields ahead of standardization SHOULD namespace them (e.g., under `data` with a vendor-prefixed `data_schema` name) so that a future promotion into ATOF core remains backward-compatible.
 
