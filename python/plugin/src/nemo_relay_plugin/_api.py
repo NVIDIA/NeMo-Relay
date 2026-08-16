@@ -112,6 +112,26 @@ class LlmCodecIdentity:
 
 
 @dataclass(frozen=True)
+class RuntimeDiagnostic:
+    """One bounded runtime diagnostic reported by the Relay host."""
+
+    code: str
+    message: str
+    count: int
+
+
+@dataclass(frozen=True)
+class RuntimeDiagnostics:
+    """Bounded snapshot of active host runtime diagnostics."""
+
+    entries: tuple[RuntimeDiagnostic, ...]
+
+    def get(self, code: str) -> RuntimeDiagnostic | None:
+        """Return the diagnostic with ``code``, when present."""
+        return next((diagnostic for diagnostic in self.entries if diagnostic.code == code), None)
+
+
+@dataclass(frozen=True)
 class LlmSanitizeRequestContext:
     """Structured per-call context provided to an LLM request sanitizer."""
 
@@ -1485,6 +1505,33 @@ class PluginRuntime:
             )
         )
         _ack_to_result(response)
+
+    async def runtime_diagnostics(self) -> RuntimeDiagnostics:
+        """Return a bounded snapshot of active host runtime diagnostics.
+
+        Raises:
+            WorkerSdkError: The host rejects the request or lacks the additive
+                ``grpc-v1`` runtime-diagnostics operation.
+        """
+        try:
+            response = await self._host_stub.GetRuntimeDiagnostics(
+                pb.GetRuntimeDiagnosticsRequest(
+                    activation_id=self._activation_id,
+                    auth_token=self._auth_token,
+                )
+            )
+        except grpc.aio.AioRpcError as exc:
+            if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                raise WorkerSdkError(
+                    "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension"
+                ) from exc
+            raise WorkerSdkError(f"GetRuntimeDiagnostics failed: {exc.details()}") from exc
+        return RuntimeDiagnostics(
+            entries=tuple(
+                RuntimeDiagnostic(code=entry.code, message=entry.message, count=entry.count)
+                for entry in response.entries
+            )
+        )
 
     async def emit_metric(
         self,

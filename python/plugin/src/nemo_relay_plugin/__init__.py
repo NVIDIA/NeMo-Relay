@@ -45,6 +45,8 @@ Public data types:
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
+    RuntimeDiagnostic: One aggregated host runtime diagnostic entry.
+    RuntimeDiagnostics: Immutable host runtime diagnostics snapshot.
     ScopeType: Semantic category for a Relay execution scope.
     WorkerSdkError: SDK, host-call, or worker protocol error.
 
@@ -110,6 +112,8 @@ from ._api import (
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
+    RuntimeDiagnostic,
+    RuntimeDiagnostics,
     ScopeType,
     SubscriberCallback,
     ToolConditionalCallback,
@@ -161,6 +165,8 @@ __all__ = [
     "LlmStreamExecutionCallback",
     "PluginContext",
     "PluginRuntime",
+    "RuntimeDiagnostic",
+    "RuntimeDiagnostics",
     "PendingMarkSpec",
     "ScopeType",
     "SubscriberCallback",

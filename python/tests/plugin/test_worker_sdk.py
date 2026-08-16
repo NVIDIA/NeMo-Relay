@@ -36,6 +36,8 @@ from nemo_relay_plugin import (  # noqa: E402
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
+    RuntimeDiagnostic,
+    RuntimeDiagnostics,
     ScopeType,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
@@ -379,6 +381,15 @@ class RecordingHostStub:
         self.requests.append(request)
         return self._host_ack("EmitMark")
 
+    async def GetRuntimeDiagnostics(self, request: Any) -> Any:
+        self.requests.append(request)
+        return pb.GetRuntimeDiagnosticsResponse(
+            entries=[
+                pb.RuntimeDiagnostic(code="alpha", message="first", count=1),
+                pb.RuntimeDiagnostic(code="zeta", message="latest", count=3),
+            ]
+        )
+
     async def CreateScopeStack(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("CreateScopeStack") == "error":
@@ -625,6 +636,9 @@ def test_generated_proto_matches_worker_contract():
     assert pb.CUSTOM == 10
 
     host_runtime = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"]
+    diagnostics = host_runtime.methods_by_name["GetRuntimeDiagnostics"]
+    assert diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
+    assert diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
     tool_next = host_runtime.methods_by_name["ToolNext"]
     assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
     tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
@@ -2106,6 +2120,15 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     assert runtime.current_scope_stack_id() is None
     assert runtime.current_parent_scope_id() is None
 
+    diagnostics = await runtime.runtime_diagnostics()
+    assert isinstance(diagnostics, RuntimeDiagnostics)
+    assert diagnostics.entries == (
+        RuntimeDiagnostic(code="alpha", message="first", count=1),
+        RuntimeDiagnostic(code="zeta", message="latest", count=3),
+    )
+    assert diagnostics.get("zeta") == RuntimeDiagnostic(code="zeta", message="latest", count=3)
+    assert diagnostics.get("missing") is None
+
     stack_id = await runtime.create_scope_stack()
     assert stack_id == "stack-1"
     with runtime.bind_scope_stack(stack_id, parent_scope_id="parent-1"):
@@ -2282,6 +2305,24 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
     host_stub.failures["EmitMark"] = "empty"
     with pytest.raises(WorkerSdkError, match="host call failed"):
         await runtime.emit_mark("mark")
+
+    class UnimplementedRuntimeDiagnosticsError(Exception):
+        def code(self) -> grpc.StatusCode:
+            return grpc.StatusCode.UNIMPLEMENTED
+
+    class OldHostStub:
+        async def GetRuntimeDiagnostics(self, request: Any) -> Any:
+            del request
+            raise UnimplementedRuntimeDiagnosticsError()
+
+    with mock.patch.object(grpc.aio, "AioRpcError", UnimplementedRuntimeDiagnosticsError):
+        old_host_runtime = PluginRuntime(
+            activation_id=ACTIVATION_ID,
+            auth_token=AUTH_TOKEN,
+            host_stub=OldHostStub(),
+        )
+        with pytest.raises(WorkerSdkError, match="grpc-v1 diagnostics extension"):
+            await old_host_runtime.runtime_diagnostics()
 
     host_stub.failures["CreateScopeStack"] = "error"
     with pytest.raises(WorkerSdkError, match="CreateScopeStack failed"):

@@ -461,9 +461,13 @@ fn assert_native_abi_platform_layout() {
             0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
         ]
     );
-    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 520);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 528);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 512);
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+        520
+    );
     assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
     assert_type_layout::<NemoRelayNativeLlmStreamV1>(8, 40);
@@ -487,9 +491,13 @@ fn assert_native_abi_platform_layout() {
             0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
         ]
     );
-    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 256);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 260);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 252);
+    assert_eq!(
+        offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+        256
+    );
     assert_type_layout::<NemoRelayNativePluginV1>(4, 28);
     assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
     assert_type_layout::<NemoRelayNativeLlmStreamV1>(4, 20);
@@ -506,22 +514,23 @@ fn native_abi_v4_extension_is_append_only() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 520);
-        assert_eq!(host_api_v4_offsets(), [0, 512]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 528);
+        assert_eq!(host_api_v4_offsets(), [0, 512, 520]);
     }
 
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 256);
-        assert_eq!(host_api_v4_offsets(), [0, 252]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
+        assert_eq!(host_api_v4_offsets(), [0, 252, 256]);
     }
 }
 
-fn host_api_v4_offsets() -> [usize; 2] {
+fn host_api_v4_offsets() -> [usize; 3] {
     [
         offset_of!(NemoRelayNativeHostApiV4, v3),
         offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
+        offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
     ]
 }
 
@@ -1325,6 +1334,21 @@ unsafe extern "C" fn capture_emit_mark_v2(
         !parent.is_null()
     ));
     NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_runtime_diagnostics(
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let value =
+        c"{\"entries\":[{\"code\":\"otel.example\",\"message\":\"example failure\",\"count\":3}]}";
+    unsafe { test_string_new(value.as_ptr().cast(), value.to_bytes().len(), out) }
+}
+
+unsafe extern "C" fn capture_malformed_runtime_diagnostics(
+    out: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let value = c"{not-json";
+    unsafe { test_string_new(value.as_ptr().cast(), value.to_bytes().len(), out) }
 }
 
 unsafe extern "C" fn capture_scope_stack_create(
@@ -2133,6 +2157,7 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_completion_retain: capture_async_completion_retain,
         async_stream_is_backpressured: capture_async_stream_backpressured,
         emit_mark_v2: capture_emit_mark_v2,
+        get_runtime_diagnostics: capture_runtime_diagnostics,
     }
 }
 
@@ -2604,6 +2629,58 @@ fn plugin_runtime_uses_v4_mark_options_extension() {
             && call.contains(r#""name":"example.mark""#)
             && call.contains("severity=warn")
     }));
+}
+
+#[test]
+fn plugin_runtime_reads_v4_runtime_diagnostics_extension() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let diagnostics = PluginRuntime::new(&host.v3.v1)
+        .runtime_diagnostics()
+        .unwrap();
+
+    assert_eq!(diagnostics.entries().len(), 1);
+    assert_eq!(diagnostics.entries()[0].code, "otel.example");
+    assert_eq!(diagnostics.entries()[0].count, 3);
+    assert_eq!(
+        diagnostics
+            .get("otel.example")
+            .map(|diagnostic| diagnostic.message.as_str()),
+        Some("example failure")
+    );
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_rejects_malformed_runtime_diagnostics_json() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.get_runtime_diagnostics = capture_malformed_runtime_diagnostics;
+
+    let error = PluginRuntime::new(&host.v3.v1)
+        .runtime_diagnostics()
+        .unwrap_err();
+    assert!(
+        error.contains("invalid runtime diagnostics result"),
+        "{error}"
+    );
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_keeps_mark_options_on_a_pre_diagnostics_v4_host() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.v3.v1.struct_size = offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics);
+    let runtime = PluginRuntime::new(&host.v3.v1);
+
+    runtime
+        .emit_mark_with_options("current-v4", None, None, None, Some(LogSeverity::Info))
+        .unwrap();
+    assert_eq!(
+        runtime.runtime_diagnostics().unwrap_err(),
+        "runtime diagnostics require the native host ABI v4 diagnostics extension"
+    );
 }
 
 #[test]

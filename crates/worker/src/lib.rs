@@ -56,12 +56,12 @@ use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWork
 use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
-    EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
-    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
-    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
-    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk,
+    EmptyResult, GetRuntimeDiagnosticsRequest, GuardrailResult, HandshakeRequest,
+    HandshakeResponse, HealthRequest, HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope,
+    JsonResult, LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind,
+    LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest,
+    PushScopeRequest, RegisterRequest, RegisterResponse, Registration, RegistrationSurface,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionInterceptResult, ToolExecutionResult as ProtoToolExecutionResult,
     ToolExecutionResultResponse, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
@@ -84,6 +84,37 @@ use tower::service_fn;
 
 /// SDK result type.
 pub type Result<T> = std::result::Result<T, WorkerSdkError>;
+
+/// One bounded runtime diagnostic reported by the Relay host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeDiagnostic {
+    /// Stable identifier for the diagnostic condition.
+    pub code: String,
+    /// Most recently recorded message for this condition.
+    pub message: String,
+    /// Total number of occurrences recorded for this condition.
+    pub count: u64,
+}
+
+/// Bounded snapshot of active host runtime diagnostics.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeDiagnostics {
+    entries: Vec<RuntimeDiagnostic>,
+}
+
+impl RuntimeDiagnostics {
+    /// Return diagnostics in stable code order.
+    pub fn entries(&self) -> &[RuntimeDiagnostic] {
+        &self.entries
+    }
+
+    /// Return a diagnostic by its stable code.
+    pub fn get(&self, code: &str) -> Option<&RuntimeDiagnostic> {
+        self.entries
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+    }
+}
 
 /// Boxed future returned by async worker callbacks.
 pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
@@ -813,6 +844,39 @@ impl PluginRuntime {
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
         ack_to_result(response.ok, response.error)
+    }
+
+    /// Return a bounded snapshot of active host runtime diagnostics.
+    pub async fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
+        let mut client = self.host_client().await?;
+        let response = client
+            .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+                activation_id: self.activation_id.clone(),
+                auth_token: self.auth_token.clone(),
+            }))
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    WorkerSdkError::Callback(
+                        "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension"
+                            .into(),
+                    )
+                } else {
+                    WorkerSdkError::Transport(error.to_string())
+                }
+            })?
+            .into_inner();
+        Ok(RuntimeDiagnostics {
+            entries: response
+                .entries
+                .into_iter()
+                .map(|diagnostic: ProtoRuntimeDiagnostic| RuntimeDiagnostic {
+                    code: diagnostic.code,
+                    message: diagnostic.message,
+                    count: diagnostic.count,
+                })
+                .collect(),
+        })
     }
 
     /// Emits a validated Relay metric-measurement mark through the host runtime.

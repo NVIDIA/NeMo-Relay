@@ -4,8 +4,9 @@
 //! Tests for stable worker protocol helpers, structural tool results, and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    EmitMarkRequest, HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, JsonValue,
-    RegistrationSurface, ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
+    EmitMarkRequest, GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest,
+    HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface, RuntimeDiagnostic,
+    ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
@@ -112,6 +113,28 @@ fn request_field_numbers_are_stable() {
         InvokeRequest::decode(encoded.as_slice()).expect("decode invoke"),
         invoke
     );
+}
+
+#[test]
+fn runtime_diagnostics_messages_are_stable() {
+    let request = GetRuntimeDiagnosticsRequest {
+        activation_id: "act".into(),
+        auth_token: "token".into(),
+    };
+    assert_eq!(
+        request.encode_to_vec(),
+        b"\x0a\x03act\x12\x05token".to_vec()
+    );
+
+    let response = GetRuntimeDiagnosticsResponse {
+        entries: vec![RuntimeDiagnostic {
+            code: "otel.metric_mark_invalid".into(),
+            message: "unsupported metric schema version".into(),
+            count: 3,
+        }],
+    };
+    assert_eq!(response.entries[0].count, 3);
+    assert_eq!(response.entries[0].code, "otel.metric_mark_invalid");
 }
 
 #[test]

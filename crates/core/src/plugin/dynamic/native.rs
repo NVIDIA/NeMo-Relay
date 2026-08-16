@@ -45,7 +45,8 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin_registration_checked, register_plugin_tracked,
+    active_runtime_diagnostics_snapshot, deregister_plugin_registration_checked,
+    register_plugin_tracked,
 };
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
@@ -71,7 +72,8 @@ use nemo_relay_plugin::{
 };
 #[cfg(test)]
 use nemo_relay_plugin::{
-    NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
+    NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS, NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_DIAGNOSTICS,
+    NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
 };
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
@@ -924,6 +926,7 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
         async_completion_retain: native_async_completion_retain,
         async_stream_is_backpressured: native_async_stream_is_backpressured,
         emit_mark_v2: native_emit_mark_v2,
+        get_runtime_diagnostics: native_get_runtime_diagnostics,
     }
 }
 
@@ -1288,6 +1291,20 @@ unsafe extern "C" fn native_emit_mark_v2(
     ) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_flow_error(err),
+    }
+}
+
+unsafe extern "C" fn native_get_runtime_diagnostics(
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    match serde_json::to_value(serde_json::json!({"entries": diagnostics})) {
+        Ok(value) => write_native_json(&value, out_json),
+        Err(error) => {
+            set_native_last_error(format!("failed to serialize runtime diagnostics: {error}"));
+            NemoRelayStatus::Internal
+        }
     }
 }
 

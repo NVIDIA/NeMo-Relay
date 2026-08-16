@@ -30,10 +30,11 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
-    InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
+    GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest, HostAck, InvokeRequest,
+    InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegistrationSurface,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
@@ -789,6 +790,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(stream_auth.code(), tonic::Code::PermissionDenied);
 
     let calls = host.calls();
+    assert!(calls.contains(&"runtime_diagnostics".into()));
     assert!(calls.contains(&"mark:tool-exec:stack-1:parent-1".into()));
     assert!(calls.contains(&"create_scope_stack".into()));
     assert!(calls.contains(&"mark:tool-exec-isolated:isolated-stack:".into()));
@@ -1456,6 +1458,13 @@ async fn worker_service_propagates_host_runtime_errors() {
     for (failures, expected) in [
         (
             MockHostFailures {
+                runtime_diagnostics_unimplemented: true,
+                ..Default::default()
+            },
+            "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension",
+        ),
+        (
+            MockHostFailures {
                 emit_mark: HostFailure::WorkerError,
                 ..Default::default()
             },
@@ -1828,6 +1837,16 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_tool_execution_intercept("tool-exec", 1, move |_, value, next: ToolNext| {
             let runtime = tool_runtime.clone();
             async move {
+                let diagnostics = runtime.runtime_diagnostics().await?;
+                if diagnostics
+                    .get("otel.metric_mark_invalid")
+                    .map(|diagnostic| diagnostic.count)
+                    != Some(3)
+                {
+                    return Err(WorkerSdkError::Callback(
+                        "runtime diagnostics response did not contain the expected entry".into(),
+                    ));
+                }
                 runtime.emit_mark("tool-exec", None, None).await?;
                 runtime
                     .emit_mark_with_options(
@@ -2061,6 +2080,7 @@ enum MockStreamMode {
 
 #[derive(Clone, Copy, Default)]
 struct MockHostFailures {
+    runtime_diagnostics_unimplemented: bool,
     emit_mark: HostFailure,
     create_scope_stack: bool,
     push_scope: bool,
@@ -2106,6 +2126,25 @@ impl MockHost {
 
 #[tonic::async_trait]
 impl RelayHostRuntime for MockHost {
+    async fn get_runtime_diagnostics(
+        &self,
+        request: Request<GetRuntimeDiagnosticsRequest>,
+    ) -> std::result::Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record("runtime_diagnostics");
+        if self.failures().runtime_diagnostics_unimplemented {
+            return Err(Status::unimplemented("runtime diagnostics are unavailable"));
+        }
+        Ok(Response::new(GetRuntimeDiagnosticsResponse {
+            entries: vec![ProtoRuntimeDiagnostic {
+                code: "otel.metric_mark_invalid".into(),
+                message: "metric mark has an unsupported value".into(),
+                count: 3,
+            }],
+        }))
+    }
+
     async fn emit_mark(
         &self,
         request: Request<EmitMarkRequest>,

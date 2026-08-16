@@ -650,6 +650,10 @@ fn assert_native_host_api_versions() {
         unsafe { (*current).abi_version },
         NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS
     );
+    assert_eq!(
+        unsafe { (*current).abi_version },
+        NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_DIAGNOSTICS
+    );
     assert_eq!(unsafe { (*frozen_v3).abi_version }, 3);
     assert_eq!(
         unsafe { (*legacy).abi_version },
@@ -670,21 +674,29 @@ fn assert_native_host_api_versions() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 520);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 528);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
         assert_eq!(
             std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
             512
         );
+        assert_eq!(
+            std::mem::offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+            520
+        );
     }
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 256);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 260);
         assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
         assert_eq!(
             std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
             252
+        );
+        assert_eq!(
+            std::mem::offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+            256
         );
     }
 }

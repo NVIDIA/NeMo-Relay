@@ -20,14 +20,16 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HandshakeResponse,
+    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
+    GetRuntimeDiagnosticsResponse, GuardrailResult, HandshakeRequest, HandshakeResponse,
     HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
     LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest,
     LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    Registration, RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext,
+    ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
@@ -81,7 +83,8 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin_registration_checked, register_plugin_tracked,
+    active_runtime_diagnostics_snapshot, deregister_plugin_registration_checked,
+    register_plugin_tracked,
 };
 
 use super::{
@@ -2503,6 +2506,25 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
             )
         });
         Ok(Response::new(host_ack(result)))
+    }
+
+    async fn get_runtime_diagnostics(
+        &self,
+        request: Request<GetRuntimeDiagnosticsRequest>,
+    ) -> Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        Ok(Response::new(GetRuntimeDiagnosticsResponse {
+            entries: active_runtime_diagnostics_snapshot()
+                .into_iter()
+                .map(|diagnostic| ProtoRuntimeDiagnostic {
+                    code: diagnostic.code,
+                    message: diagnostic.message,
+                    count: diagnostic.count,
+                })
+                .collect(),
+        }))
     }
 
     async fn push_scope(
