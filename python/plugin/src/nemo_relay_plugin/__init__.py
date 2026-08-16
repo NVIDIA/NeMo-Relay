@@ -17,6 +17,11 @@ appropriate executor.
 
 Public data types:
     Json: Any JSON-serializable Python value.
+    DataSchema: Schema identity for a mark's opaque data payload.
+    LogSeverity: Telemetry severity assigned to an exported mark log.
+    MetricKind: OpenTelemetry instrument kind for a metric measurement.
+    MetricValueType: Explicit numeric representation for a metric measurement.
+    MetricMeasurement: One recording operation in a Relay metric mark.
     Event: A Relay event represented as a JSON object.
     EventSanitizeFields: Mutable event observability fields.
     LlmRequest: A Relay LLM request represented as a JSON object.
@@ -72,6 +77,7 @@ Public functions:
 from ._api import (
     AnnotatedLlmRequest,
     ConfigDiagnostic,
+    DataSchema,
     DiagnosticLevel,
     Event,
     EventSanitizeCallback,
@@ -97,6 +103,10 @@ from ._api import (
     LlmSanitizeResponseContext,
     LlmStreamExecutionCallback,
     LlmStreamNext,
+    LogSeverity,
+    MetricKind,
+    MetricMeasurement,
+    MetricValueType,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
@@ -119,6 +129,7 @@ from ._api import (
 __all__ = [
     "AnnotatedLlmRequest",
     "ConfigDiagnostic",
+    "DataSchema",
     "DiagnosticLevel",
     "Event",
     "EventSanitizeCallback",
@@ -127,6 +138,10 @@ __all__ = [
     "LlmConditionalCallback",
     "LlmCodecIdentity",
     "LlmExecutionCallback",
+    "LogSeverity",
+    "MetricKind",
+    "MetricMeasurement",
+    "MetricValueType",
     "LlmOptimizationContribution",
     "LlmOptimizationDataSchema",
     "LlmOptimizationEvidenceQuality",

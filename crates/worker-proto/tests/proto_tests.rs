@@ -4,8 +4,8 @@
 //! Tests for stable worker protocol helpers, structural tool results, and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface,
-    ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
+    EmitMarkRequest, HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, JsonValue,
+    RegistrationSurface, ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
 };
 use nemo_relay_worker_proto::{
     WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
@@ -180,4 +180,27 @@ fn tool_execution_result_tolerates_unknown_protobuf_fields() {
         decode_json_value::<serde_json::Value>(decoded_proto.result.as_ref().unwrap()).unwrap(),
         json!({"ok": true})
     );
+}
+
+#[test]
+fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
+    let legacy = EmitMarkRequest::decode(b"\x22\x04mark".as_slice()).expect("decode legacy mark");
+    assert_eq!(legacy.name, "mark");
+    assert!(legacy.data_schema.is_none());
+    assert!(legacy.severity.is_empty());
+
+    let request = EmitMarkRequest {
+        name: "mark".into(),
+        data_schema: Some(
+            json_envelope(
+                "nemo.relay.DataSchema@1",
+                &json!({"name": "nemo.relay.metric_measurements", "version": "1"}),
+            )
+            .unwrap(),
+        ),
+        severity: "warn".into(),
+        ..EmitMarkRequest::default()
+    };
+    let round_trip = EmitMarkRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(round_trip, request);
 }

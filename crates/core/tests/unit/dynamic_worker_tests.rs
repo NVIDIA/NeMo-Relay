@@ -1926,6 +1926,8 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             scope: None,
             data: None,
             metadata: None,
+            data_schema: None,
+            severity: String::new(),
         }))
         .await
         .expect_err("bad activation id should fail auth");
@@ -1942,6 +1944,8 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             }),
             data: None,
             metadata: None,
+            data_schema: None,
+            severity: String::new(),
         }))
         .await
         .expect("missing stack should return host ack")
@@ -1962,11 +1966,74 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
             scope: None,
             data: None,
             metadata: None,
+            data_schema: None,
+            severity: String::new(),
         }))
         .await
         .expect("no-scope mark should succeed")
         .into_inner();
     assert!(ack.ok);
+
+    let ack = service
+        .emit_mark(Request::new(EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "telemetry-options".into(),
+            scope: None,
+            data: Some(json_envelope("nemo.relay.Json@1", &json!({"measurements": []})).unwrap()),
+            metadata: None,
+            data_schema: Some(
+                json_envelope(
+                    "nemo.relay.DataSchema@1",
+                    &json!({
+                        "name": "nemo.relay.metric_measurements",
+                        "version": "1"
+                    }),
+                )
+                .unwrap(),
+            ),
+            severity: "warning".into(),
+        }))
+        .await
+        .expect("typed mark options should return host ack")
+        .into_inner();
+    assert!(ack.ok, "{:?}", ack.error);
+
+    for request in [
+        EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "bad-schema".into(),
+            data_schema: Some(
+                json_envelope(
+                    "nemo.relay.DataSchema@1",
+                    &json!({"name": 7, "version": "1"}),
+                )
+                .unwrap(),
+            ),
+            ..EmitMarkRequest::default()
+        },
+        EmitMarkRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+            name: "bad-severity".into(),
+            severity: "fatal".into(),
+            ..EmitMarkRequest::default()
+        },
+    ] {
+        let ack = service
+            .emit_mark(Request::new(request))
+            .await
+            .expect("invalid mark options should return host ack")
+            .into_inner();
+        assert!(!ack.ok);
+        assert!(
+            ack.error
+                .expect("invalid mark error")
+                .message
+                .contains("invalid argument")
+        );
+    }
 
     let push = service
         .push_scope(Request::new(PushScopeRequest {

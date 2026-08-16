@@ -21,14 +21,17 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use nemo_relay_plugin::{
-    AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DiagnosticLevel,
-    Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity, LlmJsonAsyncStream,
-    LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NativeExecutorConfig, NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
-    NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
-    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DataSchema,
+    DiagnosticLevel, Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity,
+    LlmJsonAsyncStream, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
+    LlmStreamNext, LogSeverity, NEMO_RELAY_NATIVE_ABI_VERSION,
+    NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+    NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
+    NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
+    NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
+    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmAsyncStream,
@@ -422,6 +425,8 @@ static ASYNC_TOOL_NEXT_RESULT: AtomicBool = AtomicBool::new(false);
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
     assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 4);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC, 4);
+    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS, 4);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -440,8 +445,7 @@ fn native_abi_struct_sizes_are_self_describing() {
 
 #[cfg(target_pointer_width = "64")]
 fn assert_native_abi_platform_layout() {
-    assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 320);
+    assert_type_layout::<NemoRelayNativeHostApiV1>(8, 320);
     assert_eq!(
         host_api_offsets(),
         [
@@ -450,29 +454,25 @@ fn assert_native_abi_platform_layout() {
             296, 304, 312,
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 440);
+    assert_type_layout::<NemoRelayNativeHostApiV3>(8, 440);
     assert_eq!(
         host_api_v3_offsets(),
         [
             0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 512);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 520);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
-    assert_eq!(align_of::<NemoRelayNativePluginV1>(), 8);
-    assert_eq!(size_of::<NemoRelayNativePluginV1>(), 56);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 512);
+    assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
-    assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 8);
-    assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 40);
+    assert_type_layout::<NemoRelayNativeLlmStreamV1>(8, 40);
     assert_eq!(stream_offsets(), [0, 8, 16, 24, 32]);
 }
 
 #[cfg(target_pointer_width = "32")]
 fn assert_native_abi_platform_layout() {
-    assert_eq!(align_of::<NemoRelayNativeHostApiV1>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV1>(), 160);
+    assert_type_layout::<NemoRelayNativeHostApiV1>(4, 160);
     assert_eq!(
         host_api_offsets(),
         [
@@ -480,23 +480,49 @@ fn assert_native_abi_platform_layout() {
             88, 92, 96, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 148, 152, 156,
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV3>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV3>(), 216);
+    assert_type_layout::<NemoRelayNativeHostApiV3>(4, 216);
     assert_eq!(
         host_api_v3_offsets(),
         [
             0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
         ]
     );
-    assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 252);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 256);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
-    assert_eq!(align_of::<NemoRelayNativePluginV1>(), 4);
-    assert_eq!(size_of::<NemoRelayNativePluginV1>(), 28);
+    assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 252);
+    assert_type_layout::<NemoRelayNativePluginV1>(4, 28);
     assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
-    assert_eq!(align_of::<NemoRelayNativeLlmStreamV1>(), 4);
-    assert_eq!(size_of::<NemoRelayNativeLlmStreamV1>(), 20);
+    assert_type_layout::<NemoRelayNativeLlmStreamV1>(4, 20);
     assert_eq!(stream_offsets(), [0, 4, 8, 12, 16]);
+}
+
+fn assert_type_layout<T>(expected_alignment: usize, expected_size: usize) {
+    assert_eq!(align_of::<T>(), expected_alignment);
+    assert_eq!(size_of::<T>(), expected_size);
+}
+
+#[test]
+fn native_abi_v4_extension_is_append_only() {
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 520);
+        assert_eq!(host_api_v4_offsets(), [0, 512]);
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 256);
+        assert_eq!(host_api_v4_offsets(), [0, 252]);
+    }
+}
+
+fn host_api_v4_offsets() -> [usize; 2] {
+    [
+        offset_of!(NemoRelayNativeHostApiV4, v3),
+        offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
+    ]
 }
 
 fn host_api_v3_offsets() -> [usize; 16] {
@@ -1259,6 +1285,43 @@ unsafe extern "C" fn capture_emit_mark(
     };
     RUNTIME_CALLS.lock().unwrap().push(format!(
         "mark:{name}:parent={}:data={data}:metadata={metadata}",
+        !parent.is_null()
+    ));
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_emit_mark_v2(
+    name: *const NemoRelayNativeString,
+    parent: *const NemoRelayNativeScopeHandle,
+    data_json: *const NemoRelayNativeString,
+    metadata_json: *const NemoRelayNativeString,
+    data_schema_json: *const NemoRelayNativeString,
+    severity: *const NemoRelayNativeString,
+    _timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
+    let host = test_host();
+    let name = match required_host_string(&host, name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let data = match optional_host_string(&host, data_json) {
+        Ok(data) => data,
+        Err(status) => return status,
+    };
+    let metadata = match optional_host_string(&host, metadata_json) {
+        Ok(metadata) => metadata,
+        Err(status) => return status,
+    };
+    let data_schema = match optional_host_string(&host, data_schema_json) {
+        Ok(data_schema) => data_schema,
+        Err(status) => return status,
+    };
+    let severity = match optional_host_string(&host, severity) {
+        Ok(severity) => severity,
+        Err(status) => return status,
+    };
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "mark_v2:{name}:parent={}:data={data}:metadata={metadata}:data_schema={data_schema}:severity={severity}",
         !parent.is_null()
     ));
     NemoRelayStatus::Ok
@@ -2069,6 +2132,7 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_llm_stream_release: capture_async_release_pull_stream,
         async_completion_retain: capture_async_completion_retain,
         async_stream_is_backpressured: capture_async_stream_backpressured,
+        emit_mark_v2: capture_emit_mark_v2,
     }
 }
 
@@ -2511,6 +2575,65 @@ fn plugin_runtime_scope_mark_and_stack_helpers_call_host() {
     assert_eq!(SCOPE_STACK_FREES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_RESTORES.load(Ordering::SeqCst), 1);
     assert_eq!(SCOPE_STACK_BINDING_FREES.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_uses_v4_mark_options_extension() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let runtime = PluginRuntime::new(&host.v3.v1);
+    let data_schema = DataSchema::builder()
+        .name("example.mark")
+        .version("1")
+        .build();
+
+    runtime
+        .emit_mark_with_options(
+            "checkpoint",
+            Some(&json!({ "mark": true })),
+            Some(&json!({ "meta": true })),
+            Some(&data_schema),
+            Some(LogSeverity::Warn),
+        )
+        .unwrap();
+
+    assert!(RUNTIME_CALLS.lock().unwrap().iter().any(|call| {
+        call.starts_with("mark_v2:checkpoint:parent=false")
+            && call.contains(r#""mark":true"#)
+            && call.contains(r#""meta":true"#)
+            && call.contains(r#""name":"example.mark""#)
+            && call.contains("severity=warn")
+    }));
+}
+
+#[test]
+fn plugin_runtime_does_not_read_mark_options_past_v4_struct_size() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.v3.v1.struct_size = offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2);
+    let runtime = PluginRuntime::new(&host.v3.v1);
+
+    runtime
+        .emit_mark_with_options("legacy", None, None, None, None)
+        .unwrap();
+    let schema = DataSchema::builder()
+        .name("example.mark")
+        .version("1")
+        .build();
+    assert_eq!(
+        runtime
+            .emit_mark_with_options("extended", None, None, Some(&schema), None)
+            .unwrap_err(),
+        "mark data_schema and severity require native host ABI v4"
+    );
+
+    let calls = RUNTIME_CALLS.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("mark:legacy:parent=false"))
+    );
+    assert!(!calls.iter().any(|call| call.starts_with("mark_v2:")));
 }
 
 fn assert_scope_runtime_calls(calls: &[String]) {
@@ -5027,6 +5150,30 @@ fn exported_entry_symbol_validates_args_before_constructor() {
         NemoRelayStatus::InvalidArg
     );
     assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn exported_entry_symbol_accepts_supported_prior_host_versions() {
+    let _guard = begin_test();
+    CONSTRUCTOR_CALLS.store(0, Ordering::SeqCst);
+
+    for abi_version in [
+        NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+        NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
+    ] {
+        let mut host = test_host();
+        host.abi_version = abi_version;
+        let mut plugin = NemoRelayNativePluginV1::default();
+
+        assert_eq!(
+            unsafe { constructor_counting_entry(&host, &mut plugin) },
+            NemoRelayStatus::Ok
+        );
+        unsafe { drop_exported_plugin(&host, plugin) };
+    }
+
+    assert_eq!(CONSTRUCTOR_CALLS.load(Ordering::SeqCst), 3);
 }
 
 #[test]

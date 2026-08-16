@@ -23,6 +23,10 @@ use nemo_relay::api::tool::{
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
+use nemo_relay::observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
+use nemo_relay::observability::otel_metrics::{
+    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
+};
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
     WorkerPluginLoadSpec, load_worker_plugins,
@@ -31,6 +35,8 @@ use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
     list_plugin_kinds,
 };
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use prost::Message;
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -41,6 +47,67 @@ static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::con
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
+}
+
+struct CapturedOtlpRequest {
+    path: String,
+    body: Vec<u8>,
+}
+
+fn capture_one_otlp_request(
+    listener: std::net::TcpListener,
+) -> std::sync::mpsc::Receiver<CapturedOtlpRequest> {
+    use std::io::{Read, Write};
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("collector should accept request");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        let (header_end, content_length) = loop {
+            let count = stream.read(&mut buffer).expect("collector should read");
+            assert!(count > 0, "collector closed before request headers");
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let header_end = offset + 4;
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                break (header_end, content_length);
+            }
+        };
+        while bytes.len() < header_end + content_length {
+            let count = stream
+                .read(&mut buffer)
+                .expect("collector should read body");
+            assert!(count > 0, "collector closed before request body");
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let path = headers
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .expect("request path")
+            .to_string();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .expect("collector should respond");
+        sender
+            .send(CapturedOtlpRequest {
+                path,
+                body: bytes[header_end..header_end + content_length].to_vec(),
+            })
+            .expect("capture receiver should remain available");
+    });
+    receiver
 }
 
 #[test]
@@ -375,6 +442,63 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         stream_value["request"]["worker_plugin_llm_stream_execution_request"],
         true
     );
+
+    loaded.clear();
+}
+
+#[tokio::test]
+async fn rust_worker_tokenomics_metric_reaches_metrics_only() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::from_iter([(
+        "emit_tokenomics_metric".into(),
+        json!(true),
+    )]))
+    .await;
+
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
+    let metric_endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let metric_request = capture_one_otlp_request(listener);
+    let metric_subscriber = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metric_endpoint)
+            .with_instrumentation_scope("worker-tokenomics-metric-test"),
+    )
+    .expect("metric subscriber should build");
+    let log_subscriber =
+        OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new("http://127.0.0.1:9/v1/logs"))
+            .expect("log subscriber should build without connecting");
+    let metric_name = "worker_tokenomics_metric_metrics";
+    let log_name = "worker_tokenomics_metric_logs";
+    metric_subscriber.register(metric_name).unwrap();
+    log_subscriber.register(log_name).unwrap();
+
+    let rewritten = tool_request_intercepts("tokenomics_meter", json!({"input": true}))
+        .await
+        .expect("worker metric callback should complete");
+    assert_eq!(rewritten["worker_plugin"], true);
+
+    metric_subscriber.deregister(metric_name).unwrap();
+    log_subscriber.deregister(log_name).unwrap();
+    log_subscriber
+        .shutdown()
+        .expect("metric mark must not be reinterpreted as an OTLP log");
+    metric_subscriber
+        .shutdown()
+        .expect("metric provider should export its final collection");
+
+    let request = metric_request
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("worker metric should reach the local OTLP collector");
+    assert_eq!(request.path, "/v1/metrics");
+    let metrics = ExportMetricsServiceRequest::decode(request.body.as_slice()).unwrap();
+    let names = metrics
+        .resource_metrics
+        .iter()
+        .flat_map(|resource| &resource.scope_metrics)
+        .flat_map(|scope| &scope.metrics)
+        .map(|metric| metric.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["example.tokens.saved"]);
 
     loaded.clear();
 }

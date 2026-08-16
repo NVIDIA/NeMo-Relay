@@ -19,10 +19,10 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
-    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
-    serve_plugin_arc_with_config,
+    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, Json, JsonStream, LlmNext,
+    LlmRequest, LlmStreamNext, LogSeverity, PluginContext, PluginRuntime, Result, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
+    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -805,6 +805,21 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"mark:stream-poll:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:scope-agent:explicit-stack:".into()));
     assert!(calls.contains(&"push:scope-unknown:explicit-stack:".into()));
+    let telemetry_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-telemetry")
+        .expect("extended mark request");
+    assert_eq!(telemetry_mark.severity, "warn");
+    let data_schema = telemetry_mark.data_schema.expect("mark data schema");
+    assert_eq!(data_schema.schema, "nemo.relay.DataSchema@1");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&data_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
 
     worker_handle.abort();
     host_handle.abort();
@@ -1814,6 +1829,22 @@ impl WorkerPlugin for SurfacePlugin {
             let runtime = tool_runtime.clone();
             async move {
                 runtime.emit_mark("tool-exec", None, None).await?;
+                runtime
+                    .emit_mark_with_options(
+                        "tool-exec-telemetry",
+                        Some(json!({"measurements": []})),
+                        None,
+                        EmitMarkOptions {
+                            data_schema: Some(
+                                DataSchema::builder()
+                                    .name("nemo.relay.metric_measurements")
+                                    .version("1")
+                                    .build(),
+                            ),
+                            severity: Some(LogSeverity::Warn),
+                        },
+                    )
+                    .await?;
                 let stack_id = runtime.create_scope_stack().await?;
                 let isolated_runtime = runtime.clone();
                 runtime
@@ -2047,6 +2078,7 @@ struct MockHostFailures {
 #[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
+    marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
 }
 
@@ -2057,6 +2089,10 @@ impl MockHost {
 
     fn record(&self, call: impl Into<String>) {
         self.calls.lock().expect("calls lock").push(call.into());
+    }
+
+    fn marks(&self) -> Vec<EmitMarkRequest> {
+        self.marks.lock().expect("marks lock").clone()
     }
 
     fn failures(&self) -> MockHostFailures {
@@ -2076,6 +2112,7 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.marks.lock().expect("marks lock").push(request.clone());
         let scope = request.scope.expect("scope context");
         self.record(format!(
             "mark:{}:{}:{}",

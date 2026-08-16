@@ -300,6 +300,8 @@ message EmitMarkRequest {
   string name = 4;
   JsonEnvelope data = 5;
   JsonEnvelope metadata = 6;
+  JsonEnvelope data_schema = 7;
+  string severity = 8;
 }
 
 message PushScopeRequest {

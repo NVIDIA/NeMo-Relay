@@ -25,12 +25,14 @@ grpc = pytest.importorskip("grpc")
 
 from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
+    DataSchema,
     DiagnosticLevel,
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
     LlmSanitizeRequestContext,
     LlmSanitizeResponseContext,
+    LogSeverity,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
@@ -272,6 +274,31 @@ def test_optimization_contribution_omitted_applied_defaults_consistently():
     assert decoded.applied is False
     assert direct.to_json()["applied"] is False
     assert decoded.to_json()["applied"] is False
+
+
+def test_pending_mark_spec_serializes_telemetry_fields():
+    mark = PendingMarkSpec(
+        "worker.telemetry",
+        data={"measurements": []},
+        data_schema={"name": "nemo.relay.metric_measurements", "version": "1"},
+        severity="warning",
+    )
+
+    assert mark.to_json() == {
+        "name": "worker.telemetry",
+        "category": None,
+        "category_profile": None,
+        "data": {"measurements": []},
+        "data_schema": {
+            "name": "nemo.relay.metric_measurements",
+            "version": "1",
+        },
+        "metadata": None,
+        "severity": "warn",
+    }
+
+    with pytest.raises(ValueError, match="invalid log severity"):
+        PendingMarkSpec("worker.invalid", severity="fatal").to_json()
 
 
 def test_optimization_contribution_preserves_future_quality_strings():
@@ -1617,7 +1644,9 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
             "category": None,
             "category_profile": None,
             "data": {"source": "python"},
+            "data_schema": None,
             "metadata": None,
+            "severity": None,
         }
     ]
 
@@ -2099,6 +2128,23 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     assert llm_next["next_llm"]["content"]["prompt"] == "hello"
     assert stream_next[0]["next_stream"]["content"]["prompt"] == "hello"
 
+    await runtime.emit_mark(
+        "telemetry-options",
+        {"measurements": []},
+        data_schema=DataSchema("nemo.relay.metric_measurements", "1"),
+        severity=LogSeverity.WARNING,
+    )
+    await runtime.emit_metric(
+        "telemetry-metric",
+        [
+            {
+                "name": "example.tokens.saved",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 42,
+            }
+        ],
+    )
     await runtime.emit_mark("explicit", scope_stack_id="explicit-stack", parent_scope_id="explicit-parent")
     await runtime.drop_scope_stack(stack_id)
     mark_request = _last_request(host_stub, pb.EmitMarkRequest)
@@ -2107,6 +2153,28 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     push_request = _last_request(host_stub, pb.PushScopeRequest)
     assert push_request.scope.scope_stack_id == "stack-1"
     assert push_request.scope.parent_scope_id == "parent-1"
+
+    telemetry_mark = next(
+        request
+        for request in host_stub.requests
+        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-options"
+    )
+    assert telemetry_mark.data_schema.schema == "nemo.relay.DataSchema@1"
+    assert json.loads(telemetry_mark.data_schema.json) == {
+        "name": "nemo.relay.metric_measurements",
+        "version": "1",
+    }
+    assert telemetry_mark.severity == "warn"
+    metric_mark = next(
+        request
+        for request in host_stub.requests
+        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-metric"
+    )
+    assert json.loads(metric_mark.data.json)["measurements"][0]["value"] == 42
+    assert json.loads(metric_mark.data_schema.json) == {
+        "name": "nemo.relay.metric_measurements",
+        "version": "1",
+    }
 
     override_mark = next(
         request
@@ -2131,6 +2199,12 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("empty-stack", scope_stack_id="")
     with pytest.raises(WorkerSdkError, match="parent_scope_id must not be empty"):
         await runtime.emit_mark("empty-parent", scope_stack_id="stack", parent_scope_id="")
+    with pytest.raises(ValueError, match="invalid log severity"):
+        await runtime.emit_mark("invalid-severity", severity="fatal")
+    with pytest.raises(ValueError, match="exactly name and version"):
+        await runtime.emit_mark("invalid-schema", data_schema={"name": "schema"})
+    with pytest.raises(TypeError, match="measurements must contain mappings"):
+        await runtime.emit_metric("invalid-metric", cast(Any, [42]))
 
 
 async def test_invocation_scope_context_is_isolated_across_concurrent_requests(host_stub: RecordingHostStub):

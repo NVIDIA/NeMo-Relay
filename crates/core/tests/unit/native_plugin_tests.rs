@@ -638,12 +638,55 @@ fn assert_native_host_api_versions() {
     assert!(!current.is_null());
     assert!(!frozen_v3.is_null());
     assert!(!legacy.is_null());
-    assert_eq!(unsafe { (*current).abi_version }, 4);
+    assert_eq!(
+        unsafe { (*current).abi_version },
+        NEMO_RELAY_NATIVE_ABI_VERSION
+    );
+    assert_eq!(
+        unsafe { (*current).abi_version },
+        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC
+    );
+    assert_eq!(
+        unsafe { (*current).abi_version },
+        NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS
+    );
     assert_eq!(unsafe { (*frozen_v3).abi_version }, 3);
     assert_eq!(
         unsafe { (*legacy).abi_version },
         NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY
     );
+    assert_eq!(
+        unsafe { (*current).struct_size },
+        std::mem::size_of::<NemoRelayNativeHostApiV4>()
+    );
+    assert_eq!(
+        unsafe { (*frozen_v3).struct_size },
+        std::mem::size_of::<NemoRelayNativeHostApiV3>()
+    );
+    assert_eq!(
+        unsafe { (*legacy).struct_size },
+        std::mem::size_of::<NemoRelayNativeHostApiV1>()
+    );
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 8);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 520);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
+        assert_eq!(
+            std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
+            512
+        );
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(std::mem::align_of::<NemoRelayNativeHostApiV4>(), 4);
+        assert_eq!(std::mem::size_of::<NemoRelayNativeHostApiV4>(), 256);
+        assert_eq!(std::mem::offset_of!(NemoRelayNativeHostApiV4, v3), 0);
+        assert_eq!(
+            std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
+            252
+        );
+    }
 }
 
 #[tokio::test]
@@ -4315,6 +4358,38 @@ fn assert_native_scope_pop_and_mark_validation(
         },
         NemoRelayStatus::InvalidArg
     );
+    let malformed_schema = native_string(r#"{"name":7,"version":"1"}"#);
+    assert_eq!(
+        unsafe {
+            native_emit_mark_v2(
+                strings.mark_name,
+                scope,
+                ptr::null(),
+                ptr::null(),
+                malformed_schema,
+                ptr::null(),
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    unsafe { native_string_free(malformed_schema) };
+    let invalid_severity = native_string("fatal");
+    assert_eq!(
+        unsafe {
+            native_emit_mark_v2(
+                strings.mark_name,
+                scope,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                invalid_severity,
+                ptr::null(),
+            )
+        },
+        NemoRelayStatus::InvalidArg
+    );
+    unsafe { native_string_free(invalid_severity) };
     assert_eq!(
         unsafe { native_scope_pop(ptr::null(), ptr::null(), ptr::null(), ptr::null()) },
         NemoRelayStatus::NullPointer
