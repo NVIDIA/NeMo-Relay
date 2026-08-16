@@ -115,6 +115,33 @@ describe('observability plugin helpers', () => {
     assert.throws(() => observability.openTelemetrySignalEndpoint({ endpoint: ' ' }), /nonblank/);
   });
 
+  it('initializes a version 4 log and metric configuration without exporting signals', async () => {
+    const config = {
+      version: 4,
+      opentelemetry: observability.openTelemetryConfig({
+        enabled: true,
+        logs: observability.openTelemetryLogConfig({
+          enabled: true,
+          endpoints: [observability.openTelemetrySignalEndpoint({ endpoint: 'http://127.0.0.1:4318/v1/logs' })],
+        }),
+        metrics: observability.openTelemetryMetricConfig({
+          enabled: true,
+          endpoints: [observability.openTelemetrySignalEndpoint({ endpoint: 'http://127.0.0.1:4318/v1/metrics' })],
+        }),
+      }),
+    };
+
+    await plugin.initialize({
+      version: 1,
+      components: [observability.ComponentSpec(config)],
+    });
+    try {
+      assert.deepEqual(plugin.report()?.runtime_diagnostics ?? [], []);
+    } finally {
+      plugin.clear();
+    }
+  });
+
   it('lists builtin observability kind and validates bad values', () => {
     assert.throws(() => observability.openTelemetryEndpoint(), /config is required/);
     assert.throws(

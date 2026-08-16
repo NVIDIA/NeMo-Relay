@@ -397,6 +397,24 @@ fn build_otel_metric_config(
     Ok(config)
 }
 
+fn otel_runtime_diagnostics_json(
+    diagnostics: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+) -> Json {
+    Json::Array(
+        diagnostics
+            .entries()
+            .iter()
+            .map(|diagnostic| {
+                serde_json::json!({
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "count": diagnostic.count,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn build_atof_config(
     options: Option<AtofExporterConfig>,
 ) -> napi::Result<nemo_relay::observability::atof::AtofExporterConfig> {
@@ -4666,6 +4684,12 @@ impl OpenTelemetryLogSubscriber {
             .map_err(|error| napi::Error::from_reason(error.to_string()))
     }
 
+    /// Return bounded runtime diagnostics recorded by this subscriber.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+    }
+
     /// Shut down the underlying logger provider.
     #[napi]
     pub fn shutdown(&self) -> napi::Result<()> {
@@ -4750,6 +4774,12 @@ impl OpenTelemetryMetricSubscriber {
         self.inner
             .force_flush()
             .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Return bounded runtime diagnostics recorded by this subscriber.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
     }
 
     /// Shut down the underlying meter provider.

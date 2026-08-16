@@ -195,6 +195,7 @@ describe('OpenTelemetry log and metric subscribers', () => {
     logSubscriber.register(logName);
     assert.equal(logSubscriber.deregister(logName), true);
     logSubscriber.forceFlush();
+    assert.deepEqual(logSubscriber.runtimeDiagnostics(), []);
     logSubscriber.shutdown();
 
     const metricSubscriber = new OpenTelemetryMetricSubscriber({
@@ -210,6 +211,7 @@ describe('OpenTelemetry log and metric subscribers', () => {
     metricSubscriber.register(metricName);
     assert.equal(metricSubscriber.deregister(metricName), true);
     metricSubscriber.forceFlush();
+    assert.deepEqual(metricSubscriber.runtimeDiagnostics(), []);
     metricSubscriber.shutdown();
   });
 

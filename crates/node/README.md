@@ -115,9 +115,17 @@ const execution = await toolCallExecuteAsync('lookup', { query: 'relay' }, async
 console.log(execution.result.answer);
 ```
 
-Pass `LogSeverity.Info` to the optional final `event` argument for a mark
-intended for log export. Call `metric()` with `MetricMeasurement` objects for
-metrics; Relay validates the complete measurement group before publishing it.
+The core mark contract uses positional optional arguments. Pass `null` for
+`dataSchema` before supplying the final `severity` argument:
+
+```js
+const { LogSeverity } = require('nemo-relay-node');
+
+event('initialized', handle, { binding: 'node' }, null, null, null, LogSeverity.Info);
+```
+
+Call `metric()` with `MetricMeasurement` objects for metrics; Relay validates
+the complete measurement group before publishing it.
 
 Native subscriber delivery is asynchronous. Awaiting `flushSubscribers()` drains
 the native dispatcher and waits for managed terminal publications registered

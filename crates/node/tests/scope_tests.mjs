@@ -424,6 +424,21 @@ describe('Events', () => {
     }
   });
 
+  it('event serializes representative log severities', async () => {
+    const events = [];
+    registerSubscriber('node_log_severity_collector', (e) => events.push(e));
+    try {
+      event('trace_log', null, null, null, null, null, LogSeverity.Trace);
+      event('error_log', null, null, null, null, null, LogSeverity.Error);
+      await flushSubscribers();
+
+      assert.equal(events.find((e) => e.name === 'trace_log')?.metadata?.['nemo_relay.log.severity'], 'trace');
+      assert.equal(events.find((e) => e.name === 'error_log')?.metadata?.['nemo_relay.log.severity'], 'error');
+    } finally {
+      deregisterSubscriber('node_log_severity_collector');
+    }
+  });
+
   it('metric emits a validated metric mark', async () => {
     const events = [];
     registerSubscriber('node_metric_collector', (e) => events.push(e));
