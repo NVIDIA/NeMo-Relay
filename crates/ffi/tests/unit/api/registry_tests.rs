@@ -799,6 +799,163 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
 }
 
 #[test]
+fn test_ffi_open_telemetry_log_and_metric_subscribers_export_signals() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let (log_endpoint, log_requests, log_collector) = start_otlp_http_collector();
+        let (metric_endpoint, metric_requests, metric_collector) = start_otlp_http_collector();
+        let log_endpoint = cstring(&log_endpoint);
+        let metric_endpoint = cstring(&metric_endpoint);
+        let mut log_subscriber: *mut types::FfiOpenTelemetryLogSubscriber = ptr::null_mut();
+        let mut metric_subscriber: *mut types::FfiOpenTelemetryMetricSubscriber = ptr::null_mut();
+
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
+                log_endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                metric_endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let log_subscriber_name = cstring(&unique_name("ffi_otel_log_signal"));
+        let metric_subscriber_name = cstring(&unique_name("ffi_otel_metric_signal"));
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(log_subscriber, log_subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(
+                metric_subscriber,
+                metric_subscriber_name.as_ptr(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let stack = fresh_scope_stack();
+        let log_name = cstring("ffi_exported_log");
+        let severity = types::NEMO_RELAY_LOG_SEVERITY_ERROR;
+        assert_status!(
+            api::nemo_relay_event_v2(
+                log_name.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::from_ref(&severity),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let metric_mark_name = cstring("ffi_exported_metric");
+        let instrument_name = cstring("example.ffi.requests");
+        let measurement = types::NemoRelayMetricMeasurement {
+            name: instrument_name.as_ptr(),
+            kind: types::NEMO_RELAY_METRIC_KIND_COUNTER,
+            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_U64,
+            u64_value: 1,
+            i64_value: 0,
+            f64_value: 0.0,
+            unit: ptr::null(),
+            description: ptr::null(),
+            attributes_json: ptr::null(),
+            boundaries: ptr::null(),
+            boundaries_len: 0,
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_mark_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&measurement),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        assert_status!(
+            nemo_relay_otel_log_subscriber_force_flush(log_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_force_flush(metric_subscriber),
+            NemoRelayStatus::Ok
+        );
+
+        let log_body = log_requests.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            log_body
+                .windows(b"ffi_exported_log".len())
+                .any(|value| value == b"ffi_exported_log")
+        );
+        let metric_body = metric_requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(
+            metric_body
+                .windows(b"example.ffi.requests".len())
+                .any(|value| value == b"example.ffi.requests")
+        );
+
+        assert_status!(
+            nemo_relay_otel_log_subscriber_deregister(log_subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_deregister(metric_subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
+            NemoRelayStatus::Ok
+        );
+        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
+        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
+        nemo_relay_scope_stack_free(stack);
+        log_collector.join().unwrap();
+        metric_collector.join().unwrap();
+    }
+}
+
+#[test]
 fn test_ffi_open_telemetry_typed_required_fields_and_gen_ai_wire_output() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

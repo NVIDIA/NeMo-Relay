@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -323,6 +324,82 @@ func TestObservabilityPluginAtofAndAtifFiles(t *testing.T) {
 
 	AssertAtofRecordCount(t, filepath.Join(dir, eventsJSONLFilename), 3)
 	AssertAtifAgentMetadata(t, TrajectoryFilePath(dir, handle))
+}
+
+func TestObservabilityPluginActivatesDerivedLogsAndExplicitMetrics(t *testing.T) {
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	}
+	t.Cleanup(func() {
+		requireNoError(t, ClearPluginConfiguration(), ClearPluginConfigurationFailed)
+	})
+
+	derivedRequests := make(chan otelRequest, 4)
+	derivedServer := NewOtelTestServer(t, derivedRequests)
+	defer derivedServer.Close()
+	metricRequests := make(chan otelRequest, 2)
+	metricServer := NewOtelTestServer(t, metricRequests)
+	defer metricServer.Close()
+
+	config := NewObservabilityConfig()
+	openTelemetry := NewObservabilityOpenTelemetryConfig()
+	openTelemetry.Enabled = true
+	openTelemetry.Endpoints = []ObservabilityOpenTelemetryEndpointConfig{
+		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, derivedServer.URL+otelTestPath),
+	}
+	logs := NewObservabilityOpenTelemetryLogConfig()
+	logs.Enabled = true
+	openTelemetry.Logs = &logs
+	metrics := NewObservabilityOpenTelemetryMetricConfig()
+	metrics.Enabled = true
+	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(
+		NewObservabilityOpenTelemetrySignalEndpointConfig(metricServer.URL),
+	)
+	openTelemetry.Metrics = &metrics
+	config.OpenTelemetry = &openTelemetry
+
+	if _, err := InitializePlugins(PluginConfig{
+		Version:    1,
+		Components: []PluginComponentSpec{ObservabilityComponent(config)},
+	}); err != nil {
+		t.Fatalf(fatalErrorFormat, InitializePluginsFailed, err)
+	}
+
+	runWithTestScopeStack(t, func() {
+		requireNoError(t, EmitEvent("go_plugin_exported_log", WithEventSeverity(LogSeverityError)), "EmitEvent failed")
+		requireNoError(t, EmitMetric("go_plugin_exported_metric", []MetricMeasurement{{
+			Name:      "example.go.plugin.requests",
+			Kind:      MetricKindCounter,
+			ValueType: MetricValueTypeU64,
+			Value:     uint64(1),
+		}}), "EmitMetric failed")
+	})
+	if err := ClearPluginConfiguration(); err != nil {
+		t.Fatalf(fatalErrorFormat, ClearPluginConfigurationFailed, err)
+	}
+
+	requireOtelRequest(t, derivedRequests, "/v1/logs", "go_plugin_exported_log")
+	requireOtelRequest(t, metricRequests, "/v1/metrics", "example.go.plugin.requests")
+}
+
+func requireOtelRequest(t *testing.T, requests <-chan otelRequest, path, bodyFragment string) {
+	t.Helper()
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case request := <-requests:
+			if request.Path != path {
+				continue
+			}
+			if !strings.Contains(string(request.Body), bodyFragment) {
+				t.Fatalf("OTLP %s export did not contain %q", path, bodyFragment)
+			}
+			return
+		case <-timeout.C:
+			t.Fatalf("timed out waiting for OTLP %s export", path)
+		}
+	}
 }
 
 func NewAtofAndAtifTestConfig(dir string) ObservabilityConfig {
