@@ -186,6 +186,8 @@ def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks():
             "category_profile": {"subtype": "checkpoint", "nested": {"ok": True}},
             "data": False,
             "metadata": 0,
+            "data_schema": None,
+            "severity": None,
         }
     ]
 
@@ -206,6 +208,8 @@ def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fi
             "category_profile": None,
             "data": None,
             "metadata": None,
+            "data_schema": None,
+            "severity": None,
         }
     ]
 
