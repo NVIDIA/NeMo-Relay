@@ -1516,6 +1516,28 @@ fn test_ffi_event_v2_and_metric_mark_contracts() {
                 .contains("measurements[0].value_type has invalid value -2147483648")
         );
 
+        let non_finite = types::NemoRelayMetricMeasurement {
+            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_F64,
+            f64_value: f64::NAN,
+            ..measurement
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                [measurement, non_finite].as_ptr(),
+                2,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[1].f64_value must be finite")
+        );
+
         assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
         let events = lock_unpoisoned(event_log()).clone();
         let log = events

@@ -6,6 +6,7 @@ package nemo_relay
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,17 +81,25 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 func TestEventAndMetricValidationErrors(t *testing.T) {
 	if err := EmitEvent("invalid_severity", WithEventSeverity(LogSeverity("verbose"))); err == nil {
 		t.Fatal("expected invalid severity to fail")
+	} else if !strings.Contains(err.Error(), "invalid log severity") {
+		t.Fatalf("unexpected severity error: %v", err)
 	}
-	if err := EmitEvent(
-		"invalid_metadata",
-		WithEventMetadata(json.RawMessage(`[]`)),
-		WithEventSeverity(LogSeverityInfo),
-	); err == nil {
-		t.Fatal("expected severity with non-object metadata to fail")
-	}
-	if err := EmitMetric("empty_metric", nil); err == nil {
-		t.Fatal("expected empty measurements to fail")
-	}
+	runWithTestScopeStack(t, func() {
+		if err := EmitEvent(
+			"invalid_metadata",
+			WithEventMetadata(json.RawMessage(`[]`)),
+			WithEventSeverity(LogSeverityInfo),
+		); err == nil {
+			t.Fatal("expected severity with non-object metadata to fail")
+		} else if !strings.Contains(err.Error(), "mark metadata must be a JSON object") {
+			t.Fatalf("unexpected metadata error: %v", err)
+		}
+		if err := EmitMetric("empty_metric", []MetricMeasurement{}); err == nil {
+			t.Fatal("expected empty measurements to fail")
+		} else if !strings.Contains(err.Error(), "measurements must contain at least one entry") {
+			t.Fatalf("unexpected empty measurement error: %v", err)
+		}
+	})
 }
 
 func TestWithMetricParentRetainsScopeHandle(t *testing.T) {

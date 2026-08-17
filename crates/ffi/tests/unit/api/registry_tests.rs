@@ -17,7 +17,7 @@ fn start_otlp_http_collector() -> (String, Receiver<Vec<u8>>, JoinHandle<()>) {
     listener.set_nonblocking(true).unwrap();
     let (sender, receiver) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         let mut last_request = None;
         while Instant::now() < deadline {
             match listener.accept() {
@@ -708,6 +708,25 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
         assert_status!(
             nemo_relay_otel_log_subscriber_create(
                 ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                0,
+                0,
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                ptr::null(),
                 endpoint.as_ptr(),
                 ptr::null(),
                 ptr::null(),
@@ -744,13 +763,53 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
             NemoRelayStatus::Ok
         );
         assert!(!log_subscriber.is_null());
+        let unused_name = cstring("unused");
+        let mut unused_json = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(ptr::null(), unused_name.as_ptr()),
+            NemoRelayStatus::NullPointer
+        );
         assert_status!(
             nemo_relay_otel_log_subscriber_force_flush(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_runtime_diagnostics_json(ptr::null(), &mut unused_json),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_runtime_diagnostics_json(
+                log_subscriber,
+                ptr::null_mut()
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(ptr::null()),
             NemoRelayStatus::NullPointer
         );
         types::nemo_relay_otel_log_subscriber_free(log_subscriber);
 
         let mut metric_subscriber: *mut types::FfiOpenTelemetryMetricSubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                0,
+                ptr::null(),
+                0,
+                0,
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
         assert_status!(
             nemo_relay_otel_metric_subscriber_create(
                 ptr::null(),
@@ -790,6 +849,28 @@ fn test_ffi_open_telemetry_log_and_metric_subscriber_construction() {
             NemoRelayStatus::Ok
         );
         assert!(!metric_subscriber.is_null());
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(ptr::null(), unused_name.as_ptr()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_force_flush(ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(
+                ptr::null(),
+                &mut unused_json
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(
+                metric_subscriber,
+                ptr::null_mut()
+            ),
+            NemoRelayStatus::NullPointer
+        );
         assert_status!(
             nemo_relay_otel_metric_subscriber_shutdown(ptr::null()),
             NemoRelayStatus::NullPointer

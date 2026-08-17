@@ -1743,7 +1743,7 @@ NemoRelayStatus nemo_relay_otel_subscriber_shutdown(const struct FfiOpenTelemetr
 /**
  * Creates an independently managed OpenTelemetry log subscriber.
  *
- * Numeric processing settings use their documented defaults when zero.
+ * Numeric processing settings use their core-config defaults when zero.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
@@ -1773,7 +1773,10 @@ NemoRelayStatus nemo_relay_otel_log_subscriber_register(const struct FfiOpenTele
                                                         const char *name);
 
 /**
- * Deregisters an OpenTelemetry log subscriber by name.
+ * Deregisters a subscriber by name from the shared subscriber registry.
+ *
+ * Subscriber names share one global namespace across trace, log, and metric
+ * subscribers. This function does not verify the subscriber type.
  *
  * # Safety
  * `name` must be a valid C string.
@@ -1812,7 +1815,7 @@ NemoRelayStatus nemo_relay_otel_log_subscriber_shutdown(const struct FfiOpenTele
 /**
  * Creates an independently managed OpenTelemetry metric subscriber.
  *
- * Numeric processing settings use their documented defaults when zero.
+ * Numeric processing settings use their core-config defaults when zero.
  *
  * # Safety
  * Any non-null C strings must be valid and `out` must be non-null.
@@ -1842,7 +1845,10 @@ NemoRelayStatus nemo_relay_otel_metric_subscriber_register(const struct FfiOpenT
                                                            const char *name);
 
 /**
- * Deregisters an OpenTelemetry metric subscriber by name.
+ * Deregisters a subscriber by name from the shared subscriber registry.
+ *
+ * Subscriber names share one global namespace across trace, log, and metric
+ * subscribers. This function does not verify the subscriber type.
  *
  * # Safety
  * `name` must be a valid C string.

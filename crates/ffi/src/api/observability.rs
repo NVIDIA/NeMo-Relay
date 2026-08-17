@@ -31,7 +31,11 @@ fn status_from_atof_error(error: &AtofExporterError) -> NemoRelayStatus {
     }
 }
 
-fn write_runtime_diagnostics(
+/// Write `diagnostics` to a valid, non-null C-string output slot.
+///
+/// # Safety
+/// `out_json` must point to writable storage for one C-string pointer.
+unsafe fn write_runtime_diagnostics(
     diagnostics: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
     out_json: *mut *mut c_char,
 ) -> NemoRelayStatus {
@@ -621,7 +625,13 @@ fn parse_transport(ptr: *const c_char) -> Result<String, NemoRelayStatus> {
 fn parse_otlp_transport(
     ptr: *const c_char,
 ) -> Result<nemo_relay::observability::otel::OtlpTransport, NemoRelayStatus> {
-    match parse_transport(ptr)?.as_str() {
+    transport_from_str(&parse_transport(ptr)?)
+}
+
+fn transport_from_str(
+    value: &str,
+) -> Result<nemo_relay::observability::otel::OtlpTransport, NemoRelayStatus> {
+    match value {
         "http_binary" => Ok(nemo_relay::observability::otel::OtlpTransport::HttpBinary),
         "grpc" => Ok(nemo_relay::observability::otel::OtlpTransport::Grpc),
         other => {
@@ -687,16 +697,7 @@ fn otel_config_for_transport(
     endpoint: String,
     service_name: String,
 ) -> Result<OpenTelemetryConfig, NemoRelayStatus> {
-    let transport = match transport {
-        "http_binary" => nemo_relay::observability::otel::OtlpTransport::HttpBinary,
-        "grpc" => nemo_relay::observability::otel::OtlpTransport::Grpc,
-        other => {
-            set_last_error(&format!(
-                "transport must be 'http_binary' or 'grpc', got {other:?}"
-            ));
-            return Err(NemoRelayStatus::InvalidArg);
-        }
-    };
+    let transport = transport_from_str(transport)?;
     Ok(OpenTelemetryConfig::new(otel_type, endpoint)
         .with_transport(transport)
         .with_service_name(service_name))
@@ -1002,7 +1003,7 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_runtime_diagnostics_json(
     if let Err(status) = required_out_ptr(out_json) {
         return status;
     }
-    write_runtime_diagnostics(unsafe { &*subscriber }.0.runtime_diagnostics(), out_json)
+    unsafe { write_runtime_diagnostics((&*subscriber).0.runtime_diagnostics(), out_json) }
 }
 
 /// Shuts down the underlying tracer provider.
@@ -1028,20 +1029,11 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_shutdown(
     }
 }
 
-fn parse_usize_or_default(
-    value: u64,
-    default: usize,
-    field_name: &str,
-) -> Result<usize, NemoRelayStatus> {
-    let value = if value == 0 {
-        default
-    } else {
-        usize::try_from(value).map_err(|_| {
-            set_last_error(&format!("{field_name} exceeds the platform size limit"));
-            NemoRelayStatus::InvalidArg
-        })?
-    };
-    Ok(value)
+fn parse_usize(value: u64, field_name: &str) -> Result<usize, NemoRelayStatus> {
+    usize::try_from(value).map_err(|_| {
+        set_last_error(&format!("{field_name} exceeds the platform size limit"));
+        NemoRelayStatus::InvalidArg
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1060,40 +1052,43 @@ fn build_ffi_otel_log_config(
     max_export_batch_size: u64,
     scheduled_delay_millis: u64,
 ) -> Result<OpenTelemetryLogConfig, NemoRelayStatus> {
-    let severity = parse_string_or_default(minimum_severity, "info")?
-        .parse()
-        .map_err(|error: nemo_relay::api::event::ParseLogSeverityError| {
-            set_last_error(&error.to_string());
-            NemoRelayStatus::InvalidArg
-        })?;
     let mut config = OpenTelemetryLogConfig::new(parse_required_otel_endpoint(endpoint)?)
-        .with_transport(parse_otlp_transport(transport)?)
-        .with_service_name(parse_string_or_default(service_name, "unknown_service")?)
-        .with_instrumentation_scope(parse_string_or_default(
-            instrumentation_scope,
-            "opentelemetry",
-        )?)
-        .with_timeout(Duration::from_millis(if timeout_millis == 0 {
-            3_000
-        } else {
-            timeout_millis
-        }))
-        .with_minimum_severity(severity)
-        .with_max_queue_size(parse_usize_or_default(
-            max_queue_size,
-            2_048,
-            "max_queue_size",
-        )?)
-        .with_max_export_batch_size(parse_usize_or_default(
+        .with_transport(parse_otlp_transport(transport)?);
+    config = apply_optional_string(
+        config,
+        service_name,
+        OpenTelemetryLogConfig::with_service_name,
+    )?;
+    config = apply_optional_string(
+        config,
+        instrumentation_scope,
+        OpenTelemetryLogConfig::with_instrumentation_scope,
+    )?;
+    if timeout_millis != 0 {
+        config = config.with_timeout(Duration::from_millis(timeout_millis));
+    }
+    if let Some(value) = parse_optional_string(minimum_severity)? {
+        let severity =
+            value
+                .parse()
+                .map_err(|error: nemo_relay::api::event::ParseLogSeverityError| {
+                    set_last_error(&error.to_string());
+                    NemoRelayStatus::InvalidArg
+                })?;
+        config = config.with_minimum_severity(severity);
+    }
+    if max_queue_size != 0 {
+        config = config.with_max_queue_size(parse_usize(max_queue_size, "max_queue_size")?);
+    }
+    if max_export_batch_size != 0 {
+        config = config.with_max_export_batch_size(parse_usize(
             max_export_batch_size,
-            512,
             "max_export_batch_size",
-        )?)
-        .with_scheduled_delay(Duration::from_millis(if scheduled_delay_millis == 0 {
-            1_000
-        } else {
-            scheduled_delay_millis
-        }));
+        )?);
+    }
+    if scheduled_delay_millis != 0 {
+        config = config.with_scheduled_delay(Duration::from_millis(scheduled_delay_millis));
+    }
     config = apply_optional_string(
         config,
         service_namespace,
@@ -1120,7 +1115,7 @@ fn build_ffi_otel_log_config(
 
 /// Creates an independently managed OpenTelemetry log subscriber.
 ///
-/// Numeric processing settings use their documented defaults when zero.
+/// Numeric processing settings use their core-config defaults when zero.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
@@ -1204,7 +1199,10 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_register(
     }
 }
 
-/// Deregisters an OpenTelemetry log subscriber by name.
+/// Deregisters a subscriber by name from the shared subscriber registry.
+///
+/// Subscriber names share one global namespace across trace, log, and metric
+/// subscribers. This function does not verify the subscriber type.
 ///
 /// # Safety
 /// `name` must be a valid C string.
@@ -1258,7 +1256,7 @@ pub unsafe extern "C" fn nemo_relay_otel_log_subscriber_runtime_diagnostics_json
     if let Err(status) = required_out_ptr(out_json) {
         return status;
     }
-    write_runtime_diagnostics(unsafe { &*subscriber }.0.runtime_diagnostics(), out_json)
+    unsafe { write_runtime_diagnostics((&*subscriber).0.runtime_diagnostics(), out_json) }
 }
 
 /// Shuts down the OpenTelemetry logger provider.
@@ -1299,40 +1297,38 @@ fn build_ffi_otel_metric_config(
     max_instruments: u64,
     cardinality_limit: u64,
 ) -> Result<OpenTelemetryMetricConfig, NemoRelayStatus> {
-    let temporality = parse_string_or_default(temporality, "cumulative")?
-        .parse()
-        .map_err(|error: String| {
+    let mut config = OpenTelemetryMetricConfig::new(parse_required_otel_endpoint(endpoint)?)
+        .with_transport(parse_otlp_transport(transport)?);
+    config = apply_optional_string(
+        config,
+        service_name,
+        OpenTelemetryMetricConfig::with_service_name,
+    )?;
+    config = apply_optional_string(
+        config,
+        instrumentation_scope,
+        OpenTelemetryMetricConfig::with_instrumentation_scope,
+    )?;
+    if timeout_millis != 0 {
+        config = config.with_timeout(Duration::from_millis(timeout_millis));
+    }
+    if export_interval_millis != 0 {
+        config = config.with_export_interval(Duration::from_millis(export_interval_millis));
+    }
+    if let Some(value) = parse_optional_string(temporality)? {
+        let temporality = value.parse().map_err(|error: String| {
             set_last_error(&error);
             NemoRelayStatus::InvalidArg
         })?;
-    let mut config = OpenTelemetryMetricConfig::new(parse_required_otel_endpoint(endpoint)?)
-        .with_transport(parse_otlp_transport(transport)?)
-        .with_service_name(parse_string_or_default(service_name, "unknown_service")?)
-        .with_instrumentation_scope(parse_string_or_default(
-            instrumentation_scope,
-            "opentelemetry",
-        )?)
-        .with_timeout(Duration::from_millis(if timeout_millis == 0 {
-            3_000
-        } else {
-            timeout_millis
-        }))
-        .with_export_interval(Duration::from_millis(if export_interval_millis == 0 {
-            60_000
-        } else {
-            export_interval_millis
-        }))
-        .with_temporality(temporality)
-        .with_max_instruments(parse_usize_or_default(
-            max_instruments,
-            256,
-            "max_instruments",
-        )?)
-        .with_cardinality_limit(parse_usize_or_default(
-            cardinality_limit,
-            2_000,
-            "cardinality_limit",
-        )?);
+        config = config.with_temporality(temporality);
+    }
+    if max_instruments != 0 {
+        config = config.with_max_instruments(parse_usize(max_instruments, "max_instruments")?);
+    }
+    if cardinality_limit != 0 {
+        config =
+            config.with_cardinality_limit(parse_usize(cardinality_limit, "cardinality_limit")?);
+    }
     config = apply_optional_string(
         config,
         service_namespace,
@@ -1359,7 +1355,7 @@ fn build_ffi_otel_metric_config(
 
 /// Creates an independently managed OpenTelemetry metric subscriber.
 ///
-/// Numeric processing settings use their documented defaults when zero.
+/// Numeric processing settings use their core-config defaults when zero.
 ///
 /// # Safety
 /// Any non-null C strings must be valid and `out` must be non-null.
@@ -1443,7 +1439,10 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_register(
     }
 }
 
-/// Deregisters an OpenTelemetry metric subscriber by name.
+/// Deregisters a subscriber by name from the shared subscriber registry.
+///
+/// Subscriber names share one global namespace across trace, log, and metric
+/// subscribers. This function does not verify the subscriber type.
 ///
 /// # Safety
 /// `name` must be a valid C string.
@@ -1497,7 +1496,7 @@ pub unsafe extern "C" fn nemo_relay_otel_metric_subscriber_runtime_diagnostics_j
     if let Err(status) = required_out_ptr(out_json) {
         return status;
     }
-    write_runtime_diagnostics(unsafe { &*subscriber }.0.runtime_diagnostics(), out_json)
+    unsafe { write_runtime_diagnostics((&*subscriber).0.runtime_diagnostics(), out_json) }
 }
 
 /// Shuts down the OpenTelemetry meter provider and performs final collection.

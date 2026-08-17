@@ -189,20 +189,41 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 func TestObservabilitySignalEndpointOmittedVersusExplicitEmpty(t *testing.T) {
 	logs := NewObservabilityOpenTelemetryLogConfig()
 	logs.Enabled = true
-	omitted, err := json.Marshal(logs)
-	if err != nil {
-		t.Fatalf("marshal omitted endpoints: %v", err)
+	metrics := NewObservabilityOpenTelemetryMetricConfig()
+	metrics.Enabled = true
+	cases := []struct {
+		name     string
+		omitted  any
+		explicit any
+	}{
+		{"logs", logs, func() any {
+			config := logs
+			config.Endpoints = ObservabilityOpenTelemetrySignalEndpoints()
+			return config
+		}()},
+		{"metrics", metrics, func() any {
+			config := metrics
+			config.Endpoints = ObservabilityOpenTelemetrySignalEndpoints()
+			return config
+		}()},
 	}
-	if strings.Contains(string(omitted), `"endpoints"`) {
-		t.Fatalf("omitted endpoint list should derive from traces: %s", omitted)
-	}
-	logs.Endpoints = ObservabilityOpenTelemetrySignalEndpoints()
-	explicitEmpty, err := json.Marshal(logs)
-	if err != nil {
-		t.Fatalf("marshal explicit empty endpoints: %v", err)
-	}
-	if !strings.Contains(string(explicitEmpty), `"endpoints":[]`) {
-		t.Fatalf("explicit empty endpoint list must be preserved: %s", explicitEmpty)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			omitted, err := json.Marshal(testCase.omitted)
+			if err != nil {
+				t.Fatalf("marshal omitted endpoints: %v", err)
+			}
+			if strings.Contains(string(omitted), `"endpoints"`) {
+				t.Fatalf("omitted endpoint list should derive from traces: %s", omitted)
+			}
+			explicitEmpty, err := json.Marshal(testCase.explicit)
+			if err != nil {
+				t.Fatalf("marshal explicit empty endpoints: %v", err)
+			}
+			if !strings.Contains(string(explicitEmpty), `"endpoints":[]`) {
+				t.Fatalf("explicit empty endpoint list must be preserved: %s", explicitEmpty)
+			}
+		})
 	}
 }
 
