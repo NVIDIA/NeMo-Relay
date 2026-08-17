@@ -506,20 +506,8 @@ impl PyOpenTelemetryConfig {
                 )));
             }
         };
-        if self.endpoint.trim().is_empty() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "endpoint is required and must be nonblank",
-            ));
-        }
-        let transport = match self.transport.as_str() {
-            "http_binary" => nemo_relay::observability::otel::OtlpTransport::HttpBinary,
-            "grpc" => nemo_relay::observability::otel::OtlpTransport::Grpc,
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "transport must be 'http_binary' or 'grpc', got {other:?}"
-                )));
-            }
-        };
+        validate_otel_signal_endpoint(&self.endpoint)?;
+        let transport = parse_otel_signal_transport(&self.transport)?;
         let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(
             otel_type,
             self.endpoint.clone(),
