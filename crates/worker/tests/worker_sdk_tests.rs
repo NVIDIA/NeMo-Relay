@@ -20,9 +20,10 @@ use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
     ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, Json, JsonStream, LlmNext,
-    LlmRequest, LlmStreamNext, LogSeverity, PluginContext, PluginRuntime, Result, ScopeType,
-    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
-    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
+    LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
+    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
+    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
+    serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -821,6 +822,34 @@ async fn worker_service_invokes_every_registration_surface() {
             .name("nemo.relay.metric_measurements")
             .version("1")
             .build()
+    );
+    let metric_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-metric")
+        .expect("metric mark request");
+    let metric_schema = metric_mark.data_schema.expect("metric data schema");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&metric_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
+    assert_eq!(
+        decode_json_envelope::<Json>(&metric_mark.data.expect("metric data")).unwrap(),
+        json!({
+            "measurements": [{
+                "name": "worker.requests",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 1,
+                "unit": null,
+                "description": null,
+                "attributes": null,
+                "boundaries": null
+            }]
+        })
     );
 
     worker_handle.abort();
@@ -1862,6 +1891,22 @@ impl WorkerPlugin for SurfacePlugin {
                             ),
                             severity: Some(LogSeverity::Warn),
                         },
+                    )
+                    .await?;
+                runtime
+                    .emit_metric(
+                        "tool-exec-metric",
+                        vec![MetricMeasurement {
+                            name: "worker.requests".into(),
+                            kind: MetricKind::Counter,
+                            value_type: MetricValueType::U64,
+                            value: json!(1),
+                            unit: None,
+                            description: None,
+                            attributes: None,
+                            boundaries: None,
+                        }],
+                        None,
                     )
                     .await?;
                 let stack_id = runtime.create_scope_stack().await?;

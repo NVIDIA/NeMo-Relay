@@ -1406,6 +1406,13 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
     let restored_report = active_plugin_report().expect("previous config should be restored");
     assert!(restored_report.diagnostics.is_empty());
     assert_eq!(restored_report.runtime_diagnostics.len(), 1);
+    let restored = &restored_report.runtime_diagnostics[0];
+    assert_eq!(restored.code, "atif.remote_delivery_failed");
+    assert_eq!(restored.component, "observability");
+    assert_eq!(restored.field.as_deref(), Some("storage[0]"));
+    assert_eq!(restored.message, "HTTP 500");
+    assert_eq!(restored.session_id.as_deref(), Some("session-123"));
+    assert_eq!(restored.count, 1);
     let diagnostics = active_runtime_diagnostics_snapshot();
     assert_eq!(diagnostics.len(), 1);
     assert_eq!(diagnostics[0].code, "atif.remote_delivery_failed");

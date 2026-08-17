@@ -23,11 +23,11 @@ use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWork
 use nemo_relay_worker_proto::v1::stream_chunk::Item as StreamItem;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
-    EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, JsonEnvelope, JsonResult, JsonValue, LlmCodecDecodeRequest,
-    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmNextRequest, LlmRequestInterceptResult,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, Registration, ScopeContext,
-    ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk,
+    EmptyResult, GetRuntimeDiagnosticsRequest, GuardrailResult, HandshakeRequest,
+    HandshakeResponse, HealthRequest, HealthResponse, JsonEnvelope, JsonResult, JsonValue,
+    LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmNextRequest,
+    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
+    Registration, ScopeContext, ScopeType as ProtoScopeType, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionInterceptResult, ToolExecutionResultResponse, ToolNextRequest, ValidateRequest,
     ValidateResponse, WorkerAck,
@@ -1917,6 +1917,24 @@ async fn host_runtime_service_covers_auth_scope_and_ack_errors() {
     let service = WorkerHostRuntimeService {
         state: state.clone(),
     };
+
+    let diagnostics_auth_error = service
+        .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+            activation_id: "wrong".into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect_err("bad activation id should fail diagnostics auth");
+    assert_eq!(diagnostics_auth_error.code(), tonic::Code::PermissionDenied);
+    let diagnostics = service
+        .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+            activation_id: ACTIVATION_ID.into(),
+            auth_token: AUTH_TOKEN.into(),
+        }))
+        .await
+        .expect("diagnostics request should succeed")
+        .into_inner();
+    assert!(diagnostics.entries.len() <= 32);
 
     let auth_error = service
         .emit_mark(Request::new(EmitMarkRequest {

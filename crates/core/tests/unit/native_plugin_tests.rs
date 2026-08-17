@@ -4396,6 +4396,20 @@ fn assert_native_scope_pop_and_mark_validation(
     );
 }
 
+#[test]
+fn native_runtime_diagnostics_callback_returns_owned_json() {
+    let mut out = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { native_get_runtime_diagnostics(&mut out) },
+        NemoRelayStatus::Ok
+    );
+    assert!(!out.is_null());
+
+    let value: Json = serde_json::from_str(&read_native_string(out).unwrap()).unwrap();
+    assert!(value["entries"].is_array());
+    unsafe { native_string_free(out) };
+}
+
 fn assert_native_scope_stack_binding_lifecycle() {
     let mut binding = ptr::null_mut();
     assert_eq!(

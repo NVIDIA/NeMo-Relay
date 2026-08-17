@@ -24,13 +24,13 @@ use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DataSchema,
     DiagnosticLevel, Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity,
     LlmJsonAsyncStream, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
-    LlmStreamNext, LogSeverity, NEMO_RELAY_NATIVE_ABI_VERSION,
-    NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
-    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
-    NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
-    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NativeExecutorConfig, NativePlugin,
+    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
+    NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmAsyncStream,
@@ -2627,6 +2627,41 @@ fn plugin_runtime_uses_v4_mark_options_extension() {
             && call.contains("severity=warn")
     }));
     assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_emits_metrics_and_requires_v4_diagnostics() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    PluginRuntime::new(&host.v3.v1)
+        .emit_metric(
+            "example.requests",
+            vec![MetricMeasurement {
+                name: "example.requests".into(),
+                kind: MetricKind::Counter,
+                value_type: MetricValueType::U64,
+                value: json!(1),
+                unit: Some("{request}".into()),
+                description: None,
+                attributes: Some(json!({"region": "test"})),
+                boundaries: None,
+            }],
+            Some(&json!({"source": "sdk-test"})),
+        )
+        .unwrap();
+
+    assert!(RUNTIME_CALLS.lock().unwrap().iter().any(|call| {
+        call.starts_with("mark_v2:example.requests:parent=false")
+            && call.contains(r#""name":"nemo.relay.metric_measurements""#)
+            && call.contains(r#""measurements":[{"attributes":{"region":"test"}"#)
+    }));
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+
+    let legacy_host = test_host();
+    let error = PluginRuntime::new(&legacy_host)
+        .runtime_diagnostics()
+        .unwrap_err();
+    assert!(error.contains("runtime diagnostics require the native host ABI v4"));
 }
 
 #[test]
