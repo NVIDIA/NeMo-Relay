@@ -1380,6 +1380,14 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
             ..PluginConfig::default()
         }))
         .unwrap();
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "atif.remote_delivery_failed".into(),
+        component: "observability".into(),
+        field: Some("storage[0]".into()),
+        message: "HTTP 500".into(),
+        session_id: Some("session-123".into()),
+        count: 1,
+    });
 
     let err = runtime
         .block_on(initialize_plugins_exact(PluginConfig {
@@ -1397,6 +1405,12 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
     assert_eq!(RESTORE_FAIL_REGISTRATIONS.load(Ordering::SeqCst), 1);
     let restored_report = active_plugin_report().expect("previous config should be restored");
     assert!(restored_report.diagnostics.is_empty());
+    assert_eq!(restored_report.runtime_diagnostics.len(), 1);
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "atif.remote_delivery_failed");
+    assert_eq!(diagnostics[0].message, "HTTP 500");
+    assert_eq!(diagnostics[0].count, 1);
     let names = recorded_names().lock().unwrap().clone();
     assert_eq!(
         names,

@@ -1763,9 +1763,10 @@ async fn restore_previous_plugin_configuration(
     .await
     {
         Ok(registrations) => {
-            store_active_plugin_configuration(
+            store_active_plugin_configuration_with_runtime_diagnostics(
                 previous_state.config,
                 previous_state.report,
+                previous_state.runtime_diagnostics,
                 registrations,
             )?;
             log::warn!(
@@ -2697,13 +2698,27 @@ fn store_active_plugin_configuration(
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
 ) -> Result<()> {
+    store_active_plugin_configuration_with_runtime_diagnostics(
+        config,
+        report,
+        BTreeMap::new(),
+        registrations,
+    )
+}
+
+fn store_active_plugin_configuration_with_runtime_diagnostics(
+    config: PluginConfig,
+    report: ConfigReport,
+    runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
     let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
         PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
     })?;
     *guard = Some(ActivePluginConfiguration {
         config,
         report,
-        runtime_diagnostics: BTreeMap::new(),
+        runtime_diagnostics,
         registrations,
     });
     if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
