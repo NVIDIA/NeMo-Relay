@@ -126,6 +126,12 @@ class TestScope:
         }
 
     def test_metric_rejects_invalid_measurements_atomically(self, subscribed_events):
+        valid = MetricMeasurement(
+            "relay.requests",
+            MetricKind.Counter,
+            MetricValueType.U64,
+            1,
+        )
         invalid = MetricMeasurement(
             "relay.tokens",
             MetricKind.Counter,
@@ -134,7 +140,7 @@ class TestScope:
         )
 
         with pytest.raises(ValueError, match="does not support value_type i64"):
-            scope.metric("invalid_metric", [invalid])
+            scope.metric("invalid_metric", [valid, invalid])
         subscribers.flush()
         assert all(event.name != "invalid_metric" for event in subscribed_events)
 
