@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nemo_relay::api::runtime::{ToolExecutionFn, ToolExecutionNextFn};
-use nemo_relay::api::tool::ToolExecutionInterceptOutcome;
+use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay::error::Result as FlowResult;
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 use crate::config::ResponseCacheConfig;
 use crate::response_cache::config::{ToolCacheConfig, ToolClass, ToolOverride};
@@ -24,6 +24,8 @@ use crate::response_cache::mark::{
     CacheMark, CacheMarkStatus, CacheReason, CacheSurface, emit_cache_mark,
 };
 use crate::response_cache::store::{CacheEntry, CacheStore, now_unix_ms};
+
+const TOOL_RESULT_CACHE_ENTRY_SCHEMA: &str = "nemo.relay.ResponseCacheToolResult@1";
 
 #[derive(Debug, Clone, PartialEq)]
 struct ResolvedToolPolicy {
@@ -275,7 +277,10 @@ async fn run_tool_cache(
     }
 
     match store.get(&key).await {
-        Ok(Some(entry)) if !tools.cache_errors && is_error_shaped_tool_result(&entry.response) => {
+        Ok(Some(entry))
+            if !tools.cache_errors
+                && is_error_shaped_tool_result(&decode_tool_result(&entry.response).result) =>
+        {
             // A prior Relay version could have stored a snake_case `is_error`
             // result under this same policy. Never replay it after error
             // caching is disabled; a successful live result replaces it.
@@ -290,6 +295,7 @@ async fn run_tool_cache(
             Ok(result.into())
         }
         Ok(Some(entry)) => {
+            let result = decode_tool_result(&entry.response);
             let age_ms = now_unix_ms().saturating_sub(entry.created_unix_ms);
             emit_cache_mark(
                 CacheMark::new(CacheMarkStatus::Hit, backend)
@@ -299,7 +305,7 @@ async fn run_tool_cache(
                     .ttl_ms(policy.ttl.as_millis() as u64)
                     .saved_invocations(1),
             );
-            Ok(entry.response.clone().into())
+            Ok(result.into())
         }
         Ok(None) => {
             emit_cache_mark(
@@ -328,14 +334,39 @@ async fn store_tool_result(
     store: &Arc<dyn CacheStore>,
     key: &str,
     ttl: Duration,
-    result: &Json,
+    result: &ToolExecutionResult,
     cache_errors: bool,
 ) {
-    if !cache_errors && is_error_shaped_tool_result(result) {
+    if !cache_errors && is_error_shaped_tool_result(&result.result) {
         return;
     }
-    let entry = CacheEntry::new(result.clone(), ttl, key.to_string(), None, None);
+    let entry = CacheEntry::new(encode_tool_result(result), ttl, key.to_string(), None, None);
     let _ = store.set(key, entry, ttl).await;
+}
+
+fn encode_tool_result(result: &ToolExecutionResult) -> Json {
+    json!({
+        "$schema": TOOL_RESULT_CACHE_ENTRY_SCHEMA,
+        "result": result.result,
+        "annotation": result.annotation,
+    })
+}
+
+fn decode_tool_result(value: &Json) -> ToolExecutionResult {
+    let Some(object) = value.as_object() else {
+        return value.clone().into();
+    };
+    if object.get("$schema").and_then(Json::as_str) != Some(TOOL_RESULT_CACHE_ENTRY_SCHEMA) {
+        return value.clone().into();
+    }
+    let Some(result) = object.get("result") else {
+        return value.clone().into();
+    };
+    let mut decoded = ToolExecutionResult::new(result.clone());
+    if let Some(annotation) = object.get("annotation").filter(|value| !value.is_null()) {
+        decoded = decoded.with_annotation(annotation.clone());
+    }
+    decoded
 }
 
 /// A tool result has no universal provider envelope. Treat only the explicit,

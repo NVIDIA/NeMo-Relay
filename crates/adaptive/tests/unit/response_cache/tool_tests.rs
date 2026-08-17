@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use nemo_relay::api::runtime::ToolExecutionNextFn;
+use nemo_relay::api::tool::ToolExecutionResult;
 
 use super::*;
 use crate::config::ResponseCacheConfig;
@@ -73,7 +74,7 @@ fn counting_next(calls: Arc<AtomicUsize>, result: Json) -> ToolExecutionNextFn {
         let result = result.clone();
         Box::pin(async move {
             calls.fetch_add(1, Ordering::SeqCst);
-            Ok(result)
+            Ok(result.into())
         })
     })
 }
@@ -183,7 +184,7 @@ async fn stale_error_entries_are_not_replayed_when_error_caching_is_disabled() {
             let calls = Arc::clone(&calls);
             Box::pin(async move {
                 calls.fetch_add(1, Ordering::SeqCst);
-                Ok(serde_json::json!({"answer": "fresh"}))
+                Ok(serde_json::json!({"answer": "fresh"}).into())
             })
         }
     });
@@ -210,6 +211,60 @@ async fn stale_error_entries_are_not_replayed_when_error_caching_is_disabled() {
     .await
     .unwrap();
     assert_eq!(hit.result, serde_json::json!({"answer": "fresh"}));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn cached_tool_results_preserve_annotations() {
+    let store: Arc<dyn CacheStore> = Arc::new(InMemoryCacheStore::new(1 << 20));
+    let response_cache = cache_config();
+    let tools = Arc::new(ToolCacheConfig {
+        enabled: true,
+        default: ToolClass {
+            cacheable: true,
+            ..ToolClass::default()
+        },
+        ..ToolCacheConfig::default()
+    });
+    let calls = Arc::new(AtomicUsize::new(0));
+    let next: ToolExecutionNextFn = Arc::new({
+        let calls = Arc::clone(&calls);
+        move |_args| {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ToolExecutionResult::annotated(
+                    serde_json::json!({"answer": "cached"}),
+                    serde_json::json!({"source": "tool"}),
+                ))
+            })
+        }
+    });
+    let args = serde_json::json!({"query": "relay"});
+
+    let first = run_tool_cache(
+        "docs_lookup".to_string(),
+        args.clone(),
+        Arc::clone(&next),
+        Arc::clone(&store),
+        Arc::clone(&response_cache),
+        Arc::clone(&tools),
+    )
+    .await
+    .unwrap();
+    let hit = run_tool_cache(
+        "docs_lookup".to_string(),
+        args,
+        next,
+        store,
+        response_cache,
+        tools,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(first, hit);
+    assert_eq!(hit.annotation, Some(serde_json::json!({"source": "tool"})));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 

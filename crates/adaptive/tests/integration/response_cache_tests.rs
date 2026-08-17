@@ -1923,7 +1923,7 @@ fn counting_tool(calls: Arc<AtomicUsize>, result: Json) -> ToolExecutionNextFn {
         let result = result.clone();
         Box::pin(async move {
             calls.fetch_add(1, Ordering::SeqCst);
-            Ok(result)
+            Ok(result.into())
         })
     })
 }
@@ -1938,6 +1938,7 @@ async fn tool_call(name: &str, tool: &ToolExecutionNextFn, args: Json) -> Json {
     )
     .await
     .unwrap()
+    .result
 }
 
 fn one_cacheable_class(members: &[&str]) -> ToolCacheConfig {
