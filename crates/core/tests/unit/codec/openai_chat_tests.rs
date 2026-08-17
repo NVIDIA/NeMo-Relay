@@ -230,6 +230,30 @@ fn test_decode_response_scalar_provider_reported_cost_honors_cost_usd_precedence
 
     assert_eq!(conflicting_cost.total, Some(0.0456));
     assert_eq!(conflicting_cost.source, CostSource::ProviderReported);
+
+    let conflicting_detailed_response = json!({
+        "usage": {
+            "cost_usd": 0.0456,
+            "cost": {
+                "total": 0.0123,
+                "input": 0.004,
+                "output": 0.0083
+            }
+        }
+    });
+    let conflicting_detailed_cost = codec
+        .decode_response(&conflicting_detailed_response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert_eq!(conflicting_detailed_cost.total, Some(0.0456));
+    assert_eq!(
+        conflicting_detailed_cost.source,
+        CostSource::ProviderReported
+    );
 }
 
 #[test]
