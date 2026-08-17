@@ -1294,8 +1294,11 @@ unsafe extern "C" fn native_get_runtime_diagnostics(
 ) -> NemoRelayStatus {
     clear_native_last_error();
     let diagnostics = active_runtime_diagnostics_snapshot();
-    match serde_json::to_value(serde_json::json!({"entries": diagnostics})) {
-        Ok(value) => write_native_json(&value, out_json),
+    match serde_json::to_value(diagnostics) {
+        Ok(entries) => {
+            let value = Json::Object(Map::from_iter([("entries".into(), entries)]));
+            write_native_json(&value, out_json)
+        }
         Err(error) => {
             set_native_last_error(format!("failed to serialize runtime diagnostics: {error}"));
             NemoRelayStatus::Internal
