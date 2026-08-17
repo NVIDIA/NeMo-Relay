@@ -2626,6 +2626,7 @@ fn plugin_runtime_uses_v4_mark_options_extension() {
             && call.contains(r#""name":"example.mark""#)
             && call.contains("severity=warn")
     }));
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
 }
 
 #[test]
