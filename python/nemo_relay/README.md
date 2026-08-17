@@ -155,9 +155,10 @@ nemo_relay.subscribers.flush()
 nemo_relay.subscribers.deregister("printer")
 ```
 
-Use `nemo_relay.scope.event(..., severity=LogSeverity.Info)` for a mark intended
-for log export. Use `nemo_relay.scope.metric()` with `MetricMeasurement` objects
-for metrics; Relay validates the complete measurement group before publishing it.
+Use `nemo_relay.scope.event(..., severity=nemo_relay.LogSeverity.Info)` for a
+mark intended for log export. Use `nemo_relay.scope.metric()` with
+`nemo_relay.MetricMeasurement` objects for metrics; Relay validates the complete
+measurement group before publishing it.
 
 Native subscriber delivery is asynchronous, so call
 `nemo_relay.subscribers.flush()` before you read subscriber output or exit.
