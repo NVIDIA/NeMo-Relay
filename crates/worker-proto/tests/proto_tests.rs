@@ -133,6 +133,11 @@ fn runtime_diagnostics_messages_are_stable() {
             count: 3,
         }],
     };
+    assert_eq!(
+        response.encode_to_vec(),
+        b"\x0a\x3f\x0a\x18otel.metric_mark_invalid\x12\x21unsupported metric schema version\x18\x03"
+            .to_vec()
+    );
     assert_eq!(response.entries[0].count, 3);
     assert_eq!(response.entries[0].code, "otel.metric_mark_invalid");
 }
@@ -224,6 +229,12 @@ fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
         severity: "warn".into(),
         ..EmitMarkRequest::default()
     };
-    let round_trip = EmitMarkRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+    let encoded = request.encode_to_vec();
+    assert_eq!(
+        encoded,
+        b"\x22\x04mark\x3a\x52\x0a\x17nemo.relay.DataSchema@1\x12\x37{\"name\":\"nemo.relay.metric_measurements\",\"version\":\"1\"}\x42\x04warn"
+            .to_vec()
+    );
+    let round_trip = EmitMarkRequest::decode(encoded.as_slice()).unwrap();
     assert_eq!(round_trip, request);
 }
