@@ -183,7 +183,7 @@ class TestObservabilityConfigHelpers:
         }
 
         logs = OpenTelemetryLogSectionConfig(enabled=True, endpoints=[endpoint])
-        metrics = OpenTelemetryMetricSectionConfig(enabled=True, endpoints=[])
+        metrics = OpenTelemetryMetricSectionConfig(enabled=True, endpoints=[endpoint])
         assert OpenTelemetryLogSectionConfig().to_dict() == {
             "enabled": False,
             "minimum_severity": "info",
@@ -202,7 +202,7 @@ class TestObservabilityConfigHelpers:
         section = OpenTelemetrySectionConfig(enabled=True, logs=logs, metrics=metrics).to_dict()
         assert section["logs"] == logs.to_dict()
         assert section["metrics"] == metrics.to_dict()
-        assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == []
+        assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
 
     def test_validation_rejects_bad_values(self):
         report = plugin.validate(
