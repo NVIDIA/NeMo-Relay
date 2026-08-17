@@ -46,18 +46,12 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 4 adds completion-scoped codecs, pull-based LLM streams, and
-/// extended mark emission. Hosts retain frozen version-3 and version-2 tables
-/// for already-built plugins that target those layouts.
+/// Version 4 adds completion-scoped codecs, pull-based LLM streams, extended
+/// mark emission, and runtime diagnostics. Hosts retain frozen version-3 and
+/// version-2 tables for already-built plugins that target those layouts.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 4;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
-/// ABI version that introduced typed async middleware capabilities.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC: u32 = 4;
-/// ABI version that introduced data schemas and severities for emitted marks.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS: u32 = 4;
-/// ABI version that introduced runtime diagnostics for dynamic plugins.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_DIAGNOSTICS: u32 = 4;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
@@ -178,7 +172,7 @@ pub struct NemoRelayNativeLlmSanitizeResponseContext {
 
 /// Safe completion-backed request codec facade for typed native plugins.
 pub struct LlmSanitizeRequestCodec<'a> {
-    async_host: NemoRelayNativeHostApiV4TypedAsync,
+    async_host: NemoRelayNativeHostApiV4,
     completion: *const NemoRelayNativeAsyncCompletion,
     completion_release: unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion),
     _lifetime: PhantomData<&'a NemoRelayNativeLlmRequestCodec>,
@@ -235,7 +229,7 @@ impl LlmSanitizeRequestCodec<'_> {
 
 /// Safe completion-backed response codec facade for typed native plugins.
 pub struct LlmSanitizeResponseCodec<'a> {
-    async_host: NemoRelayNativeHostApiV4TypedAsync,
+    async_host: NemoRelayNativeHostApiV4,
     completion: *const NemoRelayNativeAsyncCompletion,
     completion_release: unsafe extern "C" fn(*const NemoRelayNativeAsyncCompletion),
     _lifetime: PhantomData<&'a NemoRelayNativeLlmResponseCodec>,
@@ -1206,70 +1200,10 @@ pub struct NemoRelayNativeHostApiV4 {
     pub get_runtime_diagnostics: NemoRelayNativeGetRuntimeDiagnosticsFn,
 }
 
-/// Frozen ABI-v4 prefix required by typed asynchronous middleware.
-///
-/// This private prefix lets newly built plugins copy the pre-diagnostics ABI-v4
-/// fields from an older v4 host without reading the appended diagnostics field.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub(crate) struct NemoRelayNativeHostApiV4TypedAsync {
-    pub(crate) v3: NemoRelayNativeHostApiV3,
-    pub(crate) async_completion_llm_request_codec_decode: unsafe extern "C" fn(
-        completion: *const NemoRelayNativeAsyncCompletion,
-        request_json: *const NemoRelayNativeString,
-        out: *mut *mut NemoRelayNativeString,
-    )
-        -> NemoRelayStatus,
-    pub(crate) async_completion_llm_request_codec_encode: unsafe extern "C" fn(
-        completion: *const NemoRelayNativeAsyncCompletion,
-        annotated_json: *const NemoRelayNativeString,
-        original_json: *const NemoRelayNativeString,
-        out: *mut *mut NemoRelayNativeString,
-    )
-        -> NemoRelayStatus,
-    pub(crate) async_completion_llm_response_codec_decode: unsafe extern "C" fn(
-        completion: *const NemoRelayNativeAsyncCompletion,
-        response_json: *const NemoRelayNativeString,
-        out: *mut *mut NemoRelayNativeString,
-    )
-        -> NemoRelayStatus,
-    pub(crate) async_next_open_llm_stream: unsafe extern "C" fn(
-        next: *const NemoRelayNativeAsyncNext,
-        request_json: *const NemoRelayNativeString,
-        cb: NemoRelayNativeAsyncLlmStreamOpenCb,
-        user_data: *mut c_void,
-    ) -> NemoRelayStatus,
-    pub(crate) async_llm_stream_pull: unsafe extern "C" fn(
-        stream: *const NemoRelayNativeLlmAsyncStream,
-        cb: NemoRelayNativeAsyncLlmStreamPullCb,
-        user_data: *mut c_void,
-    ) -> NemoRelayStatus,
-    pub(crate) async_llm_stream_cancel:
-        unsafe extern "C" fn(stream: *const NemoRelayNativeLlmAsyncStream) -> NemoRelayStatus,
-    pub(crate) async_llm_stream_release:
-        unsafe extern "C" fn(stream: *const NemoRelayNativeLlmAsyncStream),
-    pub(crate) async_completion_retain:
-        unsafe extern "C" fn(completion: *const NemoRelayNativeAsyncCompletion) -> NemoRelayStatus,
-    pub(crate) async_stream_is_backpressured:
-        unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool,
-}
-
-/// Bytes required for the typed asynchronous middleware portion of ABI v4.
-pub const NEMO_RELAY_NATIVE_HOST_API_V4_TYPED_ASYNC_SIZE: usize =
-    std::mem::size_of::<NemoRelayNativeHostApiV4TypedAsync>();
-/// Bytes required for the mark-options portion of ABI v4.
-pub const NEMO_RELAY_NATIVE_HOST_API_V4_MARK_OPTIONS_SIZE: usize =
-    std::mem::offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics);
-/// Bytes required for the runtime-diagnostics portion of ABI v4.
-pub const NEMO_RELAY_NATIVE_HOST_API_V4_RUNTIME_DIAGNOSTICS_SIZE: usize =
-    std::mem::size_of::<NemoRelayNativeHostApiV4>();
-
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
 unsafe impl Send for NemoRelayNativeHostApiV4 {}
 unsafe impl Sync for NemoRelayNativeHostApiV4 {}
-unsafe impl Send for NemoRelayNativeHostApiV4TypedAsync {}
-unsafe impl Sync for NemoRelayNativeHostApiV4TypedAsync {}
 
 // The host API table is immutable after construction. Function pointers and
 // the null-terminated version string pointer are safe to share across threads.
@@ -1363,28 +1297,13 @@ pub struct PluginRuntime {
 impl PluginRuntime {
     /// Creates a runtime handle from the host ABI table.
     pub fn new(host: &NemoRelayNativeHostApiV1) -> Self {
-        let emit_mark_v2 = if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS
-            && host.struct_size >= NEMO_RELAY_NATIVE_HOST_API_V4_MARK_OPTIONS_SIZE
-        {
-            Some(unsafe { &*(host as *const _ as *const NemoRelayNativeHostApiV4) }.emit_mark_v2)
-        } else {
-            None
-        };
-        let get_runtime_diagnostics = if host.abi_version
-            >= NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_DIAGNOSTICS
-            && host.struct_size >= NEMO_RELAY_NATIVE_HOST_API_V4_RUNTIME_DIAGNOSTICS_SIZE
-        {
-            Some(
-                unsafe { &*(host as *const _ as *const NemoRelayNativeHostApiV4) }
-                    .get_runtime_diagnostics,
-            )
-        } else {
-            None
-        };
+        let v4 = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>())
+        .then(|| unsafe { &*(host as *const _ as *const NemoRelayNativeHostApiV4) });
         Self {
             host: *host,
-            emit_mark_v2,
-            get_runtime_diagnostics,
+            emit_mark_v2: v4.map(|host| host.emit_mark_v2),
+            get_runtime_diagnostics: v4.map(|host| host.get_runtime_diagnostics),
         }
     }
 
@@ -2779,7 +2698,7 @@ enum OwnedHostApi {
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             Self::V4(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) })

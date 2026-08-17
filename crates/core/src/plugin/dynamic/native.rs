@@ -70,11 +70,6 @@ use nemo_relay_plugin::{
     NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
     NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
-#[cfg(test)]
-use nemo_relay_plugin::{
-    NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS, NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_DIAGNOSTICS,
-    NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
-};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;

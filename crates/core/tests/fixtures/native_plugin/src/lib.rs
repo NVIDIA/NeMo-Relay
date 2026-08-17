@@ -9,8 +9,8 @@ use futures::StreamExt;
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
     Json, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, MetricKind,
-    MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
-    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
+    MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION,
+    NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
     NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
     NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
@@ -436,7 +436,7 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v2(
     }
 }
 
-/// Raw ABI-v4 entry used to verify the current table is append-only.
+/// Raw ABI-v4 entry used to verify the final current table.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v4(
     host: *const NemoRelayNativeHostApiV1,
@@ -446,8 +446,8 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v4(
         fixture_compat_entry(
             host,
             out,
-            NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
-            std::mem::offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
+            NEMO_RELAY_NATIVE_ABI_VERSION,
+            std::mem::size_of::<NemoRelayNativeHostApiV4>(),
             b"fixture_native_v4",
         )
     }

@@ -642,18 +642,6 @@ fn assert_native_host_api_versions() {
         unsafe { (*current).abi_version },
         NEMO_RELAY_NATIVE_ABI_VERSION
     );
-    assert_eq!(
-        unsafe { (*current).abi_version },
-        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC
-    );
-    assert_eq!(
-        unsafe { (*current).abi_version },
-        NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS
-    );
-    assert_eq!(
-        unsafe { (*current).abi_version },
-        NEMO_RELAY_NATIVE_ABI_VERSION_RUNTIME_DIAGNOSTICS
-    );
     assert_eq!(unsafe { (*frozen_v3).abi_version }, 3);
     assert_eq!(
         unsafe { (*legacy).abi_version },

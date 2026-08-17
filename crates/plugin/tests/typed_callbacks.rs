@@ -26,7 +26,6 @@ use nemo_relay_plugin::{
     LlmJsonAsyncStream, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
     LlmStreamNext, LogSeverity, NEMO_RELAY_NATIVE_ABI_VERSION,
     NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS, NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
     NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
     NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
@@ -425,8 +424,6 @@ static ASYNC_TOOL_NEXT_RESULT: AtomicBool = AtomicBool::new(false);
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
     assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION, 4);
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC, 4);
-    assert_eq!(NEMO_RELAY_NATIVE_ABI_VERSION_MARK_OPTIONS, 4);
     assert_eq!(
         size_of::<NemoRelayNativeHostApiV1>(),
         test_host().struct_size
@@ -2665,52 +2662,6 @@ fn plugin_runtime_rejects_malformed_runtime_diagnostics_json() {
         "{error}"
     );
     assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
-}
-
-#[test]
-fn plugin_runtime_keeps_mark_options_on_a_pre_diagnostics_v4_host() {
-    let _guard = begin_test();
-    let mut host = test_host_v4();
-    host.v3.v1.struct_size = offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics);
-    let runtime = PluginRuntime::new(&host.v3.v1);
-
-    runtime
-        .emit_mark_with_options("current-v4", None, None, None, Some(LogSeverity::Info))
-        .unwrap();
-    assert_eq!(
-        runtime.runtime_diagnostics().unwrap_err(),
-        "runtime diagnostics require the native host ABI v4 diagnostics extension"
-    );
-}
-
-#[test]
-fn plugin_runtime_does_not_read_mark_options_past_v4_struct_size() {
-    let _guard = begin_test();
-    let mut host = test_host_v4();
-    host.v3.v1.struct_size = offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2);
-    let runtime = PluginRuntime::new(&host.v3.v1);
-
-    runtime
-        .emit_mark_with_options("legacy", None, None, None, None)
-        .unwrap();
-    let schema = DataSchema::builder()
-        .name("example.mark")
-        .version("1")
-        .build();
-    assert_eq!(
-        runtime
-            .emit_mark_with_options("extended", None, None, Some(&schema), None)
-            .unwrap_err(),
-        "mark data_schema and severity require native host ABI v4"
-    );
-
-    let calls = RUNTIME_CALLS.lock().unwrap();
-    assert!(
-        calls
-            .iter()
-            .any(|call| call.starts_with("mark:legacy:parent=false"))
-    );
-    assert!(!calls.iter().any(|call| call.starts_with("mark_v2:")));
 }
 
 fn assert_scope_runtime_calls(calls: &[String]) {
@@ -5237,7 +5188,7 @@ fn exported_entry_symbol_accepts_supported_prior_host_versions() {
     for abi_version in [
         NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
         NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
-        NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC,
+        NEMO_RELAY_NATIVE_ABI_VERSION,
     ] {
         let mut host = test_host();
         host.abi_version = abi_version;
