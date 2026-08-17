@@ -156,6 +156,7 @@ jobs:
             platform: linux-musl-amd64
             runner: ubuntu-latest
             container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+            container_image_compat: node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8
             package_name: nemo-relay-node-linux-x64-musl
           - &package-linux-musl-arm64
             node_arch: arm64
@@ -164,6 +165,7 @@ jobs:
             platform: linux-musl-arm64
             runner: ubuntu-24.04-arm
             container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
+            container_image_compat: node:22-alpine3.22@sha256:cd7807368cf24826297cbad5dca1a44972ccfd770647db52a8c7589eb4599ac8
             package_name: nemo-relay-node-linux-arm64-musl
 
     steps:
@@ -406,47 +408,140 @@ jobs:
           }
           NODE
 
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        with:
+          node-version: ${{ steps.ci-config.outputs.node_compat_version }}
+
+      - name: Install and load split Node package below the declared engines floor
+        if: ${{ !contains(matrix.platform, 'musl') }}
+        env:
+          NEMO_RELAY_NODE_COMPAT_VERSION: ${{ steps.ci-config.outputs.node_compat_version }}
+        run: |
+          set -euo pipefail
+          mkdir package-smoke-compat
+          cd package-smoke-compat
+          metapackage=(../node-metapackage/nemo-relay-node-npm-[0-9]*.tgz)
+          native=(../node-native/nemo-relay-node-npm-*-*-[0-9]*.tgz)
+          # Install the metapackage alone and let npm reach the platform package through
+          # its optionalDependencies, overridden to the packed tarball. Installing both
+          # tarballs directly would make the platform package a direct dependency and
+          # would not exercise the resolution path that an engines mismatch breaks.
+          native_name="$(tar -xzOf "${native[0]}" package/package.json | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).name")"
+          node -e '
+            const { writeFileSync } = require("node:fs");
+            const [name, spec] = process.argv.slice(1);
+            writeFileSync(
+              "package.json",
+              JSON.stringify(
+                { name: "package-smoke-compat", version: "1.0.0", private: true, overrides: { [name]: `file:${spec}` } },
+                null,
+                2,
+              ),
+            );
+          ' "${native_name}" "${native[0]}"
+          npm install --ignore-scripts "${metapackage[0]}"
+          node - <<'NODE'
+          const assert = require('node:assert/strict');
+          const { readdirSync, readFileSync } = require('node:fs');
+          const runningMajor = Number(process.versions.node.split('.')[0]);
+          assert.equal(runningMajor, Number(process.env.NEMO_RELAY_NODE_COMPAT_VERSION));
+          const nativePackages = readdirSync('node_modules').filter(
+            (name) => name.startsWith('nemo-relay-node-') && name !== 'nemo-relay-node',
+          );
+          assert.equal(
+            nativePackages.length,
+            1,
+            'npm omitted the platform package; the metapackage must resolve it through optionalDependencies on this runtime',
+          );
+          const nativeManifest = JSON.parse(
+            readFileSync(`node_modules/${nativePackages[0]}/package.json`, 'utf8'),
+          );
+          assert.equal(
+            nativeManifest.engines,
+            undefined,
+            'native packages must not declare engines; npm silently omits an optional dependency whose engines do not match the running Node.js',
+          );
+          for (const entrypoint of [
+            'nemo-relay-node',
+            'nemo-relay-node/typed',
+            'nemo-relay-node/plugin',
+            'nemo-relay-node/adaptive',
+            'nemo-relay-node/observability',
+            'nemo-relay-node/pii_redaction',
+            'nemo-relay-node/model_pricing',
+          ]) {
+            require(entrypoint);
+          }
+          NODE
+
       - name: Install and load musllinux split Node package
         if: ${{ contains(matrix.platform, 'musl') }}
         run: |
           set -euo pipefail
-          docker run --rm \
-            --volume "${{ github.workspace }}:${{ github.workspace }}" \
-            --workdir "${{ github.workspace }}" \
-            --env NEMO_RELAY_NODE_PACKAGE_NAME="${{ matrix.package_name }}" \
-            --env NEMO_RELAY_WORKSPACE="${{ github.workspace }}" \
-            "${{ matrix.container_image }}" \
-            sh -ceu '
-              smoke_dir="$(mktemp -d)"
-              trap "rm -rf $smoke_dir" EXIT
-              cd "$smoke_dir"
-              npm init --yes >/dev/null
-              metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "nemo-relay-node-npm-[0-9]*.tgz" -print -quit)"
-              native_count="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" | wc -l)"
-              test "$native_count" -eq 1
-              native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" -print -quit)"
-              test -n "$metapackage"
-              test -n "$native"
-              npm install --ignore-scripts "$native" "$metapackage"
-              node -e "
-                const assert = require(\"node:assert/strict\");
-                const { readdirSync } = require(\"node:fs\");
-                const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
-                const nativePackages = readdirSync(\"node_modules\").filter(
-                  (name) => name.startsWith(\"nemo-relay-node-\") && name !== \"nemo-relay-node\",
-                );
-                assert.equal(nativePackages.length, 1);
-                assert.deepEqual(manifest.libc, [\"musl\"]);
-                for (const entrypoint of [
-                  \"nemo-relay-node\",
-                  \"nemo-relay-node/typed\",
-                  \"nemo-relay-node/plugin\",
-                  \"nemo-relay-node/adaptive\",
-                  \"nemo-relay-node/observability\",
-                  \"nemo-relay-node/pii_redaction\",
-                  \"nemo-relay-node/model_pricing\",
-                ]) {
-                  require(entrypoint);
-                }
-              "
-            '
+          for container_image in "${{ matrix.container_image }}" "${{ matrix.container_image_compat }}"; do
+            docker run --rm \
+              --volume "${{ github.workspace }}:${{ github.workspace }}" \
+              --workdir "${{ github.workspace }}" \
+              --env NEMO_RELAY_NODE_PACKAGE_NAME="${{ matrix.package_name }}" \
+              --env NEMO_RELAY_WORKSPACE="${{ github.workspace }}" \
+              "$container_image" \
+              sh -ceu '
+                smoke_dir="$(mktemp -d)"
+                trap "rm -rf $smoke_dir" EXIT
+                cd "$smoke_dir"
+                metapackage="$(find "$NEMO_RELAY_WORKSPACE/node-metapackage" -name "nemo-relay-node-npm-[0-9]*.tgz" -print -quit)"
+                native_count="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" | wc -l)"
+                test "$native_count" -eq 1
+                native="$(find "$NEMO_RELAY_WORKSPACE/node-native" -name "nemo-relay-node-npm-*-*-[0-9]*.tgz" -print -quit)"
+                test -n "$metapackage"
+                test -n "$native"
+                node -e "
+                  const { writeFileSync } = require(\"node:fs\");
+                  writeFileSync(
+                    \"package.json\",
+                    JSON.stringify(
+                      {
+                        name: \"package-smoke\",
+                        version: \"1.0.0\",
+                        private: true,
+                        overrides: { [process.env.NEMO_RELAY_NODE_PACKAGE_NAME]: \"file:\" + process.argv[1] },
+                      },
+                      null,
+                      2,
+                    ),
+                  );
+                " "$native"
+                npm install --ignore-scripts "$metapackage"
+                node -e "
+                  const assert = require(\"node:assert/strict\");
+                  const { readdirSync } = require(\"node:fs\");
+                  const manifest = require(process.env.NEMO_RELAY_NODE_PACKAGE_NAME + \"/package.json\");
+                  const nativePackages = readdirSync(\"node_modules\").filter(
+                    (name) => name.startsWith(\"nemo-relay-node-\") && name !== \"nemo-relay-node\",
+                  );
+                  assert.equal(
+                    nativePackages.length,
+                    1,
+                    \"npm omitted the platform package; the metapackage must resolve it through optionalDependencies on this runtime\",
+                  );
+                  assert.deepEqual(manifest.libc, [\"musl\"]);
+                  assert.equal(
+                    manifest.engines,
+                    undefined,
+                    \"native packages must not declare engines; npm silently omits an optional dependency whose engines do not match the running Node.js\",
+                  );
+                  for (const entrypoint of [
+                    \"nemo-relay-node\",
+                    \"nemo-relay-node/typed\",
+                    \"nemo-relay-node/plugin\",
+                    \"nemo-relay-node/adaptive\",
+                    \"nemo-relay-node/observability\",
+                    \"nemo-relay-node/pii_redaction\",
+                    \"nemo-relay-node/model_pricing\",
+                  ]) {
+                    require(entrypoint);
+                  }
+                "
+              '
+          done

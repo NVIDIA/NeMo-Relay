@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_NAME = "nemo-relay-node"
+METADATA_FIELDS = ("description", "keywords", "homepage", "bugs", "repository", "author", "engines", "license")
 
 
 @dataclass(frozen=True)
@@ -56,9 +57,17 @@ def add_tar_bytes(archive: tarfile.TarFile, path: str, content: bytes, mode: int
     archive.addfile(info, io.BytesIO(content))
 
 
-def repository_metadata(source: dict[str, object]) -> dict[str, object]:
-    """Return metadata shared by the metapackage and native packages."""
-    fields = ("description", "keywords", "homepage", "bugs", "repository", "author", "engines", "license")
+def repository_metadata(source: dict[str, object], *, include_engines: bool = True) -> dict[str, object]:
+    """Return metadata shared by the metapackage and native packages.
+
+    Native packages omit `engines` deliberately. npm resolves them as optional
+    dependencies of the metapackage and silently omits an optional dependency
+    whose `engines` do not match the running Node.js, which leaves `require()`
+    unable to find the platform binary. Without the field, the platform package
+    installs on older runtimes while the metapackage keeps declaring the
+    supported floor as an advisory `EBADENGINE` warning.
+    """
+    fields = METADATA_FIELDS if include_engines else tuple(field for field in METADATA_FIELDS if field != "engines")
     return {field: source[field] for field in fields if field in source}
 
 
@@ -81,7 +90,7 @@ def build_native_package(node_dir: Path, platform: Platform, version: str, outpu
     manifest = {
         "name": platform.package_name,
         "version": version,
-        **repository_metadata(source_manifest),
+        **repository_metadata(source_manifest, include_engines=False),
         "main": platform.binary,
         "files": [platform.binary],
         "os": [platform.npm_os],
