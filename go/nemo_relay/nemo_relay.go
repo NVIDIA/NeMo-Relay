@@ -628,6 +628,14 @@ type eventOptions struct {
 	timestamp  *C.int64_t
 }
 
+// replaceCString replaces an option-owned C string and frees its prior value.
+func replaceCString(slot **C.char, value string) {
+	if *slot != nil {
+		C.free(unsafe.Pointer(*slot))
+	}
+	*slot = C.CString(value)
+}
+
 // DataSchema identifies the name and version of a structured mark payload.
 type DataSchema struct {
 	Name    string `json:"name"`
@@ -668,7 +676,7 @@ func WithEventParent(parent *ScopeHandle) EventOption {
 // logging, tracing, or custom instrumentation.
 func WithEventData(data json.RawMessage) EventOption {
 	return func(o *eventOptions) {
-		o.data = C.CString(string(data))
+		replaceCString(&o.data, string(data))
 	}
 }
 
@@ -677,7 +685,7 @@ func WithEventDataSchema(schema DataSchema) EventOption {
 	return func(o *eventOptions) {
 		encoded, err := jsonMarshal(schema)
 		if err == nil {
-			o.dataSchema = C.CString(string(encoded))
+			replaceCString(&o.dataSchema, string(encoded))
 		}
 	}
 }
@@ -687,7 +695,7 @@ func WithEventDataSchema(schema DataSchema) EventOption {
 // hints) as opposed to the primary data payload.
 func WithEventMetadata(metadata json.RawMessage) EventOption {
 	return func(o *eventOptions) {
-		o.metadata = C.CString(string(metadata))
+		replaceCString(&o.metadata, string(metadata))
 	}
 }
 
@@ -801,7 +809,7 @@ func WithMetricParent(parent *ScopeHandle) MetricOption {
 // converted into metric attributes by the exporter.
 func WithMetricMetadata(metadata json.RawMessage) MetricOption {
 	return func(o *metricOptions) {
-		o.metadata = C.CString(string(metadata))
+		replaceCString(&o.metadata, string(metadata))
 	}
 }
 

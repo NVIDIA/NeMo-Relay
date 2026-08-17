@@ -30,8 +30,11 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 	runWithTestScopeStack(t, func() {
 		err := EmitEvent(
 			"go_structured_log",
+			WithEventData(json.RawMessage(`{"message":"ignored"}`)),
 			WithEventData(json.RawMessage(`{"message":"hello"}`)),
+			WithEventDataSchema(DataSchema{Name: "ignored", Version: "0"}),
 			WithEventDataSchema(DataSchema{Name: "example.log", Version: "1"}),
+			WithEventMetadata(json.RawMessage(`{"context":"ignored"}`)),
 			WithEventMetadata(json.RawMessage(`{"nemo_relay.log.severity":"debug"}`)),
 			WithEventSeverity(LogSeverityWarn),
 		)
@@ -46,7 +49,10 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 			Attributes: map[string]interface{}{
 				"model": "example-model",
 			},
-		}})
+		}},
+			WithMetricMetadata(json.RawMessage(`{"context":"ignored"}`)),
+			WithMetricMetadata(json.RawMessage(`{"context":"final"}`)),
+		)
 		requireNoError(t, err, "EmitMetric failed")
 	})
 	requireNoError(t, FlushSubscribers(), "FlushSubscribers failed")
@@ -63,6 +69,9 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 	if schema.Name != "example.log" || schema.Version != "1" {
 		t.Fatalf("unexpected log schema: %#v", schema)
 	}
+	if !bytes.Equal(events[0].Data(), []byte(`{"message":"hello"}`)) {
+		t.Fatalf("final event data should replace the earlier value: %s", events[0].Data())
+	}
 	var metadata map[string]interface{}
 	if err := json.Unmarshal(events[0].Metadata(), &metadata); err != nil {
 		t.Fatalf("decode log metadata: %v", err)
@@ -70,11 +79,21 @@ func TestEventSchemaSeverityAndMetricParity(t *testing.T) {
 	if metadata["nemo_relay.log.severity"] != "warn" {
 		t.Fatalf("typed severity did not override metadata: %#v", metadata)
 	}
+	if _, ok := metadata["context"]; ok {
+		t.Fatalf("final event metadata should replace the earlier value: %#v", metadata)
+	}
 	if !bytes.Contains(events[1].DataSchema(), []byte("nemo.relay.metric_measurements")) {
 		t.Fatalf("metric schema missing: %s", events[1].DataSchema())
 	}
 	if !bytes.Contains(events[1].Data(), []byte("example.tokens.saved")) {
 		t.Fatalf("metric envelope missing measurement: %s", events[1].Data())
+	}
+	var metricMetadata map[string]interface{}
+	if err := json.Unmarshal(events[1].Metadata(), &metricMetadata); err != nil {
+		t.Fatalf("decode metric metadata: %v", err)
+	}
+	if metricMetadata["context"] != "final" {
+		t.Fatalf("final metric metadata should replace the earlier value: %#v", metricMetadata)
 	}
 }
 
