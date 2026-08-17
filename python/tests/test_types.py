@@ -624,9 +624,12 @@ class TestOpenTelemetryTypes:
         log_subscriber = OpenTelemetryLogSubscriber(log_config)
         log_name = f"py_otel_log_{uuid4().hex}"
         log_subscriber.register(log_name)
-        assert log_subscriber.deregister(log_name)
-        log_subscriber.force_flush()
-        log_subscriber.shutdown()
+        try:
+            assert log_subscriber.deregister(log_name)
+            log_subscriber.force_flush()
+        finally:
+            subscribers.deregister(log_name)
+            log_subscriber.shutdown()
 
         metric_config = OpenTelemetryMetricConfig("http://localhost:4318/v1/metrics")
         assert metric_config.export_interval_millis == 60000
@@ -640,9 +643,12 @@ class TestOpenTelemetryTypes:
         metric_subscriber = OpenTelemetryMetricSubscriber(metric_config)
         metric_name = f"py_otel_metric_{uuid4().hex}"
         metric_subscriber.register(metric_name)
-        assert metric_subscriber.deregister(metric_name)
-        metric_subscriber.force_flush()
-        metric_subscriber.shutdown()
+        try:
+            assert metric_subscriber.deregister(metric_name)
+            metric_subscriber.force_flush()
+        finally:
+            subscribers.deregister(metric_name)
+            metric_subscriber.shutdown()
 
     def test_signal_subscribers_validate_limits(self):
         log_config = OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
