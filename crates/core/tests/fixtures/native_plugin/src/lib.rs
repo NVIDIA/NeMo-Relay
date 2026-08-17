@@ -392,31 +392,15 @@ pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v3(
     host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
 ) -> NemoRelayStatus {
-    if host.is_null() || out.is_null() {
-        return NemoRelayStatus::NullPointer;
-    }
-    let host = unsafe { &*host };
-    if host.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE {
-        return NemoRelayStatus::InvalidArg;
-    }
-    let kind = b"fixture_native_v3";
-    let mut plugin_kind = ptr::null_mut();
-    let status = unsafe { (host.string_new)(kind.as_ptr(), kind.len(), &mut plugin_kind) };
-    if status != NemoRelayStatus::Ok {
-        return status;
-    }
     unsafe {
-        *out = NemoRelayNativePluginV1 {
-            struct_size: std::mem::size_of::<NemoRelayNativePluginV1>(),
-            plugin_kind,
-            allows_multiple_components: false,
-            user_data: ptr::null_mut(),
-            validate: None,
-            register: Some(fixture_compat_register),
-            drop: None,
-        };
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+            std::mem::size_of::<NemoRelayNativeHostApiV3>(),
+            b"fixture_native_v3",
+        )
     }
-    NemoRelayStatus::Ok
 }
 
 /// Raw ABI-v2 entry used to verify host fallback for already-built plugins.
