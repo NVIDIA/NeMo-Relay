@@ -302,7 +302,11 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
         metric.data_schema().expect("native metric schema").version,
         "1"
     );
-    assert_eq!(metric.data().unwrap()["measurements"][0]["value"], 1);
+    let measurement = &metric.data().unwrap()["measurements"][0];
+    assert_eq!(measurement["name"], "fixture.native.count");
+    assert_eq!(measurement["kind"], "counter");
+    assert_eq!(measurement["value_type"], "u64");
+    assert_eq!(measurement["value"], 1);
     assert_parent(
         &first_events,
         "fixture.native.scope",
