@@ -4,6 +4,7 @@
 //! Unit tests for plugin in the NeMo Relay core crate.
 
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -11,6 +12,7 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::json;
 use tokio::sync::Notify;
 
+use crate::api::event::{BaseEvent, Event, MarkEvent};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
 use crate::api::runtime::global_context;
@@ -39,6 +41,7 @@ struct BackgroundTaskPlugin {
 }
 struct PanickingPlugin;
 struct FailingDeregisterPlugin;
+struct EventMetadataPlugin;
 struct PluginMutationOwnerCleanup;
 
 impl Drop for PluginMutationOwnerCleanup {
@@ -172,6 +175,40 @@ impl Plugin for TestPlugin {
                         request.headers.insert("x-plugin".into(), json!(true));
                         Ok(LlmRequestInterceptOutcome::new(request, annotated))
                     })
+                }),
+            )
+        })
+    }
+}
+
+impl Plugin for EventMetadataPlugin {
+    fn plugin_kind(&self) -> &str {
+        "event-metadata.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        Vec::new()
+    }
+
+    fn register<'a>(
+        &'a self,
+        plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let configured = plugin_config
+            .get("metadata")
+            .and_then(Json::as_object)
+            .expect("test plugin metadata must be an object")
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        Box::pin(async move {
+            ctx.register_event_metadata_injector(
+                "configured-metadata",
+                10,
+                Arc::new(move |_| {
+                    let additions = configured.clone();
+                    Box::pin(async move { Ok(additions) })
                 }),
             )
         })
@@ -544,6 +581,7 @@ fn reset_global() {
     let _ = deregister_plugin("background.task.plugin");
     let _ = deregister_plugin("panicking.plugin");
     let _ = deregister_plugin("failing.deregister.plugin");
+    let _ = deregister_plugin("event-metadata.plugin");
 }
 
 #[test]
@@ -999,6 +1037,58 @@ fn test_initialize_plugins_registers_and_clears_components() {
 }
 
 #[test]
+fn test_plugin_configuration_registers_event_metadata_injector() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(EventMetadataPlugin)).unwrap();
+
+    let mut component = PluginComponentSpec::new("event-metadata.plugin");
+    component.config = serde_json::from_value(json!({
+        "metadata": {"nv.test.plugin_config": "configured"}
+    }))
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![component],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let callback = {
+        let context = global_context();
+        let state = context.read().unwrap();
+        let injectors = state.event_metadata_injectors.sorted_values();
+        assert_eq!(injectors.len(), 1);
+        Arc::clone(&injectors[0].payload)
+    };
+    let event = Arc::new(Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("plugin-configured-mark").build(),
+        None,
+        None,
+    )));
+    let additions = runtime.block_on(callback(event)).unwrap();
+    assert_eq!(
+        additions.get("nv.test.plugin_config"),
+        Some(&json!("configured"))
+    );
+
+    clear_plugin_configuration().unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_metadata_injectors
+            .sorted_values()
+            .is_empty()
+    );
+    assert!(deregister_plugin("event-metadata.plugin"));
+    reset_global();
+}
+#[test]
 fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
     let _guard = lock_runtime_owner();
     reset_global();
@@ -1253,6 +1343,12 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     let mut ctx = PluginRegistrationContext::with_namespace("demo::");
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
         .unwrap();
+    ctx.register_event_metadata_injector(
+        "event-metadata",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(BTreeMap::new()) })),
+    )
+    .unwrap();
     ctx.register_tool_request_intercept(
         "tool-request",
         1,
@@ -1303,6 +1399,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
         names,
         vec![
             "demo::subscriber",
+            "demo::event-metadata",
             "demo::tool-request",
             "demo::tool-exec",
             "demo::llm-request",

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::api::event::{Event, EventSanitizeFields, ScopeCategory};
 use crate::api::llm::LlmRequest;
-use crate::api::registry::Guardrail;
+use crate::api::registry::{EventMetadataInjector, Guardrail};
 use crate::api::runtime::global_context;
 use crate::api::runtime::scope_stack::traceparent_for_llm;
 use crate::api::runtime::{
@@ -122,6 +122,37 @@ pub(crate) fn snapshot_event_sanitizers(
     Some(entries)
 }
 
+/// Snapshot the Event metadata injectors visible to a queued Event.
+pub(crate) fn snapshot_event_metadata_injectors(
+    scope_stack: &ScopeStackHandle,
+) -> Vec<EventMetadataInjector> {
+    let scope_guard = match scope_stack.read() {
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!(
+                target: "nemo_relay.runtime",
+                event = "event_metadata_injector_snapshot_failed";
+                "Event metadata injector snapshot failed; continuing without injection: {error}"
+            );
+            return Vec::new();
+        }
+    };
+    let context = global_context();
+    let state = match context.read() {
+        Ok(state) => state,
+        Err(error) => {
+            log::error!(
+                target: "nemo_relay.runtime",
+                event = "event_metadata_injector_snapshot_failed";
+                "Event metadata injector snapshot failed; continuing without injection: {error}"
+            );
+            return Vec::new();
+        }
+    };
+    let locals = scope_guard
+        .collect_scope_local_registries(|registries| &registries.event_metadata_injectors);
+    NemoRelayContextState::event_metadata_injector_entries(&state.event_metadata_injectors, &locals)
+}
 pub(crate) fn ensure_runtime_owner() -> Result<()> {
     ensure_process_runtime_owner()
 }

@@ -8,9 +8,14 @@ use super::native::{
     set_sanitizer_runtime_failure_for_test, spawn_background_publication,
 };
 use super::{EventSubscriberFn, SubscriberDelivery, publication_context, with_publication_context};
+use crate::api::event::{BaseEvent, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent};
 use crate::api::registry::RegistryRecord;
-use crate::api::runtime::EventSanitizeFn;
 use crate::api::runtime::scope_stack::current_scope_stack;
+use crate::api::runtime::{EventMetadataInjectorFn, EventSanitizeFn};
+use crate::api::scope::ScopeType;
+use crate::error::FlowError;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 #[test]
@@ -65,6 +70,7 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
         .send(DispatcherMessage::Deliver {
             event: Box::new(queued_event),
             transform: None,
+            injectors: Vec::new(),
             sanitizers: Vec::new(),
             subscribers: vec![subscriber.clone()],
             scope_stack: current_scope_stack(),
@@ -101,6 +107,7 @@ fn flush_waits_for_active_but_not_later_publication_barriers() {
         .send(vec![DispatcherMessage::Deliver {
             event: Box::new(deferred_event),
             transform: None,
+            injectors: Vec::new(),
             sanitizers: Vec::new(),
             subscribers: vec![subscriber],
             scope_stack: current_scope_stack(),
@@ -143,6 +150,7 @@ fn pending_publication_defers_flush_without_blocking_unrelated_delivery() {
     enqueue_dispatch_message(DispatcherMessage::Deliver {
         event: Box::new(event),
         transform: None,
+        injectors: Vec::new(),
         sanitizers: Vec::new(),
         subscribers: vec![subscriber],
         scope_stack: current_scope_stack(),
@@ -211,6 +219,7 @@ fn flush_does_not_wait_for_later_delivery() {
                     event
                 })
             })),
+            injectors: Vec::new(),
             sanitizers: Vec::new(),
             subscribers: Vec::new(),
             scope_stack: current_scope_stack(),
@@ -327,6 +336,7 @@ fn subscriber_delivery_receipt_does_not_capture_later_events() {
                 event
             })
         })),
+        injectors: Vec::new(),
         sanitizers: Vec::new(),
         subscribers: Vec::new(),
         scope_stack: current_scope_stack(),
@@ -443,6 +453,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
                             .expect("valid event"),
                         ),
                         transform: None,
+                        injectors: Vec::new(),
                         sanitizers: Vec::new(),
                         subscribers: vec![nested_subscriber.clone()],
                         scope_stack: nested_scope_stack.clone(),
@@ -466,6 +477,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
                                 .expect("valid event"),
                             ),
                             transform: None,
+                            injectors: Vec::new(),
                             sanitizers: Vec::new(),
                             subscribers: vec![nested_subscriber],
                             scope_stack: nested_scope_stack,
@@ -477,6 +489,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
                     event
                 })
             })),
+            injectors: Vec::new(),
             sanitizers: Vec::new(),
             subscribers: vec![subscriber.clone()],
             scope_stack: current_scope_stack(),
@@ -492,6 +505,7 @@ fn nested_publication_barrier_precedes_already_queued_delivery() {
         .send(DispatcherMessage::Deliver {
             event: Box::new(event("019c1df6-4a57-7000-8000-000000000007", "later")),
             transform: None,
+            injectors: Vec::new(),
             sanitizers: Vec::new(),
             subscribers: vec![subscriber],
             scope_stack: current_scope_stack(),
@@ -559,6 +573,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
                     .expect("valid event"),
                 ),
                 transform: None,
+                injectors: Vec::new(),
                 sanitizers: Vec::new(),
                 subscribers: vec![grandchild_subscriber.clone()],
                 scope_stack: current_scope_stack(),
@@ -597,6 +612,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
                     .expect("valid event"),
                 ),
                 transform: None,
+                injectors: Vec::new(),
                 sanitizers: Vec::new(),
                 subscribers: vec![child_subscriber.clone()],
                 scope_stack: current_scope_stack(),
@@ -620,6 +636,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
         .send(DispatcherMessage::Deliver {
             event: Box::new(event("019c1df6-4a57-7000-8000-000000000008", "outer")),
             transform: None,
+            injectors: Vec::new(),
             sanitizers: Vec::new(),
             subscribers: vec![outer_subscriber],
             scope_stack: current_scope_stack(),
@@ -635,6 +652,7 @@ fn flush_waits_for_transitive_subscriber_publications_without_reordering() {
         .send(DispatcherMessage::Deliver {
             event: Box::new(event("019c1df6-4a57-7000-8000-000000000011", "later")),
             transform: None,
+            injectors: Vec::new(),
             sanitizers: Vec::new(),
             subscribers: vec![later_subscriber],
             scope_stack: current_scope_stack(),
@@ -689,6 +707,157 @@ fn detached_publications_share_one_background_executor_thread() {
 }
 
 #[test]
+fn event_metadata_injection_applies_to_every_canonical_event_record() {
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let injector: EventMetadataInjectorFn = {
+        let invocations = Arc::clone(&invocations);
+        Arc::new(move |event| {
+            invocations.fetch_add(1, Ordering::SeqCst);
+            let marker = match event.as_ref() {
+                Event::Scope(scope) => {
+                    assert_eq!(event.category(), Some(&scope.category));
+                    match scope.scope_category {
+                        ScopeCategory::Start => "scope_start",
+                        ScopeCategory::End => "scope_end",
+                    }
+                }
+                Event::Mark(_) => {
+                    assert_eq!(event.category(), None);
+                    "mark"
+                }
+            };
+            assert!(!event.name().is_empty());
+            assert_eq!(event.data(), Some(&serde_json::json!({"readable": true})));
+            assert_eq!(
+                event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nv.test.existing")),
+                Some(&serde_json::json!("original"))
+            );
+            Box::pin(async move {
+                Ok(BTreeMap::from([(
+                    "nv.test.injector.global".to_string(),
+                    serde_json::json!(marker),
+                )]))
+            })
+        })
+    };
+    let injectors = vec![RegistryRecord::new("all-events", 0, injector)];
+    let scope_types = [
+        ScopeType::Agent,
+        ScopeType::Function,
+        ScopeType::Tool,
+        ScopeType::Llm,
+        ScopeType::Retriever,
+        ScopeType::Embedder,
+        ScopeType::Reranker,
+        ScopeType::Guardrail,
+        ScopeType::Evaluator,
+        ScopeType::Custom,
+        ScopeType::Unknown,
+    ];
+
+    for scope_type in scope_types {
+        for (phase, expected_marker) in [
+            (ScopeCategory::Start, "scope_start"),
+            (ScopeCategory::End, "scope_end"),
+        ] {
+            let event = Event::Scope(ScopeEvent::new(
+                BaseEvent::builder()
+                    .name(format!("{}-{expected_marker}", scope_type.as_str()))
+                    .data(serde_json::json!({"readable": true}))
+                    .metadata(serde_json::json!({"nv.test.existing": "original"}))
+                    .build(),
+                phase,
+                Vec::new(),
+                EventCategory::from(scope_type),
+                None,
+            ));
+            let (published, nested) =
+                sanitize_event_snapshot(event, None, injectors.clone(), Vec::new(), None);
+            let published = published.expect("metadata injection must preserve the Scope Event");
+
+            assert_eq!(published.kind(), "scope");
+            assert_eq!(published.scope_category(), Some(phase));
+            assert_eq!(
+                published.category().map(EventCategory::as_str),
+                Some(scope_type.as_str())
+            );
+            assert_eq!(
+                published
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nv.test.injector.global")),
+                Some(&serde_json::json!(expected_marker))
+            );
+            assert_eq!(
+                published
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nv.test.existing")),
+                Some(&serde_json::json!("original"))
+            );
+            assert!(nested.is_empty());
+        }
+    }
+
+    let mark = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("mark")
+            .data(serde_json::json!({"readable": true}))
+            .metadata(serde_json::json!({"nv.test.existing": "original"}))
+            .build(),
+        None,
+        None,
+    ));
+    let (published, nested) = sanitize_event_snapshot(mark, None, injectors, Vec::new(), None);
+    let published = published.expect("metadata injection must preserve the Mark Event");
+
+    assert_eq!(published.kind(), "mark");
+    assert_eq!(
+        published
+            .metadata()
+            .and_then(|metadata| metadata.get("nv.test.injector.global")),
+        Some(&serde_json::json!("mark"))
+    );
+    assert_eq!(
+        published
+            .metadata()
+            .and_then(|metadata| metadata.get("nv.test.existing")),
+        Some(&serde_json::json!("original"))
+    );
+    assert!(nested.is_empty());
+    assert_eq!(invocations.load(Ordering::SeqCst), 23);
+}
+
+#[test]
+fn failing_event_metadata_injector_preserves_scope_and_mark_events() {
+    let injector: EventMetadataInjectorFn = Arc::new(|_| {
+        Box::pin(async { Err(FlowError::Internal("expected injector failure".into())) })
+    });
+    let injectors = vec![RegistryRecord::new("failure", 0, injector)];
+    let events = [
+        Event::Scope(ScopeEvent::new(
+            BaseEvent::builder().name("scope").build(),
+            ScopeCategory::Start,
+            Vec::new(),
+            EventCategory::agent(),
+            None,
+        )),
+        Event::Mark(MarkEvent::new(
+            BaseEvent::builder().name("mark").build(),
+            None,
+            None,
+        )),
+    ];
+
+    for event in events {
+        let (published, nested) =
+            sanitize_event_snapshot(event.clone(), None, injectors.clone(), Vec::new(), None);
+
+        assert_eq!(published, Some(event));
+        assert!(nested.is_empty());
+    }
+}
+#[test]
 fn sanitizer_runtime_failure_clears_untransformed_event_fields() {
     let _lock = crate::shared_runtime::runtime_owner_test_mutex()
         .lock()
@@ -713,6 +882,7 @@ fn sanitizer_runtime_failure_clears_untransformed_event_fields() {
     let (published, nested) = sanitize_event_snapshot(
         event.clone(),
         None,
+        Vec::new(),
         vec![RegistryRecord::new("unreachable", 0, sanitizer)],
         None,
     );
@@ -738,7 +908,8 @@ fn synchronous_transform_panics_drop_only_the_current_event() {
     let transform: super::EventTransformFn =
         Box::new(|_| panic!("transform panicked before returning its future"));
 
-    let (published, nested) = sanitize_event_snapshot(event, Some(transform), Vec::new(), None);
+    let (published, nested) =
+        sanitize_event_snapshot(event, Some(transform), Vec::new(), Vec::new(), None);
 
     assert!(published.is_none());
     assert!(nested.is_empty());
@@ -771,6 +942,7 @@ fn detached_blocking_sanitizer_work_does_not_stall_publication() {
         let result = sanitize_event_snapshot(
             event,
             None,
+            Vec::new(),
             vec![RegistryRecord::new("detached-blocking", 0, sanitizer)],
             None,
         );
@@ -817,6 +989,7 @@ fn sanitizer_spawned_tasks_inherit_the_binding_publication_context() {
     let (published, nested) = sanitize_event_snapshot(
         event.clone(),
         None,
+        Vec::new(),
         vec![RegistryRecord::new("spawned-context", 0, sanitizer)],
         Some(Arc::new("binding-context".to_string())),
     );
@@ -875,6 +1048,7 @@ fn detached_sanitizer_tasks_cannot_inherit_a_later_publication_context() {
     let (published, nested) = sanitize_event_snapshot(
         first_event.clone(),
         None,
+        Vec::new(),
         vec![RegistryRecord::new("detached-context", 0, first_sanitizer)],
         Some(Arc::new("first-context".to_string())),
     );
@@ -894,6 +1068,7 @@ fn detached_sanitizer_tasks_cannot_inherit_a_later_publication_context() {
     let (published, nested) = sanitize_event_snapshot(
         second_event.clone(),
         None,
+        Vec::new(),
         vec![RegistryRecord::new("later-context", 0, second_sanitizer)],
         Some(Arc::new("second-context".to_string())),
     );
