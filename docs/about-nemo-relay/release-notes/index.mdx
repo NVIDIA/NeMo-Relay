@@ -72,9 +72,12 @@ The `nemo-relay-node` package still requires Node.js 24 or later, but the
 platform-specific native packages no longer declare an `engines` range. npm
 omits an optional dependency whose `engines` do not match the running Node.js,
 which previously left `require("nemo-relay-node")` unable to find its native
-binary on older hosts. Installs on Node.js 22 and 23 now resolve and load the
-native package, and the only signal that the runtime is below the supported
-floor is the `EBADENGINE` warning npm prints for the metapackage.
+binary on older hosts. With npm's default `engine-strict=false` setting,
+installs on Node.js 22 and 23 now resolve and load the platform package, and the
+only signal that the runtime is below the supported floor is the `EBADENGINE`
+warning npm prints for the metapackage. With `engine-strict=true`, or a package
+manager that enforces the parent package's engine range, installation fails.
+Node.js 22 and 23 remain unsupported.
 
 Migration guidance for upgrading from 0.7 to 0.8 is available in the
 [Migration Guides](/reference/migration-guides).
@@ -139,10 +142,12 @@ for destination paths and explicit-file alternatives.
   before required MCP servers start; Relay retries the request.
 - Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
   delegated-task payloads that Relay cannot decrypt or reliably link.
-- The Node.js binding and package workflows require Node.js 24 or later. The
-  native packages install and load on Node.js 22 and 23, but those versions are
-  unsupported, and an `EBADENGINE` warning on the metapackage is the only signal
-  a user gets.
+- The Node.js binding and package workflows require Node.js 24 or later. Under
+  npm's default `engine-strict=false` setting, the native packages install and
+  load on Node.js 22 and 23, and an `EBADENGINE` warning on the metapackage is
+  the only signal a user gets. With `engine-strict=true`, or a package manager
+  that enforces the parent package's engine range, installation fails. Node.js
+  22 and 23 remain unsupported.
 - The deprecated Switchyard plugin is experimental, excluded from default CLI
   builds, and requires a separately managed compatible service and a named
   authenticated ATOF HTTP stream sink. It is scheduled for removal in 0.8.
