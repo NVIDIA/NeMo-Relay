@@ -23,9 +23,7 @@ pub mod store;
 pub(crate) mod tool;
 
 pub use crate::config::ResponseCacheConfig;
-pub use crate::response_cache::config::{
-    BackendConfig, KEY_STRATEGY_EXACT_REQUEST, KEY_STRATEGY_LOGICAL, ToolCacheConfig,
-};
+pub use crate::response_cache::config::{BackendConfig, ResponseCacheKeyStrategy, ToolCacheConfig};
 pub(crate) use crate::response_cache::intercept::{make_intercept, make_stream_intercept};
 pub use crate::response_cache::mark::RESPONSE_CACHE_MARK;
 pub(crate) use crate::response_cache::store::build_store;

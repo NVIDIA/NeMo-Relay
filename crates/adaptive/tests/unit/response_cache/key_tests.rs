@@ -993,6 +993,13 @@ fn tool_key_with_error_policy(
     }
 }
 
+fn logical_config() -> ResponseCacheConfig {
+    ResponseCacheConfig {
+        key_strategy: ResponseCacheKeyStrategy::Logical,
+        ..cache_all_config()
+    }
+}
+
 #[test]
 fn same_tool_and_args_yield_the_same_key() {
     let args = json!({"q": "weather", "units": "metric"});

@@ -9,9 +9,7 @@ use nemo_relay::plugin::{
 use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
-use crate::response_cache::config::{
-    KEY_STRATEGY_EXACT_REQUEST, KEY_STRATEGY_LOGICAL, ToolCacheConfig,
-};
+use crate::response_cache::config::{ResponseCacheKeyStrategy, ToolCacheConfig};
 use crate::response_cache::tool::{is_supported_tool_pattern, wildcard_patterns_overlap};
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
@@ -125,14 +123,13 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
             "bypass_rate must be in [0.0, 1.0]".to_string(),
         ));
     }
-    if ![KEY_STRATEGY_EXACT_REQUEST, KEY_STRATEGY_LOGICAL].contains(&config.key_strategy.as_str()) {
+    if matches!(config.key_strategy, ResponseCacheKeyStrategy::Unknown(_)) {
         report.diagnostics.push(response_cache_error(
             "response_cache.unsupported_key_strategy",
             Some("key_strategy"),
             format!(
-                "unsupported key_strategy '{}'; supported: \"{KEY_STRATEGY_EXACT_REQUEST}\", \
-                 \"{KEY_STRATEGY_LOGICAL}\"",
-                config.key_strategy
+                "unsupported key_strategy '{}'; supported: \"exact_request\", \"logical\"",
+                config.key_strategy.as_str()
             ),
         ));
     }

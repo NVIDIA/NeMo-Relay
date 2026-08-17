@@ -25,7 +25,7 @@ use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::ResponseCacheConfig;
-use crate::response_cache::config::KEY_STRATEGY_LOGICAL;
+use crate::response_cache::config::ResponseCacheKeyStrategy;
 use crate::response_cache::mark::CacheReason;
 use crate::response_cache::store::CACHE_SCHEMA_VERSION;
 
@@ -78,7 +78,7 @@ pub fn build_cache_key(
         normalize_tool_call_ids(object);
     }
 
-    if config.key_strategy == KEY_STRATEGY_LOGICAL
+    if config.key_strategy == ResponseCacheKeyStrategy::Logical
         && let Some(object) = body.as_object_mut()
         && let Some(tools) = object.get("tools").cloned()
     {

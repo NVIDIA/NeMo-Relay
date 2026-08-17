@@ -16,6 +16,7 @@ from nemo_relay.adaptive import (
     ComponentSpec,
     ConfigPolicy,
     ResponseCacheConfig,
+    ResponseCacheKeyStrategy,
     StateConfig,
     TelemetryConfig,
     ToolCacheConfig,
@@ -171,6 +172,14 @@ class TestDynamicConfigContract:
             "header_allowlist": [],
             "backend": {"kind": "in_memory", "config": {}},
         }
+
+    def test_response_cache_key_strategy_enum_serializes(self):
+        config = ResponseCacheConfig(
+            namespace="logical-cache",
+            key_strategy=ResponseCacheKeyStrategy.LOGICAL,
+        )
+
+        assert config.to_dict()["key_strategy"] == "logical"
 
     def test_response_cache_default_preserves_positional_policy_argument(self):
         policy = ConfigPolicy(unknown_field="error")

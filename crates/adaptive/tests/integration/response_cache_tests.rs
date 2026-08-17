@@ -33,8 +33,8 @@ use nemo_relay::plugin::{
 };
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
-    AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, StateConfig,
-    ToolCacheConfig, ToolClass, ToolOverride,
+    AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, ResponseCacheKeyStrategy,
+    StateConfig, ToolCacheConfig, ToolClass, ToolOverride,
 };
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
@@ -555,7 +555,7 @@ async fn invalid_config_is_rejected_by_validation() {
         response_cache: Some(ResponseCacheConfig {
             ttl_seconds: 0,
             bypass_rate: 2.0,
-            key_strategy: "semantic".to_string(),
+            key_strategy: ResponseCacheKeyStrategy::Unknown("semantic".to_string()),
             namespace: "invalid-config-test".to_string(),
             ..ResponseCacheConfig::default()
         }),
@@ -647,7 +647,7 @@ async fn response_cache_validation_diagnostics_identify_the_invalid_setting() {
 
     let mut cache = ResponseCacheConfig {
         namespace: "diagnostic-contract-test".to_string(),
-        key_strategy: "semantic".to_string(),
+        key_strategy: ResponseCacheKeyStrategy::Unknown("semantic".to_string()),
         tools: Some(ToolCacheConfig {
             enabled: true,
             default: ToolClass {
@@ -799,7 +799,8 @@ async fn logical_strategy_reuses_across_reworded_tool_descriptions() {
     // `logical` must be accepted by validation (activate_cache asserts no
     // diagnostics) and must reuse across a reworded tool description end-to-end.
     activate_cache(ResponseCacheConfig {
-        key_strategy: "logical".to_string(),
+        namespace: "logical-key-integration-test".to_string(),
+        key_strategy: ResponseCacheKeyStrategy::Logical,
         ..ResponseCacheConfig::default()
     })
     .await;

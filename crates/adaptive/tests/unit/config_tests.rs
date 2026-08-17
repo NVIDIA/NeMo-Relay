@@ -7,7 +7,7 @@ use super::*;
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
 use serde_json::json;
 
-use crate::response_cache::config::{ToolCacheConfig, ToolClass};
+use crate::response_cache::config::{ResponseCacheKeyStrategy, ToolCacheConfig, ToolClass};
 
 #[test]
 fn test_adaptive_config_defaults() {
@@ -34,6 +34,10 @@ fn test_typed_section_helpers_default() {
 
     let response_cache = ResponseCacheConfig::default();
     assert!(!response_cache.cache_nondeterministic);
+    assert_eq!(
+        response_cache.key_strategy,
+        ResponseCacheKeyStrategy::ExactRequest
+    );
 
     let tools = ToolCacheConfig::default();
     assert!(!tools.enabled);
@@ -50,6 +54,28 @@ fn test_tool_cache_deserializes_explicit_error_caching_opt_in() {
     .unwrap();
     assert!(tools.enabled);
     assert!(tools.cache_errors);
+}
+
+#[test]
+fn test_response_cache_key_strategy_roundtrips_and_preserves_unknown() {
+    let logical: ResponseCacheConfig = serde_json::from_value(json!({
+        "key_strategy": "logical"
+    }))
+    .unwrap();
+    assert_eq!(logical.key_strategy, ResponseCacheKeyStrategy::Logical);
+    assert_eq!(
+        serde_json::to_value(logical).unwrap()["key_strategy"],
+        json!("logical")
+    );
+
+    let unsupported: ResponseCacheConfig = serde_json::from_value(json!({
+        "key_strategy": "future"
+    }))
+    .unwrap();
+    assert_eq!(
+        unsupported.key_strategy,
+        ResponseCacheKeyStrategy::Unknown("future".to_string())
+    );
 }
 
 #[test]
@@ -183,6 +209,14 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
     assert_eq!(
         response_cache.field("bypass_rate").unwrap().kind,
         EditorFieldKind::Float
+    );
+    assert_eq!(
+        response_cache.field("key_strategy").unwrap().kind,
+        EditorFieldKind::Enum
+    );
+    assert_eq!(
+        response_cache.field("key_strategy").unwrap().enum_values,
+        &["exact_request", "logical"]
     );
     assert!(
         response_cache.field("skip_keys").is_none(),

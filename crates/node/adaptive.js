@@ -8,6 +8,11 @@ const plugin = require('./plugin.js');
 
 const ADAPTIVE_PLUGIN_KIND = 'adaptive';
 
+const ResponseCacheKeyStrategy = Object.freeze({
+  ExactRequest: 'exact_request',
+  Logical: 'logical',
+});
+
 /**
  * Create a default adaptive component config.
  *
@@ -170,7 +175,7 @@ function responseCacheConfig(config = {}) {
     priority: 50,
     bypassRate: 0,
     cacheNondeterministic: false,
-    keyStrategy: 'exact_request',
+    keyStrategy: ResponseCacheKeyStrategy.ExactRequest,
     headerAllowlist: [],
     backend: backend ?? inMemoryBackend(),
     ...rest,
@@ -297,6 +302,7 @@ function setLatencySensitivity(value) {
 module.exports = {
   AdaptiveRuntime,
   ADAPTIVE_PLUGIN_KIND,
+  ResponseCacheKeyStrategy,
   defaultConfig,
   inMemoryBackend,
   redisBackend,
