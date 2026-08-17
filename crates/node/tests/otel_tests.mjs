@@ -244,7 +244,7 @@ describe('OpenTelemetry log and metric subscribers', () => {
       subscriber.forceFlush();
       const request = await collector.nextRequest();
       assert.equal(request.url, '/v1/logs');
-      assert.ok(request.body.length > 0);
+      assertBodyContains(request.body, 'log_mark');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();
@@ -278,7 +278,7 @@ describe('OpenTelemetry log and metric subscribers', () => {
       subscriber.forceFlush();
       const request = await collector.nextRequest();
       assert.equal(request.url, '/v1/metrics');
-      assert.ok(request.body.length > 0);
+      assertBodyContains(request.body, 'relay.tokens');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();
