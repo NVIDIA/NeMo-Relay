@@ -118,7 +118,12 @@ earlier than `T + 1µs`. Streaming and non-streaming calls use the same rules.
 Pending marks are never added to the provider request, annotated request,
 codec input, sanitizer input, or start payload.
 
-## Migration
+## Historical 0.6 Migration
+
+This section describes the NeMo Relay 0.6 migration. Relay 0.8 retains the
+`grpc-v1` identifier but replaces the tool-result envelope fields with
+structured protobuf messages. Rebuild workers, regenerate custom protobuf
+bindings, and exclude pre-0.8 Relay versions in `compat.relay`.
 
 This finalizes unpublished native ABI v2 and `grpc-v1` contracts. Rebuild all
 development native plugins and workers against the same NeMo Relay release that
@@ -131,9 +136,12 @@ The 0.6 annotation expansion changes the request and outcome envelope schemas
 to `nemo.relay.AnnotatedLlmRequest@2` and
 `nemo.relay.LlmRequestInterceptOutcome@2`. Rebuild Rust native plugins and Rust
 `grpc-v1` workers against NeMo Relay 0.6, and update Python workers to the 0.6
-worker SDK. Dynamic plugins that register an LLM request intercept must declare
-`compat.relay = ">=0.6,<1.0"`, or another range that excludes Relay 0.5. The
-host enforces this compatibility floor during registration.
+worker SDK. That release required a compatibility range that excluded Relay
+0.5. Relay 0.8 supersedes that historical floor for every dynamic plugin:
+after rebuilding, declare `compat.relay = ">=0.8.0,<1.0"`, or another range
+that excludes Relay versions before 0.8. The host enforces the current
+compatibility floor during manifest and registry validation, before loading the
+plugin.
 
 For gateway generation requests, replace code such as
 `request.content["messages"] = ...` with an edit to

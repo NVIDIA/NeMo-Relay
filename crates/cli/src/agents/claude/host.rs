@@ -8,12 +8,17 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use crate::agents::shared::host::{home_dir, read_json_object, write_json};
+use crate::agents::shared::host::{
+    home_dir, read_json_object, write_json, write_json_preserving_symlink,
+};
 use crate::filesystem::{
-    FileSnapshot, backup, backup_path, remove_backup, restore_file_snapshot, snapshot_optional_file,
+    FileSnapshot, backup, backup_path, remove_backup, remove_file_preserving_symlink,
+    restore_file_snapshot, snapshot_optional_file,
 };
 
 const ABSENT_SETTINGS_BACKUP_KEY: &str = "__nemo_relay_original_settings_absent";
+const DANGLING_SETTINGS_SYMLINK_BACKUP_KEY: &str =
+    "__nemo_relay_original_settings_dangling_symlink";
 const MANAGED_PROVIDER_BACKUP_KEY: &str = "__nemo_relay_managed_anthropic_base_url";
 
 pub(crate) struct ClaudeSetupSnapshot {
@@ -79,7 +84,7 @@ pub(crate) fn enable_claude_provider(gateway_url: &str) -> Result<(), String> {
         .or_insert_with(|| json!({}));
     let env = env.as_object_mut().expect("env was validated as an object");
     env.insert("ANTHROPIC_BASE_URL".into(), json!(gateway_url));
-    if let Err(error) = write_json(&path, &settings) {
+    if let Err(error) = write_json_preserving_symlink(&path, &settings) {
         restore_file_snapshot(&backup_snapshot)?;
         return Err(error);
     }
@@ -113,15 +118,20 @@ pub(crate) fn restore_claude_provider(gateway_url: &str) -> Result<(), String> {
         if backup_settings.get(ABSENT_SETTINGS_BACKUP_KEY) == Some(&Value::Bool(true))
             && settings.as_object().is_some_and(serde_json::Map::is_empty)
         {
-            match fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(format!("failed to remove {}: {error}", path.display()));
+            if backup_settings.get(DANGLING_SETTINGS_SYMLINK_BACKUP_KEY) == Some(&Value::Bool(true))
+            {
+                remove_file_preserving_symlink(&path)?;
+            } else {
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(format!("failed to remove {}: {error}", path.display()));
+                    }
                 }
             }
         } else {
-            write_json(&path, &settings)?;
+            write_json_preserving_symlink(&path, &settings)?;
         }
         remove_backup(&path)?;
         println!(
@@ -208,11 +218,25 @@ pub(crate) fn backup_claude_settings(path: &Path, replace_existing: bool) -> Res
             fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
         }
-        fs::write(
-            &backup_file,
-            format!("{{\"{ABSENT_SETTINGS_BACKUP_KEY}\":true}}\n"),
-        )
-        .map_err(|error| format!("failed to write {}: {error}", backup_file.display()))
+        let mut backup = json!({
+            ABSENT_SETTINGS_BACKUP_KEY: true,
+        });
+        if path_is_dangling_symlink(path)? {
+            backup[DANGLING_SETTINGS_SYMLINK_BACKUP_KEY] = Value::Bool(true);
+        }
+        write_json(&backup_file, &backup)
+    }
+}
+
+fn path_is_dangling_symlink(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Ok(!path.exists()),
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!(
+            "failed to inspect {} for symlink metadata: {error}",
+            path.display()
+        )),
     }
 }
 

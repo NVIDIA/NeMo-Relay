@@ -67,7 +67,7 @@ id = "{plugin_id}"
 {name}kind = "worker"
 
 [compat]
-relay = "0.5"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -199,6 +199,28 @@ fn editor_uses_explicit_plugin_target_without_default_discovery() {
     assert_eq!(target, path);
 }
 
+fn assert_observability_signal_editor_sections(opentelemetry: &EditorSchema) {
+    for signal in ["logs", "metrics"] {
+        let signal = opentelemetry.field(signal).unwrap();
+        assert_eq!(signal.kind, EditorFieldKind::Section);
+        assert!(signal.optional);
+        let signal_schema = signal.schema().unwrap();
+        let endpoints = signal_schema.field("endpoints").unwrap();
+        assert_eq!(endpoints.kind, EditorFieldKind::List);
+        assert!(endpoints.optional);
+        let endpoint_schema = endpoints.list_item.unwrap().schema.unwrap()();
+        assert!(endpoint_schema.field("type").is_none());
+        assert_eq!(
+            endpoint_schema.field("endpoint").unwrap().kind,
+            EditorFieldKind::String
+        );
+        assert_eq!(
+            endpoint_schema.field("header_env").unwrap().kind,
+            EditorFieldKind::StringMap
+        );
+    }
+}
+
 #[test]
 fn typed_editor_model_contains_observability_sections() {
     let schema = ObservabilityConfig::editor_schema();
@@ -219,7 +241,7 @@ fn typed_editor_model_contains_observability_sections() {
             .iter()
             .any(|field| field.name == "filename_template")
     );
-    let otel_endpoints = opentelemetry.field("endpoints").unwrap();
+    let otel_endpoints = opentelemetry.field("traces").unwrap();
     assert_eq!(otel_endpoints.kind, EditorFieldKind::List);
     let endpoint = otel_endpoints.list_item.unwrap();
     assert_eq!(endpoint.kind, EditorFieldKind::Section);
@@ -241,6 +263,29 @@ fn typed_editor_model_contains_observability_sections() {
             .fields
             .iter()
             .any(|field| field.name == "header_env")
+    );
+    assert_observability_signal_editor_sections(opentelemetry);
+    assert_eq!(
+        opentelemetry
+            .field("logs")
+            .unwrap()
+            .schema()
+            .unwrap()
+            .field("minimum_severity")
+            .unwrap()
+            .enum_values,
+        &["trace", "debug", "info", "warn", "warning", "error"]
+    );
+    assert_eq!(
+        opentelemetry
+            .field("metrics")
+            .unwrap()
+            .schema()
+            .unwrap()
+            .field("temporality")
+            .unwrap()
+            .enum_values,
+        &["cumulative", "delta", "low_memory"]
     );
 }
 
@@ -516,10 +561,12 @@ fn component_menu_contains_toggle_fields_and_back() {
         .collect::<Vec<_>>();
 
     assert_eq!(labels[0], "Toggle component [on]");
-    assert_eq!(labels[1], "  Edit ATOF");
+    assert_eq!(labels[1], "✓ Edit version");
+    assert_eq!(labels[2], "  Edit ATOF");
     assert_eq!(labels.last().unwrap(), "Back [q]");
     assert!(matches!(actions[0], ComponentMenuAction::Toggle));
     assert!(matches!(actions[1], ComponentMenuAction::EditField(0)));
+    assert!(matches!(actions[2], ComponentMenuAction::EditField(1)));
     assert!(matches!(actions.last(), Some(ComponentMenuAction::Back)));
 }
 
@@ -823,6 +870,15 @@ fn editor_model_object_and_schema_helpers_cover_fallbacks() {
 
     let fields = observability_editor_fields_with_version();
     assert_eq!(fields.first(), Some(&"version"));
+    assert_eq!(
+        fields.iter().filter(|field| **field == "version").count(),
+        1
+    );
+    let version = ObservabilityConfig::editor_schema()
+        .field("version")
+        .expect("observability version field");
+    assert_eq!(version.kind, EditorFieldKind::IntegerEnum);
+    assert_eq!(version.enum_values, &["3", "4"]);
     let nested = nested_editor_keys(ObservabilityConfig::editor_schema());
     assert!(nested.contains(&"atof"));
 
@@ -1054,6 +1110,7 @@ fn editor_save_persists_disabled_nemo_guardrails_policy_only_edits() {
 #[test]
 fn typed_editor_serializes_explicit_observability_overrides() {
     let mut observability = ObservabilityConfig::default();
+    assert_eq!(observability.version, 4);
     let atof = ObservabilityConfig::editor_schema().field("atof").unwrap();
     toggle_section(&mut observability, atof);
     set_section_field(
@@ -1065,6 +1122,7 @@ fn typed_editor_serializes_explicit_observability_overrides() {
     .unwrap();
 
     let map = observability_config_map(&observability).unwrap();
+    assert_eq!(map.get("version"), Some(&json!(4)));
     let atof = map
         .get("atof")
         .and_then(Value::as_object)
@@ -2961,6 +3019,38 @@ fn parse_float_value_rejects_non_finite_numbers() {
         );
         assert!(error.contains(value), "error was: {error}");
     }
+}
+
+#[test]
+fn editor_enum_values_preserve_numeric_config_fields() {
+    let version = ObservabilityConfig::editor_schema()
+        .field("version")
+        .expect("observability version field");
+    assert_eq!(editor_enum_default_index(&version, Some(&json!(4))), 1);
+    assert_eq!(editor_enum_value(&version, 0), json!(3));
+    assert_eq!(editor_enum_value(&version, 1), json!(4));
+
+    let numeric_strings = EditorFieldSpec {
+        kind: EditorFieldKind::Enum,
+        enum_values: &["1", "2"],
+        ..version
+    };
+    assert_eq!(editor_enum_value(&numeric_strings, 0), json!("1"));
+    assert_eq!(editor_enum_value(&numeric_strings, 1), json!("2"));
+
+    let severity = ObservabilityConfig::editor_schema()
+        .field("opentelemetry")
+        .and_then(EditorFieldSpec::schema)
+        .and_then(|opentelemetry| opentelemetry.field("logs"))
+        .and_then(EditorFieldSpec::schema)
+        .and_then(|logs| logs.field("minimum_severity"))
+        .expect("minimum severity field");
+    let warning = severity
+        .enum_values
+        .iter()
+        .position(|value| *value == "warning")
+        .expect("warning alias");
+    assert_eq!(editor_enum_value(&severity, warning), json!("warning"));
 }
 
 fn tagged_list_item_schema() -> &'static EditorSchema {

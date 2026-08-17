@@ -71,19 +71,25 @@ configuration.
 
 ## Inspect Configuration Before Editing
 
-Resolve the user configuration directory from `$XDG_CONFIG_HOME/nemo-relay`,
-falling back to `$HOME/.config/nemo-relay`. Inspect these files when they exist:
+Resolve the supported user configuration directory from
+`$XDG_CONFIG_HOME/nemo-relay`, falling back to `$HOME/.config/nemo-relay`.
+Inspect these files when they exist:
 
 ```text
 ${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/config.toml
 ${XDG_CONFIG_HOME:-$HOME/.config}/nemo-relay/plugins.toml
 ```
 
-Repository-local `.nemo-relay` files are ignored unless the user selects them
-explicitly. Do not edit an ignored project file for the default trial. Account
-for higher-precedence system policy, show the proposed user-file change, and
-obtain confirmation. Merge with an existing plugin document; do not replace
-unrelated components.
+Repository-local `.nemo-relay/config.toml` and `.nemo-relay/plugins.toml`
+files are unsupported as active Relay configuration. If they exist, identify
+them for the user and explain that this quick start will not create, edit,
+merge, or trust them. Local output directories such as `.nemo-relay/atof` and
+`.nemo-relay/atif` are artifacts, not configuration layers, and may remain
+valid when explicitly configured as output locations.
+
+Account for higher-precedence system policy, show the proposed user-file
+change, and obtain confirmation. Merge with an existing plugin document; do
+not replace unrelated components.
 
 ## Configure The Agent And Observability
 
@@ -169,8 +175,9 @@ nemo-relay run --agent claude --dry-run --print
 ```
 
 Confirm that the plan uses a loopback gateway, the intended agent command, and
-the expected user plugin configuration. Show this summary and obtain user
-confirmation before the live run.
+supported user or explicit plugin configuration. The plan must not depend on
+repository-local `.nemo-relay/config.toml` or `.nemo-relay/plugins.toml`. Show
+this summary and obtain user confirmation before the live run.
 
 ## Run A Safe Trial
 
@@ -233,9 +240,11 @@ insufficient.
 
 ## Troubleshoot The Smallest Failed Boundary
 
-- **No ATOF or ATIF files**: run `nemo-relay doctor <agent> --json`; check plugin
-  discovery, component activation, config precedence, and output-directory
-  permissions.
+- **No ATOF or ATIF files**: run `nemo-relay doctor <agent> --json`; check
+  supported plugin discovery, component activation, config precedence, and
+  output-directory permissions. Do not treat repository-local
+  `.nemo-relay/config.toml` or `.nemo-relay/plugins.toml` as active
+  configuration.
 - **ATOF exists but ATIF does not**: finish the turn and close or finalize the
   agent session before changing configuration.
 - **Agent and tool events exist but LLM events do not**: confirm the launched

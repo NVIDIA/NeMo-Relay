@@ -65,7 +65,7 @@ def on_event(event) -> None:
     print(f"event={event.kind} name={event.name}")
 
 async def search(args):
-    return {"echo": args["query"]}
+    return nemo_relay.ToolExecutionResult({"echo": args["query"]})
 
 async def model(request):
     return {
@@ -87,7 +87,7 @@ async def main():
             handle=handle,
         )
 
-        print(tool_result)
+        print(tool_result.result)
         print(llm_result)
 
     nemo_relay.subscribers.flush()
@@ -96,12 +96,16 @@ async def main():
 asyncio.run(main())
 ```
 
+The managed tool callback returns `ToolExecutionResult`, and application code
+reads its `result` field. The optional `annotation` field carries opaque JSON
+metadata without changing the business result.
+
 ## What Success Looks Like
 
 You should see:
 
 - Event lines for the scope, tool, and LLM lifecycles, plus the `initialized` mark event
-- `{'echo': 'hello'}` from the tool call
+- `{'echo': 'hello'}` from the tool call's `result` field
 - A final object containing `ok: True` and the echoed message payload from the LLM callback
 
 Native subscriber delivery is asynchronous, so flush before checking subscriber

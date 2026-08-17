@@ -87,7 +87,9 @@ use crate::convert::{
 use crate::promise_call::PromiseAwareFn;
 use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
-use crate::types::{LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolHandle};
+use crate::types::{
+    LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolExecutionResult, ToolHandle,
+};
 
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static NODE_ENVIRONMENT_LIFECYCLE_LOCK: StdMutex<()> = StdMutex::new(());
@@ -1534,9 +1536,45 @@ impl Drop for PersistentJsFunction {
     }
 }
 
+struct NodePluginValidateCallback {
+    direct: PersistentJsFunction,
+    thread_safe: ThreadsafeFunction<Json, ErrorStrategy::Fatal>,
+    registration_thread: std::thread::ThreadId,
+}
+
+impl NodePluginValidateCallback {
+    fn call(&self, plugin_config: Json) -> napi::Result<Json> {
+        if std::thread::current().id() == self.registration_thread {
+            return self.direct.call_validate(&plugin_config);
+        }
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let status = self.thread_safe.call_with_return_value(
+            plugin_config,
+            ThreadsafeFunctionCallMode::Blocking,
+            move |value: Option<Json>| {
+                let result = callable::unwrap_middleware_result(
+                    callback_json(value),
+                    "JS plugin validate callback failed",
+                )
+                .map_err(|error| napi::Error::from_reason(error.to_string()));
+                let _ = tx.send(result);
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(napi::Error::from_reason(format!(
+                "failed to queue JS plugin validate callback: {status:?}"
+            )));
+        }
+        rx.recv()
+            .map_err(|_| napi::Error::from_reason("JS plugin validate completion channel closed"))?
+    }
+}
+
 struct NodePlugin {
     plugin_kind: String,
-    validate: Option<PersistentJsFunction>,
+    validate: Option<NodePluginValidateCallback>,
     register: ThreadsafeFunction<NodePluginRegisterCall, ErrorStrategy::Fatal>,
 }
 
@@ -1552,7 +1590,7 @@ impl Plugin for NodePlugin {
         let Some(validate) = &self.validate else {
             return vec![];
         };
-        match validate.call_validate(&Json::Object(plugin_config.clone())) {
+        match validate.call(Json::Object(plugin_config.clone())) {
             Ok(Json::Null) => vec![],
             Ok(value) => {
                 serde_json::from_value::<Vec<ConfigDiagnostic>>(value).unwrap_or_else(|e| {
@@ -2273,7 +2311,7 @@ pub fn tool_call(
 pub fn tool_call_end(
     env: Env,
     handle: &ToolHandle,
-    result: Json,
+    result: ToolExecutionResult,
     data: Option<Json>,
     metadata: Option<Json>,
     timestamp: Option<f64>,
@@ -2283,7 +2321,7 @@ pub fn tool_call_end(
         core_tool_api::tool_call_end(
             core_tool_api::ToolCallEndParams::builder()
                 .handle(&handle.inner)
-                .result(result)
+                .execution_result(result.into())
                 .data_opt(opt_json(data))
                 .metadata_opt(opt_json(metadata))
                 .timestamp_opt(timestamp)
@@ -2302,12 +2340,12 @@ pub fn tool_call_end(
 /// (no Start/End pair) and `GuardrailRejected` is returned. Returns the final
 /// execution result; sanitize guardrails do not rewrite the caller-visible value.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<unknown>")]
+#[napi(ts_return_type = "Promise<ToolExecutionResult>")]
 pub fn tool_call_execute(
     env: Env,
     name: String,
     args: Json,
-    #[napi(ts_arg_type = "(arg: Json) => any")] func: JsFunction,
+    #[napi(ts_arg_type = "(arg: Json) => ToolExecutionResult")] func: JsFunction,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
     data: Option<Json>,
@@ -2343,6 +2381,7 @@ pub fn tool_call_execute(
                                     .build(),
                             )
                             .await
+                            .map(ToolExecutionResult::from)
                             .map_err(to_napi_err)
                         })
                         .await
@@ -2363,11 +2402,14 @@ pub fn tool_call_execute(
 /// Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a
 /// promise-aware wrapper with access to `Env`.
 #[allow(clippy::too_many_arguments)]
-#[napi(ts_return_type = "Promise<unknown>")]
+#[napi(ts_return_type = "Promise<ToolExecutionResult>")]
 pub fn tool_call_execute_async(
     env: Env,
     name: String,
     args: Json,
+    #[napi(
+        ts_arg_type = "(arg: Json, signal: AbortSignal) => ToolExecutionResult | Promise<ToolExecutionResult>"
+    )]
     func: JsFunction,
     handle: Option<&ScopeHandle>,
     attributes: Option<u32>,
@@ -2390,7 +2432,14 @@ pub fn tool_call_execute_async(
 
     let exec_fn: ToolExecutionNextFn = std::sync::Arc::new(move |args| {
         let pa_fn = pa_fn.clone();
-        Box::pin(async move { pa_fn.call(args).await })
+        Box::pin(async move {
+            let result = pa_fn.call(args).await?;
+            serde_json::from_value(result).map_err(|error| {
+                FlowError::Internal(format!(
+                    "tool execution callback must return ToolExecutionResult: {error}"
+                ))
+            })
+        })
     });
 
     env.execute_tokio_future(
@@ -2413,6 +2462,7 @@ pub fn tool_call_execute_async(
                                     .build(),
                             )
                             .await
+                            .map(ToolExecutionResult::from)
                             .map_err(to_napi_err)
                         })
                         .await
@@ -3102,7 +3152,7 @@ pub fn register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -3681,7 +3731,7 @@ pub fn scope_register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => Json | Promise<Json>) => { result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4785,8 +4835,21 @@ pub fn register_plugin(
     validate: Option<JsFunction>,
     register: JsFunction,
 ) -> napi::Result<()> {
-    let validate_tsfn = match validate {
-        Some(func) => Some(PersistentJsFunction::new(&env, &func)?),
+    let validate_callback = match validate {
+        Some(func) => {
+            let direct = PersistentJsFunction::new(&env, &func)?;
+            let callback = callable::safe_middleware_callback(&env, &func)?;
+            let mut thread_safe = callback.create_threadsafe_function(
+                0,
+                |ctx: napi::threadsafe_function::ThreadSafeCallContext<Json>| Ok(vec![ctx.value]),
+            )?;
+            thread_safe.unref(&env)?;
+            Some(NodePluginValidateCallback {
+                direct,
+                thread_safe,
+                registration_thread: std::thread::current().id(),
+            })
+        }
         None => None,
     };
     let mut register_tsfn = register
@@ -4814,7 +4877,7 @@ pub fn register_plugin(
 
     register_plugin_impl(Arc::new(NodePlugin {
         plugin_kind,
-        validate: validate_tsfn,
+        validate: validate_callback,
         register: register_tsfn,
     }))
     .map_err(|e| napi::Error::from_reason(e.to_string()))

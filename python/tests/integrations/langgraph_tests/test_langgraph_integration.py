@@ -133,7 +133,7 @@ def test_complete_skill_read_inside_langgraph_emits_mark(
 
     def load_skill(state: State) -> State:
         handle = nemo_relay.tools.call("read_file", {"path": "/skills/review/SKILL.md"})
-        nemo_relay.tools.call_end(handle, {"loaded": True})
+        nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult({"loaded": True}))
         return state
 
     builder = StateGraph(cast(Any, State))

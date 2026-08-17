@@ -36,6 +36,7 @@ Public data types:
     LlmOptimizationTokens: Explicit token evidence by category.
     LlmOptimizationTokenImpact: Baseline, effective, and saved token evidence.
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
+    ToolExecutionResult: Canonical application-visible tool result.
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
@@ -104,6 +105,7 @@ from ._api import (
     ToolConditionalCallback,
     ToolExecutionCallback,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     ToolNext,
     ToolRequestCallback,
     ToolSanitizeCallback,
@@ -150,6 +152,7 @@ __all__ = [
     "ToolConditionalCallback",
     "ToolExecutionCallback",
     "ToolExecutionInterceptOutcome",
+    "ToolExecutionResult",
     "ToolNext",
     "ToolRequestCallback",
     "ToolSanitizeCallback",

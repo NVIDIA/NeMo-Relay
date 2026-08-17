@@ -17,7 +17,9 @@ use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
+use nemo_relay::api::tool::{
+    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
@@ -168,7 +170,12 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
                     .name("worker-fixture-tool")
                     .args(json!({ "input": "execute" }))
                     .func(Arc::new(|args| {
-                        Box::pin(async move { Ok(json!({ "tool_callback": true, "args": args })) })
+                        Box::pin(async move {
+                            Ok(ToolExecutionResult::annotated(
+                                json!({ "tool_callback": true, "args": args }),
+                                json!({"source": "provider"}),
+                            ))
+                        })
                     }))
                     .build(),
             )
@@ -181,10 +188,11 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         .await;
 
     assert_eq!(rewritten["worker_plugin"], true);
-    assert_eq!(tool_result["tool_callback"], true);
-    assert_eq!(tool_result["worker_plugin_tool_execution"], true);
+    assert_eq!(tool_result.result["tool_callback"], true);
+    assert_eq!(tool_result.result["worker_plugin_tool_execution"], true);
+    assert_eq!(tool_result.annotation, Some(json!({"source": "provider"})));
     assert_eq!(
-        tool_result["args"]["worker_plugin_tool_execution_request"],
+        tool_result.result["args"]["worker_plugin_tool_execution_request"],
         true
     );
 
@@ -496,7 +504,7 @@ async fn host_cancellation_reaches_rust_worker_invocation() {
 
                     let _drop_signal = DropSignal(Some(dropped));
                     let _ = started.send(());
-                    std::future::pending::<FlowResult<Json>>().await
+                    std::future::pending::<FlowResult<ToolExecutionResult>>().await
                 })
             }))
             .build(),
@@ -547,7 +555,9 @@ async fn worker_conditional_guardrail_blocks_tool_execution() {
             .name("worker-fixture-blocked-tool")
             .args(json!({ "input": "blocked" }))
             .func(Arc::new(|_| {
-                Box::pin(async move { Ok(json!({ "should_not_run": true })) })
+                Box::pin(
+                    async move { Ok(ToolExecutionResult::new(json!({ "should_not_run": true }))) },
+                )
             }))
             .build(),
     )
@@ -988,7 +998,7 @@ fn unsupported_worker_relay_requirement_reports_compatibility_error() {
 }
 
 #[test]
-fn worker_request_intercept_rejects_manifest_that_admits_relay_0_5() {
+fn worker_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) =
@@ -1002,11 +1012,14 @@ fn worker_request_intercept_rejects_manifest_that_admits_relay_0_5() {
     }]) {
         Ok(activation) => {
             activation.clear();
-            panic!("the request-intercept registration should reject Relay 0.5 compatibility");
+            panic!("the worker loader should reject pre-0.8 Relay compatibility");
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains(">=0.6,<1.0"), "{error}");
+    assert!(
+        error.contains("excludes Relay versions before 0.8"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1178,12 +1191,63 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         rewritten["_nemo_relay_plugin"]["tag"],
         "managed-environment"
     );
+
+    let tool_result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("python-worker-tool")
+            .args(json!({ "query": "relay" }))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({ "provider_result": true, "args": args }),
+                        json!({ "source": "provider" }),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .expect("Python tool execution intercept should call ToolNext and return its outcome");
+    assert_eq!(tool_result.result["provider_result"], true);
+    assert_eq!(
+        tool_result.result["_nemo_relay_plugin"]["tag"],
+        "managed-environment"
+    );
+    assert_eq!(
+        tool_result.result["args"]["_nemo_relay_plugin"]["tag"],
+        "managed-environment"
+    );
+    assert_eq!(
+        tool_result.annotation,
+        Some(json!({
+            "upstream": { "source": "provider" },
+            "worker": {
+                "tool_name": "python-worker-tool",
+                "tag": "managed-environment",
+            },
+        }))
+    );
+
     flush_subscribers().expect("Python callback mark should flush");
+    let captured_events = events.lock().unwrap();
     find_event(
-        &events.lock().unwrap(),
+        &captured_events,
         "examples.python_grpc_worker.tool_request",
         None,
     );
+    let tool_mark = find_event(
+        &captured_events,
+        "examples.python_grpc_worker.tool_execution",
+        None,
+    );
+    assert_eq!(
+        tool_mark.data(),
+        Some(&json!({
+            "tool_name": "python-worker-tool",
+            "tag": "managed-environment",
+        }))
+    );
+    drop(captured_events);
 
     drop(cleanup);
 }

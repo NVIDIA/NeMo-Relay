@@ -3,7 +3,7 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type { EventSanitizeFields, Json } from './index';
+import type { EventSanitizeFields, Json, ToolExecutionResult } from './index';
 import type { LlmCodec, LlmResponseCodec } from './typed';
 
 /** Codec identity available while a managed LLM event is sanitized. */
@@ -195,6 +195,7 @@ export interface LlmRequestInterceptOutcome {
  */
 export interface ToolExecutionInterceptOutcome {
   result: Json;
+  annotation?: Json;
   pendingMarks?: PendingMarkSpec[];
 }
 
@@ -296,14 +297,14 @@ export interface PluginContext {
   ): void;
   /**
    * Register tool execution middleware that returns a canonical outcome.
-   * The `next` callback resolves to the raw downstream result.
+   * The `next` callback resolves to the canonical downstream result.
    */
   registerToolExecutionIntercept(
     name: string,
     priority: number,
     callback: (
       args: Json,
-      next: (args: Json) => Json | Promise<Json>,
+      next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>,
     ) => ToolExecutionInterceptOutcome | Promise<ToolExecutionInterceptOutcome>,
   ): void;
 }

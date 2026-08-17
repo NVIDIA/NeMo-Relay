@@ -6,8 +6,12 @@ SPDX-License-Identifier: Apache-2.0
 # Python gRPC Worker Plugin
 
 This example shows a Python worker plugin using the `nemo-relay-plugin` SDK. It
-registers a tool request intercept, emits a mark event through the host runtime,
-and returns a mutated JSON tool request.
+registers tool request and execution intercepts, calls the host continuation,
+preserves the upstream tool-result annotation, and emits marks through both the
+host runtime and the execution outcome.
+
+The example targets Relay 0.8 or later and the canonical `grpc-v1` tool-result
+contract declared in `relay-plugin.toml`.
 
 ## Register With Relay
 

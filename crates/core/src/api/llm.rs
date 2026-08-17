@@ -32,7 +32,7 @@ use crate::api::runtime::{
 };
 use crate::api::runtime::{ScopeStackHandle, capture_traceparent, current_scope_stack};
 use crate::api::scope::event;
-use crate::api::scope::{EmitMarkEventParams, ScopeHandle};
+use crate::api::scope::{EmitMarkEventParams, ScopeHandle, metadata_with_log_severity};
 use crate::api::shared::{
     ensure_runtime_owner, inject_dynamo_session_ids, inject_traceparent, inject_traceparent_value,
     metadata_with_otel_error, metadata_with_otel_status, resolve_parent_uuid,
@@ -628,14 +628,31 @@ async fn emit_pending_request_marks(
     }
     ensure_runtime_owner()?;
     let timestamp = handle.started_at + TimeDelta::microseconds(1);
-    for mark in marks {
+    for (index, mark) in marks.into_iter().enumerate() {
+        let metadata = match metadata_with_log_severity(mark.metadata, mark.severity) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let llm_uuid = handle.uuid.to_string();
+                log::warn!(
+                    target: "nemo_relay.observability",
+                    event = "llm_pending_mark_dropped",
+                    llm_name = handle.name.as_str(),
+                    llm_uuid = llm_uuid.as_str(),
+                    pending_mark_index = index,
+                    pending_mark_name = mark.name.as_str();
+                    "LLM pending mark was dropped because its severity metadata is invalid: {error}"
+                );
+                continue;
+            }
+        };
         let event = Event::Mark(MarkEvent::new(
             BaseEvent::builder()
                 .name(mark.name)
                 .parent_uuid(handle.uuid)
                 .timestamp(timestamp)
                 .data_opt(mark.data)
-                .metadata_opt(mark.metadata)
+                .data_schema_opt(mark.data_schema)
+                .metadata_opt(metadata)
                 .build(),
             mark.category,
             mark.category_profile,

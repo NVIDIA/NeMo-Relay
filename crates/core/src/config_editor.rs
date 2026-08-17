@@ -20,8 +20,10 @@ pub enum EditorFieldKind {
     Integer,
     /// Floating-point number value.
     Float,
-    /// String enum with a fixed set of allowed values.
+    /// Value selected from a fixed set of allowed choices.
     Enum,
+    /// Integer value selected from a fixed set of allowed choices.
+    IntegerEnum,
     /// Object with string keys and string values.
     StringMap,
     /// Arbitrary JSON value.
@@ -43,7 +45,7 @@ pub struct EditorFieldSpec {
     pub label: &'static str,
     /// Editor control shape.
     pub kind: EditorFieldKind,
-    /// Allowed string enum values, when [`EditorFieldKind::Enum`] is used.
+    /// Allowed display choices, when an enum field kind is used.
     pub enum_values: &'static [&'static str],
     /// Whether the field is represented as an `Option<T>` in Rust.
     pub optional: bool,
@@ -167,6 +169,7 @@ macro_rules! editor_config {
                 $field:ident => {
                     label: $label:literal,
                     kind: $kind:ident
+                    $(, name: $name:literal)?
                     $(, values: [$($value:literal),* $(,)?])?
                     $(, optional: $optional:literal)?
                     $(, nested: $nested:ty)?
@@ -190,7 +193,7 @@ macro_rules! editor_config {
                     fields: &[
                         $(
                             $crate::config_editor::EditorFieldSpec {
-                                name: stringify!($field),
+                                name: $crate::editor_config!(@name $field $($name)?),
                                 label: $label,
                                 kind: $crate::editor_config!(@kind $kind),
                                 enum_values: $crate::editor_config!(@values $($($value),*)?),
@@ -208,11 +211,15 @@ macro_rules! editor_config {
         }
     };
 
+    (@name $field:ident) => { stringify!($field) };
+    (@name $field:ident $name:literal) => { $name };
+
     (@kind Boolean) => { $crate::config_editor::EditorFieldKind::Boolean };
     (@kind String) => { $crate::config_editor::EditorFieldKind::String };
     (@kind Integer) => { $crate::config_editor::EditorFieldKind::Integer };
     (@kind Float) => { $crate::config_editor::EditorFieldKind::Float };
     (@kind Enum) => { $crate::config_editor::EditorFieldKind::Enum };
+    (@kind IntegerEnum) => { $crate::config_editor::EditorFieldKind::IntegerEnum };
     (@kind StringMap) => { $crate::config_editor::EditorFieldKind::StringMap };
     (@kind Json) => { $crate::config_editor::EditorFieldKind::Json };
     (@kind List) => { $crate::config_editor::EditorFieldKind::List };

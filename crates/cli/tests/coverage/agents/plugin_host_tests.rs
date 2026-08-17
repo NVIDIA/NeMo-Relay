@@ -18,7 +18,9 @@ use toml_edit::{DocumentMut, Item, Value as TomlValue};
 
 use super::*;
 use crate::configuration::{BOOTSTRAP_CLIENT_TOKEN_HEADER, BootstrapChallengeKey};
-use crate::filesystem::{backup, backup_path, restore_file_snapshot, snapshot_optional_file};
+use crate::filesystem::{
+    atomic_write, backup, backup_path, restore_file_snapshot, snapshot_optional_file,
+};
 
 const TEST_PLUGIN_GENERATION: &str = "test-generation";
 
@@ -1310,6 +1312,195 @@ fn codex_install_tightens_the_secret_bearing_config_to_owner_only() {
     assert_eq!(
         fs::metadata(path).unwrap().permissions().mode() & 0o777,
         0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_install_and_uninstall_preserve_symlinked_config_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let codex_dir = dir.path().join(".codex");
+    let linked_dir = dir.path().join("linked");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::create_dir_all(&linked_dir).unwrap();
+
+    let target = linked_dir.join("config-target.toml");
+    fs::write(
+        &target,
+        "model_provider = \"openai\"\ncustom = \"target-marker\"\n",
+    )
+    .unwrap();
+    let path = codex_dir.join("config.toml");
+    symlink(&target, &path).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    assert!(
+        !fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let installed = fs::read_to_string(&path).unwrap();
+    assert!(installed.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(installed.contains("custom = \"target-marker\""));
+    assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+    let installed = fs::read_to_string(&target).unwrap();
+    assert_eq!(
+        installed,
+        "model_provider = \"openai\"\ncustom = \"target-marker\"\n"
+    );
+    let backup = fs::read_to_string(backup_path(&path)).unwrap();
+    assert!(backup.contains("__nemo_relay_original_config_symlink_target"));
+    assert!(!backup.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "model_provider = \"openai\"\ncustom = \"target-marker\"\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_install_allows_non_utf8_symlink_target_paths() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let codex_dir = dir.path().join(".codex");
+    let linked_dir = dir.path().join("linked");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::create_dir_all(&linked_dir).unwrap();
+
+    let target_name = OsString::from_vec(vec![
+        b'c', b'o', b'n', b'f', b'i', b'g', 0xff, b'.', b't', b'o', b'm', b'l',
+    ]);
+    let target = linked_dir.join(PathBuf::from(target_name));
+
+    let path = codex_dir.join("config.toml");
+    symlink(&target, &path).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let installed = fs::read_to_string(&path).unwrap();
+    assert!(installed.contains("model_provider = \"nemo-relay-openai\""));
+    assert!(installed.contains(BOOTSTRAP_CLIENT_TOKEN_HEADER));
+
+    let backup = fs::read_to_string(backup_path(&path)).unwrap();
+    assert!(backup.contains("__nemo_relay_original_config_absent = true"));
+    assert!(!backup.contains("__nemo_relay_original_config_symlink_target"));
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_install_and_uninstall_restore_dangling_symlinked_config_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let codex_dir = dir.path().join(".codex");
+    let linked_dir = dir.path().join("linked");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::create_dir_all(&linked_dir).unwrap();
+
+    let target = linked_dir.join("config-target.toml");
+    let path = codex_dir.join("config.toml");
+    symlink(&target, &path).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!target.exists());
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    assert!(
+        !fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        fs::read_to_string(&path)
+            .unwrap()
+            .contains(BOOTSTRAP_CLIENT_TOKEN_HEADER)
+    );
+    assert!(!target.exists());
+    let backup = fs::read_to_string(backup_path(&path)).unwrap();
+    assert!(backup.contains("__nemo_relay_original_config_absent = true"));
+    assert!(backup.contains("__nemo_relay_original_config_symlink_target"));
+
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!target.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_reinstall_restores_original_symlink_after_user_edits_materialized_config() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let codex_dir = dir.path().join(".codex");
+    let linked_dir = dir.path().join("linked");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::create_dir_all(&linked_dir).unwrap();
+
+    let target = linked_dir.join("config-target.toml");
+    fs::write(
+        &target,
+        "model_provider = \"openai\"\ncustom = \"target-marker\"\n",
+    )
+    .unwrap();
+    let path = codex_dir.join("config.toml");
+    symlink(&target, &path).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+
+    let mut edited = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    edited["custom"] = Item::Value(TomlValue::from("edited-marker"));
+    fs::write(&path, edited.to_string()).unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    uninstall_codex_config(&path, DEFAULT_URL, false).unwrap();
+
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&path).unwrap(), target);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "model_provider = \"openai\"\ncustom = \"edited-marker\"\n"
     );
 }
 
@@ -3174,6 +3365,109 @@ fn codex_install_hooks_persist_custom_gateway_url() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn codex_install_and_uninstall_preserve_symlinked_hooks_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let codex_dir = dir.path().join(".codex");
+    let linked_dir = dir.path().join("linked");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::create_dir_all(&linked_dir).unwrap();
+
+    let target = linked_dir.join("hooks-target.json");
+    fs::write(
+        &target,
+        "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"user-hook\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"user-hook-command\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+    )
+    .unwrap();
+    let path = codex_dir.join("hooks.json");
+    symlink(&target, &path).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    install_codex_hooks(&path, DEFAULT_URL).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let installed = fs::read_to_string(&target).unwrap();
+    assert!(installed.contains("user-hook-command"));
+    assert!(installed.contains("hook-forward codex"));
+
+    uninstall_codex_hooks(&path, DEFAULT_URL).unwrap();
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let restored = fs::read_to_string(&target).unwrap();
+    assert!(restored.contains("user-hook-command"));
+    assert!(!restored.contains("hook-forward codex"));
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_install_migration_preserves_symlinked_legacy_hooks_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let codex_dir = dir.path().join(".codex");
+    let linked_dir = dir.path().join("linked");
+    fs::create_dir_all(&codex_dir).unwrap();
+    fs::create_dir_all(&linked_dir).unwrap();
+
+    let path = codex_dir.join("hooks.json");
+    let target = linked_dir.join("hooks-target.json");
+    let relay = current_exe().unwrap();
+    let legacy_command = legacy_codex_hook_command(&relay);
+    fs::write(
+        &target,
+        serde_json::to_vec_pretty(&json!({
+            "hooks": {
+                "SessionStart": [{
+                    "hooks": [
+                        {"type": "command", "command": legacy_command, "timeout": 30},
+                        {"type": "command", "command": "custom-user-hook", "timeout": 30}
+                    ]
+                }]
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    symlink(&target, &path).unwrap();
+
+    remove_legacy_codex_hooks(&path).unwrap();
+
+    assert!(
+        fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&path).unwrap(), target);
+    let updated: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+    assert!(!event_contains_command(
+        &updated,
+        "SessionStart",
+        &legacy_command
+    ));
+    assert!(event_contains_command(
+        &updated,
+        "SessionStart",
+        "custom-user-hook"
+    ));
+}
+
 #[test]
 fn codex_install_migration_removes_legacy_relay_groups_and_preserves_unrelated_hooks() {
     let dir = tempdir().unwrap();
@@ -3787,6 +4081,167 @@ fn claude_restore_removes_settings_created_from_an_absent_original() {
     assert!(!settings_path.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn claude_provider_enable_and_restore_preserve_symlinked_settings_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let linked_dir = dir.path().join("linked");
+    fs::create_dir_all(&linked_dir).unwrap();
+    let target = linked_dir.join("settings-target.json");
+    fs::write(
+        &target,
+        serde_json::to_vec_pretty(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+                "OTHER": "kept"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let settings_path = claude_settings_path().unwrap();
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    symlink(&target, &settings_path).unwrap();
+    assert!(
+        fs::symlink_metadata(&settings_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    assert!(
+        fs::symlink_metadata(&settings_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let installed: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(
+        json_env_string(&installed, "ANTHROPIC_BASE_URL"),
+        Some(DEFAULT_URL)
+    );
+    assert_eq!(json_env_string(&installed, "OTHER"), Some("kept"));
+
+    restore_claude_provider(DEFAULT_URL).unwrap();
+    assert!(
+        fs::symlink_metadata(&settings_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let restored: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(
+        json_env_string(&restored, "ANTHROPIC_BASE_URL"),
+        Some("https://api.anthropic.com")
+    );
+    assert_eq!(json_env_string(&restored, "OTHER"), Some("kept"));
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_enable_does_not_follow_symlinked_backup_path() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = claude_settings_path().unwrap();
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+    fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": DEFAULT_URL
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let unrelated_target = dir.path().join("unrelated-backup-target.json");
+    fs::write(&unrelated_target, br#"{"sentinel":"keep"}"#).unwrap();
+    let backup = backup_path(&settings_path);
+    symlink(&unrelated_target, &backup).unwrap();
+
+    enable_claude_provider(DEFAULT_URL).unwrap();
+
+    let unrelated: Value =
+        serde_json::from_str(&fs::read_to_string(&unrelated_target).unwrap()).unwrap();
+    assert_eq!(unrelated, json!({"sentinel": "keep"}));
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_restore_absent_original_does_not_delete_symlink_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = claude_settings_path().unwrap();
+
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    assert!(backup_path(&settings_path).exists());
+
+    fs::remove_file(&settings_path).unwrap();
+    let target = dir.path().join("user-owned-settings.json");
+    fs::write(
+        &target,
+        serde_json::to_vec_pretty(&json!({
+            "env": {
+                "ANTHROPIC_BASE_URL": DEFAULT_URL
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    symlink(&target, &settings_path).unwrap();
+
+    restore_claude_provider(DEFAULT_URL).unwrap();
+
+    assert!(target.exists());
+    assert!(fs::symlink_metadata(&settings_path).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn claude_restore_absent_dangling_symlink_preserves_link_and_removes_created_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let settings_path = claude_settings_path().unwrap();
+    fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+
+    let target = dir.path().join("missing-target.json");
+    symlink(&target, &settings_path).unwrap();
+    assert!(
+        fs::symlink_metadata(&settings_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&settings_path).unwrap(), target);
+    assert!(!target.exists());
+
+    enable_claude_provider(DEFAULT_URL).unwrap();
+    assert!(target.exists());
+
+    restore_claude_provider(DEFAULT_URL).unwrap();
+
+    assert!(
+        fs::symlink_metadata(&settings_path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&settings_path).unwrap(), target);
+    assert!(!target.exists());
+}
+
 #[test]
 fn plugin_host_entrypoints_report_json() {
     let dir = tempdir().unwrap();
@@ -3857,4 +4312,132 @@ fn event_contains_command(config: &Value, event: &str, command: &str) -> bool {
                     })
             })
         })
+}
+
+#[test]
+fn codex_host_helpers_honor_home_and_quote_gateway_commands() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    assert_eq!(codex_home_dir().unwrap(), dir.path().join(".codex"));
+    let command = codex_hook_command("http://127.0.0.1:47632/path with space");
+    assert!(command.contains("hook-forward codex --gateway-url"));
+    let quoted_gateway_url = if cfg!(windows) {
+        "\"http://127.0.0.1:47632/path with space\""
+    } else {
+        "'http://127.0.0.1:47632/path with space'"
+    };
+    assert!(command.contains(quoted_gateway_url));
+    assert_eq!(
+        legacy_named_codex_hook_command(),
+        "nemo-relay plugin-shim hook codex"
+    );
+}
+
+#[test]
+fn codex_hook_and_provider_helpers_distinguish_empty_and_managed_configuration() {
+    assert!(!hook_config_has_hook_groups(&json!({})));
+    assert!(!hook_config_has_hook_groups(
+        &json!({"hooks": {"SessionStart": []}})
+    ));
+    assert!(hook_config_has_hook_groups(
+        &json!({"hooks": {"SessionStart": [{}]}})
+    ));
+
+    let managed = r#"
+model_provider = "nemo-relay-openai"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay"
+base_url = "http://127.0.0.1:47632/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+[features]
+hooks = true
+[features.multi_agent_v2]
+enabled = false
+"#
+    .parse::<DocumentMut>()
+    .unwrap();
+    assert!(codex_config_doc_has_managed_install(
+        &managed,
+        "http://127.0.0.1:47632/v1"
+    ));
+    assert_eq!(feature_hooks_enabled(&managed), Some(true));
+    assert!(!codex_config_doc_has_managed_install(
+        &managed,
+        "http://other"
+    ));
+}
+
+#[test]
+fn codex_provider_helpers_restore_managed_items() {
+    let mut doc = r#"
+model_provider = "nemo-relay-openai"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay"
+base_url = "http://127.0.0.1:47632/v1"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+http_headers = { Existing = "old", X_NEMO_RELAY_CLIENT_TOKEN = "token" }
+[features]
+hooks = true
+[features.multi_agent_v2]
+enabled = false
+"#
+    .parse::<DocumentMut>()
+    .unwrap();
+    assert_eq!(
+        codex_provider_header(&doc, "existing").and_then(TomlValue::as_str),
+        Some("old")
+    );
+    assert_eq!(
+        codex_provider_header(&doc, "x_nemo_relay_client_token").and_then(TomlValue::as_str),
+        Some("token")
+    );
+
+    let backup = "model_provider = \"original\"\n[features]\nhooks = false\n"
+        .parse::<DocumentMut>()
+        .unwrap();
+    restore_top_level_item_if_str(&mut doc, &backup, "model_provider", "nemo-relay-openai");
+    restore_table_item_if_bool(&mut doc, &backup, "features", "hooks", true);
+    assert_eq!(doc["model_provider"].as_str(), Some("original"));
+    assert_eq!(feature_hooks_enabled(&doc), Some(false));
+}
+
+#[test]
+fn codex_install_preserves_user_provider_headers_when_rebuilding_configuration() {
+    let dir = tempdir().unwrap();
+    let _home = HomeScope::enter(dir.path());
+    let path = dir.path().join(".codex").join("config.toml");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"
+model_provider = "nemo-relay-openai"
+[model_providers.nemo-relay-openai]
+name = "NeMo Relay"
+base_url = "http://127.0.0.1:47632"
+wire_api = "responses"
+requires_openai_auth = true
+supports_websockets = false
+http_headers = { User_Header = "preserve-me" }
+[features]
+hooks = true
+[features.multi_agent_v2]
+enabled = false
+"#,
+    )
+    .unwrap();
+
+    install_codex_config(&path, DEFAULT_URL).unwrap();
+    let doc = fs::read_to_string(&path)
+        .unwrap()
+        .parse::<DocumentMut>()
+        .unwrap();
+    assert_eq!(
+        codex_provider_header(&doc, "user_header").and_then(TomlValue::as_str),
+        Some("preserve-me")
+    );
+    assert!(codex_provider_header(&doc, BOOTSTRAP_CLIENT_TOKEN_HEADER).is_some());
 }

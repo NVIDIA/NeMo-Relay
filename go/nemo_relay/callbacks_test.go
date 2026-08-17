@@ -39,13 +39,17 @@ func TestLLMSanitizeCodecInvocationInvalidationWaitsForInflightCall(t *testing.T
 	}
 }
 
-func toolExecutionOutcome(result json.RawMessage, err error) (ToolExecutionInterceptOutcome, error) {
-	return ToolExecutionInterceptOutcome{Result: result}, err
+func toolExecutionResult(result json.RawMessage) ToolExecutionResult {
+	return ToolExecutionResult{Result: result}
+}
+
+func toolExecutionOutcome(result ToolExecutionResult, err error) (ToolExecutionInterceptOutcome, error) {
+	return ToolExecutionInterceptOutcome{Result: result.Result, Annotation: result.Annotation}, err
 }
 
 func TestRegisterAndUnregisterClosure(t *testing.T) {
-	fn := ToolExecutionFunc(func(args json.RawMessage) (json.RawMessage, error) {
-		return args, nil
+	fn := ToolExecutionFunc(func(args json.RawMessage) (ToolExecutionResult, error) {
+		return toolExecutionResult(args), nil
 	})
 
 	userData := registerClosure(fn)

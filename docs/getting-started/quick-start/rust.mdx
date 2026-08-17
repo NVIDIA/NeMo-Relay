@@ -63,7 +63,7 @@ use nemo_relay::api::scope::{
     self, EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeType,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams};
+use nemo_relay::api::tool::{tool_call_execute, ToolCallExecuteParams, ToolExecutionResult};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .name("search")
             .args(json!({"query": "hello"}))
             .func(Arc::new(|args| Box::pin(async move {
-                Ok(json!({"echo": args["query"]}))
+                Ok(ToolExecutionResult::new(json!({"echo": args["query"]})))
             })))
             .parent(handle.clone())
             .build(),
@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    println!("{tool_result}");
+    println!("{}", tool_result.result);
     println!("{llm_result}");
 
     scope::pop_scope(PopScopeParams::builder().handle_uuid(&handle.uuid).build())?;
@@ -134,13 +134,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+The managed tool callback returns `ToolExecutionResult`, and application code
+reads its `result` field. The optional `annotation` field carries opaque JSON
+metadata without changing the business result.
+
 ## What Success Looks Like
 
 You should see:
 
 - Event lines for the root scope, managed tool and LLM lifecycles, plus the
   `initialized` mark event
-- `{"echo":"hello"}` from the tool call
+- `{"echo":"hello"}` from the tool call's `result` field
 - A final object containing `ok: true` and the echoed message payload from the
   LLM callback
 

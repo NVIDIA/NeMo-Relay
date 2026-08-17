@@ -125,9 +125,10 @@ pub unsafe extern "C" fn nemo_relay_tool_call(
 ///
 /// # Parameters
 /// - `handle`: The tool handle from `nemo_relay_tool_call`.
-/// - `result_json`: Tool result as a null-terminated JSON C string. This
-///   result becomes the end-event data after sanitize-response guardrails unless
-///   it sanitizes to JSON null.
+/// - `result_json`: Serialized `ToolExecutionResult` as a null-terminated JSON
+///   C string with required `result` and optional `annotation` fields. Its
+///   `result` becomes the end-event data after sanitize-response guardrails
+///   unless it sanitizes to JSON null.
 /// - `data_json`: Optional null-terminated JSON data used when the sanitized
 ///   result is JSON null, or null.
 /// - `metadata_json`: Optional null-terminated JSON metadata recorded on the
@@ -156,9 +157,16 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
         set_last_error("handle is null");
         return NemoRelayStatus::NullPointer;
     }
-    let result = match c_str_to_json(result_json) {
+    let result_json = match c_str_to_json(result_json) {
         Some(r) => r,
         None => return NemoRelayStatus::InvalidJson,
+    };
+    let execution_result = match serde_json::from_value(result_json) {
+        Ok(result) => result,
+        Err(error) => {
+            set_last_error(&format!("invalid tool execution result JSON: {error}"));
+            return NemoRelayStatus::InvalidJson;
+        }
     };
     let data = match c_str_to_opt_json(data_json) {
         Some(d) => d,
@@ -176,7 +184,7 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
     match core_tool_api::tool_call_end(
         core_tool_api::ToolCallEndParams::builder()
             .handle(&unsafe { &*handle }.0)
-            .result(result)
+            .execution_result(execution_result)
             .data_opt(data)
             .metadata_opt(metadata)
             .timestamp_opt(timestamp)
@@ -204,8 +212,8 @@ pub unsafe extern "C" fn nemo_relay_tool_call_end(
 /// - `attributes`: Bitfield of tool attributes.
 /// - `data_json`: Optional JSON data, or null.
 /// - `metadata_json`: Optional JSON metadata, or null.
-/// - `out`: On success, receives the result as a JSON C string. Caller must free
-///   with `nemo_relay_string_free`.
+/// - `out`: On success, receives a serialized `ToolExecutionResult` as a JSON C
+///   string. Caller must free it with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `name`, `args_json`, and `out` must be valid, non-null pointers.
@@ -270,10 +278,18 @@ pub unsafe extern "C" fn nemo_relay_tool_call_execute(
     }));
 
     match result {
-        Ok(json) => {
-            unsafe { *out = json_to_c_string(&json) };
-            NemoRelayStatus::Ok
-        }
+        Ok(execution_result) => match serde_json::to_value(execution_result) {
+            Ok(json) => {
+                unsafe { *out = json_to_c_string(&json) };
+                NemoRelayStatus::Ok
+            }
+            Err(error) => {
+                set_last_error(&format!(
+                    "failed to serialize tool execution result: {error}"
+                ));
+                NemoRelayStatus::Internal
+            }
+        },
         Err(e) => status_from_error(&e),
     }
 }

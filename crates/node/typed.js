@@ -61,6 +61,18 @@ function collectCodecReturn(value) {
   return value === undefined ? null : value;
 }
 
+function encodeToolExecutionResult(executionResult, resultCodec) {
+  if (executionResult === null || typeof executionResult !== 'object' || !('result' in executionResult)) {
+    throw new TypeError('typed tool callback must return ToolExecutionResult');
+  }
+  const result = executionResult.result;
+  const annotation = executionResult.annotation;
+  return {
+    result: resultCodec.toJson(result),
+    ...(annotation == null ? {} : { annotation }),
+  };
+}
+
 function decodeResponseWithCodec(codec, response) {
   try {
     return collectCodecReturn(codec.decodeResponse(response));
@@ -80,17 +92,17 @@ function decodeResponseWithCodec(codec, response) {
  *
  * Converts typed arguments to JSON, invokes the native tool execution
  * lifecycle, and decodes the final JSON result back into the caller's typed
- * result shape.
+ * result shape while preserving the opaque annotation unchanged.
  *
  * @template TArgs
  * @template TResult
  * @param {string} name - Tool name reported to the runtime.
  * @param {TArgs} args - Typed tool arguments supplied by the caller.
- * @param {function(TArgs, AbortSignal): TResult | Promise<TResult>} func - Tool implementation to execute.
+ * @param {function(TArgs, AbortSignal): { result: TResult, annotation?: * } | Promise<{ result: TResult, annotation?: * }>} func - Tool implementation to execute.
  * @param {Codec<TArgs>} argsCodec - Codec used to serialize and deserialize tool args.
  * @param {Codec<TResult>} resultCodec - Codec used to serialize and deserialize tool results.
  * @param {object} [options] - Optional execution-scoping metadata.
- * @returns {Promise<TResult>} A promise resolving to the decoded typed tool result.
+ * @returns {Promise<{ result: TResult, annotation?: * }>} A promise resolving to the decoded typed tool result.
  * @remarks The wrapper accepts both synchronous and promise-returning tool
  * implementations; codec failures and native execution errors propagate to the
  * returned promise.
@@ -103,9 +115,9 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
     const typedArgs = argsCodec.fromJson(jsonArgsInner);
     const typedResult = func(typedArgs, signal);
     if (typedResult && typeof typedResult.then === 'function') {
-      return typedResult.then((r) => resultCodec.toJson(r));
+      return typedResult.then((result) => encodeToolExecutionResult(result, resultCodec));
     }
-    return resultCodec.toJson(typedResult);
+    return encodeToolExecutionResult(typedResult, resultCodec);
   };
 
   const jsonResult = await lib.toolCallExecuteAsync(
@@ -118,7 +130,10 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
     opts.metadata ?? null,
   );
 
-  return resultCodec.fromJson(jsonResult);
+  return {
+    result: resultCodec.fromJson(jsonResult.result),
+    ...(jsonResult.annotation == null ? {} : { annotation: jsonResult.annotation }),
+  };
 }
 
 /**

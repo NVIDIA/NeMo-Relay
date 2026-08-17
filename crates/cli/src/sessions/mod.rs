@@ -1249,7 +1249,7 @@ impl Session {
             tool_call_end(
                 ToolCallEndParams::builder()
                     .handle(&handle)
-                    .result(json!({ "status": reason }))
+                    .execution_result(json!({ "status": reason }).into())
                     .metadata(json!({ "status": reason }))
                     .build(),
             )?;
@@ -1570,7 +1570,7 @@ impl Session {
         tool_call_end(
             ToolCallEndParams::builder()
                 .handle(&handle)
-                .result(event.result.clone())
+                .execution_result(event.result.clone().into())
                 .metadata(merge_metadata(
                     event_metadata,
                     json!({ "status": event.status }),

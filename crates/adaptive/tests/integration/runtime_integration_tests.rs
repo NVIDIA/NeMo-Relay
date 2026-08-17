@@ -618,7 +618,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
     .unwrap();
     assert_eq!(llm_result, json!({"response": "ok"}));
 
-    let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let tool_result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("search")
@@ -628,7 +628,7 @@ async fn test_adaptive_plugin_registers_and_passes_calls_through() {
     )
     .await
     .unwrap();
-    assert_eq!(tool_result, json!({"query": "test"}));
+    assert_eq!(tool_result.result, json!({"query": "test"}));
 
     clear_plugin_configuration().unwrap();
 }
@@ -822,7 +822,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
     .unwrap();
     assert_eq!(request.request.headers.get("x-plugin"), Some(&json!("set")));
 
-    let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args) }));
+    let tool_func: ToolExecutionNextFn = Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
     let tool_result = tool_call_execute(
         nemo_relay::api::tool::ToolCallExecuteParams::builder()
             .name("search")
@@ -832,7 +832,7 @@ async fn test_top_level_plugin_registers_request_and_execution_intercepts() {
     )
     .await
     .unwrap();
-    assert_eq!(tool_result["x-tool-plugin"], json!(true));
+    assert_eq!(tool_result.result["x-tool-plugin"], json!(true));
 
     let llm_func: LlmExecutionNextFn =
         Arc::new(|_req: LlmRequest| Box::pin(async move { Ok(json!({"response": "ok"})) }));

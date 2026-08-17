@@ -118,7 +118,7 @@ fn sync_wrappers_and_codec_errors_cover_remaining_branches() {
             py,
             r#"
 def sync_tool_exec(args):
-    return {"sync_tool": args["x"] + 1}
+    return ToolResult({"sync_tool": args["x"] + 1})
 
 def sync_tool_intercept(name, args, next):
     return ToolOutcome({"name": name, "value": args["x"] + 2})
@@ -175,6 +175,12 @@ class RaisingResponseCodec:
                 py.get_type::<crate::py_types::PyToolExecutionInterceptOutcome>(),
             )
             .unwrap();
+        module
+            .setattr(
+                "ToolResult",
+                py.get_type::<crate::py_types::PyToolExecutionResult>(),
+            )
+            .unwrap();
 
         let tool_exec_py: Py<PyAny> = module.getattr("sync_tool_exec").unwrap().unbind();
         let tool_intercept_py: Py<PyAny> = module.getattr("sync_tool_intercept").unwrap().unbind();
@@ -186,12 +192,12 @@ class RaisingResponseCodec:
             let tool_exec = wrap_py_tool_exec_fn(tool_exec_py);
             assert_eq!(
                 tool_exec(json!({"x": 2})).await.unwrap(),
-                json!({"sync_tool": 3})
+                nemo_relay::api::tool::ToolExecutionResult::new(json!({"sync_tool": 3}))
             );
 
             let tool_intercept = wrap_py_tool_exec_intercept_fn(tool_intercept_py);
             let tool_next: ToolExecutionNextFn =
-                Arc::new(|args| Box::pin(async move { Ok(json!({"next": args["x"]})) }));
+                Arc::new(|args| Box::pin(async move { Ok(json!({"next": args["x"]}).into()) }));
             assert_eq!(
                 tool_intercept("tool", json!({"x": 3}), tool_next)
                     .await
@@ -596,7 +602,14 @@ async def collect_stream(awaitable):
             pyo3_async_runtimes::tokio::run_until_complete(event_loop, async move {
                 let continuation_context = MiddlewareContinuationContext::capture();
                 let tool_next = PyToolNextFn {
-                    inner: Arc::new(|args| Box::pin(async move { Ok(json!({"echo": args["x"]})) })),
+                    inner: Arc::new(|args| {
+                        Box::pin(async move {
+                            Ok(nemo_relay::api::tool::ToolExecutionResult::annotated(
+                                json!({"echo": args["x"]}),
+                                json!({"source": "next"}),
+                            ))
+                        })
+                    }),
                     context: continuation_context.clone(),
                 };
                 let tool_awaitable = Python::attach(|py| {
@@ -609,10 +622,22 @@ async def collect_stream(awaitable):
                     pyo3_async_runtimes::tokio::into_future(helper_call.into_bound(py)).unwrap()
                 });
                 let tool_result = tool_future.await.unwrap();
-                assert_eq!(
-                    Python::attach(|py| crate::convert::py_to_json(tool_result.bind(py)).unwrap()),
-                    json!({"echo": 7})
-                );
+                Python::attach(|py| {
+                    assert_eq!(
+                        crate::convert::py_to_json(
+                            &tool_result.bind(py).getattr("result").unwrap()
+                        )
+                        .unwrap(),
+                        json!({"echo": 7})
+                    );
+                    assert_eq!(
+                        crate::convert::py_to_json(
+                            &tool_result.bind(py).getattr("annotation").unwrap()
+                        )
+                        .unwrap(),
+                        json!({"source": "next"})
+                    );
+                });
 
                 let tool_next_err = PyToolNextFn {
                     inner: Arc::new(|_| {

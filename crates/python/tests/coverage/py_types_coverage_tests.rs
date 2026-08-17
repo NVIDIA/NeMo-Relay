@@ -2173,7 +2173,12 @@ def run(types, api):
     _ = tool.data
     _ = tool.metadata
     _ = repr(tool)
-    api.tool_call_end(tool, {"result": 2}, data={"done": True}, metadata={"status": "ok"})
+    api.tool_call_end(
+        tool,
+        types.ToolExecutionResult({"result": 2}),
+        data={"done": True},
+        metadata={"status": "ok"},
+    )
 
     llm = api.llm_call(
         "llm",

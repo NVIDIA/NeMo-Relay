@@ -124,6 +124,9 @@ from nemo_relay._native import (
     ToolExecutionInterceptOutcome as ToolExecutionInterceptOutcome,
 )
 from nemo_relay._native import (
+    ToolExecutionResult as ToolExecutionResult,
+)
+from nemo_relay._native import (
     ToolHandle as ToolHandle,
 )
 
@@ -258,7 +261,7 @@ Return:
     JSON payload passed to later request intercepts and tool execution.
 """
 ToolExecutionIntercept: TypeAlias = Callable[
-    [str, Json, Callable[[Json], Awaitable[Json]]],
+    [str, Json, Callable[[Json], Awaitable[ToolExecutionResult[Json]]]],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
 """Execution intercept callback that wraps tool execution.

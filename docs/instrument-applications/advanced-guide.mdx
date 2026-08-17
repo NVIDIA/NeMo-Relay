@@ -65,8 +65,11 @@ def require_query(tool_name, args):
 async def measure_tool(tool_name, args, next_call):
     started = time.perf_counter()
     try:
-        result = await next_call(args)
-        return nemo_relay.ToolExecutionInterceptOutcome(result)
+        execution_result = await next_call(args)
+        return nemo_relay.ToolExecutionInterceptOutcome(
+            execution_result.result,
+            annotation=execution_result.annotation,
+        )
     finally:
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         print(f"{tool_name} completed in {elapsed_ms} ms")
@@ -99,8 +102,11 @@ registerToolConditionalExecutionGuardrail("search.require_query", 20, (_toolName
 registerToolExecutionIntercept("search.measure", 30, async (args, next) => {
   const started = performance.now();
   try {
-    const result = await next(args);
-    return { result };
+    const executionResult = await next(args);
+    return {
+      result: executionResult.result,
+      annotation: executionResult.annotation,
+    };
   } finally {
     console.log(`search completed in ${Math.round(performance.now() - started)} ms`);
   }
@@ -157,7 +163,7 @@ register_tool_execution_intercept(
             let started = Instant::now();
             let result = next(args).await;
             println!("{name} completed in {:?}", started.elapsed());
-            Ok(ToolExecutionInterceptOutcome::new(result?))
+            Ok(ToolExecutionInterceptOutcome::from(result?))
         })
     }),
 )?;
@@ -167,8 +173,10 @@ register_tool_execution_intercept(
 </Tabs>
 
 Tool execution intercepts return an outcome even when they only forward the
-result from `next`. Refer to [Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
-for pending marks, lifecycle ordering, and binding-specific return types.
+canonical result from `next`. A forwarding intercept must preserve both
+`result` and `annotation`; pending marks remain lifecycle-owned. Refer to
+[Tool Execution Intercept Outcomes](/reference/tool-execution-intercept-outcomes)
+for annotation, pending-mark, lifecycle, and binding-specific return semantics.
 
 ## Scope Middleware to One Request
 
@@ -194,7 +202,12 @@ NeMo Relay exposes the same core middleware families for tools and LLMs:
 | Execution intercept | `register_tool_execution` | `register_llm_execution` | Yes |
 | Stream execution intercept | Not applicable | `register_llm_stream_execution` | Yes |
 
-Sanitize guardrails affect only the payload recorded on emitted events. Request intercepts affect the real request that reaches the tool or provider. Execution intercepts wrap the callback itself and are only available when the invocation uses managed execution.
+Sanitize guardrails affect only the payload recorded on emitted events. Tool
+sanitize-response guardrails receive only `ToolExecutionResult.result`; a
+scope-end event sanitizer can separately sanitize the projected tool result
+annotation. Request intercepts affect the real request that reaches the tool or
+provider. Execution intercepts wrap the callback itself and are only available
+when the invocation uses managed execution.
 
 ### Node.js Callback Failures
 

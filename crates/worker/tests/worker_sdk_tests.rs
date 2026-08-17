@@ -33,10 +33,14 @@ use nemo_relay_worker_proto::v1::{
     DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
     InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
     LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
+    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+};
 use serde_json::json;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -74,7 +78,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
+            relay_version: "0.8.0".into(),
             worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: "bad-token".into(),
             host_endpoint: "http://127.0.0.1:9".into(),
@@ -87,7 +91,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: "wrong-activation".into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
+            relay_version: "0.8.0".into(),
             worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
@@ -100,7 +104,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
+            relay_version: "0.8.0".into(),
             worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
@@ -109,6 +113,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .expect("handshake succeeds")
         .into_inner();
     assert_eq!(handshake.plugin_id, PLUGIN_ID);
+    assert_eq!(handshake.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
     assert!(
         handshake
             .supported_surfaces
@@ -611,7 +616,14 @@ async fn worker_service_invokes_every_registration_surface() {
     )
     .await;
     assert_eq!(tool_outcome.pending_marks.len(), 1);
-    assert_eq!(tool_outcome.pending_marks[0].name, "worker.tool.execution");
+    assert_eq!(
+        tool_outcome.pending_marks[0],
+        PendingMarkSpec::builder()
+            .name("worker.tool.execution")
+            .data(json!({"checkpoint": true}))
+            .build()
+    );
+    assert_eq!(tool_outcome.annotation, Some(json!({"source": "host"})));
     let tool_exec = tool_outcome.result;
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
@@ -1476,6 +1488,13 @@ async fn worker_service_propagates_host_runtime_errors() {
             },
             "tool next failed",
         ),
+        (
+            MockHostFailures {
+                tool_next_missing_result: true,
+                ..Default::default()
+            },
+            "tool execution result.result is missing",
+        ),
     ] {
         host.set_failures(failures);
         assert_worker_error(
@@ -1810,17 +1829,16 @@ impl WorkerPlugin for SurfacePlugin {
                     .await?;
                 runtime.pop_scope(&handle, None, None).await?;
                 runtime.drop_scope_stack(&stack_id).await?;
-                let next_value = next.call(value).await?;
-                Ok(ToolExecutionInterceptOutcome::new(set_json_field(
-                    next_value,
-                    "phase",
-                    "tool_exec",
-                ))
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("worker.tool.execution")
-                        .build(),
-                ))
+                let mut next_value = next.call(value).await?;
+                next_value.result = set_json_field(next_value.result, "phase", "tool_exec");
+                Ok(
+                    ToolExecutionInterceptOutcome::from(next_value).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("worker.tool.execution")
+                            .data(json!({"checkpoint": true}))
+                            .build(),
+                    ),
+                )
             }
         });
         let scope_runtime = runtime.clone();
@@ -2018,6 +2036,7 @@ struct MockHostFailures {
     pop_scope: HostFailure,
     drop_scope_stack: HostFailure,
     tool_next: bool,
+    tool_next_missing_result: bool,
     llm_next: bool,
     llm_stream_mode: MockStreamMode,
     codec_request_decode: bool,
@@ -2166,18 +2185,31 @@ impl RelayHostRuntime for MockHost {
     async fn tool_next(
         &self,
         request: Request<ToolNextRequest>,
-    ) -> std::result::Result<Response<JsonResult>, Status> {
+    ) -> std::result::Result<Response<ToolExecutionResultResponse>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
         self.record(format!("tool_next:{}", request.continuation_id));
         if self.failures().tool_next {
-            return Ok(Response::new(JsonResult {
+            return Ok(Response::new(ToolExecutionResultResponse {
                 value: None,
                 error: Some(worker_error("tool next failed")),
             }));
         }
-        Ok(Response::new(JsonResult {
-            value: Some(json_env(json!({"next": "tool"}))),
+        let value = if self.failures().tool_next_missing_result {
+            ProtoToolExecutionResult {
+                result: None,
+                annotation: None,
+            }
+        } else {
+            ProtoToolExecutionResult {
+                result: Some(json_value(&json!({"next": "tool"})).expect("encode tool result")),
+                annotation: Some(
+                    json_value(&json!({"source": "host"})).expect("encode annotation"),
+                ),
+            }
+        };
+        Ok(Response::new(ToolExecutionResultResponse {
+            value: Some(value),
             error: None,
         }))
     }
@@ -2730,11 +2762,7 @@ async fn invoke_json(client: &mut PluginWorkerClient<Channel>, request: InvokeRe
             decode_json_envelope(&result.value.expect("json value")).expect("decode JSON result")
         }
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
-            decode_json_envelope::<ToolExecutionInterceptOutcome>(
-                &result.outcome.expect("tool execution outcome"),
-            )
-            .expect("decode tool execution outcome")
-            .result
+            decode_tool_execution_outcome(result.outcome.expect("tool execution outcome")).result
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }
@@ -2752,10 +2780,32 @@ async fn invoke_tool_execution(
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
             let outcome = result.outcome.expect("tool execution outcome");
-            assert_eq!(outcome.schema, "nemo.relay.ToolExecutionInterceptOutcome@1");
-            decode_json_envelope(&outcome).expect("decode tool execution outcome")
+            decode_tool_execution_outcome(outcome)
         }
         other => panic!("unexpected invoke result: {other:?}"),
+    }
+}
+
+fn decode_tool_execution_outcome(
+    outcome: ProtoToolExecutionInterceptOutcome,
+) -> ToolExecutionInterceptOutcome {
+    ToolExecutionInterceptOutcome {
+        result: decode_json_value(outcome.result.as_ref().expect("tool execution result"))
+            .expect("decode tool execution result"),
+        annotation: outcome
+            .annotation
+            .as_ref()
+            .map(decode_json_value)
+            .transpose()
+            .expect("decode tool execution annotation")
+            .filter(|value: &Json| !value.is_null()),
+        pending_marks: outcome
+            .pending_marks
+            .as_ref()
+            .map(decode_json_value)
+            .transpose()
+            .expect("decode pending marks")
+            .unwrap_or_default(),
     }
 }
 

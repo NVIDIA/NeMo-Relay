@@ -19,9 +19,7 @@ fn catalog_json() -> Value {
                 "output_per_million": 2.0
             },
             "prompt_cache": {
-                "read_accounting": "separate",
-                "read_per_million": 0.1,
-                "write_per_million": 0.2
+                "read_accounting": "separate"
             }
         }]
     })

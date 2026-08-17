@@ -929,7 +929,8 @@ impl NemoRelayContextState {
     ///
     /// # Parameters
     /// - `name`: Tool name associated with the response.
-    /// - `result`: Raw tool result to sanitize for observability.
+    /// - `result`: Application-owned tool result JSON to sanitize for
+    ///   observability.
     /// - `entries`: Sanitizer snapshots to evaluate.
     ///
     /// # Returns
@@ -1161,7 +1162,7 @@ impl NemoRelayContextState {
             Box::pin(async move {
                 default_fn(args)
                     .await
-                    .map(ToolExecutionInterceptOutcome::new)
+                    .map(ToolExecutionInterceptOutcome::from)
             })
         });
         let name = name.to_string();
@@ -1185,12 +1186,14 @@ impl NemoRelayContextState {
                         let invocation = continuation.begin();
                         let downstream_marks = downstream_marks.clone();
                         Box::pin(async move {
-                            let outcome = invocation?.invoke(move || current_next(args)).await?;
+                            let mut outcome =
+                                invocation?.invoke(move || current_next(args)).await?;
+                            let pending_marks = std::mem::take(&mut outcome.pending_marks);
                             downstream_marks
                                 .lock()
                                 .expect("tool pending mark accumulator lock poisoned")
-                                .push((sequence, outcome.pending_marks));
-                            Ok(outcome.result)
+                                .push((sequence, pending_marks));
+                            Ok(outcome.into_execution_result())
                         })
                     })
                 };

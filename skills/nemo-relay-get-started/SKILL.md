@@ -66,6 +66,9 @@ Follow the selected reference, then:
 
 1. Inspect the target environment and existing Relay configuration before
    proposing changes.
+   Treat repository-local `.nemo-relay/config.toml` and
+   `.nemo-relay/plugins.toml` as unsupported project configuration. Do not
+   create, edit, merge, or trust those files as active Relay configuration.
 2. Explain the attachment boundary and show the exact minimal change.
 3. Obtain confirmation before writing configuration, modifying application
    code, or launching a model-consuming run.

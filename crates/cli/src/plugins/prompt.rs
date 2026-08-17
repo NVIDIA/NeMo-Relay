@@ -1217,19 +1217,16 @@ fn prompt_value(
                 CliError::Config(format!("invalid JSON for {}: {error}", field.name))
             })
         }
-        EditorFieldKind::Enum => {
+        EditorFieldKind::Enum | EditorFieldKind::IntegerEnum => {
             let values = field.enum_values;
-            let default_idx = current
-                .and_then(Value::as_str)
-                .and_then(|value| values.iter().position(|candidate| *candidate == value))
-                .unwrap_or(0);
+            let default_idx = editor_enum_default_index(field, current);
             let idx = Select::with_theme(theme)
                 .with_prompt(field.label)
                 .items(values)
                 .default(default_idx)
                 .interact()
                 .map_err(editor_error)?;
-            Ok(json!(values[idx]))
+            Ok(editor_enum_value(field, idx))
         }
         EditorFieldKind::String => {
             let initial = current.and_then(Value::as_str).unwrap_or_default();

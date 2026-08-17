@@ -697,7 +697,8 @@ func WithToolAttributes(attrs uint32) ToolCallOption {
 
 // WithToolData stores an arbitrary JSON application data payload on the manual
 // tool handle. Manual Start event data is the sanitized tool arguments; manual
-// End event data is the sanitized result unless that value is JSON null.
+// End event data is the sanitized protocol result unless that value is JSON
+// null.
 func WithToolData(data json.RawMessage) ToolCallOption {
 	return func(o *toolCallOptions) {
 		o.data = C.CString(string(data))
@@ -778,19 +779,25 @@ func ToolCall(name string, args json.RawMessage, opts ...ToolCallOption) (*ToolH
 }
 
 // ToolCallEnd completes a tool call that was previously started with [ToolCall].
-// It emits an End event to all subscribers with the provided result JSON. The
-// handle must have been returned by a prior [ToolCall] invocation. The emitted
-// End event records result after sanitize-response guardrails; [WithToolData]
-// is used only when the sanitized result is JSON null. Response intercepts run
-// only through [ToolCallExecute].
-func ToolCallEnd(handle *ToolHandle, result json.RawMessage, opts ...ToolCallOption) error {
+// It emits an End event to all subscribers with the provided canonical result.
+// The handle must have been returned by a prior [ToolCall] invocation. The emitted
+// End event records Result after sanitize-response guardrails and carries
+// Annotation in the event category profile; [WithToolData] is used only when
+// the sanitized result is JSON null. Response intercepts run only through
+// [ToolCallExecute].
+func ToolCallEnd(handle *ToolHandle, result ToolExecutionResult, opts ...ToolCallOption) error {
 	o := &toolCallOptions{}
 	for _, opt := range opts {
 		opt(o)
 	}
 	defer freeToolOpts(o)
 
-	cResult := C.CString(string(result))
+	result = normalizeToolExecutionResult(result)
+	resultJSON, err := jsonMarshal(result)
+	if err != nil {
+		return err
+	}
+	cResult := C.CString(string(resultJSON))
 	defer C.free(unsafe.Pointer(cResult))
 
 	return checkStatus(C.nemo_relay_tool_call_end(handle.ptr, cResult, o.data, o.metadata, o.timestamp))
@@ -805,7 +812,7 @@ func ToolCallEnd(handle *ToolHandle, result json.RawMessage, opts ...ToolCallOpt
 // and GuardrailRejected is returned. This is the recommended high-level API
 // for tool invocations. Sanitize guardrails do not rewrite the value passed
 // into fn or the value returned to the caller.
-func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, opts ...ToolCallOption) (json.RawMessage, error) {
+func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, opts ...ToolCallOption) (ToolExecutionResult, error) {
 	o := &toolCallOptions{}
 	for _, opt := range opts {
 		opt(o)
@@ -830,9 +837,13 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 		&out,
 	)
 	if err := checkStatus(status); err != nil {
-		return nil, err
+		return ToolExecutionResult{}, err
 	}
-	result := json.RawMessage(C.GoString(out))
+	result, err := decodeToolExecutionResult([]byte(C.GoString(out)))
+	if err != nil {
+		C.nemo_relay_string_free(out)
+		return ToolExecutionResult{}, err
+	}
 	C.nemo_relay_string_free(out)
 	return result, nil
 }

@@ -150,13 +150,13 @@ func registerLifecycleInterceptors(ctx *PluginContext, pluginKind string) error 
 	if err := ctx.RegisterToolExecutionIntercept(
 		"tool_exec",
 		7,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			resultJSON, err := next(args)
 			if err != nil {
 				return ToolExecutionInterceptOutcome{}, err
 			}
-			result, err := decorateJSONPayload(resultJSON, "goToolExecPlugin", pluginKind)
-			return ToolExecutionInterceptOutcome{Result: result}, err
+			result, err := decorateJSONPayload(resultJSON.Result, "goToolExecPlugin", pluginKind)
+			return ToolExecutionInterceptOutcome{Result: result, Annotation: resultJSON.Annotation}, err
 		},
 	); err != nil {
 		return err
@@ -209,14 +209,14 @@ func registerLifecycleStreamPlugin(streamPluginKind string) error {
 
 func assertToolPluginPayload(t *testing.T, pluginKind string) {
 	t.Helper()
-	toolResult, err := ToolCallExecute("search", json.RawMessage(`{"query":"test"}`), func(args json.RawMessage) (json.RawMessage, error) {
-		return args, nil
+	toolResult, err := ToolCallExecute("search", json.RawMessage(`{"query":"test"}`), func(args json.RawMessage) (ToolExecutionResult, error) {
+		return toolExecutionResult(args), nil
 	})
 	if err != nil {
 		t.Fatalf("ToolCallExecute failed: %v", err)
 	}
 	var toolPayload map[string]any
-	if err := json.Unmarshal(toolResult, &toolPayload); err != nil {
+	if err := json.Unmarshal(toolResult.Result, &toolPayload); err != nil {
 		t.Fatalf("tool result unmarshal failed: %v", err)
 	}
 	if toolPayload["goToolPlugin"] != pluginKind {
@@ -565,7 +565,7 @@ func TestPluginFuncsAndClosedContextBranches(t *testing.T) {
 			})
 		}},
 		{"tool execution", func() error {
-			return closed.RegisterToolExecutionIntercept("tool_exec", 1, func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+			return closed.RegisterToolExecutionIntercept("tool_exec", 1, func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 				return toolExecutionOutcome(next(args))
 			})
 		}},

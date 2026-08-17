@@ -27,6 +27,8 @@ The following table shows which API to use based on your integration need:
 Use manual lifecycle calls only when the surrounding code owns the real tool invocation and only exposes reliable start and finish hooks.
 If you are replaying events or bridging a framework clock, pass an explicit timestamp to the manual start, end, or mark helpers.
 Python accepts timezone-aware `datetime` values, Node.js accepts Unix microseconds since epoch, Rust accepts `DateTime<Utc>`, and Go accepts `time.Time`.
+Every manual tool end helper accepts the canonical `ToolExecutionResult`; wrap
+the business payload and add an optional opaque annotation when needed.
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -37,7 +39,7 @@ handle = nemo_relay.tools.call("search", {"query": "weather"}, data={"attempt": 
 try:
     result = {"hits": 2}
 finally:
-    nemo_relay.tools.call_end(handle, result)
+    nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
 ```
 </Tab>
 
@@ -47,13 +49,15 @@ import { toolCall, toolCallEnd } from 'nemo-relay-node';
 
 const handle = toolCall('search', { query: 'weather' }, null, null, { attempt: 1 }, null, null);
 const result = { hits: 2 };
-toolCallEnd(handle, result, null, null);
+toolCallEnd(handle, { result }, null, null);
 ```
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
+use nemo_relay::api::tool::{
+    tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
+};
 use serde_json::json;
 
 let handle = tool_call(
@@ -67,7 +71,7 @@ let handle = tool_call(
 tool_call_end(
     ToolCallEndParams::builder()
         .handle(&handle)
-        .result(json!({"hits": 2}))
+        .execution_result(ToolExecutionResult::new(json!({"hits": 2})))
         .build(),
 )?;
 ```

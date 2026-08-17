@@ -136,14 +136,16 @@ class NemoRelayMiddleware(AgentMiddleware):
 
         (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
 
-        def _call(args: Any) -> ToolMessage | Command[Any]:
-            return handler(request.override(tool_call={**request.tool_call, "args": args}))
+        def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
+            return nemo_relay.ToolExecutionResult(
+                handler(request.override(tool_call={**request.tool_call, "args": args}))
+            )
 
         return run_sync(
             nemo_relay.typed.tool_execute(
                 name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent
             )
-        )
+        ).result
 
     async def awrap_tool_call(
         self,
@@ -154,9 +156,18 @@ class NemoRelayMiddleware(AgentMiddleware):
 
         (parent, codec, tool_name, tool_args) = self._prepare_tool_call(request)
 
-        async def _call(args: Any) -> ToolMessage | Command[Any]:
-            return await handler(request.override(tool_call={**request.tool_call, "args": args}))
+        async def _call(args: Any) -> nemo_relay.ToolExecutionResult[ToolMessage | Command[Any]]:
+            return nemo_relay.ToolExecutionResult(
+                await handler(request.override(tool_call={**request.tool_call, "args": args}))
+            )
 
-        return await nemo_relay.typed.tool_execute(
-            name=tool_name, args=tool_args, func=_call, args_codec=codec, result_codec=codec, handle=parent
-        )
+        return (
+            await nemo_relay.typed.tool_execute(
+                name=tool_name,
+                args=tool_args,
+                func=_call,
+                args_codec=codec,
+                result_codec=codec,
+                handle=parent,
+            )
+        ).result

@@ -42,7 +42,7 @@ fn sample_record() -> DynamicPluginRecord {
             config_ref: Some("plugins.acme.guardrails.pii".into()),
         },
         compatibility: DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             worker_protocol: "grpc-v1".into(),
         }),
         load: DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
@@ -160,7 +160,7 @@ fn registry_rejects_invalid_raw_record_shapes() {
     let mut record = sample_record();
     record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             native_api: "1".into(),
         });
 
@@ -201,7 +201,7 @@ fn registry_rejects_invalid_raw_record_compatibility_shapes() {
     let mut record = sample_record();
     record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             native_api: "1".into(),
         });
 
@@ -222,7 +222,7 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
     let mut worker_record = sample_record();
     worker_record.compatibility =
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             worker_protocol: "   ".into(),
         });
 
@@ -240,7 +240,7 @@ fn registry_rejects_empty_required_lane_specific_compatibility_strings() {
     rust_record.metadata.kind = DynamicPluginKind::RustDynamic;
     rust_record.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             native_api: "   ".into(),
         });
     rust_record.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
@@ -285,7 +285,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     let mut record = sample_record();
     record.metadata.id = " acme.guardrails.pii ".into();
     record.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-        relay: " >=0.1.0,<0.2.0 ".into(),
+        relay: " >=0.8.0,<1.0 ".into(),
         worker_protocol: " grpc-v1 ".into(),
     });
     record.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
@@ -298,7 +298,7 @@ fn registry_add_canonicalizes_required_record_strings_before_storage() {
     assert_eq!(
         stored.compatibility,
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             worker_protocol: "grpc-v1".into(),
         })
     );
@@ -506,7 +506,7 @@ version = "0.1.0"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -540,7 +540,7 @@ id = "acme.native.switchyard"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -618,7 +618,7 @@ id = "acme.guardrails.rich"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -666,7 +666,7 @@ id = "acme.guardrails.missing-schema"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -704,7 +704,7 @@ id = "acme.guardrails.missing-capability"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -909,7 +909,7 @@ id = " acme.guardrails.trimmed "
 kind = "worker"
 
 [compat]
-relay = " >=0.1.0,<0.2.0 "
+relay = " >=0.8.0,<1.0 "
 worker_protocol = " grpc-v1 "
 
 [defaults]
@@ -932,7 +932,7 @@ entrypoint = " acme_guardrails.plugin:register "
     assert_eq!(
         record.compatibility,
         DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             worker_protocol: "grpc-v1".into(),
         })
     );
@@ -960,7 +960,7 @@ id = "acme.guardrails.{runtime}"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -1000,7 +1000,7 @@ id = "acme.guardrails.future-worker"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v2"
 
 [defaults]
@@ -1025,6 +1025,24 @@ entrypoint = "acme_guardrails.plugin:register"
 }
 
 #[test]
+fn manifest_rejects_relay_ranges_that_admit_pre_zero_eight_versions() {
+    for requirement in [">=0.7.0,<1.0", ">=0.8.0-alpha,<1.0"] {
+        let manifest = valid_worker_manifest_toml().replace(">=0.8.0,<1.0", requirement);
+        let error = DynamicPluginManifest::parse_toml(&manifest)
+            .expect_err("a pre-0.8-compatible manifest should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("excludes Relay versions before 0.8")
+        );
+    }
+
+    let future = valid_worker_manifest_toml().replace(">=0.8.0,<1.0", ">=0.9.0,<1.0");
+    DynamicPluginManifest::parse_toml(&future)
+        .expect("a future-targeted manifest that preserves the 0.8 floor should parse");
+}
+
+#[test]
 fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
     let manifest =
         DynamicPluginManifest::parse_toml(valid_rust_manifest_toml()).expect("parse manifest");
@@ -1042,10 +1060,23 @@ fn manifest_parse_and_conversion_supports_rust_dynamic_lane() {
     assert_eq!(
         record.compatibility,
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.1.0,<0.2.0".into(),
+            relay: ">=0.8.0,<1.0".into(),
             native_api: "1".into(),
         })
     );
+}
+
+#[test]
+fn manifest_rejects_native_api_two_and_unknown_native_api() {
+    for unsupported in ["2", "3"] {
+        let manifest = valid_rust_manifest_toml().replace(
+            "native_api = \"1\"",
+            &format!("native_api = \"{unsupported}\""),
+        );
+        let error = DynamicPluginManifest::parse_toml(&manifest)
+            .expect_err("unsupported native API should fail");
+        assert!(error.to_string().contains("native_api = \"1\""));
+    }
 }
 
 #[test]
@@ -1059,7 +1090,7 @@ id = "acme.guardrails.bad"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 
 [defaults]
 enabled = false
@@ -1095,7 +1126,7 @@ id = "acme.native.bad"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -1130,7 +1161,7 @@ id = "   "
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -1165,7 +1196,7 @@ id = "acme.native.missing-api"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 
 [defaults]
 enabled = false
@@ -1199,7 +1230,7 @@ id = "acme.native.bad-load"
 kind = "rust_dynamic"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 native_api = "1"
 
 [defaults]
@@ -1343,7 +1374,7 @@ id = "acme.guardrails.enabled"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -1378,7 +1409,7 @@ id = "acme.guardrails.empty-paths"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -1512,7 +1543,7 @@ id = "acme.guardrails.future"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -1547,7 +1578,7 @@ id = "acme.guardrails.dupe-cap"
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -1585,7 +1616,7 @@ version = "   "
 kind = "worker"
 
 [compat]
-relay = ">=0.1.0,<0.2.0"
+relay = ">=0.8.0,<1.0"
 worker_protocol = "grpc-v1"
 
 [defaults]
@@ -1799,7 +1830,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     let mut native = sample_record();
     native.metadata.kind = DynamicPluginKind::RustDynamic;
     native.compatibility = DynamicPluginCompatibility::Worker(DynamicPluginWorkerCompatibility {
-        relay: ">=0.5,<1.0".into(),
+        relay: ">=0.8,<1.0".into(),
         worker_protocol: "grpc-v1".into(),
     });
     native.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
@@ -1817,7 +1848,7 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
     native.metadata.kind = DynamicPluginKind::RustDynamic;
     native.compatibility =
         DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
-            relay: ">=0.5,<1.0".into(),
+            relay: ">=0.8,<1.0".into(),
             native_api: "1".into(),
         });
     native.load = DynamicPluginLoadContract::Worker(DynamicPluginWorkerLoadContract {
@@ -1839,6 +1870,54 @@ fn registry_reconstruction_and_raw_native_validation_cover_rejections() {
 }
 
 #[test]
+fn registry_rejects_pre_zero_eight_ranges_and_v2_contracts() {
+    let mut future_relay = sample_record();
+    let DynamicPluginCompatibility::Worker(compatibility) = &mut future_relay.compatibility else {
+        unreachable!("sample record is a worker")
+    };
+    compatibility.relay = ">=0.9,<1.0".into();
+    DynamicPluginRegistry::from_records(vec![future_relay])
+        .expect("future-targeted persisted state should remain readable");
+
+    let mut legacy_relay = sample_record();
+    let DynamicPluginCompatibility::Worker(compatibility) = &mut legacy_relay.compatibility else {
+        unreachable!("sample record is a worker")
+    };
+    compatibility.relay = ">=0.7,<1.0".into();
+    let error = DynamicPluginRegistry::from_records(vec![legacy_relay])
+        .expect_err("a persisted pre-0.8-compatible record should fail");
+    assert!(
+        error
+            .to_string()
+            .contains("excludes Relay versions before 0.8")
+    );
+
+    let mut worker_v2 = sample_record();
+    let DynamicPluginCompatibility::Worker(compatibility) = &mut worker_v2.compatibility else {
+        unreachable!("sample record is a worker")
+    };
+    compatibility.worker_protocol = "grpc-v2".into();
+    let error = DynamicPluginRegistry::from_records(vec![worker_v2])
+        .expect_err("a persisted grpc-v2 record should fail");
+    assert!(error.to_string().contains("worker_protocol = \"grpc-v1\""));
+
+    let mut native_v2 = sample_record();
+    native_v2.metadata.kind = DynamicPluginKind::RustDynamic;
+    native_v2.compatibility =
+        DynamicPluginCompatibility::RustDynamic(DynamicPluginRustCompatibility {
+            relay: ">=0.8,<1.0".into(),
+            native_api: "2".into(),
+        });
+    native_v2.load = DynamicPluginLoadContract::RustDynamic(DynamicPluginRustLoadContract {
+        library: "plugin.so".into(),
+        symbol: "register".into(),
+    });
+    let error = DynamicPluginRegistry::from_records(vec![native_v2])
+        .expect_err("a persisted native API 2 record should fail");
+    assert!(error.to_string().contains("native_api = \"1\""));
+}
+
+#[test]
 fn annotated_request_consumers_must_exclude_relay_zero_five() {
     let error = validate_annotated_request_consumer_compatibility(
         ">=0.5,<1.0",
@@ -1849,4 +1928,45 @@ fn annotated_request_consumers_must_exclude_relay_zero_five() {
 
     validate_annotated_request_consumer_compatibility(">=0.6,<1.0", "example.request_interceptor")
         .unwrap();
+}
+
+#[test]
+fn dynamic_plugin_relay_compatibility_requires_the_zero_eight_baseline() {
+    for requirement in [
+        ">=0.8.0",
+        ">=0.8.0,<1.0",
+        ">=0.8.0-alpha,>=0.8.0",
+        ">0.7",
+        "=0.8",
+        "^0.8",
+        "=0.8.0",
+    ] {
+        validate_dynamic_plugin_relay_baseline(Some(requirement), "worker")
+            .unwrap_or_else(|error| panic!("{requirement} should satisfy the baseline: {error}"));
+        validate_dynamic_plugin_relay_compatibility(Some(requirement), "worker")
+            .unwrap_or_else(|error| panic!("{requirement} should be accepted: {error}"));
+    }
+
+    for requirement in [
+        ">=0.7,<1.0",
+        ">=0.5,<0.6",
+        "<0.7",
+        "0.*",
+        ">=0.8.0-alpha,<1.0",
+        ">0.8.0-alpha,<1.0",
+    ] {
+        let error = validate_dynamic_plugin_relay_baseline(Some(requirement), "worker")
+            .expect_err("a range that admits a pre-0.8 version should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("excludes Relay versions before 0.8")
+        );
+    }
+
+    validate_dynamic_plugin_relay_baseline(Some(">=1.0"), "worker")
+        .expect("a future-targeted range should satisfy the permanent baseline");
+    let error = validate_dynamic_plugin_relay_compatibility(Some(">=1.0"), "worker")
+        .expect_err("a range that excludes the current host should fail");
+    assert!(error.to_string().contains("but host version is"));
 }

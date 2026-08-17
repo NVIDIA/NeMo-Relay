@@ -16,7 +16,9 @@ use serde_json::Value as Json;
 use nemo_relay::api::event::Event;
 use nemo_relay::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
 use nemo_relay::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
-use nemo_relay::api::tool::ToolHandle as CoreToolHandle;
+use nemo_relay::api::tool::{
+    ToolExecutionResult as CoreToolExecutionResult, ToolHandle as CoreToolHandle,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
@@ -90,6 +92,34 @@ impl From<CoreScopeType> for ScopeType {
 // ---------------------------------------------------------------------------
 // Handle wrappers
 // ---------------------------------------------------------------------------
+
+/// Canonical application-visible result of tool execution.
+///
+/// `result` is application-owned JSON. `annotation` is optional opaque adjacent
+/// metadata that Relay transports without interpretation.
+#[napi(object)]
+pub struct ToolExecutionResult {
+    pub result: Json,
+    pub annotation: Option<Json>,
+}
+
+impl From<ToolExecutionResult> for CoreToolExecutionResult {
+    fn from(value: ToolExecutionResult) -> Self {
+        Self {
+            result: value.result,
+            annotation: value.annotation.filter(|annotation| !annotation.is_null()),
+        }
+    }
+}
+
+impl From<CoreToolExecutionResult> for ToolExecutionResult {
+    fn from(value: CoreToolExecutionResult) -> Self {
+        Self {
+            result: value.result,
+            annotation: value.annotation,
+        }
+    }
+}
 
 /// Handle to an isolated scope stack for per-request/per-task isolation.
 #[napi]

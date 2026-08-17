@@ -63,7 +63,7 @@ func testManualLifecycleTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolCall failed: %v", err)
 	}
-	if err := ToolCallEnd(toolHandle, json.RawMessage(`{"ok":true}`), WithToolTimestamp(timestamps[3])); err != nil {
+	if err := ToolCallEnd(toolHandle, toolExecutionResult(json.RawMessage(`{"ok":true}`)), WithToolTimestamp(timestamps[3])); err != nil {
 		t.Fatalf("ToolCallEnd failed: %v", err)
 	}
 	llmHandle, err := LlmCall("go_ts_llm", makeRequest(), WithLLMTimestamp(timestamps[4]))

@@ -203,7 +203,7 @@ fn test_ffi_runtime_owner_conflict_and_llm_shape_error_sweeps() {
 
         let tool_name = cstring("ffi_runtime_owner_tool");
         let tool_args = cstring(r#"{"value":1}"#);
-        let tool_result = cstring(r#"{"ok":true}"#);
+        let tool_result = cstring(r#"{"result":{"ok":true}}"#);
         let llm_name = cstring("ffi_runtime_owner_llm");
         let llm_request =
             cstring(r#"{"headers":{},"content":{"model":"ffi-model","messages":[]}}"#);
@@ -1589,7 +1589,7 @@ fn test_ffi_tool_call_parent_tool_call_id_and_utf8_paths() {
 
         let name = cstring("ffi_tool_call_utf8");
         let args = cstring(r#"{"value":1}"#);
-        let result = cstring(r#"{"done":true}"#);
+        let result = cstring(r#"{"result":{"done":true}}"#);
         let data = cstring(r#"{"source":"tool-call"}"#);
         let metadata = cstring(r#"{"trace":"tool-call"}"#);
         let tool_call_id = cstring("tool-call-id");
@@ -2060,7 +2060,7 @@ fn test_ffi_helper_and_lifecycle_callback_failure_paths() {
             NemoRelayStatus::Ok
         );
 
-        let tool_result = cstring(r#"{"done":true}"#);
+        let tool_result = cstring(r#"{"result":{"done":true}}"#);
         assert_status!(
             nemo_relay_tool_call_end(tool_handle, tool_result.as_ptr(), ptr::null(), ptr::null()),
             NemoRelayStatus::Ok

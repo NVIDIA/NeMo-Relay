@@ -758,6 +758,31 @@ fn parse_float_value(field: &EditorFieldSpec, value: &str) -> Result<Value, CliE
     Ok(json!(parsed))
 }
 
+fn editor_enum_default_index(field: &EditorFieldSpec, current: Option<&Value>) -> usize {
+    current
+        .map(display_value)
+        .and_then(|value| {
+            field
+                .enum_values
+                .iter()
+                .position(|candidate| *candidate == value)
+        })
+        .unwrap_or(0)
+}
+
+fn editor_enum_value(field: &EditorFieldSpec, selected: usize) -> Value {
+    let value = field.enum_values[selected];
+    match field.kind {
+        EditorFieldKind::IntegerEnum => json!(
+            value
+                .parse::<i64>()
+                .expect("integer editor enum values must be valid i64 values")
+        ),
+        EditorFieldKind::Enum => json!(value),
+        _ => unreachable!("editor enum value requested for a non-enum field"),
+    }
+}
+
 #[cfg(test)]
 #[path = "../../tests/coverage/shared/plugins_tests.rs"]
 mod tests;

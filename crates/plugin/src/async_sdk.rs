@@ -256,8 +256,10 @@ pub struct ToolNext(Arc<NextInner>);
 
 impl ToolNext {
     /// Continues the tool chain with replacement arguments.
-    pub async fn call(&self, args: Json) -> Result<Json> {
-        invoke_unary_next(&self.0, &args).await
+    pub async fn call(&self, args: Json) -> Result<ToolExecutionResult> {
+        let result = invoke_unary_next(&self.0, &args).await?;
+        serde_json::from_value(result)
+            .map_err(|error| format!("invalid canonical tool execution result: {error}"))
     }
 }
 
@@ -499,6 +501,10 @@ async fn invoke_unary_next<T: Serialize>(next: &NextInner, value: &T) -> Result<
         .await
         .map_err(|_| "native continuation callback was dropped".to_string())?
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/async_sdk_tests.rs"]
+mod tests;
 
 type UnarySender = futures::channel::oneshot::Sender<Result<Json>>;
 struct UnaryState {
@@ -1035,20 +1041,9 @@ impl CodecIdentityInvocation {
         match (self.codec_kind.as_str(), self.codec_id) {
             ("none", _) => Ok(LlmCodecIdentity::None),
             ("opaque", _) => Ok(LlmCodecIdentity::Opaque),
-            ("builtin", Some(id)) => match id.as_str() {
-                "openai_chat" => Ok(LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiChat)),
-                "openai_responses" => {
-                    Ok(LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OpenAiResponses))
-                }
-                "anthropic_messages" => Ok(LlmCodecIdentity::BuiltIn(
-                    BuiltinLlmCodec::AnthropicMessages,
-                )),
-                "oci_genai" => Ok(LlmCodecIdentity::BuiltIn(BuiltinLlmCodec::OCIGenAI)),
-                "gemini_generate_content" => Ok(LlmCodecIdentity::BuiltIn(
-                    BuiltinLlmCodec::GeminiGenerateContent,
-                )),
-                _ => Err(format!("unknown built-in LLM codec: {id}")),
-            },
+            ("builtin", Some(id)) => BuiltinLlmCodec::from_id(&id)
+                .map(LlmCodecIdentity::BuiltIn)
+                .ok_or_else(|| format!("unknown built-in LLM codec: {id}")),
             ("runtime", Some(id)) => Ok(LlmCodecIdentity::Runtime(id)),
             (kind, _) => Err(format!("invalid LLM codec context: {kind}")),
         }

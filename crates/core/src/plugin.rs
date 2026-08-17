@@ -1282,7 +1282,9 @@ fn merge_plugin_components(left: &mut Json, right: Json) {
 ///
 /// Direct list fields in a component's `config` object concatenate with
 /// higher-precedence entries first. Declared observability collections do the
-/// same; deeper implementation-specific lists retain replacement semantics.
+/// same, except that an explicit empty log or metric endpoint list clears the
+/// lower-precedence list so it remains distinguishable from an omitted list.
+/// Deeper implementation-specific lists retain replacement semantics.
 fn merge_plugin_component(existing: &mut Json, higher_priority: Json) {
     let is_observability = component_kind(&higher_priority).or_else(|| component_kind(existing))
         == Some("observability");
@@ -1334,8 +1336,14 @@ fn merge_plugin_config_value(
         (Json::Array(lower_priority), Json::Array(mut higher_priority))
             if plugin_config_list_concatenates(path, is_observability) =>
         {
-            higher_priority.append(lower_priority);
-            *lower_priority = higher_priority;
+            if higher_priority.is_empty()
+                && plugin_config_empty_list_replaces(path, is_observability)
+            {
+                lower_priority.clear();
+            } else {
+                higher_priority.append(lower_priority);
+                *lower_priority = higher_priority;
+            }
         }
         (lower_priority, higher_priority) => *lower_priority = higher_priority,
     }
@@ -1344,13 +1352,30 @@ fn merge_plugin_config_value(
 fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> bool {
     path.len() == 1
         || (is_observability
-            && matches!(
+            && (matches!(
                 path,
                 [section, field]
                     if (section == "atof" && field == "sinks")
-                        || (section == "opentelemetry" && field == "endpoints")
+                        || (section == "opentelemetry" && matches!(field.as_str(), "traces" | "endpoints"))
                         || (section == "atif" && field == "storage")
-            ))
+            ) || matches!(
+                path,
+                [section, signal, field]
+                    if section == "opentelemetry"
+                        && matches!(signal.as_str(), "logs" | "metrics")
+                        && field == "endpoints"
+            )))
+}
+
+fn plugin_config_empty_list_replaces(path: &[String], is_observability: bool) -> bool {
+    is_observability
+        && matches!(
+            path,
+            [section, signal, field]
+                if section == "opentelemetry"
+                    && matches!(signal.as_str(), "logs" | "metrics")
+                    && field == "endpoints"
+        )
 }
 
 /// Recursively merges `right` into a `left` JSON object; arrays and scalars are replaced.
@@ -2438,7 +2463,7 @@ pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     {
         existing.message = diagnostic.message;
         existing.session_id = diagnostic.session_id;
-        existing.count += 1;
+        existing.count = existing.count.saturating_add(diagnostic.count);
     } else {
         state.report.runtime_diagnostics.push(diagnostic);
     }

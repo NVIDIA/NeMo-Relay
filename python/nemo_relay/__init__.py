@@ -53,7 +53,7 @@ Example::
         )
 
     async def tool_impl(args):
-        return {"echo": args["query"]}
+        return nemo_relay.ToolExecutionResult({"echo": args["query"]})
 
     async def llm_impl(request):
         return {"messages": request.content["messages"], "ok": True}
@@ -119,6 +119,7 @@ from nemo_relay._native import (
     ScopeType,
     ToolAttributes,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     ToolHandle,
     _shutdown_default_logging,
 )
@@ -209,7 +210,7 @@ ToolRequestIntercept: TypeAlias = AbcCallable[[str, Json], Json | Awaitable[Json
 #: behavior. The callback receives the tool name, current arguments, and the
 #: next callable. It may await and return ``next(args)`` or short-circuit.
 ToolExecutionIntercept: TypeAlias = Callable[
-    [str, Json, Callable[[Json], Awaitable[Json]]],
+    [str, Json, Callable[[Json], Awaitable[ToolExecutionResult[Json]]]],
     ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome],
 ]
 #: Request intercept callback that returns the canonical request, annotation,
@@ -615,6 +616,7 @@ __all__ = [
     "MarkEvent",
     "ScopeHandle",
     "ToolHandle",
+    "ToolExecutionResult",
     "ToolExecutionInterceptOutcome",
     "LLMHandle",
     "LLMRequest",

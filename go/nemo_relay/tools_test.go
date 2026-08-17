@@ -38,7 +38,7 @@ func TestToolCallAndEnd(t *testing.T) {
 		t.Fatal("UUID is empty")
 	}
 
-	err = ToolCallEnd(handle, json.RawMessage(`{"output": "result"}`))
+	err = ToolCallEnd(handle, toolExecutionResult(json.RawMessage(`{"output": "result"}`)))
 	if err != nil {
 		t.Fatalf("ToolCallEnd failed: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestToolCallWithAttributes(t *testing.T) {
 	if handle.Attributes()&ToolAttrRemote == 0 {
 		t.Fatal("expected REMOTE attribute")
 	}
-	ToolCallEnd(handle, json.RawMessage(`{}`))
+	ToolCallEnd(handle, toolExecutionResult(json.RawMessage(`{}`)))
 }
 
 func TestToolCallWithDataMetadata(t *testing.T) {
@@ -63,7 +63,7 @@ func TestToolCallWithDataMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf(toolCallFailed, err)
 	}
-	ToolCallEnd(handle, json.RawMessage(`{}`),
+	ToolCallEnd(handle, toolExecutionResult(json.RawMessage(`{}`)),
 		WithToolData(json.RawMessage(`{"end_data": true}`)),
 		WithToolMetadata(json.RawMessage(`{"end_meta": true}`)),
 	)
@@ -84,7 +84,7 @@ func testToolCallWithParent(t *testing.T) {
 	if handle.ParentUUID() != parent.UUID() {
 		t.Fatalf("expected parent UUID %s, got %s", parent.UUID(), handle.ParentUUID())
 	}
-	ToolCallEnd(handle, json.RawMessage(`{}`))
+	ToolCallEnd(handle, toolExecutionResult(json.RawMessage(`{}`)))
 }
 
 func TestToolEvents(t *testing.T) {
@@ -104,7 +104,7 @@ func TestToolEvents(t *testing.T) {
 	defer func() { _ = DeregisterSubscriber("go_tool_evt") }()
 
 	handle, _ := ToolCall("evt_tool", json.RawMessage(`{}`))
-	ToolCallEnd(handle, json.RawMessage(`{}`))
+	ToolCallEnd(handle, toolExecutionResult(json.RawMessage(`{}`)))
 	if err := FlushSubscribers(); err != nil {
 		t.Fatalf(toolFlushSubscribersFailed, err)
 	}
@@ -124,12 +124,12 @@ func TestToolEvents(t *testing.T) {
 // ============================================================================
 
 func TestToolCallExecuteBasic(t *testing.T) {
-	fn := func(args json.RawMessage) (json.RawMessage, error) {
+	fn := func(args json.RawMessage) (ToolExecutionResult, error) {
 		var input map[string]interface{}
 		json.Unmarshal(args, &input)
 		x := input["x"].(float64)
 		result, _ := json.Marshal(map[string]interface{}{"result": x * 2})
-		return result, nil
+		return toolExecutionResult(result), nil
 	}
 
 	result, err := ToolCallExecute("double", json.RawMessage(`{"x": 5}`), fn)
@@ -138,15 +138,176 @@ func TestToolCallExecuteBasic(t *testing.T) {
 	}
 
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 	if output["result"].(float64) != 10 {
 		t.Fatalf("expected 10, got %v", output["result"])
 	}
 }
 
+func TestToolExecutionResultAnnotationRoundTrip(t *testing.T) {
+	const interceptName = "go_tool_result_annotation"
+	if err := RegisterToolExecutionIntercept(interceptName, 1,
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			downstream, err := next(args)
+			if err != nil {
+				return ToolExecutionInterceptOutcome{}, err
+			}
+			var annotation map[string]any
+			if err := json.Unmarshal(downstream.Annotation, &annotation); err != nil {
+				return ToolExecutionInterceptOutcome{}, err
+			}
+			annotation["intercepted"] = true
+			updatedAnnotation, err := json.Marshal(annotation)
+			if err != nil {
+				return ToolExecutionInterceptOutcome{}, err
+			}
+			return ToolExecutionInterceptOutcome{
+				Result:     downstream.Result,
+				Annotation: updatedAnnotation,
+			}, nil
+		},
+	); err != nil {
+		t.Fatalf(registerFailed, err)
+	}
+	t.Cleanup(func() { _ = DeregisterToolExecutionIntercept(interceptName) })
+
+	result, err := ToolCallExecute(
+		"annotated_tool",
+		json.RawMessage(`{"input":true}`),
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return ToolExecutionResult{
+				Result:     json.RawMessage(`{"content":[{"type":"text","text":"ok"}],"isError":true}`),
+				Annotation: json.RawMessage(`{"provider":"mcp"}`),
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf(toolCallExecuteFailed, err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result.Result, &payload); err != nil {
+		t.Fatalf("decode result payload: %v", err)
+	}
+	if payload["isError"] != true {
+		t.Fatalf("protocol result was not preserved: %s", result.Result)
+	}
+	var annotation map[string]any
+	if err := json.Unmarshal(result.Annotation, &annotation); err != nil {
+		t.Fatalf("decode annotation: %v", err)
+	}
+	if annotation["provider"] != "mcp" || annotation["intercepted"] != true {
+		t.Fatalf("annotation did not round trip through next: %s", result.Annotation)
+	}
+}
+
+func TestDecodeToolExecutionResultCanonicalContract(t *testing.T) {
+	t.Run("rejects legacy raw result", func(t *testing.T) {
+		_, err := decodeToolExecutionResult([]byte(`{"value":1}`))
+		if err == nil || !strings.Contains(err.Error(), "missing required result field") {
+			t.Fatalf("expected missing-result error, got %v", err)
+		}
+	})
+
+	t.Run("allows explicit null result", func(t *testing.T) {
+		result, err := decodeToolExecutionResult([]byte(`{"result":null}`))
+		if err != nil {
+			t.Fatalf("decode explicit null result: %v", err)
+		}
+		if string(result.Result) != "null" {
+			t.Fatalf("result = %s, want null", result.Result)
+		}
+	})
+
+	t.Run("normalizes null annotation", func(t *testing.T) {
+		result, err := decodeToolExecutionResult([]byte(`{"result":{"ok":true},"annotation":null}`))
+		if err != nil {
+			t.Fatalf("decode null annotation: %v", err)
+		}
+		if result.Annotation != nil {
+			t.Fatalf("annotation = %s, want absent", result.Annotation)
+		}
+	})
+}
+
+func TestToolExecutionNullAnnotationsNormalizeToAbsent(t *testing.T) {
+	const interceptName = "go_tool_null_annotation"
+	var annotationMu sync.Mutex
+	var nextAnnotation json.RawMessage
+	if err := RegisterToolExecutionIntercept(interceptName, 1,
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
+			downstream, err := next(args)
+			if err != nil {
+				return ToolExecutionInterceptOutcome{}, err
+			}
+			annotationMu.Lock()
+			nextAnnotation = append(json.RawMessage(nil), downstream.Annotation...)
+			annotationMu.Unlock()
+			return ToolExecutionInterceptOutcome{
+				Result:     downstream.Result,
+				Annotation: json.RawMessage(`null`),
+			}, nil
+		},
+	); err != nil {
+		t.Fatalf(registerFailed, err)
+	}
+	t.Cleanup(func() { _ = DeregisterToolExecutionIntercept(interceptName) })
+
+	result, err := ToolCallExecute(
+		"null_annotation_tool",
+		json.RawMessage(`{}`),
+		func(json.RawMessage) (ToolExecutionResult, error) {
+			return ToolExecutionResult{
+				Result:     json.RawMessage(`{"ok":true}`),
+				Annotation: json.RawMessage(`null`),
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf(toolCallExecuteFailed, err)
+	}
+	annotationMu.Lock()
+	capturedNextAnnotation := append(json.RawMessage(nil), nextAnnotation...)
+	annotationMu.Unlock()
+	if capturedNextAnnotation != nil {
+		t.Fatalf("next annotation = %s, want absent", capturedNextAnnotation)
+	}
+	if result.Annotation != nil {
+		t.Fatalf("result annotation = %s, want absent", result.Annotation)
+	}
+}
+
+func TestToolCallEndNormalizesNullAnnotationBeforeMarshal(t *testing.T) {
+	handle, err := ToolCall("manual_null_annotation_tool", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf(toolCallFailed, err)
+	}
+
+	oldMarshal := jsonMarshal
+	t.Cleanup(func() { jsonMarshal = oldMarshal })
+	var marshaledAnnotation json.RawMessage
+	jsonMarshal = func(value any) ([]byte, error) {
+		if result, ok := value.(ToolExecutionResult); ok {
+			marshaledAnnotation = append(json.RawMessage(nil), result.Annotation...)
+		}
+		return json.Marshal(value)
+	}
+
+	err = ToolCallEnd(handle, ToolExecutionResult{
+		Result:     json.RawMessage(`{"ok":true}`),
+		Annotation: json.RawMessage(`null`),
+	})
+	if err != nil {
+		t.Fatalf("ToolCallEnd failed: %v", err)
+	}
+	if marshaledAnnotation != nil {
+		t.Fatalf("marshaled annotation = %s, want absent", marshaledAnnotation)
+	}
+}
+
 func TestToolCallExecuteWithAttributes(t *testing.T) {
-	fn := func(args json.RawMessage) (json.RawMessage, error) {
-		return args, nil
+	fn := func(args json.RawMessage) (ToolExecutionResult, error) {
+		return toolExecutionResult(args), nil
 	}
 
 	result, err := ToolCallExecute("attr_tool", json.RawMessage(`{"test": true}`), fn,
@@ -157,7 +318,7 @@ func TestToolCallExecuteWithAttributes(t *testing.T) {
 	}
 
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 	if output["test"] != true {
 		t.Fatalf("expected test=true, got %v", output["test"])
 	}
@@ -180,8 +341,8 @@ func TestToolCallExecuteAddsOTELStatusMetadataToEndEvents(t *testing.T) {
 	defer DeregisterSubscriber("go_tool_status_metadata_sub")
 
 	_, err := ToolCallExecute("go_tool_status_ok", json.RawMessage(`{"x":1}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ok":true}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"ok":true}`)), nil
 		},
 		WithToolMetadata(json.RawMessage(`{"caller":"go-tool","otel.status_code":"USER"}`)),
 	)
@@ -190,8 +351,8 @@ func TestToolCallExecuteAddsOTELStatusMetadataToEndEvents(t *testing.T) {
 	}
 
 	_, err = ToolCallExecute("go_tool_status_error", json.RawMessage(`{"x":2}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return nil, errors.New("go tool status failure")
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return ToolExecutionResult{}, errors.New("go tool status failure")
 		},
 		WithToolMetadata(json.RawMessage(`{"caller":"go-tool-error"}`)),
 	)
@@ -288,8 +449,8 @@ func TestToolConditionalBlocksExecution(t *testing.T) {
 	)
 
 	_, err := ToolCallExecute("blocked_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"should": "not reach"}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"should": "not reach"}`)), nil
 		},
 	)
 	if err == nil {
@@ -318,7 +479,7 @@ func TestToolRequestInterceptRegisterDeregister(t *testing.T) {
 
 func TestToolExecutionInterceptRegisterDeregister(t *testing.T) {
 	err := RegisterToolExecutionIntercept("go_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			return toolExecutionOutcome(next(args))
 		},
 	)
@@ -353,8 +514,8 @@ func TestToolRequestInterceptModifiesArgs(t *testing.T) {
 	)
 
 	result, err := ToolCallExecute("intercepted_tool", json.RawMessage(`{"original": true}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return args, nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(args), nil
 		},
 	)
 	if err != nil {
@@ -362,7 +523,7 @@ func TestToolRequestInterceptModifiesArgs(t *testing.T) {
 	}
 
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 	if output["original"] != true || output["intercepted"] != true {
 		t.Fatalf("expected both original and intercepted, got %v", output)
 	}
@@ -372,15 +533,15 @@ func TestToolRequestInterceptModifiesArgs(t *testing.T) {
 
 func TestToolExecutionInterceptReplacesFunc(t *testing.T) {
 	RegisterToolExecutionIntercept("go_exec_replace", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			// Short-circuit: don't call next, return directly
 			return ToolExecutionInterceptOutcome{Result: json.RawMessage(`{"from_intercept": true}`)}, nil
 		},
 	)
 
 	result, err := ToolCallExecute("replaced_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"from_original": true}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"from_original": true}`)), nil
 		},
 	)
 	if err != nil {
@@ -388,7 +549,7 @@ func TestToolExecutionInterceptReplacesFunc(t *testing.T) {
 	}
 
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 	if output["from_intercept"] != true {
 		t.Fatalf("expected from_intercept, got %v", output)
 	}
@@ -420,14 +581,14 @@ func TestToolRequestInterceptBreakChain(t *testing.T) {
 	)
 
 	result, err := ToolCallExecute("chain_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil },
 	)
 	if err != nil {
 		t.Fatalf(executeFailed, err)
 	}
 
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 	if output["from_first"] != true {
 		t.Fatal("expected from_first")
 	}
@@ -458,25 +619,25 @@ func TestToolFullPipelineInterceptsAndExecute(t *testing.T) {
 
 	// Register an execution intercept that wraps the callable
 	RegisterToolExecutionIntercept("go_pipe_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			result, err := next(args)
 			if err != nil {
 				return ToolExecutionInterceptOutcome{}, err
 			}
 			var m map[string]interface{}
-			json.Unmarshal(result, &m)
+			json.Unmarshal(result.Result, &m)
 			m["exec_intercepted"] = true
 			out, _ := json.Marshal(m)
-			return ToolExecutionInterceptOutcome{Result: out}, nil
+			return ToolExecutionInterceptOutcome{Result: out, Annotation: result.Annotation}, nil
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_pipe_exec_int")
 
 	// Execute a tool call through the full pipeline
 	result, err := ToolCallExecute("pipeline_tool", json.RawMessage(`{"input": "value"}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
+		func(args json.RawMessage) (ToolExecutionResult, error) {
 			// The tool callable receives args after request intercepts
-			return args, nil
+			return toolExecutionResult(args), nil
 		},
 	)
 	if err != nil {
@@ -484,7 +645,7 @@ func TestToolFullPipelineInterceptsAndExecute(t *testing.T) {
 	}
 
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 
 	// Verify all pipeline stages affected the result
 	if output["input"] != "value" {
@@ -527,8 +688,8 @@ func TestToolSanitizeRequestGuardrailModifiesEventInput(t *testing.T) {
 	defer DeregisterToolSanitizeRequestGuardrail("go_redact_guard")
 
 	_, err := ToolCallExecute("redact_tool", json.RawMessage(`{"user": "alice", "password": "secret123"}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"done": true}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"done": true}`)), nil
 		},
 	)
 	if err != nil {
@@ -569,8 +730,8 @@ func TestToolConditionalGuardrailSelectiveReject(t *testing.T) {
 
 	// The dangerous tool should be blocked
 	_, err := ToolCallExecute("dangerous_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ran": true}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"ran": true}`)), nil
 		},
 	)
 	if err == nil {
@@ -582,15 +743,15 @@ func TestToolConditionalGuardrailSelectiveReject(t *testing.T) {
 
 	// The safe tool should succeed
 	result, err := ToolCallExecute("safe_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"ran": true}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"ran": true}`)), nil
 		},
 	)
 	if err != nil {
 		t.Fatalf("safe_tool should succeed: %v", err)
 	}
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 	if output["ran"] != true {
 		t.Fatalf("expected ran=true, got %v", output)
 	}
@@ -631,8 +792,8 @@ func TestToolMultipleGuardrailsPriorityOrder(t *testing.T) {
 	defer DeregisterToolSanitizeRequestGuardrail("go_prio_guard_3")
 
 	_, err := ToolCallExecute("prio_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{}`)), nil
 		},
 	)
 	if err != nil {
@@ -660,8 +821,8 @@ func TestToolMultipleGuardrailsPriorityOrder(t *testing.T) {
 
 func TestToolCallableErrorPropagation(t *testing.T) {
 	_, err := ToolCallExecute("error_tool", json.RawMessage(`{}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return nil, errors.New("tool internal failure")
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return ToolExecutionResult{}, errors.New("tool internal failure")
 		},
 	)
 	if err == nil {
@@ -675,7 +836,7 @@ func TestToolCallableErrorPropagation(t *testing.T) {
 func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 	// Register an execution intercept that modifies args and result
 	RegisterToolExecutionIntercept("go_wrap_exec_int", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			// Before: modify args
 			var m map[string]interface{}
 			json.Unmarshal(args, &m)
@@ -690,22 +851,22 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 
 			// After: modify result
 			var out map[string]interface{}
-			json.Unmarshal(result, &out)
+			json.Unmarshal(result.Result, &out)
 			out["after_exec"] = true
 			final, _ := json.Marshal(out)
-			return ToolExecutionInterceptOutcome{Result: final}, nil
+			return ToolExecutionInterceptOutcome{Result: final, Annotation: result.Annotation}, nil
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_wrap_exec_int")
 
 	result, err := ToolCallExecute("wrap_tool", json.RawMessage(`{"input": 1}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
+		func(args json.RawMessage) (ToolExecutionResult, error) {
 			// The tool callable should see the modified args
 			var m map[string]interface{}
 			json.Unmarshal(args, &m)
 			m["tool_ran"] = true
 			out, _ := json.Marshal(m)
-			return out, nil
+			return toolExecutionResult(out), nil
 		},
 	)
 	if err != nil {
@@ -713,7 +874,7 @@ func TestToolExecutionInterceptWrapsCallable(t *testing.T) {
 	}
 
 	var output map[string]interface{}
-	json.Unmarshal(result, &output)
+	json.Unmarshal(result.Result, &output)
 	if output["before_exec"] != true {
 		t.Fatal("expected before_exec=true")
 	}
@@ -748,13 +909,14 @@ func TestToolExecutionInterceptEmitsPendingMarks(t *testing.T) {
 	if err := RegisterToolExecutionIntercept(
 		interceptName,
 		1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			result, err := next(args)
 			if err != nil {
 				return ToolExecutionInterceptOutcome{}, err
 			}
 			return ToolExecutionInterceptOutcome{
-				Result: result,
+				Result:     result.Result,
+				Annotation: result.Annotation,
 				PendingMarks: []PendingMarkSpec{{
 					Name:            markName,
 					Category:        &category,
@@ -772,13 +934,13 @@ func TestToolExecutionInterceptEmitsPendingMarks(t *testing.T) {
 	result, err := ToolCallExecute(
 		toolName,
 		json.RawMessage(`{"value":42}`),
-		func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil },
 	)
 	if err != nil {
 		t.Fatalf(toolCallExecuteFailed, err)
 	}
 	var applicationResult map[string]any
-	if err := json.Unmarshal(result, &applicationResult); err != nil {
+	if err := json.Unmarshal(result.Result, &applicationResult); err != nil {
 		t.Fatalf("decode tool result: %v", err)
 	}
 	if applicationResult["value"] != float64(42) {
@@ -854,15 +1016,15 @@ func toolExecutionLifecycleEvents(events []Event, toolName, markName string) too
 
 func TestToolExecutionInterceptSeesNextError(t *testing.T) {
 	RegisterToolExecutionIntercept("go_wrap_exec_err", 1,
-		func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			return toolExecutionOutcome(next(args))
 		},
 	)
 	defer DeregisterToolExecutionIntercept("go_wrap_exec_err")
 
 	_, err := ToolCallExecute("wrap_tool_err", json.RawMessage(`{"input": 1}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return nil, errors.New("tool next failure")
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return ToolExecutionResult{}, errors.New("tool next failure")
 		},
 	)
 	if err == nil {
@@ -890,7 +1052,7 @@ func TestToolCallWithToolCallID(t *testing.T) {
 	if err != nil {
 		t.Fatalf(toolCallFailed, err)
 	}
-	ToolCallEnd(handle, json.RawMessage(`{}`))
+	ToolCallEnd(handle, toolExecutionResult(json.RawMessage(`{}`)))
 	if err := FlushSubscribers(); err != nil {
 		t.Fatalf(toolFlushSubscribersFailed, err)
 	}
@@ -919,8 +1081,8 @@ func TestToolEventInputOutput(t *testing.T) {
 	defer func() { _ = DeregisterSubscriber("go_tool_io_sub") }()
 
 	_, err := ToolCallExecute("io_tool", json.RawMessage(`{"query": "test"}`),
-		func(args json.RawMessage) (json.RawMessage, error) {
-			return json.RawMessage(`{"answer": "result"}`), nil
+		func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(json.RawMessage(`{"answer": "result"}`)), nil
 		},
 	)
 	if err != nil {

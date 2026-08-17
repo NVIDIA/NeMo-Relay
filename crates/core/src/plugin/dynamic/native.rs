@@ -39,7 +39,7 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
 };
 use crate::api::scope::{event as emit_scope_mark, get_handle, pop_scope, push_scope};
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
@@ -69,7 +69,6 @@ use nemo_relay_plugin::{
     NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
     NemoRelayNativeWithScopeStackCb, NemoRelayStatus,
 };
-use semver::{Version, VersionReq};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
@@ -78,7 +77,7 @@ use tokio_stream::{Stream, StreamExt};
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, deregister_tracked_registrations_checked,
-    validate_annotated_request_consumer_compatibility,
+    validate_annotated_request_consumer_compatibility, validate_dynamic_plugin_relay_compatibility,
 };
 
 /// Native plugin load request derived from host dynamic-plugin state.
@@ -285,6 +284,22 @@ struct NativePluginInstance {
     _library: Library,
 }
 
+fn serialize_native_tool_result(result: ToolExecutionResult) -> serde_json::Result<Json> {
+    serde_json::to_value(result)
+}
+
+fn serialize_native_tool_outcome(
+    outcome: ToolExecutionInterceptOutcome,
+) -> serde_json::Result<Json> {
+    serde_json::to_value(outcome)
+}
+
+fn deserialize_native_tool_outcome(
+    outcome: Json,
+) -> serde_json::Result<ToolExecutionInterceptOutcome> {
+    serde_json::from_value(outcome)
+}
+
 unsafe impl Send for NativePluginInstance {}
 unsafe impl Sync for NativePluginInstance {}
 
@@ -431,22 +446,7 @@ fn load_one_native_plugin(
 }
 
 fn validate_relay_compatibility(relay: Option<&str>) -> crate::plugin::Result<()> {
-    let relay = relay
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| PluginError::InvalidConfig("compat.relay is required".into()))?;
-    let req = VersionReq::parse(relay).map_err(|err| {
-        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {err}"))
-    })?;
-    let version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|err| PluginError::Internal(format!("failed to parse host version: {err}")))?;
-    if req.matches(&version) {
-        Ok(())
-    } else {
-        Err(PluginError::InvalidConfig(format!(
-            "native plugin requires relay '{relay}' but host version is {version}"
-        )))
-    }
+    validate_dynamic_plugin_relay_compatibility(relay, "native")
 }
 
 fn validate_plugin_descriptor(
@@ -2330,10 +2330,8 @@ unsafe extern "C" fn native_async_next_invoke(
             (NativeAsyncNextInner::Tool(next), Invocation::Tool(invocation)) => {
                 let next = next.clone();
                 Box::pin(async move {
-                    serde_json::to_value(ToolExecutionInterceptOutcome::new(
-                        next(invocation).await?,
-                    ))
-                    .map_err(|error| {
+                    let result = next(invocation).await?;
+                    serialize_native_tool_outcome(result.into()).map_err(|error| {
                         FlowError::Internal(format!(
                             "failed to serialize native async tool outcome: {error}"
                         ))
@@ -2593,9 +2591,16 @@ unsafe extern "C" fn native_async_next_invoke_result(
         Err(status) => return status,
     };
     let future: Pin<Box<dyn Future<Output = FlowResult<Json>> + Send>> = match &next.inner {
-        NativeAsyncNextInner::Tool(next_fn) => {
-            let next_fn = next_fn.clone();
-            Box::pin(async move { next_fn(invocation).await })
+        NativeAsyncNextInner::Tool(next) => {
+            let next = next.clone();
+            Box::pin(async move {
+                let result = next(invocation).await?;
+                serialize_native_tool_result(result).map_err(|error| {
+                    FlowError::Internal(format!(
+                        "failed to serialize native async tool result: {error}"
+                    ))
+                })
+            })
         }
         NativeAsyncNextInner::Llm(next_fn) => {
             let request = match serde_json::from_value(invocation) {
@@ -3373,17 +3378,15 @@ fn wrap_native_async_tool_execution(
         let user_data = user_data.clone();
         let invocation = serde_json::json!({"name": name, "value": args});
         Box::pin(async move {
-            serde_json::from_value(
-                invoke_native_async_callback(
-                    cb,
-                    user_data,
-                    invocation,
-                    Some(NativeAsyncNextInner::Tool(next)),
-                    None,
-                )
-                .await?,
+            let outcome = invoke_native_async_callback(
+                cb,
+                user_data,
+                invocation,
+                Some(NativeAsyncNextInner::Tool(next)),
+                None,
             )
-            .map_err(|error| {
+            .await?;
+            deserialize_native_tool_outcome(outcome).map_err(|error| {
                 FlowError::Internal(format!("invalid native async tool outcome: {error}"))
             })
         })
@@ -4298,7 +4301,7 @@ fn wrap_tool_execution_fn(
                 out_outcome,
                 "native tool execution returned null outcome",
             )?;
-            serde_json::from_value::<ToolExecutionInterceptOutcome>(outcome_json).map_err(|err| {
+            deserialize_native_tool_outcome(outcome_json).map_err(|err| {
                 FlowError::Internal(format!("invalid native tool execution outcome JSON: {err}"))
             })
         })
@@ -4322,7 +4325,13 @@ unsafe extern "C" fn native_tool_next(
     let context = MiddlewareContinuationContext::capture();
     let result = spawn_with_continuation_context(context, move || next(args)).join();
     match result {
-        Ok(Ok(result)) => write_native_json(&result, out_json),
+        Ok(Ok(result)) => match serialize_native_tool_result(result) {
+            Ok(result) => write_native_json(&result, out_json),
+            Err(error) => {
+                set_native_last_error(format!("failed to serialize native tool result: {error}"));
+                NemoRelayStatus::Internal
+            }
+        },
         Ok(Err(err)) => status_from_flow_error(err),
         Err(_) => {
             set_native_last_error("native tool next panicked");

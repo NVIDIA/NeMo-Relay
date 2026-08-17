@@ -21,6 +21,14 @@ dynamic worker plugins. Use it when plugin code should run in its own Python
 process and communicate with Relay through the versioned `grpc-v1` worker
 protocol.
 
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. The
+protocol name remains `grpc-v1`, while generated `ToolNext` responses and tool
+execution outcomes use structural protobuf `ToolExecutionResult` and
+`ToolExecutionInterceptOutcome` messages instead of schema-tagged JSON
+envelopes. Workers and custom bindings built for an earlier Relay release must
+regenerate their protobuf bindings, rebuild with this SDK, and declare a
+`compat.relay` range beginning at `0.8.0` or later.
+
 ## Why Use It?
 
 - **Isolate plugin dependencies**: Run custom policy, middleware, or exporter
@@ -40,6 +48,8 @@ protocol.
   environment.
 - **Typed runtime helpers**: JSON, event, scope, middleware, continuation, and
   diagnostic types shared with Relay.
+- **Canonical tool results**: `ToolNext.call()` returns `ToolExecutionResult`,
+  preserving opaque annotations separately from application result JSON.
 - **Generated transport bindings**: Private protobuf bindings included in built
   wheels; published-wheel installation does not require `protoc` or
   `grpcio-tools`.
@@ -161,9 +171,8 @@ cancellation RPC and all other worker RPCs, so offload blocking work and make
 its own cancellation behavior explicit.
 
 `grpc-v1` workers are expected to implement this best-effort cancellation
-contract. Relay remains compatible with older workers that return
-`accepted = false`; in that case it still drops the transport request, but it
-cannot guarantee worker-side interruption.
+contract. When a worker returns `accepted = false`, Relay still drops the
+transport request, but it cannot guarantee worker-side interruption.
 
 Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and

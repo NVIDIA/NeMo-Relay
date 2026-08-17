@@ -38,7 +38,8 @@ fn test_ffi_tool_execute_parent_data_and_error_paths() {
             NemoRelayStatus::Ok
         );
         let executed = returned_json(out_json);
-        assert_eq!(executed["executed"], json!(true));
+        assert_eq!(executed["result"]["executed"], json!(true));
+        assert_eq!(executed["annotation"]["source"], json!("ffi"));
 
         assert_status!(
             nemo_relay_tool_call_execute(

@@ -34,6 +34,8 @@ Relay.
 - Preserve opaque framework objects outside the middleware path and pass only the serializable projection into the runtime.
 - Store external object references in framework-owned maps keyed by request IDs, not inside NeMo Relay event payloads.
 - Use typed wrappers for your application boundary, then serialize at the last responsible moment.
+- Keep `ToolExecutionResult.annotation` JSON-compatible; store opaque framework
+  objects outside both the business result and its annotation.
 
 ## Concrete Projection Pattern
 
@@ -56,16 +58,17 @@ class SearchResult(TypedDict):
 framework_clients: dict[str, object] = {}
 framework_clients["client-1"] = object()
 
-async def invoke(args: SearchArgs) -> SearchResult:
+async def invoke(args: SearchArgs) -> nemo_relay.ToolExecutionResult[SearchResult]:
     client = framework_clients[args["client_id"]]
     _ = client  # framework-owned object stays outside NeMo Relay payloads
-    return {"hits": 2}
+    return nemo_relay.ToolExecutionResult({"hits": 2})
 
 result = await nemo_relay.tools.execute(
     "search",
     SearchArgs(client_id="client-1", query="weather"),
     invoke,
 )
+search_result: SearchResult = result.result
 ```
 </Tab>
 
@@ -82,20 +85,21 @@ frameworkClients.set('client-1', {});
 const result = await toolCallExecute(
   'search',
   { clientId: 'client-1', query: 'weather' },
-  async (args: SearchArgs): Promise<SearchResult> => {
+  async (args: SearchArgs) => {
     const client = frameworkClients.get(args.clientId);
     if (!client) {
       throw new Error(`missing client ${args.clientId}`);
     }
-    return { hits: 2 };
+    return { result: { hits: 2 } };
   },
-) as SearchResult;
+);
+const searchResult = result.result as SearchResult;
 ```
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
+use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -124,11 +128,12 @@ let result = tool_call_execute(
             Box::pin(async move {
                 let client_id = input["client_id"].as_str().unwrap();
                 let _client = local_clients.lock().unwrap().get(client_id).cloned().unwrap();
-                Ok(json!({"hits": 2}))
+                Ok(ToolExecutionResult::new(json!({"hits": 2})))
             })
         }))
         .build(),
 ).await?;
+let search_result = result.result;
 ```
 </Tab>
 </Tabs>
@@ -176,6 +181,7 @@ Use this checklist to confirm the implementation preserves the expected runtime
 contract.
 
 - Middleware receives only JSON-compatible values.
+- Tool execution results and optional annotations are JSON-compatible.
 - The framework callback can still resolve the original SDK client or stream by ID.
 - Subscribers and exporters receive enough metadata to debug the call.
 - Cleanup removes object-map entries after the request finishes.

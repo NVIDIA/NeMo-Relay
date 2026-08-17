@@ -462,10 +462,11 @@ The 0.6 request annotation expansion uses
 `nemo.relay.AnnotatedLlmRequest@2` and
 `nemo.relay.LlmRequestInterceptOutcome@2` at dynamic plugin boundaries. Rebuild
 Rust native plugins and Rust `grpc-v1` workers against NeMo Relay 0.6, and
-update Python workers to the 0.6 worker SDK. A dynamic plugin that registers an
-LLM request intercept must set `compat.relay = ">=0.6,<1.0"`, or another range
-that excludes Relay 0.5. Relay enforces this floor when the intercept is
-registered.
+update Python workers to the 0.6 worker SDK. That release required a Relay 0.6
+compatibility floor. Relay 0.8 dynamic plugins must instead use
+`compat.relay = ">=0.8.0,<1.0"`, or another range that excludes every earlier
+Relay version. Relay enforces the current floor during manifest and registry
+validation, before loading the plugin.
 
 Gateway interceptors that mutate provider request bodies must now edit the
 annotation on the three generation routes. For example, replace

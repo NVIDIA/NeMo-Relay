@@ -293,6 +293,10 @@ meaning of scope parentage, event UUIDs, codec annotations, and exporter-local
 lineage rules without becoming the source of truth for runtime ownership,
 middleware ordering, or provider payload decoding.
 
+When a successful tool result carries an opaque annotation, the corresponding
+ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
+preserves the JSON value without interpreting application-defined keys.
+
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the ATIF
