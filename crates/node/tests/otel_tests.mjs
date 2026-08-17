@@ -193,7 +193,9 @@ describe('OpenTelemetry log and metric subscribers', () => {
     });
     const logName = uniqueId('node_otel_log');
     logSubscriber.register(logName);
+    assert.throws(() => logSubscriber.register(logName), /already exists/i);
     assert.equal(logSubscriber.deregister(logName), true);
+    assert.equal(logSubscriber.deregister(logName), false);
     logSubscriber.forceFlush();
     assert.deepEqual(logSubscriber.runtimeDiagnostics(), []);
     logSubscriber.shutdown();
@@ -209,7 +211,9 @@ describe('OpenTelemetry log and metric subscribers', () => {
     });
     const metricName = uniqueId('node_otel_metric');
     metricSubscriber.register(metricName);
+    assert.throws(() => metricSubscriber.register(metricName), /already exists/i);
     assert.equal(metricSubscriber.deregister(metricName), true);
+    assert.equal(metricSubscriber.deregister(metricName), false);
     metricSubscriber.forceFlush();
     assert.deepEqual(metricSubscriber.runtimeDiagnostics(), []);
     metricSubscriber.shutdown();
