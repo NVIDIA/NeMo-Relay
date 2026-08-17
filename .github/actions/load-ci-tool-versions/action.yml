@@ -17,6 +17,9 @@ outputs:
   node_version:
     description: Node.js version
     value: ${{ steps.load.outputs.node_version }}
+  node_compat_version:
+    description: Older Node.js version where the native packages must still install and load
+    value: ${{ steps.load.outputs.node_compat_version }}
   uv_version:
     description: uv version
     value: ${{ steps.load.outputs.uv_version }}
@@ -54,6 +57,7 @@ runs:
           NEMO_RELAY_CI_DEFAULT_PYTHON_VER
           NEMO_RELAY_CI_RUST_VERSION
           NEMO_RELAY_CI_NODE_VERSION
+          NEMO_RELAY_CI_NODE_COMPAT_VERSION
           NEMO_RELAY_CI_UV_VERSION
           NEMO_RELAY_CI_PRE_COMMIT_VERSION
           NEMO_RELAY_CI_JUST_VERSION
@@ -75,6 +79,7 @@ runs:
           printf 'default_python_version=%s\n' "$NEMO_RELAY_CI_DEFAULT_PYTHON_VER"
           printf 'rust_version=%s\n' "$NEMO_RELAY_CI_RUST_VERSION"
           printf 'node_version=%s\n' "$NEMO_RELAY_CI_NODE_VERSION"
+          printf 'node_compat_version=%s\n' "$NEMO_RELAY_CI_NODE_COMPAT_VERSION"
           printf 'uv_version=%s\n' "$NEMO_RELAY_CI_UV_VERSION"
           printf 'pre_commit_version=%s\n' "$NEMO_RELAY_CI_PRE_COMMIT_VERSION"
           printf 'just_version=%s\n' "$NEMO_RELAY_CI_JUST_VERSION"

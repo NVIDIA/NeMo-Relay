@@ -66,13 +66,17 @@ class PackageNodeBinTests(unittest.TestCase):
                 self.assertEqual(manifest["os"], ["linux"])
                 self.assertEqual(manifest["cpu"], ["x64"])
                 self.assertEqual(manifest["libc"], ["glibc"])
-                self.assertEqual(manifest["main"], binary_name)
+                self.assertEqual(manifest["main"], "index.js")
+                self.assertEqual(manifest["files"], ["index.js", binary_name])
+                self.assertNotIn("engines", manifest)
                 self.assertEqual(required_member(archive, f"package/{binary_name}").read(), b"native")
-                self.assertNotIn("package/index.js", archive.getnames())
+                entrypoint = required_member(archive, "package/index.js").read().decode()
+                self.assertIn(f"require('./{binary_name}')", entrypoint)
 
             self.assertEqual(metapackage.name, "nemo-relay-node-npm-0.7.0-rc.1.tgz")
             with tarfile.open(metapackage) as archive:
                 manifest = json.load(required_member(archive, "package/package.json"))
+                self.assertEqual(manifest["engines"], {"node": ">=24.0.0"})
                 self.assertEqual(
                     manifest["optionalDependencies"]["nemo-relay-node-linux-x64-gnu"],
                     "0.7.0-rc.1",

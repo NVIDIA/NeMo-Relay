@@ -64,6 +64,19 @@ Install the npm package in a Node.js 24 or newer project:
 npm install nemo-relay-node@0.8.0
 ```
 
+The platform-specific native packages do not declare an `engines` range, so
+`npm install` also resolves and loads them on Node.js 22 and 23. Those versions
+are outside the supported floor, and the only signal is the warning npm prints
+for the metapackage:
+
+```text
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: 'nemo-relay-node@0.8.0',
+npm warn EBADENGINE   required: { node: '>=24.0.0' },
+npm warn EBADENGINE   current: { node: 'v22.23.2', npm: '10.9.8' }
+npm warn EBADENGINE }
+```
+
 ## Getting Started
 
 Register a subscriber and emit a mark inside a scope:
