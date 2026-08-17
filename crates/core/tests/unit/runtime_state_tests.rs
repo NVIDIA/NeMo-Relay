@@ -27,7 +27,10 @@ async fn event_metadata_injection_accepts_flat_otel_values_and_empty_output() {
     let valid: EventMetadataInjectorFn = Arc::new(|_| {
         Box::pin(async {
             Ok(BTreeMap::from([
-                ("nv.test.string".into(), json!("value")),
+                ("region".into(), json!("us-west")),
+                ("region_name".into(), json!("west")),
+                ("region-name".into(), json!("west")),
+                ("experiment.variant".into(), json!("value")),
                 ("nv.test.boolean".into(), json!(true)),
                 ("nv.test.number".into(), json!(42)),
                 ("nv.test.strings".into(), json!(["a", "b"])),
@@ -49,7 +52,10 @@ async fn event_metadata_injection_accepts_flat_otel_values_and_empty_output() {
     let metadata = injected.metadata().expect("metadata should be an object");
 
     assert_eq!(metadata["nv.test.existing"], json!("original"));
-    assert_eq!(metadata["nv.test.string"], json!("value"));
+    assert_eq!(metadata["region"], json!("us-west"));
+    assert_eq!(metadata["region_name"], json!("west"));
+    assert_eq!(metadata["region-name"], json!("west"));
+    assert_eq!(metadata["experiment.variant"], json!("value"));
     assert_eq!(metadata["nv.test.boolean"], json!(true));
     assert_eq!(metadata["nv.test.number"], json!(42));
     assert_eq!(metadata["nv.test.strings"], json!(["a", "b"]));
@@ -62,12 +68,18 @@ async fn event_metadata_injection_accepts_flat_otel_values_and_empty_output() {
 async fn event_metadata_injection_rejects_invalid_output_atomically() {
     let invalid_outputs = [
         BTreeMap::from([
-            ("nv.test.accepted_if_valid".into(), json!(true)),
-            ("not-nv.test".into(), json!(true)),
+            ("telemetry.accepted_if_valid".into(), json!(true)),
+            ("invalid-value".into(), Json::Null),
         ]),
-        BTreeMap::from([(".nv.test".into(), json!(true))]),
-        BTreeMap::from([("nv.test.".into(), json!(true))]),
-        BTreeMap::from([("nv..test".into(), json!(true))]),
+        BTreeMap::from([("".into(), json!(true))]),
+        BTreeMap::from([("   ".into(), json!(true))]),
+        BTreeMap::from([(".region".into(), json!(true))]),
+        BTreeMap::from([("region.".into(), json!(true))]),
+        BTreeMap::from([("literal..dots".into(), json!(true))]),
+        BTreeMap::from([("display name".into(), json!(true))]),
+        BTreeMap::from([("region/zone".into(), json!(true))]),
+        BTreeMap::from([("region@name".into(), json!(true))]),
+        BTreeMap::from([("region\nname".into(), json!(true))]),
         BTreeMap::from([("nv.test.null".into(), Json::Null)]),
         BTreeMap::from([("nv.test.object".into(), json!({"nested": true}))]),
         BTreeMap::from([("nv.test.nested_list".into(), json!([[1]]))]),

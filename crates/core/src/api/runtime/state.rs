@@ -1770,11 +1770,10 @@ impl NemoRelayContextState {
 }
 
 fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Result<(), String> {
-    // V1 reserves the fixed `nv.*` namespace; broader namespaces require a separate contract.
     for (key, value) in attributes {
-        if !key.starts_with("nv.") || key.split('.').any(str::is_empty) {
+        if !is_valid_event_metadata_attribute_key(key) {
             return Err(format!(
-                "attribute key `{key}` must be a flat dotted `nv.*` key"
+                "attribute key `{key}` must contain letter, number, underscore, or hyphen segments separated by single dots"
             ));
         }
         if !is_otel_compatible_attribute_value(value) {
@@ -1784,6 +1783,21 @@ fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Re
         }
     }
     Ok(())
+}
+
+fn is_valid_event_metadata_attribute_key(key: &str) -> bool {
+    let mut segment_has_character = false;
+    for character in key.chars() {
+        match character {
+            '.' if segment_has_character => segment_has_character = false,
+            '.' => return false,
+            character if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') => {
+                segment_has_character = true;
+            }
+            _ => return false,
+        }
+    }
+    segment_has_character
 }
 
 fn is_otel_compatible_attribute_value(value: &Json) -> bool {

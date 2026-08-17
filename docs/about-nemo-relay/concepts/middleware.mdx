@@ -194,10 +194,13 @@ Event metadata injectors add OTel-compatible values to the existing Event
 Event as immutable context, so a callback can inspect the Event kind and name
 before deciding what to return.
 
-The v1 contract accepts flat dotted keys under the `nv.*` namespace. Values may
-be strings, numbers, booleans, or homogeneous lists of those primitive types.
-Nested objects, `null`, mixed-type lists, keys outside `nv.*`, and keys with
-empty dotted segments are rejected as one atomic callback result.
+The v1 contract accepts keys made of ASCII letter, number, underscore, or
+hyphen segments separated by optional single dots. Empty keys, whitespace,
+unsupported punctuation, leading or trailing dots, and repeated dots are
+invalid. Relay stores accepted keys literally; dots do not create nested
+objects. Values may be strings, numbers, booleans, or homogeneous lists of
+those primitive types. Nested objects, `null`, and mixed-type lists are rejected
+as one atomic callback result.
 
 Injection is insert-only. Existing Event metadata is never overwritten.
 Injectors run in ascending numeric priority and then by registration name, so

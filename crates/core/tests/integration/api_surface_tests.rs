@@ -141,7 +141,7 @@ fn event_metadata_injectors_are_insert_only_ordered_and_failure_safe() {
         Arc::new(|_| {
             ready(BTreeMap::from([
                 ("nv.test.omitted_with_invalid".into(), json!(true)),
-                ("not-nv.invalid".into(), json!(true)),
+                ("invalid-value".into(), json!({"nested": true})),
             ]))
         }),
     )
