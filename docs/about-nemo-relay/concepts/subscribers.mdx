@@ -258,11 +258,11 @@ file records are not input to either telemetry subscriber.
 
 Each direct trace, log, and metric subscriber also exposes a bounded runtime
 diagnostics snapshot. Rust and Python use `runtime_diagnostics()`, Node.js uses
-`runtimeDiagnostics()`, and Go uses `RuntimeDiagnostics()`. The C FFI exposes
-the corresponding `*_runtime_diagnostics_json` APIs, which return a
-caller-owned JSON array released with `nemo_relay_string_free`. These snapshots
-report stable codes, occurrence counts, and the most recent message for
-delivery and event-processing failures. See
+`runtimeDiagnostics()`. The C FFI exposes the corresponding
+`*_runtime_diagnostics_json` APIs, which return a caller-owned JSON array
+released with `nemo_relay_string_free`. These snapshots report stable codes,
+occurrence counts, and the most recent message for delivery and
+event-processing failures. See
 [OpenTelemetry](/configure-plugins/observability/opentelemetry#direct-subscribers)
 for the complete API and lifecycle contract.
 

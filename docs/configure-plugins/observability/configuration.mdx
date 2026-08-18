@@ -212,30 +212,6 @@ const component = observability.ComponentSpec({
 });
 ```
 </Tab>
-<Tab title="Go" language="go">
-```go
-import nemo "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
-
-config := nemo.NewObservabilityConfig()
-otel := nemo.NewObservabilityOpenTelemetryConfig()
-otel.Enabled = true
-otel.Endpoints = []nemo.ObservabilityOpenTelemetryEndpointConfig{
-    nemo.NewObservabilityOpenTelemetryEndpointConfig(
-        nemo.OpenTelemetryTypeGenAI,
-        "http://localhost:4318/v1/traces",
-    ),
-}
-logs := nemo.NewObservabilityOpenTelemetryLogConfig()
-logs.Enabled = true
-metrics := nemo.NewObservabilityOpenTelemetryMetricConfig()
-metrics.Enabled = true
-otel.Logs = &logs
-otel.Metrics = &metrics
-config.OpenTelemetry = &otel
-config.EnableFullPayloads = true
-component := nemo.NewObservabilityComponentSpec(config)
-```
-</Tab>
 </Tabs>
 
 Validate programmatic configuration before initialization. Clear the plugin
@@ -271,5 +247,5 @@ to `unknown_service`, and the default instrumentation scope becomes
 maps into its new endpoint. Use `header_env` when a header value comes from an
 environment variable.
 
-For before-and-after TOML and Rust, Python, Node.js, Go, and C API changes,
+For before-and-after TOML and Rust, Python, Node.js, and C API changes,
 refer to the [OpenTelemetry version-2-to-version-3 migration](/configure-plugins/observability/opentelemetry#version-2-to-version-3).

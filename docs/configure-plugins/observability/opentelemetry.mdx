@@ -283,13 +283,14 @@ Relay-private attribute.
 
 Rust, Python, and Node.js generic mark APIs accept optional `data_schema` and
 `severity` values. Prefer the typed metric helper rather than constructing the
-reserved schema by hand: `metric` in Rust, Python, and Node.js, or `EmitMetric`
-in Go. The helper validates the complete measurement group before publishing the
-mark. The exporter validates the sanitized payload again before recording any
-measurement.
+reserved schema by hand: `metric` in Rust, Python, and Node.js. The helper
+validates the complete measurement group before publishing the mark. The
+exporter validates the sanitized payload again before recording any measurement.
 
-The following Python example emits one warning log mark and one metric mark:
+The following examples emit one warning log mark and one metric mark:
 
+<Tabs>
+<Tab title="Python" language="python">
 ```python
 from nemo_relay import LogSeverity, MetricKind, MetricMeasurement, MetricValueType
 from nemo_relay import scope
@@ -315,6 +316,73 @@ scope.metric(
     ],
 )
 ```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const {
+  event,
+  metric,
+  LogSeverity,
+  MetricKind,
+  MetricValueType,
+} = require("nemo-relay-node");
+
+event(
+  "budget-nearly-exhausted",
+  null,
+  { remaining_tokens: 128 },
+  null,
+  null,
+  null,
+  LogSeverity.Warn,
+);
+
+metric("tokenomics", [{
+  name: "example.tokens.saved",
+  kind: MetricKind.Counter,
+  valueType: MetricValueType.U64,
+  value: 42,
+  unit: "{token}",
+  description: "Tokens avoided",
+  attributes: { model: "example-model" },
+}]);
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::api::{
+    event::{LogSeverity, MetricKind, MetricMeasurement, MetricValueType},
+    scope::{self, EmitMarkEventParams, EmitMetricEventParams},
+};
+use serde_json::json;
+
+scope::event(
+    EmitMarkEventParams::builder()
+        .name("budget-nearly-exhausted")
+        .data(json!({"remaining_tokens": 128}))
+        .severity(LogSeverity::Warn)
+        .build(),
+)?;
+
+scope::metric(
+    EmitMetricEventParams::builder()
+        .name("tokenomics")
+        .measurements(vec![
+            MetricMeasurement::builder()
+                .name("example.tokens.saved")
+                .kind(MetricKind::Counter)
+                .value_type(MetricValueType::U64)
+                .value(json!(42_u64))
+                .unit("{token}")
+                .description("Tokens avoided")
+                .attributes(json!({"model": "example-model"}))
+                .build(),
+        ])
+        .build(),
+)?;
+```
+</Tab>
+</Tabs>
 
 Mark sanitizers run for both calls. Routing uses the immutable `data_schema`
 after sanitization, and a metric mark never falls back to the log pipeline.
@@ -548,8 +616,8 @@ The log and metric equivalents are `OpenTelemetryLogConfig` with
 `OpenTelemetryLogSubscriber`, and `OpenTelemetryMetricConfig` with
 `OpenTelemetryMetricSubscriber`. Each config takes one required endpoint and
 exposes the signal settings documented above. Bare OTLP/HTTP authorities gain
-the corresponding standard signal path. Python, Node.js, Go, and C FFI expose
-the same three independently managed subscriber kinds; Go and C FFI remain
+the corresponding standard signal path. Rust, Python, and Node.js expose the
+same three independently managed subscriber kinds. The C FFI remains
 experimental and source-first.
 
 Direct construction creates one independently managed exporter. Register the
@@ -560,11 +628,108 @@ and then flushes the provider. Log shutdown drains the batch queue. Metric
 shutdown performs the reader's final collection; it does not add a second
 metric flush.
 
+### Log and Metric Subscriber Lifecycle
+
+The following examples create and register direct log and metric subscribers,
+inspect runtime diagnostics, and perform graceful teardown.
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay import (
+    OpenTelemetryLogConfig,
+    OpenTelemetryLogSubscriber,
+    OpenTelemetryMetricConfig,
+    OpenTelemetryMetricSubscriber,
+)
+
+logs = OpenTelemetryLogSubscriber(
+    OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
+)
+metrics = OpenTelemetryMetricSubscriber(
+    OpenTelemetryMetricConfig("http://localhost:4318/v1/metrics")
+)
+logs.register("otlp-logs")
+metrics.register("otlp-metrics")
+try:
+    # Run instrumented work here.
+    for diagnostic in logs.runtime_diagnostics().entries:
+        print(diagnostic.code, diagnostic.message)
+finally:
+    logs.deregister("otlp-logs")
+    logs.force_flush()
+    logs.shutdown()
+    metrics.deregister("otlp-metrics")
+    metrics.force_flush()
+    metrics.shutdown()
+```
+</Tab>
+<Tab title="Node.js" language="javascript">
+```javascript
+const {
+  OpenTelemetryLogSubscriber,
+  OpenTelemetryMetricSubscriber,
+} = require("nemo-relay-node");
+
+const logs = new OpenTelemetryLogSubscriber({
+  endpoint: "http://localhost:4318/v1/logs",
+});
+const metrics = new OpenTelemetryMetricSubscriber({
+  endpoint: "http://localhost:4318/v1/metrics",
+});
+logs.register("otlp-logs");
+metrics.register("otlp-metrics");
+try {
+  // Run instrumented work here.
+  for (const diagnostic of logs.runtimeDiagnostics()) {
+    console.error(diagnostic.code, diagnostic.message);
+  }
+} finally {
+  logs.deregister("otlp-logs");
+  logs.forceFlush();
+  logs.shutdown();
+  metrics.deregister("otlp-metrics");
+  metrics.forceFlush();
+  metrics.shutdown();
+}
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use nemo_relay::observability::{
+    otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber},
+    otel_metrics::{OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber},
+};
+
+let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(
+    "http://localhost:4318/v1/logs",
+))?;
+let metrics = OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new(
+    "http://localhost:4318/v1/metrics",
+))?;
+logs.register("otlp-logs")?;
+metrics.register("otlp-metrics")?;
+
+// Run instrumented work here.
+for diagnostic in logs.runtime_diagnostics().entries() {
+    eprintln!("{}: {}", diagnostic.code, diagnostic.message);
+}
+
+logs.deregister("otlp-logs")?;
+logs.force_flush()?;
+logs.shutdown()?;
+metrics.deregister("otlp-metrics")?;
+metrics.force_flush()?;
+metrics.shutdown()?;
+```
+</Tab>
+</Tabs>
+
 Every direct trace, log, and metric subscriber exposes a bounded runtime
 diagnostics snapshot: `runtime_diagnostics()` in Rust and Python,
-`runtimeDiagnostics()` in Node.js, and `RuntimeDiagnostics()` in Go. It reports
-each runtime condition's stable code, occurrence count, and most recent
-message. C FFI callers use `nemo_relay_otel_subscriber_runtime_diagnostics_json`,
+`runtimeDiagnostics()` in Node.js. It reports each runtime condition's stable
+code, occurrence count, and most recent message. C FFI callers use
+`nemo_relay_otel_subscriber_runtime_diagnostics_json`,
 `nemo_relay_otel_log_subscriber_runtime_diagnostics_json`, or
 `nemo_relay_otel_metric_subscriber_runtime_diagnostics_json`. Each writes a
 caller-owned bounded JSON array of diagnostic entries that the caller must
