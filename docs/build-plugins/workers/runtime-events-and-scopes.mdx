@@ -33,9 +33,11 @@ that recorded a diagnostic.
 
 ## Emit Typed Telemetry and Read Diagnostics
 
-Use the following Python code to add schema and severity metadata to a mark, emit a
-metric, and inspect the runtime diagnostics:
+Choose your worker language to add schema and severity metadata to a mark and inspect
+runtime diagnostics:
 
+<Tabs>
+<Tab title="Python" language="python">
 ```python
 from nemo_relay_plugin import DataSchema, LogSeverity
 
@@ -54,9 +56,8 @@ diagnostic = (await ctx.runtime.runtime_diagnostics()).get("otel.metric_mark_inv
 if diagnostic is not None:
     print(f"{diagnostic.message} occurred {diagnostic.count} times")
 ```
-
-Use the following Rust code for the same operations:
-
+</Tab>
+<Tab title="Rust" language="rust">
 ```rust
 use nemo_relay_worker::{DataSchema, EmitMarkOptions, LogSeverity};
 
@@ -82,6 +83,8 @@ if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
     eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
 }
 ```
+</Tab>
+</Tabs>
 
 An older host can return `UNIMPLEMENTED` for `runtime_diagnostics`. The SDK reports that
 as an unsupported runtime-diagnostics error. Relay validates the data schema and
@@ -90,6 +93,10 @@ it rejects an invalid group as a whole.
 
 ## Execute the Complete Cleanup Sequence
 
+Choose your worker language to review the complete cleanup sequence:
+
+<Tabs>
+<Tab title="Python" language="python">
 The Python helper pushes a child scope, emits the ordinary mark inside it, and closes the
 scope by its returned handle. It then binds an isolated stack only for work that should
 have independent parentage. The `finally` block drops the stack even if isolated mark
@@ -129,7 +136,8 @@ async def emit_runtime_events(ctx, tag, settings):
         finally:
             await ctx.runtime.drop_scope_stack(stack_id)
 ```
-
+</Tab>
+<Tab title="Rust" language="rust">
 The checked Rust worker performs the same operations. `with_scope_stack` accepts a
 closure that creates the bound future, restores the previous task binding afterward,
 and returns the future's result. Stack drop is attempted even when that result is an
@@ -190,6 +198,8 @@ async fn emit_runtime_events(
     Ok(())
 }
 ```
+</Tab>
+</Tabs>
 
 Both implementations pop the handle exactly once. Successful work supplies scope output;
 failed work supplies failure metadata and then propagates the original callback error.
