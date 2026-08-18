@@ -233,6 +233,41 @@ fn promotes_matching_primitive_metadata_without_overwriting_owned_keys() {
 }
 
 #[test]
+fn treats_metadata_promotion_prefixes_as_literal_string_prefixes() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("literal-metadata-prefixes")
+            .metadata(serde_json::json!({
+                "nv.dot": "dot",
+                "nv_underscore": "underscore",
+                "unrelated": "ignored",
+                "user_api_key": "api-key",
+                "username": "name"
+            }))
+            .build(),
+        None,
+        None,
+    ));
+    let mut attributes = Vec::new();
+
+    let issues = promote_event_metadata_attributes(
+        &mut attributes,
+        &event,
+        &["nv.".to_string(), "nv_".to_string(), "user".to_string()],
+        &HashSet::new(),
+    );
+
+    assert!(issues.is_empty());
+    assert_eq!(
+        attributes
+            .iter()
+            .map(|attribute| attribute.key.as_str())
+            .collect::<HashSet<_>>(),
+        HashSet::from(["nv.dot", "nv_underscore", "user_api_key", "username"])
+    );
+}
+
+#[test]
 fn rejects_metadata_keys_owned_by_relay_and_otel_projections() {
     let reserved_keys = [
         "error.type",
