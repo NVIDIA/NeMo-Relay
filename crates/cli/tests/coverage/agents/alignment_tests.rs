@@ -491,7 +491,8 @@ fn route_event_through_alias_covers_all_event_variants() {
             NormalizedEvent::ToolStarted(event) | NormalizedEvent::ToolEnded(event) => {
                 assert_eq!(event.subagent_id.as_deref(), Some("child"));
             }
-            NormalizedEvent::TurnEnded(_)
+            NormalizedEvent::TurnStarted(_)
+            | NormalizedEvent::TurnEnded(_)
             | NormalizedEvent::PromptSubmitted(_)
             | NormalizedEvent::Compaction(_)
             | NormalizedEvent::Notification(_)
@@ -763,6 +764,7 @@ fn event_metadata(event: &NormalizedEvent) -> &Value {
     match event {
         NormalizedEvent::AgentStarted(event)
         | NormalizedEvent::AgentEnded(event)
+        | NormalizedEvent::TurnStarted(event)
         | NormalizedEvent::TurnEnded(event)
         | NormalizedEvent::PromptSubmitted(event)
         | NormalizedEvent::Compaction(event)

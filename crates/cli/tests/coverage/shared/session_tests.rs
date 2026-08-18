@@ -5446,3 +5446,205 @@ fn llm_start_with_content(
         metadata: json!({}),
     }
 }
+
+// --------------------------------------------------------------------------
+// pi turn boundaries and attempt attribution, end to end through the adapter
+// --------------------------------------------------------------------------
+
+/// Drive one pi hook payload through the real adapter and the session manager.
+///
+/// Going through `pi::adapt` rather than hand-building `NormalizedEvent`s is the point: the
+/// defects this covers -- turn scopes opening at the wrong event, and attribution accepted on the
+/// wire and then discarded -- both live in the classification and metadata layers, not in the
+/// session manager alone.
+async fn apply_pi_hook(manager: &SessionManager, payload: Value) {
+    let outcome = crate::agents::shared::adapters::pi::adapt(payload, &HeaderMap::new());
+    manager
+        .apply_events(&HeaderMap::new(), outcome.events)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn pi_turn_scopes_open_at_pis_own_boundary_and_carry_attempt_attribution() {
+    let subscriber_name = "cli-pi-turn-boundary-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(
+        Vec::<(String, Option<ScopeCategory>, Value)>::new(),
+    ));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-boundary-session") {
+                return;
+            }
+            events.lock().unwrap().push((
+                event.name().to_string(),
+                event.scope_category(),
+                metadata.clone(),
+            ));
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-boundary-session" });
+    // One prompt, one attempt, one turn, one tool -- the shape every trace starts from.
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "agent_start", "attempt_index": 0 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({
+            "hook_event_name": "tool_call", "tool_call_id": "call-1", "tool_name": "read",
+            "input": { "path": "README.md" }, "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({
+            "hook_event_name": "tool_execution_end", "tool_call_id": "call-1",
+            "tool_name": "read", "status": "ok", "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        // The run-level tail. These trail the last turn_end and used to open an empty turn.
+        json!({ "hook_event_name": "agent_end", "attempt_index": 0 }),
+        json!({ "hook_event_name": "agent_settled", "attempts": 1, "attempt_index": 0 }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+
+    let turn_starts = captured
+        .iter()
+        .filter(|(name, category, _)| name == "pi-turn" && *category == Some(ScopeCategory::Start))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        turn_starts.len(),
+        1,
+        "pi reports one turn, so exactly one turn scope should exist; the run-level marks after \
+         turn_end must not open another. captured: {:?}",
+        captured
+            .iter()
+            .map(|(name, category, _)| (name.as_str(), *category))
+            .collect::<Vec<_>>()
+    );
+    let (_, _, turn_metadata) = turn_starts[0];
+    assert_eq!(turn_metadata["turn_source"], json!("turn_start"));
+    // Attribution on the scope itself, not only on a mark inside it: this is what makes "which
+    // attempt did this turn belong to" answerable by walking the scope tree.
+    assert_eq!(turn_metadata["attempt_index"], json!(0));
+    assert_eq!(turn_metadata["turn_seq"], json!(0));
+    // The gateway still assigns its own turn index and never trusts pi's, which resets on re-entry.
+    assert_eq!(turn_metadata["turn_index"], json!(1));
+
+    let tool_start = captured
+        .iter()
+        .find(|(name, category, _)| name == "read" && *category == Some(ScopeCategory::Start))
+        .expect("the tool span should exist");
+    assert_eq!(tool_start.2["attempt_index"], json!(0));
+    assert_eq!(tool_start.2["turn_seq"], json!(0));
+
+    assert_eq!(
+        captured
+            .iter()
+            .filter(|(name, category, _)| name == "pi-turn"
+                && *category == Some(ScopeCategory::End))
+            .count(),
+        1,
+        "the one turn should close exactly once"
+    );
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}
+
+// The re-entry case, which is why `turn_seq` exists: pi's `turn_index` restarts at 0 on every
+// attempt, so two turns in one session both call themselves turn 0.
+#[tokio::test]
+async fn pi_re_entry_produces_two_turns_attributed_to_two_attempts() {
+    let subscriber_name = "cli-pi-reentry-attribution-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(Vec::<Value>::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            if event.name() != "pi-turn" || event.scope_category() != Some(ScopeCategory::Start) {
+                return;
+            }
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-reentry-session") {
+                return;
+            }
+            events.lock().unwrap().push(metadata.clone());
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-reentry-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "agent_start", "attempt_index": 0 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({ "hook_event_name": "agent_end", "attempt_index": 0 }),
+        // Re-entry: pi's turn_index collides at 0 while turn_seq keeps counting.
+        json!({ "hook_event_name": "agent_start", "attempt_index": 1 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 1, "attempt_index": 1
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 1, "attempt_index": 1
+        }),
+        json!({ "hook_event_name": "agent_end", "attempt_index": 1 }),
+        json!({ "hook_event_name": "agent_settled", "attempts": 2, "attempt_index": 1 }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    assert_eq!(
+        captured.len(),
+        2,
+        "one turn scope per pi turn: {captured:?}"
+    );
+    assert_eq!(
+        captured
+            .iter()
+            .map(|metadata| (
+                metadata["attempt_index"].clone(),
+                metadata["turn_seq"].clone()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(json!(0), json!(0)), (json!(1), json!(1))],
+        "each turn scope must name the attempt it belonged to"
+    );
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}

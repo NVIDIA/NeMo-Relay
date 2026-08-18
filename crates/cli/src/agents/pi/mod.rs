@@ -28,16 +28,21 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // channel, so this floor is the version the integration was verified
     // against rather than a lower bound that is expected to keep holding.
     minimum_version: (0, 84, 0),
+    // The hooks the extension actually posts to `/hooks/pi`, which is narrower than the set it
+    // registers with pi. `tool_execution_start` is registered but never forwarded -- it fires
+    // before validation and for calls that never execute, so it is used only to remember a tool
+    // name for the matching end -- and listing it here described a hook the gateway never sees.
     hook_events: &[
         "session_start",
         "session_shutdown",
+        "session_before_compact",
+        "session_compact",
         "agent_start",
         "agent_end",
         "agent_settled",
         "turn_start",
         "turn_end",
         "tool_call",
-        "tool_execution_start",
         "tool_execution_end",
     ],
 };

@@ -17,10 +17,19 @@ all policy and all span construction happen in the gateway.
 ## Status
 
 Proof of concept, tracked under
-[RELAY-727](https://linear.app/nvidia/issue/RELAY-727) and
-[RELAY-728](https://linear.app/nvidia/issue/RELAY-728). Verified against pi
+[RELAY-727](https://linear.app/nvidia/issue/RELAY-727),
+[RELAY-728](https://linear.app/nvidia/issue/RELAY-728),
+[RELAY-729](https://linear.app/nvidia/issue/RELAY-729) and
+[RELAY-730](https://linear.app/nvidia/issue/RELAY-730). Verified against pi
 `v0.84.0`. pi ships breaking changes through *minor* releases and has no
 major-release channel, so re-verify hook signatures before relying on them.
+
+**Model traffic does not traverse the gateway yet**
+([RELAY-732](https://linear.app/nvidia/issue/RELAY-732)). pi has no base-URL
+flag and no generic environment override — it resolves `baseUrl` per model from
+a generated catalog — so redirection needs this extension to register a
+gateway-backed provider, and nothing does that yet. Until it lands there are no
+LLM spans and no model-call enforcement, only tool and turn activity.
 
 ## Usage
 
@@ -74,11 +83,33 @@ Two shapes make a naive mapping wrong.
 **Agent-run re-entry.** One prompt can re-enter the agent run several times
 (provider retry, post-compaction, queued follow-up), and pi's `turnIndex` resets
 to 0 each time. The extension-facing `agent_end` carries no `willRetry` marker,
-so a retry cannot be detected there; `agent_settled` is the only event that fires
-exactly once per logical run. The gateway's own model is flat
-(session -> turn -> tool) and assigns its own monotonic turn index, so the
-extension sends `attempt_index` and a session-monotonic `turn_seq` as metadata —
-they are the only way to recover which attempt a turn belonged to.
+so a retry cannot be detected there — `session_before_compact` is the one hook
+that announces one in advance, and only for the compaction case;
+`agent_settled` is the only event that fires exactly once per logical run. The
+gateway's own model is flat (session -> turn -> tool) and assigns its own
+monotonic turn index, so the extension sends `attempt_index` and a
+session-monotonic `turn_seq` on every attributable hook — they are the only way
+to recover which attempt a turn or tool call belonged to.
+
+Both travel as payload keys, and the gateway's pi extractor promotes them into
+each event's **metadata**. That promotion is not cosmetic: mark events record
+the raw payload as their `data`, but tool spans are built from the extracted
+call id, name, arguments, result and metadata and discard the payload entirely,
+so without it the two keys would be accepted on the wire and then dropped. Read
+them from `metadata` on scopes and spans, and from either place on marks.
+
+The consequence is worth stating plainly: **re-entry is not nested.** The
+gateway model stays flat and gains no attempt level, because that model is
+shared with Codex and Claude Code, which have no equivalent concept. Two
+attempts of one prompt appear as more turns under one session, distinguished by
+`attempt_index` — not as two subtrees.
+
+**Known limitation.** The counters live in the extension factory's closure and
+pi re-runs the factory on `/reload` with `moduleCache: false`, while the session
+id stays the same. `turn_seq` therefore restarts at 0 and can repeat within one
+session — it orders turns within a runtime, not strictly within a session.
+Rebuilding it would mean replaying the session or moving the counter into the
+gateway; neither is worth it here.
 
 **Concurrent tools.** pi preflights sibling calls sequentially then executes them
 concurrently, so `tool_execution_end` arrives out of submission order. All
@@ -86,17 +117,25 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 
 | pi hook | Forwarded as | Note |
 |---|---|---|
-| `session_start` / `session_shutdown` | session boundary | **Not** `agent_start`/`agent_end` — those repeat on re-entry |
-| `agent_start` / `agent_end` | attempt markers | Carry `attempt_index`; not a run boundary |
-| `agent_settled` | logical run boundary | Fires exactly once, from a `finally` |
-| `turn_start` | turn boundary (open) | Carries `turn_index`, `turn_seq` and `attempt_index` |
-| `turn_end` | turn boundary (close) | Carries `turn_index` only |
-| `tool_call` | tool start, and the gate | The only blocking hook |
-| `tool_execution_end` | tool end | For **every** outcome, including blocked |
-| `tool_execution_start` | *not forwarded* | Fires before validation and for calls that never execute |
+| `session_start` / `session_shutdown` | session boundary | **Not** `agent_start`/`agent_end` — those repeat on re-entry. `session_shutdown` is ignored for `reason: "reload"`, which continues the same session |
+| `agent_start` / `agent_end` | run-level marks | Carry `attempt_index`; not a run boundary. Recorded on the session scope, not inside a turn |
+| `agent_settled` | run-level mark | Fires exactly once, from a `finally`. Carries `attempts` (the count) and `attempt_index` (the last one) |
+| `turn_start` | turn scope **open** | Carries `turn_index`, `turn_seq`, `attempt_index` |
+| `turn_end` | turn scope **close** | Carries `turn_index`, `turn_seq`, `attempt_index` |
+| `session_before_compact` | mark | Announced, not done, and cancellable by a later extension. Carries `reason`, `will_retry`, `tokens_before` |
+| `session_compact` | compaction | The completed compaction, which the runtime treats as proof the context was rebuilt |
+| `tool_call` | tool start, and the gate | The only blocking hook. Carries `attempt_index`, `turn_seq` |
+| `tool_execution_end` | tool end | For **every** outcome, including blocked. Carries `attempt_index`, `turn_seq` |
+| `tool_execution_start` | *not forwarded* | Registered, but only to remember a tool name for the matching end: it fires before validation and for calls that never execute |
 
 `tool_result` is deliberately unused: it does not fire for blocked calls, and in
 the parallel path it fires *before* `tool_execution_end`.
+
+Because pi reports both ends of a turn, the gateway never invents one for it. A
+mark arriving between turns — the `agent_end` / `agent_settled` tail of a run —
+is recorded on the session scope rather than opening an empty turn to hold it.
+Codex and Claude Code report only `Stop`, so their turns stay lazily opened by
+the first event of the turn.
 
 ## Development
 

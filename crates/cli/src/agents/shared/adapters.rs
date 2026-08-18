@@ -40,6 +40,12 @@ pub(super) struct ClassificationRules<'a> {
     subagent_end: &'a [&'a str],
     tool_start: &'a [&'a str],
     tool_end: &'a [&'a str],
+    /// Hook names that open the turn scope at the harness's own boundary.
+    ///
+    /// Empty for Claude Code and Codex, which report only `Stop`; their turns
+    /// stay lazily opened by the first tool, LLM, or mark event of the turn.
+    /// pi reports `turn_start`, so its turn scope starts where pi says it does.
+    turn_start: &'a [&'a str],
     /// Hook names that additionally close the turn scope.
     ///
     /// Claude Code and Codex both spell this `Stop`; pi has an explicit
@@ -47,6 +53,14 @@ pub(super) struct ClassificationRules<'a> {
     /// session manager can close the turn and snapshot ATIF without closing
     /// the agent scope.
     turn_end: &'a [&'a str],
+    /// Hook names that report a completed context compaction.
+    ///
+    /// Empty for Claude Code and Codex, whose `PreCompact`/`PostCompact` names
+    /// are already matched by the shared fallback. pi spells the *completed*
+    /// compaction `session_compact`; its `session_before_compact` deliberately
+    /// stays a plain mark, because any extension loaded after this one can
+    /// still cancel the compaction it announces.
+    compaction: &'a [&'a str],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -199,9 +213,14 @@ pub(super) static CODEX_PAYLOAD_EXTRACTOR: CodexPayloadExtractor = CodexPayloadE
 pub(super) static PI_PAYLOAD_EXTRACTOR: PiPayloadExtractor = PiPayloadExtractor;
 
 /// pi hooks are emitted by a NeMo Relay-authored extension, so the payload uses
-/// the canonical key names and needs no path deviations. The one override is the
-/// session-header policy: pi is not Claude Code installed mode and must not
-/// adopt an `x-claude-code-session-id` that happens to be in the environment.
+/// the canonical key names and needs no path deviations. Two overrides:
+///
+/// - the session-header policy, because pi is not Claude Code installed mode and
+///   must not adopt an `x-claude-code-session-id` that happens to be in the
+///   environment;
+/// - attempt attribution, because the gateway's session model is flat
+///   (session -> turn -> tool/llm) and carries pi's agent-run structure as
+///   metadata instead of as scopes.
 impl AgentPayloadExtractor for PiPayloadExtractor {
     fn session_header_policy(&self) -> SessionHeaderPolicy {
         SessionHeaderPolicy::RelayOnly
@@ -210,7 +229,50 @@ impl AgentPayloadExtractor for PiPayloadExtractor {
     fn tool_paths(&self) -> &'static ToolPathSet {
         PI_TOOL_PATHS
     }
+
+    /// Promote pi's attempt attribution out of the payload and into metadata.
+    ///
+    /// This is load-bearing rather than cosmetic. Mark events carry the raw
+    /// payload as their `data`, so attribution sent on `agent_start` or
+    /// `turn_start` is already visible there -- but tool events do not: the
+    /// session manager builds tool spans from the extracted call id, name,
+    /// arguments, result, and `metadata`, and drops `ToolEvent::payload`
+    /// entirely. Without this promotion, `attempt_index` and `turn_seq` on
+    /// `tool_call` and `tool_execution_end` would be accepted on the wire and
+    /// then silently discarded.
+    ///
+    /// The same promotion is what puts attribution on the *turn scope* rather
+    /// than only on a mark inside it, so "which attempt did this turn belong
+    /// to" is answerable by walking the scope tree.
+    fn metadata(
+        &self,
+        payload: &Value,
+        headers: &HeaderMap,
+        kind: AgentKind,
+        event_name: &str,
+    ) -> Value {
+        let mut metadata = agent_metadata(payload, headers, kind, event_name);
+        if let Some(object) = metadata.as_object_mut() {
+            for key in PI_ATTRIBUTION_KEYS {
+                // Numbers only: these are counters, and accepting a string here
+                // would put an untyped field into observability metadata that
+                // consumers then have to defend against.
+                if let Some(value) = value_at(payload, &[key]).filter(Value::is_number) {
+                    object.insert((*key).into(), value);
+                }
+            }
+        }
+        metadata
+    }
 }
+
+/// pi attribution counters promoted from hook payloads into event metadata.
+///
+/// `attempt_index` counts agent-run re-entries within one prompt; `turn_seq` is
+/// session-monotonic where pi's own `turn_index` resets to 0 on every re-entry.
+/// pi's `turn_index` is deliberately absent: the gateway assigns its own
+/// `turn_index` to the turn scope and promoting pi's would collide with it.
+const PI_ATTRIBUTION_KEYS: &[&str] = &["attempt_index", "turn_seq"];
 
 /// Claude Code reports its native tool identifier as `tool_use_id`, so it uses
 /// a tool path set that prefers that key. Every other hook field matches the
@@ -895,6 +957,30 @@ fn classify_primary(
         .any(|name| normalize_name(name) == normalized)
     {
         NormalizedEvent::ToolEnded(common_tool_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
+        ))
+    } else if rules
+        .turn_start
+        .iter()
+        .any(|name| normalize_name(name) == normalized)
+    {
+        NormalizedEvent::TurnStarted(common_session_event_with_fallback(
+            payload,
+            headers,
+            rules.kind,
+            extractor,
+            fallback_session_id,
+        ))
+    } else if rules
+        .compaction
+        .iter()
+        .any(|name| normalize_name(name) == normalized)
+    {
+        NormalizedEvent::Compaction(common_session_event_with_fallback(
             payload,
             headers,
             rules.kind,

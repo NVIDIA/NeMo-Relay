@@ -24,7 +24,10 @@ use crate::events::AgentKind;
 ///   times (provider retry, compaction, queued follow-up), so treating
 ///   `agent_start` as a session start would open a session per retry.
 /// - `agent_settled` is the only pi event that fires exactly once per logical
-///   agent run, so it is the turn-boundary snapshot rather than `agent_end`.
+///   agent run, which makes it the run boundary rather than `agent_end` -- but
+///   deliberately *not* a turn boundary: a logical run spans several turns.
+/// - pi reports both ends of a turn, so the turn scope opens at `turn_start`
+///   instead of being opened implicitly by whichever event arrives first.
 /// - `tool_call` is the gating hook and maps to tool start. `tool_execution_start`
 ///   is deliberately NOT mapped: it fires before validation and before
 ///   `tool_call`, including for calls that never execute, so using it to open a
@@ -44,12 +47,20 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             subagent_end: &[],
             tool_start: &["tool_call", "toolCall"],
             tool_end: &["tool_execution_end", "toolExecutionEnd"],
-            // pi has an explicit turn boundary, unlike Codex and Claude Code
-            // which only signal it through `Stop`. `agent_settled` is
-            // deliberately not here: it marks the end of a logical agent run,
-            // which can span several turns, and closing the turn there would
-            // merge every re-entry attempt into one.
+            // pi has an explicit turn boundary at both ends, unlike Codex and
+            // Claude Code which only signal it through `Stop`. Classifying the
+            // open as well as the close is what stops the gateway inventing a
+            // turn at whichever event happens to arrive first.
+            turn_start: &["turn_start", "turnStart"],
+            // `agent_settled` is deliberately not here: it marks the end of a
+            // logical agent run, which can span several turns, and closing the
+            // turn there would merge every re-entry attempt into one.
             turn_end: &["turn_end", "turnEnd"],
+            // Only the *completed* compaction. `session_before_compact` stays a
+            // mark: it announces an intent that any later-loading extension can
+            // still cancel, and the runtime treats a compaction event as proof
+            // the context was actually rebuilt.
+            compaction: &["session_compact", "sessionCompact"],
         },
     );
     AdapterOutcome {

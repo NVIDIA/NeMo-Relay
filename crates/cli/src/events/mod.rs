@@ -24,12 +24,34 @@ impl AgentKind {
             Self::Gateway => "gateway",
         }
     }
+
+    // Whether this harness reports the *opening* of a conversation turn, not just its close.
+    //
+    // Codex and Claude Code only signal a turn boundary on `Stop`, so the gateway has to open
+    // turns lazily -- the first tool call, LLM call, or mark after a close starts the next one.
+    // pi emits a native `turn_start`, which is classified into `NormalizedEvent::TurnStarted`
+    // and opens the scope at pi's own boundary. For those harnesses a mark arriving *between*
+    // turns must not manufacture one: doing so left an empty trailing turn holding nothing but
+    // the `agent_end`/`agent_settled` marks at the end of every run.
+    //
+    // Kept next to `as_str` rather than on the agent descriptor because the session manager
+    // works in terms of `AgentKind`; the matching hook names live in each adapter's
+    // `ClassificationRules::turn_start`.
+    pub(crate) const fn has_explicit_turn_start(self) -> bool {
+        matches!(self, Self::Pi)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum NormalizedEvent {
     AgentStarted(SessionEvent),
     AgentEnded(SessionEvent),
+    /// Conversation-turn boundary that opens the turn scope at the harness's own signal.
+    ///
+    /// Only emitted for harnesses that report one (pi's `turn_start`). Without it the gateway
+    /// opens turns lazily on the first tool, LLM, or mark event, which puts the boundary
+    /// wherever traffic happens to arrive rather than where the harness says the turn begins.
+    TurnStarted(SessionEvent),
     /// Conversation-turn boundary that the gateway uses to snapshot ATIF without closing the
     /// agent scope. Emitted alongside `LlmHint` for `Stop` hooks (Claude/Codex).
     /// Required for Codex transparent runs because Codex has no reliable `SessionEnd`-equivalent
@@ -60,6 +82,7 @@ impl NormalizedEvent {
         match self {
             Self::AgentStarted(event)
             | Self::AgentEnded(event)
+            | Self::TurnStarted(event)
             | Self::TurnEnded(event)
             | Self::PromptSubmitted(event)
             | Self::Compaction(event)
@@ -72,7 +95,8 @@ impl NormalizedEvent {
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
-        // TurnEnded is intentionally NOT terminal — the agent scope stays open across turns.
+        // TurnStarted/TurnEnded are intentionally NOT terminal — the agent scope stays open
+        // across turns.
         matches!(
             self,
             Self::AgentEnded(_) | Self::SubagentEnded(_) | Self::ToolEnded(_)

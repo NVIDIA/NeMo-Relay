@@ -796,6 +796,7 @@ impl Session {
                 match event {
                     NormalizedEvent::AgentStarted(event) => self.start_agent(event).map(|()| None),
                     NormalizedEvent::AgentEnded(event) => self.end_agent(event).await,
+                    NormalizedEvent::TurnStarted(event) => self.start_turn_boundary(event).await,
                     NormalizedEvent::TurnEnded(event) => self.end_turn(event).await,
                     NormalizedEvent::SubagentStarted(event) => {
                         self.start_subagent(event).await.map(|()| None)
@@ -1031,6 +1032,27 @@ impl Session {
             subscriber_delivery = delivery;
         }
         self.open_turn(event.metadata, event.payload, "user_prompt")?;
+        Ok(subscriber_delivery)
+    }
+
+    // Opens a turn at the harness's own `turn_start`, for harnesses that report one.
+    //
+    // Distinct from `start_turn`, which handles a *prompt* and has to tolerate a prompt arriving
+    // while a turn is open. A turn-start hook is unambiguous: whatever is still open belongs to
+    // the previous turn and is closed first, so a dropped or missing `turn_end` degrades into one
+    // superseded turn rather than merging two turns into one.
+    async fn start_turn_boundary(
+        &mut self,
+        event: SessionEvent,
+    ) -> Result<Option<SubscriberDelivery>, CliError> {
+        let mut subscriber_delivery = None;
+        if self.turn_scope.is_some() {
+            let (_, delivery) = self
+                .close_turn_for_reason("superseded_by_next_turn")
+                .await?;
+            subscriber_delivery = delivery;
+        }
+        self.open_turn(event.metadata, event.payload, "turn_start")?;
         Ok(subscriber_delivery)
     }
 
@@ -1630,10 +1652,20 @@ impl Session {
             .filter(|subagent_id| self.subagents.contains_key(subagent_id))
     }
 
-    // Emits a mark event after ensuring the turn scope exists. Generic and unknown hooks use this
-    // path so unsupported agent events remain visible without changing scope structure.
+    // Emits a mark event after ensuring an enclosing scope exists. Generic and unknown hooks use
+    // this path so unsupported agent events remain visible without changing scope structure.
+    //
+    // Which scope encloses it depends on the harness. Codex and Claude Code report no turn start,
+    // so a mark has to open the turn it belongs to or it would have nowhere to land. pi does
+    // report one, and for it a mark arriving between turns is genuinely between turns -- run-level
+    // events such as `agent_end` and `agent_settled` trail the last `turn_end`, and opening a turn
+    // for them produced an empty turn scope at the end of every run.
     fn mark(&mut self, name: &str, event_payload: SessionEvent) -> Result<(), CliError> {
-        self.ensure_turn_started(event_payload.metadata.clone())?;
+        if self.agent_kind.has_explicit_turn_start() {
+            self.ensure_agent_started(event_payload.metadata.clone())?;
+        } else {
+            self.ensure_turn_started(event_payload.metadata.clone())?;
+        }
         emit_mark_event(
             EmitMarkEventParams::builder()
                 .name(name)

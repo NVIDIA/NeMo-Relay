@@ -23,10 +23,14 @@
  *    (provider retry, post-compaction, queued follow-up), and `turnIndex` resets
  *    to 0 each time, so turn indices collide within one prompt. The extension
  *    `agent_end` payload carries no `willRetry` marker, so a retry cannot be
- *    detected there. `agent_settled` is the only event that fires exactly once
- *    per logical run. Both an attempt counter and a session-monotonic turn
- *    sequence are therefore sent as metadata, because the gateway's own model is
- *    flat (session -> turn -> tool) and cannot express the nesting.
+ *    detected there -- `session_before_compact` is the one hook that announces
+ *    one in advance, and only for the compaction case. `agent_settled` is the
+ *    only event that fires exactly once per logical run. Every attributable
+ *    hook therefore carries an attempt counter and a session-monotonic turn
+ *    sequence, because the gateway's own model is flat (session -> turn ->
+ *    tool) and cannot express the nesting. They travel as payload keys and the
+ *    gateway promotes them into event metadata, which is what makes them
+ *    survive on tool spans.
  * 2. *Concurrent tools.* pi preflights sibling calls sequentially then executes
  *    them concurrently, so `tool_execution_end` arrives out of submission order.
  *    All per-call state is keyed by `toolCallId`, which is the only correlator
@@ -52,6 +56,8 @@ import type {
   AgentStartEvent,
   ExtensionAPI,
   ExtensionContext,
+  SessionBeforeCompactEvent,
+  SessionCompactEvent,
   SessionShutdownEvent,
   SessionStartEvent,
   ToolCallEvent,
@@ -120,6 +126,26 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     void enqueue(() => postAndForget(active, payload));
   };
 
+  /**
+   * The attempt and turn a hook belongs to.
+   *
+   * Both counters hold the *next* value -- they are incremented as soon as the
+   * event that opens their span is forwarded -- so the live attempt and turn
+   * are one behind. The gateway promotes these two keys out of the payload and
+   * into event metadata, which is the only reason they survive on tool events:
+   * tool spans are built from the extracted call id, name, arguments, result
+   * and metadata, and the raw payload is discarded.
+   *
+   * Sent on every hook that can be attributed. Without it, `tool_call` and
+   * `tool_execution_end` are recoverable to an attempt only by reading
+   * surrounding events in arrival order, which stops working the moment two
+   * attempts are in flight.
+   */
+  const attribution = (): { attempt_index: number; turn_seq: number } => ({
+    attempt_index: Math.max(0, attemptIndex - 1),
+    turn_seq: Math.max(0, turnSeq - 1),
+  });
+
   // ---------------------------------------------------------------------------
   // Session lifecycle
   //
@@ -184,24 +210,80 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('agent_settled', async (_event: AgentSettledEvent, ctx: ExtensionContext) => {
-    emit(ctx, { hook_event_name: 'agent_settled', attempts: attemptIndex });
+    emit(ctx, {
+      hook_event_name: 'agent_settled',
+      // Two different facts, both wanted: `attempts` is how many attempts the
+      // run took, `attempt_index` is the last of them. Sending only the count
+      // made this the one hook a consumer filtering on `attempt_index` missed.
+      attempts: attemptIndex,
+      ...attribution(),
+    });
     attemptIndex = 0;
   });
 
   pi.on('turn_start', async (event: TurnStartEvent, ctx: ExtensionContext) => {
+    const seq = turnSeq;
+    turnSeq += 1;
     emit(ctx, {
       hook_event_name: 'turn_start',
       // pi's turn_index resets to 0 on re-entry; turn_seq does not, so a
       // consumer can still order turns across the whole session.
       turn_index: event.turnIndex,
-      turn_seq: turnSeq,
+      turn_seq: seq,
       attempt_index: Math.max(0, attemptIndex - 1),
     });
-    turnSeq += 1;
   });
 
   pi.on('turn_end', async (event: TurnEndEvent, ctx: ExtensionContext) => {
-    emit(ctx, { hook_event_name: 'turn_end', turn_index: event.turnIndex });
+    emit(ctx, {
+      hook_event_name: 'turn_end',
+      // pi carries turn_index on the close but not turn_seq, so the close could
+      // not be matched to its own open across a re-entry, where turn_index 0
+      // appears once per attempt.
+      turn_index: event.turnIndex,
+      ...attribution(),
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Compaction
+  //
+  // Only `session_compact` is a compaction *event* to the gateway; the runtime
+  // treats one as proof the context was rebuilt and marks the agent fresh so
+  // the next model call records full context rather than a delta. That effect
+  // is latent until pi's model traffic is routed through the gateway, but the
+  // boundary is recorded now either way.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Announced, not yet done, and cancellable by any extension loading after
+   * this one -- so it is forwarded as a mark. Its `willRetry` is the only
+   * advance notice pi gives an extension that the agent run is about to
+   * re-enter; `agent_end` carries no such marker.
+   *
+   * Returns nothing on purpose: a returned object is how pi's API spells
+   * "cancel this compaction, or replace its result".
+   */
+  pi.on('session_before_compact', async (event: SessionBeforeCompactEvent, ctx) => {
+    emit(ctx, {
+      hook_event_name: 'session_before_compact',
+      reason: event.reason,
+      will_retry: event.willRetry,
+      tokens_before: event.preparation?.tokensBefore,
+      is_split_turn: event.preparation?.isSplitTurn,
+      ...attribution(),
+    });
+  });
+
+  pi.on('session_compact', async (event: SessionCompactEvent, ctx) => {
+    emit(ctx, {
+      hook_event_name: 'session_compact',
+      reason: event.reason,
+      will_retry: event.willRetry,
+      from_extension: event.fromExtension,
+      tokens_before: event.compactionEntry?.tokensBefore,
+      ...attribution(),
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -241,6 +323,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
           tool_call_id: event.toolCallId,
           tool_name: event.toolName,
           input: event.input,
+          ...attribution(),
         }),
       );
 
@@ -271,6 +354,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       tool_name: toolName,
       result: summarize(event.result, event.isError),
       status: event.isError ? 'error' : 'ok',
+      ...attribution(),
     });
   });
 }

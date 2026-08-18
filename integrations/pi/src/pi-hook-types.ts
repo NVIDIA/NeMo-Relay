@@ -63,6 +63,33 @@ export type SessionShutdownEvent = {
 };
 
 /**
+ * Fired *before* context compaction, and cancellable.
+ *
+ * `willRetry` is the one place pi tells an extension that a re-entry is coming:
+ * the extension-facing `agent_end` carries no such marker. `preparation` also
+ * carries the pre-compaction token count and whether the cut lands mid-turn.
+ *
+ * A handler must return `undefined` here. Returning an object is how pi's API
+ * spells "cancel this compaction, or replace its result", so an accidental
+ * return value from an observability hook would change pi's behaviour.
+ */
+export type SessionBeforeCompactEvent = {
+  type: 'session_before_compact';
+  reason: 'manual' | 'threshold' | 'overflow';
+  willRetry: boolean;
+  preparation?: { tokensBefore?: number; isSplitTurn?: boolean };
+};
+
+/** Fired after context compaction has actually happened. Not cancellable. */
+export type SessionCompactEvent = {
+  type: 'session_compact';
+  reason: 'manual' | 'threshold' | 'overflow';
+  willRetry: boolean;
+  fromExtension: boolean;
+  compactionEntry?: { tokensBefore?: number };
+};
+
+/**
  * Fired when a tool starts executing.
  *
  * Fires *before* argument validation and before the `tool_call` hook, and also
@@ -121,6 +148,8 @@ export type ExtensionHandler<TEvent, TResult = void> = (
 export type ExtensionAPI = {
   on(event: 'session_start', handler: ExtensionHandler<SessionStartEvent>): void;
   on(event: 'session_shutdown', handler: ExtensionHandler<SessionShutdownEvent>): void;
+  on(event: 'session_before_compact', handler: ExtensionHandler<SessionBeforeCompactEvent>): void;
+  on(event: 'session_compact', handler: ExtensionHandler<SessionCompactEvent>): void;
   on(event: 'agent_start', handler: ExtensionHandler<AgentStartEvent>): void;
   on(event: 'agent_end', handler: ExtensionHandler<AgentEndEvent>): void;
   on(event: 'agent_settled', handler: ExtensionHandler<AgentSettledEvent>): void;
