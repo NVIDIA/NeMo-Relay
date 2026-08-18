@@ -86,7 +86,9 @@ with `nemo_relay_otel_log_subscriber_register` or
 deregister the name, force-flush the subscriber, shut it down, and free its
 handle with the matching `nemo_relay_otel_*_subscriber_free` function. The log
 and metric APIs also expose bounded JSON runtime-diagnostics snapshots through
-their `nemo_relay_otel_*_subscriber_runtime_diagnostics_json` functions.
+their `nemo_relay_otel_*_subscriber_runtime_diagnostics_json` functions. The
+caller owns each returned `out_json` string and must release it with
+`nemo_relay_string_free`.
 
 ## Installation
 
