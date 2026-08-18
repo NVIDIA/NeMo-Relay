@@ -232,6 +232,7 @@ class OpenTelemetryEndpointConfig:
     max_queue_size: int | None = None
     max_export_batch_size: int | None = None
     scheduled_delay_millis: int | None = None
+    promote_metadata_prefixes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -242,6 +243,7 @@ class OpenTelemetryEndpointConfig:
                 "mark_projection": self.mark_projection,
                 "mark_exclude_names": self.mark_exclude_names,
                 "attribute_mappings": self.attribute_mappings,
+                "promote_metadata_prefixes": self.promote_metadata_prefixes,
                 "transport": self.transport,
                 "service_name": self.service_name,
                 "service_namespace": self.service_namespace,

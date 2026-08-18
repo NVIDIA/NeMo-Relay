@@ -66,6 +66,9 @@ func TestNewOpenTelemetryConfigDefaults(t *testing.T) {
 	if config.AttributeMappings == nil || len(config.AttributeMappings) != 0 {
 		t.Fatalf("expected empty attribute mappings, got %#v", config.AttributeMappings)
 	}
+	if config.PromoteMetadataPrefixes == nil || len(config.PromoteMetadataPrefixes) != 0 {
+		t.Fatalf("expected empty metadata promotion prefixes, got %#v", config.PromoteMetadataPrefixes)
+	}
 }
 
 func TestOpenTelemetrySubscriberAcceptsProjectionControls(t *testing.T) {
@@ -76,12 +79,22 @@ func TestOpenTelemetrySubscriberAcceptsProjectionControls(t *testing.T) {
 		Key:   "nemo_relay.model_name",
 		Alias: "model.alias",
 	}}
+	config.PromoteMetadataPrefixes = []string{"nv."}
 
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
 		t.Fatalf("NewOpenTelemetrySubscriber with projection controls failed: %v", err)
 	}
 	defer subscriber.Close()
+}
+
+func TestOpenTelemetrySubscriberRejectsInvalidMetadataPromotionPrefix(t *testing.T) {
+	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, otelTestEndpoint)
+	config.PromoteMetadataPrefixes = []string{"nv.*"}
+
+	if _, err := NewOpenTelemetrySubscriber(config); err == nil {
+		t.Fatal("expected invalid metadata promotion prefix error")
+	}
 }
 
 func TestOpenTelemetrySubscriberRejectsInvalidAttributeMappings(t *testing.T) {
@@ -194,6 +207,7 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 
 	config := NewOpenTelemetryConfig(OpenTelemetryTypeFull, server.URL+otelTestPath)
 	config.ServiceName = "go-agent"
+	config.PromoteMetadataPrefixes = []string{"nv."}
 	subscriber, err := NewOpenTelemetrySubscriber(config)
 	if err != nil {
 		t.Fatalf(newOpenTelemetrySubscriberFailed, err)
@@ -207,7 +221,11 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 	defer func() { _ = subscriber.Deregister(name) }()
 
 	runWithTestScopeStack(t, func() {
-		handle, err := PushScope("otel_scope", ScopeTypeAgent)
+		handle, err := PushScope(
+			"otel_scope",
+			ScopeTypeAgent,
+			WithMetadata(json.RawMessage(`{"nv.binding":"go"}`)),
+		)
 		if err != nil {
 			t.Fatalf("PushScope failed: %v", err)
 		}
@@ -219,7 +237,10 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 		); err != nil {
 			t.Fatalf("EmitEvent failed: %v", err)
 		}
-		if err := PopScope(handle); err != nil {
+		if err := PopScope(
+			handle,
+			WithScopeEndMetadata(json.RawMessage(`{"nv.binding":"go"}`)),
+		); err != nil {
 			t.Fatalf("PopScope failed: %v", err)
 		}
 	})
@@ -239,6 +260,7 @@ func TestOpenTelemetrySubscriberExportsScopeLifecycleAndMarks(t *testing.T) {
 			t.Fatal("expected non-empty OTLP request body")
 		}
 		assertOtlpStringAttribute(t, request.Body, "nemo_relay.scope_type", "agent")
+		assertOtlpStringAttribute(t, request.Body, "nv.binding", "go")
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for OTLP request")
 	}

@@ -1707,6 +1707,31 @@ NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options(const 
                                                                           struct FfiOpenTelemetrySubscriber **out);
 
 /**
+ * Creates one typed OpenTelemetry exporter subscriber with projection and metadata controls.
+ *
+ * `promote_metadata_prefixes_json` is a JSON array of literal metadata prefixes,
+ * such as `["nv."]`. Pass null to disable metadata promotion.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_create_with_projection_options_v2(const char *otel_type,
+                                                                             const char *transport,
+                                                                             const char *endpoint,
+                                                                             const char *headers_json,
+                                                                             const char *resource_attributes_json,
+                                                                             const char *service_name,
+                                                                             const char *service_namespace,
+                                                                             const char *service_version,
+                                                                             const char *instrumentation_scope,
+                                                                             uint64_t timeout_millis,
+                                                                             const char *mark_projection,
+                                                                             const char *mark_exclude_names_json,
+                                                                             const char *attribute_mappings_json,
+                                                                             const char *promote_metadata_prefixes_json,
+                                                                             struct FfiOpenTelemetrySubscriber **out);
+
+/**
  * Registers the OpenTelemetry subscriber as an event subscriber.
  *
  * # Safety
