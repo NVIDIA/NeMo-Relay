@@ -183,6 +183,7 @@ use nemo_relay::observability::{
     otel_metrics::{OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber},
 };
 
+// Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
 let logs = OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new(
     "http://localhost:4318",
 ))?;
