@@ -39,6 +39,11 @@ host-table layout. A tool callback and `ToolNext` continuation now return
 execution intercept returns that pair plus pending marks. Rebuild native plugins for
 this contract even though the negotiated host-table ABI remains v4.
 
+The v4 SDK also lets a plugin add a data schema and log severity to a mark, or emit
+validated metric measurements. `PluginRuntime::runtime_diagnostics()` returns the
+current host-level diagnostic snapshot. The snapshot is ordered by code and is not
+attributed to a particular plugin.
+
 ## What the SDK Owns
 
 The Rust SDK exports the stable entry symbol, converts host-owned JSON handles into

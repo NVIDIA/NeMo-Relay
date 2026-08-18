@@ -19,10 +19,74 @@ scope context while the `RelayHostRuntime` service performs the real work.
 | Bind and restore a stack | Run a future through `with_scope_stack`. | Enter `bind_scope_stack`; use `clear_scope_stack` when code must deliberately run without a bound stack. |
 | Push and pop a scope | Await `push_scope`, retain its handle, and await `pop_scope`. | Await the same pair; the handle, not a guessed scope ID, owns the pop. |
 | Inspect inherited context | The runtime proxy carries the task scope snapshot. | `current_scope_stack_id` and `current_parent_scope_id` expose the current binding. |
+| Emit typed telemetry | Use `emit_mark_with_options` or `emit_metric`. | Use the matching async runtime methods. |
+| Read runtime diagnostics | Await `runtime_diagnostics`. | Await `runtime_diagnostics`. |
 
 Every host request carries the activation ID, token, and relevant scope context. A worker
 must not expose, log, or persist the activation token or codec capability IDs. Those
 values identify a live local capability and expire with the activation or invocation.
+
+Use typed mark options when an exported mark needs a data schema or log severity. Use
+`emit_metric` for Relay metric measurements. `runtime_diagnostics` returns the bounded,
+ordered host-level `{ code, message, count }` snapshot. It does not identify the plugin
+that recorded a diagnostic.
+
+## Emit Typed Telemetry and Read Diagnostics
+
+Use the following Python code to add schema and severity metadata to a mark, emit a
+metric, and inspect the runtime diagnostics:
+
+```python
+from nemo_relay_plugin import DataSchema, LogSeverity
+
+await ctx.runtime.emit_mark(
+    "example.python_worker.policy_decision",
+    {"allowed": True},
+    data_schema=DataSchema("example.policy.decision", "1"),
+    severity=LogSeverity.INFO,
+)
+await ctx.runtime.emit_metric(
+    "example.python_worker.requests",
+    [{"name": "example.requests", "kind": "counter", "value_type": "u64", "value": 1}],
+)
+
+diagnostic = (await ctx.runtime.runtime_diagnostics()).get("otel.metric_mark_invalid")
+if diagnostic is not None:
+    print(f"{diagnostic.message} occurred {diagnostic.count} times")
+```
+
+Use the following Rust code for the same operations:
+
+```rust
+use nemo_relay_worker::{DataSchema, EmitMarkOptions, LogSeverity};
+
+runtime
+    .emit_mark_with_options(
+        "example.rust_worker.policy_decision",
+        Some(json!({ "allowed": true })),
+        None,
+        EmitMarkOptions {
+            data_schema: Some(
+                DataSchema::builder()
+                    .name("example.policy.decision")
+                    .version("1")
+                    .build(),
+            ),
+            severity: Some(LogSeverity::Info),
+        },
+    )
+    .await?;
+
+let diagnostics = runtime.runtime_diagnostics().await?;
+if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
+    eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
+}
+```
+
+An older host can return `UNIMPLEMENTED` for `runtime_diagnostics`. The SDK reports that
+as an unsupported runtime-diagnostics error. Relay validates the data schema and
+severity at the host boundary. It validates metric measurements after sanitization, so
+it rejects an invalid group as a whole.
 
 ## Execute the Complete Cleanup Sequence
 
