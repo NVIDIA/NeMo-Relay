@@ -15,6 +15,8 @@ Each function clears the thread-local error before executing and returns an [`Ne
 
 ## Re-exports
 
+- `pub use crate::types::nemo_relay_otel_log_subscriber_free;`
+- `pub use crate::types::nemo_relay_otel_metric_subscriber_free;`
 - `pub use crate::types::nemo_relay_otel_subscriber_free;`
 
 ## Structs
@@ -69,6 +71,7 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_deregister_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-request-guardrail): Deregister a tool request sanitization guardrail by name.
 - [nemo_relay_deregister_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-deregister-tool-sanitize-response-guardrail): Deregister a tool response sanitization guardrail by name.
 - [nemo_relay_event](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-event): Emit a named lifecycle event.
+- [nemo_relay_event_v2](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-event-v2): Emit a named lifecycle event with optional data schema and log severity.
 - [nemo_relay_flush_subscribers](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-flush-subscribers): Wait for subscriber callbacks queued before this call and events emitted transitively by those callbacks to finish.
 - [nemo_relay_gemini_generate_content_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-gemini-generate-content-codec-new): Create a new Gemini generateContent API codec handle.
 - [nemo_relay_get_handle](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-get-handle): Retrieve the current scope handle from the thread-local scope stack.
@@ -87,16 +90,31 @@ Each function clears the thread-local error before executing and returns an [`Ne
 - [nemo_relay_llm_sanitize_request_codec_encode](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-sanitize-request-codec-encode): Encode normalized request changes through a callback-scoped codec capability.
 - [nemo_relay_llm_sanitize_response_codec_decode](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-sanitize-response-codec-decode): Decode a response through a callback-scoped sanitizer codec capability.
 - [nemo_relay_llm_stream_call_execute](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-llm-stream-call-execute): Execute a streaming LLM call end-to-end. Conditional-execution guardrails run first on the raw request. Returns a stream handle that can be polled with `nemo_relay_stream_next`. Blocks until the stream is set up.
+- [nemo_relay_metric](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-metric): Emit an atomic metric measurement mark from typed C measurements.
+- [nemo_relay_metric_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-metric-json): Emit an atomic metric measurement mark from canonical JSON.
 - [nemo_relay_observability_component_spec_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-observability-component-spec-json): Wrap an observability config JSON object as a top-level plugin component.
 - [nemo_relay_observability_default_config_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-observability-default-config-json): Return the default observability plugin config as JSON.
 - [nemo_relay_observability_plugin_kind](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-observability-plugin-kind): Return the built-in observability plugin kind.
 - [nemo_relay_openai_chat_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openai-chat-codec-new): Create a new OpenAI Chat Completions codec handle.
 - [nemo_relay_openai_responses_codec_new](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-openai-responses-codec-new): Create a new OpenAI Responses API codec handle.
+- [nemo_relay_otel_log_subscriber_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-log-subscriber-create): Creates an independently managed OpenTelemetry log subscriber.
+- [nemo_relay_otel_log_subscriber_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-log-subscriber-deregister): Deregisters a subscriber by name from the shared subscriber registry.
+- [nemo_relay_otel_log_subscriber_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-log-subscriber-force-flush): Flushes queued Relay events and OTLP log batches.
+- [nemo_relay_otel_log_subscriber_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-log-subscriber-register): Registers an OpenTelemetry log subscriber globally.
+- [nemo_relay_otel_log_subscriber_runtime_diagnostics_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-log-subscriber-runtime-diagnostics-json): Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+- [nemo_relay_otel_log_subscriber_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-log-subscriber-shutdown): Shuts down the OpenTelemetry logger provider.
+- [nemo_relay_otel_metric_subscriber_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-metric-subscriber-create): Creates an independently managed OpenTelemetry metric subscriber.
+- [nemo_relay_otel_metric_subscriber_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-metric-subscriber-deregister): Deregisters a subscriber by name from the shared subscriber registry.
+- [nemo_relay_otel_metric_subscriber_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-metric-subscriber-force-flush): Flushes queued Relay events and collects current metric aggregates.
+- [nemo_relay_otel_metric_subscriber_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-metric-subscriber-register): Registers an OpenTelemetry metric subscriber globally.
+- [nemo_relay_otel_metric_subscriber_runtime_diagnostics_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-metric-subscriber-runtime-diagnostics-json): Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+- [nemo_relay_otel_metric_subscriber_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-metric-subscriber-shutdown): Shuts down the OpenTelemetry meter provider and performs final collection.
 - [nemo_relay_otel_subscriber_create](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-create): Creates one typed OpenTelemetry exporter subscriber.
 - [nemo_relay_otel_subscriber_create_with_projection_options](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-create-with-projection-options): Creates one typed OpenTelemetry exporter subscriber with projection controls.
 - [nemo_relay_otel_subscriber_deregister](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-deregister): Deregisters the OpenTelemetry subscriber by name.
 - [nemo_relay_otel_subscriber_force_flush](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-force-flush): Forces a flush of finished spans through the exporter.
 - [nemo_relay_otel_subscriber_register](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-register): Registers the OpenTelemetry subscriber as an event subscriber.
+- [nemo_relay_otel_subscriber_runtime_diagnostics_json](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-runtime-diagnostics-json): Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
 - [nemo_relay_otel_subscriber_shutdown](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-otel-subscriber-shutdown): Shuts down the underlying tracer provider.
 - [nemo_relay_plugin_activation_clear](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-activation-clear): Clear one owned dynamic plugin activation.
 - [nemo_relay_plugin_context_register_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay-ffi/api/fn-nemo-relay-plugin-context-register-llm-conditional-execution-guardrail): Register an LLM conditional-execution guardrail into the plugin registration context.
