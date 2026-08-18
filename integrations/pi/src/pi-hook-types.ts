@@ -47,7 +47,20 @@ export type SessionStartEvent = {
   previousSessionFile?: string;
 };
 
-export type SessionShutdownEvent = { type: 'session_shutdown' };
+/**
+ * Fired when the current session is torn down.
+ *
+ * `reason` matters: only `quit` and the session-replacement reasons mean the
+ * session is actually over. `reload` tears down and rebuilds the extension
+ * runtime while the session itself continues, so treating it as an end splits
+ * one logical session into two traces.
+ */
+export type SessionShutdownEvent = {
+  type: 'session_shutdown';
+  reason: 'quit' | 'reload' | 'new' | 'resume' | 'fork';
+  /** Destination session file when shutting down due to session replacement. */
+  targetSessionFile?: string;
+};
 
 /**
  * Fired when a tool starts executing.

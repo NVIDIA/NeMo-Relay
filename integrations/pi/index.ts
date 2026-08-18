@@ -132,8 +132,33 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     emit(ctx, { hook_event_name: 'session_start', reason: event.reason, cwd: ctx.cwd });
   });
 
-  pi.on('session_shutdown', async (_event: SessionShutdownEvent, ctx: ExtensionContext) => {
-    emit(ctx, { hook_event_name: 'session_shutdown' });
+  /**
+   * Only some shutdown reasons actually end the session.
+   *
+   * `/reload` tears down and rebuilds the extension runtime while the session
+   * itself continues, with the same session id. Forwarding a session end there
+   * closes the gateway's session scope, and the `session_start` that follows
+   * opens a second one -- silently splitting one logical session into two
+   * disconnected traces. `quit` and the three session-replacement reasons
+   * (`new`, `resume`, `fork`) do end the session and are forwarded.
+   *
+   * Known limitation: `attemptIndex` and `turnSeq` live in this factory's
+   * closure, and pi re-runs the factory on reload with `moduleCache: false`, so
+   * they restart at 0 mid-session. Rebuilding them would mean replaying the
+   * session, which is out of scope here; `turn_seq` is therefore monotonic
+   * within a runtime, not strictly within a session.
+   */
+  pi.on('session_shutdown', async (event: SessionShutdownEvent, ctx: ExtensionContext) => {
+    if (event.reason === 'reload') {
+      // Still drain: posts already queued belong to the continuing session.
+      await chain;
+      return;
+    }
+    emit(ctx, {
+      hook_event_name: 'session_shutdown',
+      reason: event.reason,
+      ...(event.targetSessionFile ? { target_session_file: event.targetSessionFile } : {}),
+    });
     // Drain before the process exits, or trailing spans are lost. Because the
     // queue is serial, this also guarantees session_shutdown is the last post
     // to reach the gateway rather than merely one of the last.
