@@ -20,6 +20,8 @@ The following table shows which API to use based on your integration need:
 | Run a streaming LLM call | `llm_stream_execute`, `typedLlmStreamExecute`, `llm_stream_call_execute` | You need chunk collection and one final aggregate end event. |
 | Emit start/end manually | `call` and `call_end` helpers | A framework owns the real invocation boundary. |
 | Emit a checkpoint | `scope.event`, `event` | You need milestone visibility inside an active scope. |
+| Emit an OTLP log mark | Generic mark API with typed `severity` | A sanitized checkpoint should become a telemetry log record. |
+| Record an OTLP metric | `metric` | One validated measurement group should be routed to the metric pipeline. |
 | Attach work to one request | Scope-local registration helpers | Middleware or subscribers should disappear when that scope closes. |
 
 ## Manual Tool Lifecycle

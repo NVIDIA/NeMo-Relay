@@ -165,6 +165,63 @@ registers a tool request intercept that updates the request JSON and emits a
 mark through `PluginContext.runtime`. The `main` entrypoint blocks until Relay
 requests shutdown.
 
+## Read Host Runtime Diagnostics
+
+Use the runtime handle inside an asynchronous callback to inspect the active
+host-level snapshot:
+
+```python
+diagnostics = await ctx.runtime.runtime_diagnostics()
+diagnostic = diagnostics.get("otel.metric_mark_invalid")
+if diagnostic is not None:
+    print(f"{diagnostic.message} occurred {diagnostic.count} times")
+```
+
+`RuntimeDiagnostics.entries` is an immutable tuple ordered by code. The host
+aggregates repeated codes, retains the latest message, saturates counts, and
+returns at most 32 entries. Entries do not identify the emitting plugin. If a
+worker connects to an older Relay host, the SDK translates gRPC `UNIMPLEMENTED`
+into an unsupported-runtime-diagnostics error.
+
+## Emit Typed Marks and Metrics
+
+Worker plugins can assign a schema and OTLP log severity to a mark without
+changing the existing positional call shape. Use `emit_metric` rather than
+constructing Relay's reserved metric schema directly:
+
+```python
+from nemo_relay_plugin import DataSchema, LogSeverity
+
+await ctx.runtime.emit_mark(
+    "examples.python_grpc_worker.policy_decision",
+    {"allowed": True},
+    data_schema=DataSchema("examples.policy.decision", "1"),
+    severity=LogSeverity.INFO,
+)
+
+await ctx.runtime.emit_metric(
+    "examples.python_grpc_worker.requests",
+    [
+        {
+            "name": "example.requests",
+            "kind": "counter",
+            "value_type": "u64",
+            "value": 1,
+            "attributes": {"plugin": "python-worker"},
+        }
+    ],
+)
+```
+
+`LogSeverity` in this worker SDK comes from `nemo_relay_plugin`, whose members
+are uppercase, such as `LogSeverity.INFO`. Application code uses the separate
+`nemo_relay.LogSeverity` enum with title-case members such as
+`LogSeverity.Warn`.
+
+Relay validates the schema and severity at the host boundary. It validates the
+metric mark after sanitization, so an invalid measurement group is rejected
+atomically and is not exported as a log.
+
 ## Create the Manifest
 
 Create `relay-plugin.toml` with the following content:

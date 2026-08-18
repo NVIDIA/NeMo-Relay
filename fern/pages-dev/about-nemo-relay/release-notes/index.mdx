@@ -34,12 +34,13 @@ continuations. This is a source-breaking change for typed native Rust plugins;
 rebuild them with `nemo-relay-plugin` 0.8.0 and declare
 `compat.relay = ">=0.8.0,<1.0"`.
 
-Native ABI v4 adds completion-scoped codec operations and pull-based LLM
-stream continuations. Relay also negotiates the frozen ABI v3 and v2 table
-layouts for Relay 0.8-built plugins that target them, and native subscribers
-remain synchronous. Follow the [native Rust migration
+Native ABI v4 is current for Relay 0.8. It includes typed asynchronous
+middleware operations such as completion-scoped codecs and pull-based LLM
+stream continuations, then appends `emit_mark_v2` for typed data-schema and log
+severity options. Relay still accepts existing raw ABI v2 and v3 binaries, and
+native subscribers remain synchronous. Follow the [native Rust migration
 guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08)
-for callback and executor changes.
+for callback, executor, and mark-option changes.
 
 Managed and manual tool execution now uses the canonical
 `ToolExecutionResult` shape across Rust, Python, Node.js, Go, the public C
@@ -53,13 +54,23 @@ The following updates expand native Rust plugin capabilities:
 
 - Typed native Rust middleware can await Tokio timers, I/O, codecs, unary
   continuations, and downstream LLM streams on an SDK-owned executor.
-- Native ABI v4 provides completion-scoped codec operations and pull-based LLM
-  stream continuations.
+- Native ABI v4 provides completion-scoped codec operations, pull-based LLM
+  stream continuations, and appended `emit_mark_v2` support for typed data
+  schemas and log severity.
 - Tool callbacks and execution-intercept continuations share one canonical
   result contract with an optional opaque annotation.
 - ATOF, ATIF, and the `full` and `openinference` OpenTelemetry projections
   preserve sanitized tool result annotations without flattening their
   application-defined schemas.
+
+### OpenTelemetry Logs and Metrics
+
+- Independent OTLP log and metric pipelines are available alongside trace
+  export. Observability configuration version 4 derives log and metric
+  destinations from a trace endpoint when their endpoint lists are omitted.
+- Rust, Python, Node.js, and the experimental C FFI expose typed mark
+  schema and severity options plus metric helpers. Direct subscribers and
+  native and worker plugin SDKs expose bounded runtime diagnostics snapshots.
 
 ### Support Matrix and Compatibility Updates
 

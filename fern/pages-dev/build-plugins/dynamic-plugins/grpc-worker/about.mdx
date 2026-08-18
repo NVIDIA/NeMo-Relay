@@ -80,6 +80,13 @@ Workers return declarative registrations. Relay owns registry mutation,
 namespacing, rollback, and deregistration. Relay DTOs use `JsonEnvelope`
 values, while protobuf handles control flow.
 
+Worker SDKs also expose `PluginRuntime::runtime_diagnostics()` as a read-only,
+host-level snapshot. Entries contain `code`, `message`, and `count`; repeated
+codes are aggregated, ordered by code, and limited to 32 entries. The host does
+not attribute entries to individual plugins. An older Relay host returns
+`UNIMPLEMENTED`; current SDKs surface that as an unsupported-runtime-diagnostics
+error without a handshake capability flag.
+
 Run `nemo-relay plugins add` and `nemo-relay plugins validate` to evaluate the
 configured host policy and artifact trust evidence. Refer to [Configure
 Discoverable Plugins](/configure-plugins/discoverable-plugins) for the

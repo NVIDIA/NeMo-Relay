@@ -1,7 +1,7 @@
 ---
 title: "Observability"
 sidebar-title: "About"
-description: "Configure NeMo Relay observability exporters for events, traces, and trajectories."
+description: "Configure NeMo Relay observability exporters for events, traces, logs, metrics, and trajectories."
 position: 1
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -55,6 +55,9 @@ The first-party plugin component has kind `observability`. It can install:
   Agent scope or supported coding-agent turn scope.
 - Typed OpenTelemetry OTLP trace export using the `full`, `gen_ai`, or
   `openinference` projection.
+- OpenTelemetry OTLP log export for sanitized non-metric marks.
+- OpenTelemetry OTLP metric export for marks that use the Relay-owned metric
+  schema.
 
 ## Plugin-Managed Versus Manual Export
 
@@ -100,7 +103,7 @@ Start here when you need to:
 - Verify that instrumentation is attached to the right scope.
 - Inspect tool and LLM inputs and outputs after sanitization.
 - Correlate concurrent agent runs by root scope.
-- Export traces to OTLP-compatible infrastructure.
+- Export traces, logs, and metrics to OTLP-compatible infrastructure.
 - Produce trajectory data for analysis, replay, or evaluation workflows.
 
 If you have not instrumented scopes, tools, or LLM calls yet, start with
@@ -114,7 +117,7 @@ Choose the exporter based on the downstream system:
 |---|---|
 | Raw canonical event stream | [Agent Trajectory Observability Format (ATOF)](/configure-plugins/observability/atof) |
 | Offline analysis, replay, or evaluation trajectories | [Agent Trajectory Interchange Format (ATIF)](/configure-plugins/observability/atif) |
-| Complete NeMo Relay or standardized GenAI OTLP traces | [OpenTelemetry](/configure-plugins/observability/opentelemetry) |
+| Complete NeMo Relay or standardized GenAI OTLP traces, logs, and metrics | [OpenTelemetry](/configure-plugins/observability/opentelemetry) |
 | OpenInference-oriented agent and LLM spans | [OpenInference Projection](/configure-plugins/observability/openinference) |
 
 Start with in-process event inspection before exporting externally. Add sanitize
@@ -171,6 +174,6 @@ artifact IDs and exposes the logical coding-session values under
   trajectory export for top-level Agent scopes and supported coding-agent turn
   scopes.
 - [OpenTelemetry](/configure-plugins/observability/opentelemetry) covers typed
-  OTLP trace export.
+  OTLP trace, log, and metric export.
 - [OpenInference Projection](/configure-plugins/observability/openinference)
   covers OpenInference-oriented OTLP trace export.
