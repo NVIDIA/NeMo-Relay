@@ -435,7 +435,9 @@ type PendingMarkSpec struct {
 	Category        *string         `json:"category,omitempty"`
 	CategoryProfile json.RawMessage `json:"category_profile,omitempty"`
 	Data            json.RawMessage `json:"data,omitempty"`
+	DataSchema      *DataSchema     `json:"data_schema,omitempty"`
 	Metadata        json.RawMessage `json:"metadata,omitempty"`
+	Severity        LogSeverity     `json:"severity,omitempty"`
 }
 
 // LLMRequestInterceptOutcome is the canonical result of an LLM request intercept.

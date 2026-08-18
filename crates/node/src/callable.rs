@@ -32,8 +32,8 @@ use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{
-    CategoryProfile, Event, EventCategory, EventSanitizeFields as CoreEventSanitizeFields,
-    PendingMarkSpec,
+    CategoryProfile, DataSchema, Event, EventCategory,
+    EventSanitizeFields as CoreEventSanitizeFields, LogSeverity, PendingMarkSpec,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
@@ -123,7 +123,11 @@ pub(crate) struct JsPendingMarkSpec {
     #[serde(default)]
     data: Option<Json>,
     #[serde(default)]
+    data_schema: Option<DataSchema>,
+    #[serde(default)]
     metadata: Option<Json>,
+    #[serde(default)]
+    severity: Option<LogSeverity>,
 }
 
 impl From<JsPendingMarkSpec> for PendingMarkSpec {
@@ -133,9 +137,9 @@ impl From<JsPendingMarkSpec> for PendingMarkSpec {
             category: mark.category,
             category_profile: mark.category_profile,
             data: mark.data,
-            data_schema: None,
+            data_schema: mark.data_schema,
             metadata: mark.metadata,
-            severity: None,
+            severity: mark.severity,
         }
     }
 }
@@ -147,7 +151,9 @@ impl From<PendingMarkSpec> for JsPendingMarkSpec {
             category: mark.category,
             category_profile: mark.category_profile,
             data: mark.data,
+            data_schema: mark.data_schema,
             metadata: mark.metadata,
+            severity: mark.severity,
         }
     }
 }

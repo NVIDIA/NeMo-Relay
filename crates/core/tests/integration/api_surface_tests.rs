@@ -5,6 +5,7 @@
 
 #![allow(clippy::await_holding_lock)]
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 mod test_support;
@@ -19,13 +20,14 @@ use nemo_relay::api::llm::{
     llm_call_execute, llm_conditional_execution, llm_request_intercepts, llm_stream_call_execute,
 };
 use nemo_relay::api::registry::{
-    deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
-    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_mark_sanitize_guardrail,
+    deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_event_metadata_injector,
     register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
     register_llm_request_intercept, register_llm_sanitize_request_guardrail,
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
@@ -79,6 +81,127 @@ fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
+}
+
+#[test]
+fn event_metadata_injectors_are_insert_only_ordered_and_failure_safe() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+    let events = capture_events("event-metadata-injectors");
+
+    register_event_metadata_injector(
+        "early",
+        10,
+        Arc::new(|_| {
+            ready(BTreeMap::from([
+                ("nv.test.existing".into(), json!("replacement")),
+                ("nv.test.order".into(), json!("early")),
+                ("nv.test.remove_me".into(), json!(true)),
+            ]))
+        }),
+    )
+    .unwrap();
+    expect_already_exists(
+        register_event_metadata_injector("early", 99, Arc::new(|_| ready(BTreeMap::new())))
+            .unwrap_err(),
+        "early",
+    );
+    register_event_metadata_injector(
+        "later",
+        20,
+        Arc::new(|_| ready(BTreeMap::from([("nv.test.order".into(), json!("later"))]))),
+    )
+    .unwrap();
+    register_event_metadata_injector(
+        "same-priority-z",
+        15,
+        Arc::new(|_| {
+            ready(BTreeMap::from([(
+                "nv.test.same_priority".into(),
+                json!("z"),
+            )]))
+        }),
+    )
+    .unwrap();
+    register_event_metadata_injector(
+        "same-priority-a",
+        15,
+        Arc::new(|_| {
+            ready(BTreeMap::from([(
+                "nv.test.same_priority".into(),
+                json!("a"),
+            )]))
+        }),
+    )
+    .unwrap();
+    register_event_metadata_injector(
+        "invalid",
+        30,
+        Arc::new(|_| {
+            ready(BTreeMap::from([
+                ("nv.test.omitted_with_invalid".into(), json!(true)),
+                ("invalid-value".into(), json!({"nested": true})),
+            ]))
+        }),
+    )
+    .unwrap();
+    register_event_metadata_injector(
+        "failure",
+        40,
+        Arc::new(|_| {
+            Box::pin(async {
+                Err::<BTreeMap<String, Json>, _>(FlowError::Internal("expected failure".into()))
+            })
+        }),
+    )
+    .unwrap();
+    register_mark_sanitize_guardrail(
+        "remove-injected-key",
+        10,
+        Arc::new(|_, mut fields| {
+            Box::pin(async move {
+                if let Some(Json::Object(metadata)) = fields.metadata.as_mut() {
+                    metadata.remove("nv.test.remove_me");
+                }
+                Ok(fields)
+            })
+        }),
+    )
+    .unwrap();
+
+    event(
+        nemo_relay::api::scope::EmitMarkEventParams::builder()
+            .name("metadata-injection")
+            .metadata(json!({"nv.test.existing": "original"}))
+            .build(),
+    )
+    .unwrap();
+
+    let snapshot = captured_events_snapshot(&events);
+    let emitted = snapshot
+        .iter()
+        .find(|event| event.name() == "metadata-injection")
+        .unwrap();
+    let metadata = emitted.metadata().unwrap();
+    assert_eq!(metadata["nv.test.existing"], json!("original"));
+    assert_eq!(metadata["nv.test.order"], json!("early"));
+    assert_eq!(metadata["nv.test.same_priority"], json!("a"));
+    assert!(metadata.get("nv.test.remove_me").is_none());
+    assert!(metadata.get("nv.test.omitted_with_invalid").is_none());
+
+    for name in [
+        "early",
+        "later",
+        "same-priority-z",
+        "same-priority-a",
+        "invalid",
+        "failure",
+    ] {
+        assert!(deregister_event_metadata_injector(name).unwrap());
+    }
+    assert!(deregister_mark_sanitize_guardrail("remove-injected-key").unwrap());
+    assert!(deregister_subscriber("event-metadata-injectors").unwrap());
 }
 
 #[test]

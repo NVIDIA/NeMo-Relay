@@ -4,7 +4,8 @@
 //! Tests for stable worker protocol helpers, structural tool results, and enum values.
 
 use nemo_relay_worker_proto::v1::{
-    HandshakeRequest, HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface,
+    EmitMarkRequest, GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest,
+    HealthRequest, InvokeRequest, JsonEnvelope, JsonValue, RegistrationSurface, RuntimeDiagnostic,
     ScopeType, ToolExecutionResult as ProtoToolExecutionResult,
 };
 use nemo_relay_worker_proto::{
@@ -115,6 +116,33 @@ fn request_field_numbers_are_stable() {
 }
 
 #[test]
+fn runtime_diagnostics_messages_are_stable() {
+    let request = GetRuntimeDiagnosticsRequest {
+        activation_id: "act".into(),
+        auth_token: "token".into(),
+    };
+    assert_eq!(
+        request.encode_to_vec(),
+        b"\x0a\x03act\x12\x05token".to_vec()
+    );
+
+    let response = GetRuntimeDiagnosticsResponse {
+        entries: vec![RuntimeDiagnostic {
+            code: "otel.metric_mark_invalid".into(),
+            message: "unsupported metric schema version".into(),
+            count: 3,
+        }],
+    };
+    assert_eq!(
+        response.encode_to_vec(),
+        b"\x0a\x3f\x0a\x18otel.metric_mark_invalid\x12\x21unsupported metric schema version\x18\x03"
+            .to_vec()
+    );
+    assert_eq!(response.entries[0].count, 3);
+    assert_eq!(response.entries[0].code, "otel.metric_mark_invalid");
+}
+
+#[test]
 fn json_envelope_round_trips_payload() {
     let payload = json!({"answer": 42});
     let envelope = json_envelope("nemo.relay.Json@1", &payload).unwrap();
@@ -180,4 +208,33 @@ fn tool_execution_result_tolerates_unknown_protobuf_fields() {
         decode_json_value::<serde_json::Value>(decoded_proto.result.as_ref().unwrap()).unwrap(),
         json!({"ok": true})
     );
+}
+
+#[test]
+fn emit_mark_additive_fields_preserve_legacy_wire_compatibility() {
+    let legacy = EmitMarkRequest::decode(b"\x22\x04mark".as_slice()).expect("decode legacy mark");
+    assert_eq!(legacy.name, "mark");
+    assert!(legacy.data_schema.is_none());
+    assert!(legacy.severity.is_empty());
+
+    let request = EmitMarkRequest {
+        name: "mark".into(),
+        data_schema: Some(
+            json_envelope(
+                "nemo.relay.DataSchema@1",
+                &json!({"name": "nemo.relay.metric_measurements", "version": "1"}),
+            )
+            .unwrap(),
+        ),
+        severity: "warn".into(),
+        ..EmitMarkRequest::default()
+    };
+    let encoded = request.encode_to_vec();
+    assert_eq!(
+        encoded,
+        b"\x22\x04mark\x3a\x52\x0a\x17nemo.relay.DataSchema@1\x12\x37{\"name\":\"nemo.relay.metric_measurements\",\"version\":\"1\"}\x42\x04warn"
+            .to_vec()
+    );
+    let round_trip = EmitMarkRequest::decode(encoded.as_slice()).unwrap();
+    assert_eq!(round_trip, request);
 }

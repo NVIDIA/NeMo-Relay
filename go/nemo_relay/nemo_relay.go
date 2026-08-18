@@ -52,6 +52,8 @@ extern int32_t nemo_relay_get_handle(FfiScopeHandle** out);
 extern int32_t nemo_relay_push_scope(const char* name, int32_t scope_type, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* input_json, const int64_t* timestamp_unix_micros, FfiScopeHandle** out);
 extern int32_t nemo_relay_pop_scope(const FfiScopeHandle* handle, const char* output_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 extern int32_t nemo_relay_event(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_event_v2(const char* name, const FfiScopeHandle* parent, const char* data_json, const char* data_schema_json, const char* metadata_json, const int32_t* severity, const int64_t* timestamp_unix_micros);
+extern int32_t nemo_relay_metric_json(const char* name, const FfiScopeHandle* parent, const char* measurements_json, const char* metadata_json, const int64_t* timestamp_unix_micros);
 
 // Tool lifecycle
 extern int32_t nemo_relay_tool_call(const char* name, const char* args_json, const FfiScopeHandle* parent, uint32_t attributes, const char* data_json, const char* metadata_json, const char* tool_call_id, const int64_t* timestamp_unix_micros, FfiToolHandle** out);
@@ -267,8 +269,23 @@ extern int32_t nemo_relay_otel_subscriber_create_with_projection_options(const c
 extern int32_t nemo_relay_otel_subscriber_register(const void*, const char*);
 extern int32_t nemo_relay_otel_subscriber_deregister(const char*);
 extern int32_t nemo_relay_otel_subscriber_force_flush(const void*);
+extern int32_t nemo_relay_otel_subscriber_runtime_diagnostics_json(const void*, char**);
 extern int32_t nemo_relay_otel_subscriber_shutdown(const void*);
 extern void nemo_relay_otel_subscriber_free(void*);
+extern int32_t nemo_relay_otel_log_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, const char*, uint64_t, uint64_t, uint64_t, void**);
+extern int32_t nemo_relay_otel_log_subscriber_register(const void*, const char*);
+extern int32_t nemo_relay_otel_log_subscriber_deregister(const char*);
+extern int32_t nemo_relay_otel_log_subscriber_force_flush(const void*);
+extern int32_t nemo_relay_otel_log_subscriber_runtime_diagnostics_json(const void*, char**);
+extern int32_t nemo_relay_otel_log_subscriber_shutdown(const void*);
+extern void nemo_relay_otel_log_subscriber_free(void*);
+extern int32_t nemo_relay_otel_metric_subscriber_create(const char*, const char*, const char*, const char*, const char*, const char*, const char*, const char*, uint64_t, uint64_t, const char*, uint64_t, uint64_t, void**);
+extern int32_t nemo_relay_otel_metric_subscriber_register(const void*, const char*);
+extern int32_t nemo_relay_otel_metric_subscriber_deregister(const char*);
+extern int32_t nemo_relay_otel_metric_subscriber_force_flush(const void*);
+extern int32_t nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(const void*, char**);
+extern int32_t nemo_relay_otel_metric_subscriber_shutdown(const void*);
+extern void nemo_relay_otel_metric_subscriber_free(void*);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
@@ -388,6 +405,27 @@ func cTimestampMicros(timestamp time.Time) *C.int64_t {
 	ptr := (*C.int64_t)(C.malloc(C.size_t(unsafe.Sizeof(C.int64_t(0)))))
 	*ptr = C.int64_t(timestamp.UTC().UnixMicro())
 	return ptr
+}
+
+func cLogSeverity(severity LogSeverity) (*C.int32_t, error) {
+	var value C.int32_t
+	switch severity {
+	case LogSeverityTrace:
+		value = 0
+	case LogSeverityDebug:
+		value = 1
+	case LogSeverityInfo:
+		value = 2
+	case LogSeverityWarn, LogSeverityWarning:
+		value = 3
+	case LogSeverityError:
+		value = 4
+	default:
+		return nil, fmt.Errorf("invalid log severity %q", severity)
+	}
+	ptr := (*C.int32_t)(C.malloc(C.size_t(unsafe.Sizeof(value))))
+	*ptr = value
+	return ptr, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -582,15 +620,45 @@ func PopScope(handle *ScopeHandle, opts ...ScopeEndOption) error {
 // ---------------------------------------------------------------------------
 
 type eventOptions struct {
-	parent    *C.FfiScopeHandle
-	data      *C.char
-	metadata  *C.char
-	timestamp *C.int64_t
+	parent     *C.FfiScopeHandle
+	data       *C.char
+	dataSchema *C.char
+	metadata   *C.char
+	severity   LogSeverity
+	timestamp  *C.int64_t
 }
+
+// replaceCString replaces an option-owned C string and frees its prior value.
+func replaceCString(slot **C.char, value string) {
+	if *slot != nil {
+		C.free(unsafe.Pointer(*slot))
+	}
+	*slot = C.CString(value)
+}
+
+// DataSchema identifies the name and version of a structured mark payload.
+type DataSchema struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// LogSeverity controls the severity of a mark exported as an OTLP log.
+type LogSeverity string
+
+const (
+	LogSeverityTrace LogSeverity = "trace"
+	LogSeverityDebug LogSeverity = "debug"
+	LogSeverityInfo  LogSeverity = "info"
+	LogSeverityWarn  LogSeverity = "warn"
+	// LogSeverityWarning is accepted as an alias for LogSeverityWarn.
+	LogSeverityWarning LogSeverity = "warning"
+	LogSeverityError   LogSeverity = "error"
+)
 
 // EventOption is a functional option that configures optional parameters for
 // [EmitEvent]. Available options include [WithEventParent], [WithEventData],
-// [WithEventMetadata], and [WithEventTimestamp].
+// [WithEventDataSchema], [WithEventMetadata], [WithEventSeverity], and
+// [WithEventTimestamp].
 type EventOption func(*eventOptions)
 
 // WithEventParent sets the parent scope handle for the event. If not provided,
@@ -608,7 +676,17 @@ func WithEventParent(parent *ScopeHandle) EventOption {
 // logging, tracing, or custom instrumentation.
 func WithEventData(data json.RawMessage) EventOption {
 	return func(o *eventOptions) {
-		o.data = C.CString(string(data))
+		replaceCString(&o.data, string(data))
+	}
+}
+
+// WithEventDataSchema identifies the schema of the event data payload.
+func WithEventDataSchema(schema DataSchema) EventOption {
+	return func(o *eventOptions) {
+		encoded, err := jsonMarshal(schema)
+		if err == nil {
+			replaceCString(&o.dataSchema, string(encoded))
+		}
 	}
 }
 
@@ -617,7 +695,15 @@ func WithEventData(data json.RawMessage) EventOption {
 // hints) as opposed to the primary data payload.
 func WithEventMetadata(metadata json.RawMessage) EventOption {
 	return func(o *eventOptions) {
-		o.metadata = C.CString(string(metadata))
+		replaceCString(&o.metadata, string(metadata))
+	}
+}
+
+// WithEventSeverity attaches a typed log severity to the mark. Relay stores
+// it authoritatively in the reserved sanitizer-visible metadata key.
+func WithEventSeverity(severity LogSeverity) EventOption {
+	return func(o *eventOptions) {
+		o.severity = severity
 	}
 }
 
@@ -646,14 +732,118 @@ func EmitEvent(name string, opts ...EventOption) error {
 	if o.data != nil {
 		defer C.free(unsafe.Pointer(o.data))
 	}
+	if o.dataSchema != nil {
+		defer C.free(unsafe.Pointer(o.dataSchema))
+	}
 	if o.metadata != nil {
 		defer C.free(unsafe.Pointer(o.metadata))
 	}
 	if o.timestamp != nil {
 		defer C.free(unsafe.Pointer(o.timestamp))
 	}
+	var severity *C.int32_t
+	if o.severity != "" {
+		var err error
+		severity, err = cLogSeverity(o.severity)
+		if err != nil {
+			return err
+		}
+		defer C.free(unsafe.Pointer(severity))
+	}
 
-	return checkStatus(C.nemo_relay_event(cName, o.parent, o.data, o.metadata, o.timestamp))
+	return checkStatus(C.nemo_relay_event_v2(cName, o.parent, o.data, o.dataSchema, o.metadata, severity, o.timestamp))
+}
+
+// MetricKind selects the OpenTelemetry instrument used for a measurement.
+type MetricKind string
+
+const (
+	MetricKindCounter       MetricKind = "counter"
+	MetricKindUpDownCounter MetricKind = "up_down_counter"
+	MetricKindGauge         MetricKind = "gauge"
+	MetricKindHistogram     MetricKind = "histogram"
+)
+
+// MetricValueType identifies the numeric representation of a measurement.
+type MetricValueType string
+
+const (
+	MetricValueTypeU64 MetricValueType = "u64"
+	MetricValueTypeI64 MetricValueType = "i64"
+	MetricValueTypeF64 MetricValueType = "f64"
+)
+
+// MetricMeasurement is one SDK recording operation in an atomic metric mark.
+type MetricMeasurement struct {
+	Name        string                 `json:"name"`
+	Kind        MetricKind             `json:"kind"`
+	ValueType   MetricValueType        `json:"value_type"`
+	Value       interface{}            `json:"value"`
+	Unit        string                 `json:"unit,omitempty"`
+	Description string                 `json:"description,omitempty"`
+	Attributes  map[string]interface{} `json:"attributes,omitempty"`
+	Boundaries  []float64              `json:"boundaries"`
+}
+
+type metricOptions struct {
+	parent       *C.FfiScopeHandle
+	parentHandle *ScopeHandle // prevents GC of the ScopeHandle during the FFI call
+	metadata     *C.char
+	timestamp    *C.int64_t
+}
+
+// MetricOption configures optional fields for [EmitMetric].
+type MetricOption func(*metricOptions)
+
+// WithMetricParent sets the containing scope for a metric mark.
+func WithMetricParent(parent *ScopeHandle) MetricOption {
+	return func(o *metricOptions) {
+		if parent != nil {
+			o.parent = parent.ptr
+			o.parentHandle = parent
+		}
+	}
+}
+
+// WithMetricMetadata attaches JSON metadata to a metric mark. Metadata is not
+// converted into metric attributes by the exporter.
+func WithMetricMetadata(metadata json.RawMessage) MetricOption {
+	return func(o *metricOptions) {
+		replaceCString(&o.metadata, string(metadata))
+	}
+}
+
+// WithMetricTimestamp records an explicit timestamp on the underlying mark.
+// SDK-backed metric points use collection timestamps.
+func WithMetricTimestamp(timestamp time.Time) MetricOption {
+	return func(o *metricOptions) {
+		o.timestamp = cTimestampMicros(timestamp)
+	}
+}
+
+// EmitMetric emits measurements as one atomically validated metric mark.
+func EmitMetric(name string, measurements []MetricMeasurement, opts ...MetricOption) error {
+	encoded, err := jsonMarshal(measurements)
+	if err != nil {
+		return err
+	}
+	o := &metricOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	cMeasurements := C.CString(string(encoded))
+	defer C.free(unsafe.Pointer(cMeasurements))
+	if o.metadata != nil {
+		defer C.free(unsafe.Pointer(o.metadata))
+	}
+	if o.timestamp != nil {
+		defer C.free(unsafe.Pointer(o.timestamp))
+	}
+	status := C.nemo_relay_metric_json(cName, o.parent, cMeasurements, o.metadata, o.timestamp)
+	runtime.KeepAlive(o.parentHandle)
+	return checkStatus(status)
 }
 
 // ---------------------------------------------------------------------------
@@ -2080,6 +2270,23 @@ type OpenTelemetrySubscriber struct {
 	ptr unsafe.Pointer
 }
 
+// OpenTelemetryRuntimeDiagnostic is one bounded aggregate of an OTLP exporter
+// or event-processing failure.
+type OpenTelemetryRuntimeDiagnostic struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Count   uint64 `json:"count"`
+}
+
+func decodeOpenTelemetryRuntimeDiagnostics(out *C.char) ([]OpenTelemetryRuntimeDiagnostic, error) {
+	defer C.nemo_relay_string_free(out)
+	var diagnostics []OpenTelemetryRuntimeDiagnostic
+	if err := jsonUnmarshal([]byte(C.GoString(out)), &diagnostics); err != nil {
+		return nil, err
+	}
+	return diagnostics, nil
+}
+
 func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConfig, error) {
 	if config.Transport == "" {
 		config.Transport = OpenTelemetryTransportHTTPBinary
@@ -2224,6 +2431,15 @@ func (s *OpenTelemetrySubscriber) ForceFlush() error {
 	return checkStatus(status)
 }
 
+// RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
+func (s *OpenTelemetrySubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_otel_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+		return nil, err
+	}
+	return decodeOpenTelemetryRuntimeDiagnostics(out)
+}
+
 // Shutdown shuts down the underlying tracer provider.
 func (s *OpenTelemetrySubscriber) Shutdown() error {
 	status := C.nemo_relay_otel_subscriber_shutdown(s.ptr)
@@ -2234,6 +2450,406 @@ func (s *OpenTelemetrySubscriber) Shutdown() error {
 func (s *OpenTelemetrySubscriber) Close() {
 	if s.ptr != nil {
 		C.nemo_relay_otel_subscriber_free(s.ptr)
+		s.ptr = nil
+	}
+}
+
+// OpenTelemetryLogConfig configures an independent OTLP log subscriber.
+type OpenTelemetryLogConfig struct {
+	Transport            OpenTelemetryTransport
+	Endpoint             string
+	Headers              map[string]string
+	ResourceAttributes   map[string]string
+	ServiceName          string
+	ServiceNamespace     string
+	ServiceVersion       string
+	InstrumentationScope string
+	Timeout              time.Duration
+	MinimumSeverity      LogSeverity
+	MaxQueueSize         uint64
+	MaxExportBatchSize   uint64
+	ScheduledDelay       time.Duration
+}
+
+// NewOpenTelemetryLogConfig returns log settings initialized with native defaults.
+func NewOpenTelemetryLogConfig(endpoint string) OpenTelemetryLogConfig {
+	return OpenTelemetryLogConfig{
+		Transport:            OpenTelemetryTransportHTTPBinary,
+		Endpoint:             endpoint,
+		Headers:              map[string]string{},
+		ResourceAttributes:   map[string]string{},
+		ServiceName:          "unknown_service",
+		InstrumentationScope: "opentelemetry",
+		Timeout:              3 * time.Second,
+		MinimumSeverity:      LogSeverityInfo,
+		MaxQueueSize:         2048,
+		MaxExportBatchSize:   512,
+		ScheduledDelay:       time.Second,
+	}
+}
+
+// OpenTelemetryLogSubscriber exports sanitized non-metric marks as OTLP logs.
+type OpenTelemetryLogSubscriber struct {
+	ptr unsafe.Pointer
+}
+
+// OpenTelemetryMetricTemporality controls SDK metric aggregation temporality.
+type OpenTelemetryMetricTemporality string
+
+const (
+	OpenTelemetryMetricTemporalityCumulative OpenTelemetryMetricTemporality = "cumulative"
+	OpenTelemetryMetricTemporalityDelta      OpenTelemetryMetricTemporality = "delta"
+	OpenTelemetryMetricTemporalityLowMemory  OpenTelemetryMetricTemporality = "low_memory"
+)
+
+// OpenTelemetryMetricConfig configures an independent OTLP metric subscriber.
+type OpenTelemetryMetricConfig struct {
+	Transport            OpenTelemetryTransport
+	Endpoint             string
+	Headers              map[string]string
+	ResourceAttributes   map[string]string
+	ServiceName          string
+	ServiceNamespace     string
+	ServiceVersion       string
+	InstrumentationScope string
+	Timeout              time.Duration
+	ExportInterval       time.Duration
+	Temporality          OpenTelemetryMetricTemporality
+	MaxInstruments       uint64
+	CardinalityLimit     uint64
+}
+
+// NewOpenTelemetryMetricConfig returns metric settings initialized with native defaults.
+func NewOpenTelemetryMetricConfig(endpoint string) OpenTelemetryMetricConfig {
+	return OpenTelemetryMetricConfig{
+		Transport:            OpenTelemetryTransportHTTPBinary,
+		Endpoint:             endpoint,
+		Headers:              map[string]string{},
+		ResourceAttributes:   map[string]string{},
+		ServiceName:          "unknown_service",
+		InstrumentationScope: "opentelemetry",
+		Timeout:              3 * time.Second,
+		ExportInterval:       60 * time.Second,
+		Temporality:          OpenTelemetryMetricTemporalityCumulative,
+		MaxInstruments:       256,
+		CardinalityLimit:     2000,
+	}
+}
+
+// OpenTelemetryMetricSubscriber records Relay metric marks through the OTLP metrics SDK.
+type OpenTelemetryMetricSubscriber struct {
+	ptr unsafe.Pointer
+}
+
+type openTelemetrySignalCStrings struct {
+	transport            *C.char
+	endpoint             *C.char
+	headers              *C.char
+	resourceAttributes   *C.char
+	serviceName          *C.char
+	serviceNamespace     *C.char
+	serviceVersion       *C.char
+	instrumentationScope *C.char
+}
+
+func newOpenTelemetrySignalCStrings(
+	transport OpenTelemetryTransport,
+	endpoint string,
+	headers map[string]string,
+	resourceAttributes map[string]string,
+	serviceName string,
+	serviceNamespace string,
+	serviceVersion string,
+	instrumentationScope string,
+) (openTelemetrySignalCStrings, error) {
+	encodedHeaders, err := jsonMarshal(headers)
+	if err != nil {
+		return openTelemetrySignalCStrings{}, err
+	}
+	encodedResources, err := jsonMarshal(resourceAttributes)
+	if err != nil {
+		return openTelemetrySignalCStrings{}, err
+	}
+	return openTelemetrySignalCStrings{
+		transport:            C.CString(string(transport)),
+		endpoint:             C.CString(endpoint),
+		headers:              C.CString(string(encodedHeaders)),
+		resourceAttributes:   C.CString(string(encodedResources)),
+		serviceName:          C.CString(serviceName),
+		serviceNamespace:     optionalCString(serviceNamespace),
+		serviceVersion:       optionalCString(serviceVersion),
+		instrumentationScope: C.CString(instrumentationScope),
+	}, nil
+}
+
+func (values *openTelemetrySignalCStrings) free() {
+	C.free(unsafe.Pointer(values.transport))
+	C.free(unsafe.Pointer(values.endpoint))
+	C.free(unsafe.Pointer(values.headers))
+	C.free(unsafe.Pointer(values.resourceAttributes))
+	C.free(unsafe.Pointer(values.serviceName))
+	C.free(unsafe.Pointer(values.serviceNamespace))
+	C.free(unsafe.Pointer(values.serviceVersion))
+	C.free(unsafe.Pointer(values.instrumentationScope))
+}
+
+func requireWholeMillisecondDuration(field string, value time.Duration) error {
+	if value > 0 && value%time.Millisecond != 0 {
+		return fmt.Errorf("%s must be zero or an exact multiple of 1ms", field)
+	}
+	return nil
+}
+
+func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemetryLogConfig, error) {
+	if config.Transport == "" {
+		config.Transport = OpenTelemetryTransportHTTPBinary
+	}
+	if config.Endpoint == "" {
+		return config, fmt.Errorf("endpoint is required")
+	}
+	if config.ServiceName == "" {
+		config.ServiceName = "unknown_service"
+	}
+	if config.InstrumentationScope == "" {
+		config.InstrumentationScope = "opentelemetry"
+	}
+	if config.Timeout == 0 {
+		config.Timeout = 3 * time.Second
+	}
+	if config.Timeout < 0 || config.ScheduledDelay < 0 {
+		return config, fmt.Errorf("durations must not be negative")
+	}
+	if err := requireWholeMillisecondDuration("timeout", config.Timeout); err != nil {
+		return config, err
+	}
+	if err := requireWholeMillisecondDuration("scheduled delay", config.ScheduledDelay); err != nil {
+		return config, err
+	}
+	if config.MinimumSeverity == "" {
+		config.MinimumSeverity = LogSeverityInfo
+	}
+	if config.MaxQueueSize == 0 {
+		config.MaxQueueSize = 2048
+	}
+	if config.MaxExportBatchSize == 0 {
+		config.MaxExportBatchSize = 512
+	}
+	if config.ScheduledDelay == 0 {
+		config.ScheduledDelay = time.Second
+	}
+	if config.Headers == nil {
+		config.Headers = map[string]string{}
+	}
+	if config.ResourceAttributes == nil {
+		config.ResourceAttributes = map[string]string{}
+	}
+	return config, nil
+}
+
+// NewOpenTelemetryLogSubscriber creates an independent OTLP log subscriber.
+func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetryLogSubscriber, error) {
+	config, err := normalizeOpenTelemetryLogConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	common, err := newOpenTelemetrySignalCStrings(
+		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
+		config.ServiceName, config.ServiceNamespace, config.ServiceVersion,
+		config.InstrumentationScope,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer common.free()
+	cSeverity := C.CString(string(config.MinimumSeverity))
+	defer C.free(unsafe.Pointer(cSeverity))
+	var ptr unsafe.Pointer
+	status := C.nemo_relay_otel_log_subscriber_create(
+		common.transport,
+		common.endpoint,
+		common.headers,
+		common.resourceAttributes,
+		common.serviceName,
+		common.serviceNamespace,
+		common.serviceVersion,
+		common.instrumentationScope,
+		C.uint64_t(config.Timeout/time.Millisecond),
+		cSeverity,
+		C.uint64_t(config.MaxQueueSize),
+		C.uint64_t(config.MaxExportBatchSize),
+		C.uint64_t(config.ScheduledDelay/time.Millisecond),
+		&ptr,
+	)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	return &OpenTelemetryLogSubscriber{ptr: ptr}, nil
+}
+
+// Register registers the log subscriber globally with the given name.
+func (s *OpenTelemetryLogSubscriber) Register(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_otel_log_subscriber_register(s.ptr, cName))
+}
+
+// Deregister removes the log subscriber by name.
+func (s *OpenTelemetryLogSubscriber) Deregister(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_otel_log_subscriber_deregister(cName))
+}
+
+// ForceFlush drains Relay delivery and queued log batches.
+func (s *OpenTelemetryLogSubscriber) ForceFlush() error {
+	return checkStatus(C.nemo_relay_otel_log_subscriber_force_flush(s.ptr))
+}
+
+// RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
+func (s *OpenTelemetryLogSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_otel_log_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+		return nil, err
+	}
+	return decodeOpenTelemetryRuntimeDiagnostics(out)
+}
+
+// Shutdown drains and shuts down the logger provider.
+func (s *OpenTelemetryLogSubscriber) Shutdown() error {
+	return checkStatus(C.nemo_relay_otel_log_subscriber_shutdown(s.ptr))
+}
+
+// Close frees the log subscriber handle.
+func (s *OpenTelemetryLogSubscriber) Close() {
+	if s.ptr != nil {
+		C.nemo_relay_otel_log_subscriber_free(s.ptr)
+		s.ptr = nil
+	}
+}
+
+func normalizeOpenTelemetryMetricConfig(config OpenTelemetryMetricConfig) (OpenTelemetryMetricConfig, error) {
+	if config.Transport == "" {
+		config.Transport = OpenTelemetryTransportHTTPBinary
+	}
+	if config.Endpoint == "" {
+		return config, fmt.Errorf("endpoint is required")
+	}
+	if config.ServiceName == "" {
+		config.ServiceName = "unknown_service"
+	}
+	if config.InstrumentationScope == "" {
+		config.InstrumentationScope = "opentelemetry"
+	}
+	if config.Timeout == 0 {
+		config.Timeout = 3 * time.Second
+	}
+	if config.ExportInterval == 0 {
+		config.ExportInterval = 60 * time.Second
+	}
+	if config.Timeout < 0 || config.ExportInterval < 0 {
+		return config, fmt.Errorf("durations must not be negative")
+	}
+	if err := requireWholeMillisecondDuration("timeout", config.Timeout); err != nil {
+		return config, err
+	}
+	if err := requireWholeMillisecondDuration("export interval", config.ExportInterval); err != nil {
+		return config, err
+	}
+	if config.Temporality == "" {
+		config.Temporality = OpenTelemetryMetricTemporalityCumulative
+	}
+	if config.MaxInstruments == 0 {
+		config.MaxInstruments = 256
+	}
+	if config.CardinalityLimit == 0 {
+		config.CardinalityLimit = 2000
+	}
+	if config.Headers == nil {
+		config.Headers = map[string]string{}
+	}
+	if config.ResourceAttributes == nil {
+		config.ResourceAttributes = map[string]string{}
+	}
+	return config, nil
+}
+
+// NewOpenTelemetryMetricSubscriber creates an independent OTLP metric subscriber.
+func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTelemetryMetricSubscriber, error) {
+	config, err := normalizeOpenTelemetryMetricConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	common, err := newOpenTelemetrySignalCStrings(
+		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
+		config.ServiceName, config.ServiceNamespace, config.ServiceVersion,
+		config.InstrumentationScope,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer common.free()
+	cTemporality := C.CString(string(config.Temporality))
+	defer C.free(unsafe.Pointer(cTemporality))
+	var ptr unsafe.Pointer
+	status := C.nemo_relay_otel_metric_subscriber_create(
+		common.transport,
+		common.endpoint,
+		common.headers,
+		common.resourceAttributes,
+		common.serviceName,
+		common.serviceNamespace,
+		common.serviceVersion,
+		common.instrumentationScope,
+		C.uint64_t(config.Timeout/time.Millisecond),
+		C.uint64_t(config.ExportInterval/time.Millisecond),
+		cTemporality,
+		C.uint64_t(config.MaxInstruments),
+		C.uint64_t(config.CardinalityLimit),
+		&ptr,
+	)
+	if err := checkStatus(status); err != nil {
+		return nil, err
+	}
+	return &OpenTelemetryMetricSubscriber{ptr: ptr}, nil
+}
+
+// Register registers the metric subscriber globally with the given name.
+func (s *OpenTelemetryMetricSubscriber) Register(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_otel_metric_subscriber_register(s.ptr, cName))
+}
+
+// Deregister removes the metric subscriber by name.
+func (s *OpenTelemetryMetricSubscriber) Deregister(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_otel_metric_subscriber_deregister(cName))
+}
+
+// ForceFlush drains Relay delivery and collects current metric aggregates.
+func (s *OpenTelemetryMetricSubscriber) ForceFlush() error {
+	return checkStatus(C.nemo_relay_otel_metric_subscriber_force_flush(s.ptr))
+}
+
+// RuntimeDiagnostics returns a bounded snapshot of exporter and event-processing failures.
+func (s *OpenTelemetryMetricSubscriber) RuntimeDiagnostics() ([]OpenTelemetryRuntimeDiagnostic, error) {
+	var out *C.char
+	if err := checkStatus(C.nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(s.ptr, &out)); err != nil {
+		return nil, err
+	}
+	return decodeOpenTelemetryRuntimeDiagnostics(out)
+}
+
+// Shutdown performs final collection and shuts down the meter provider.
+func (s *OpenTelemetryMetricSubscriber) Shutdown() error {
+	return checkStatus(C.nemo_relay_otel_metric_subscriber_shutdown(s.ptr))
+}
+
+// Close frees the metric subscriber handle.
+func (s *OpenTelemetryMetricSubscriber) Close() {
+	if s.ptr != nil {
+		C.nemo_relay_otel_metric_subscriber_free(s.ptr)
 		s.ptr = nil
 	}
 }

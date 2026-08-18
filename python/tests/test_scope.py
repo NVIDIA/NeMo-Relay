@@ -8,6 +8,10 @@ import asyncio
 import pytest
 
 from nemo_relay import (
+    LogSeverity,
+    MetricKind,
+    MetricMeasurement,
+    MetricValueType,
     ScopeAttributes,
     ScopeHandle,
     ScopeType,
@@ -72,6 +76,73 @@ class TestScope:
         handle = scope.push("evt_scope", ScopeType.Agent)
         scope.event("scoped_mark", handle=handle)
         scope.pop(handle)
+
+    def test_event_with_data_schema_and_severity(self, subscribed_events):
+        scope.event(
+            "structured_log",
+            data={"message": "ready"},
+            data_schema={"name": "example.log", "version": "1"},
+            metadata={"source": "python"},
+            severity=LogSeverity.Warn,
+        )
+        subscribers.flush()
+
+        mark = next(event for event in subscribed_events if event.name == "structured_log")
+        assert mark.data_schema == {"name": "example.log", "version": "1"}
+        assert mark.severity == LogSeverity.Warn
+        assert mark.metadata == {
+            "source": "python",
+            "nemo_relay.log.severity": "warn",
+        }
+
+    def test_metric_emits_validated_metric_mark(self, subscribed_events):
+        measurement = MetricMeasurement(
+            "relay.tokens",
+            MetricKind.Counter,
+            MetricValueType.U64,
+            12,
+            unit="{token}",
+            attributes={"model": "test"},
+        )
+
+        scope.metric("token_usage", [measurement], metadata={"source": "python"})
+        subscribers.flush()
+
+        mark = next(event for event in subscribed_events if event.name == "token_usage")
+        assert mark.data_schema == {"name": "nemo.relay.metric_measurements", "version": "1"}
+        assert mark.data == {
+            "measurements": [
+                {
+                    "name": "relay.tokens",
+                    "kind": "counter",
+                    "value_type": "u64",
+                    "value": 12,
+                    "unit": "{token}",
+                    "description": None,
+                    "attributes": {"model": "test"},
+                    "boundaries": None,
+                }
+            ]
+        }
+
+    def test_metric_rejects_invalid_measurements_atomically(self, subscribed_events):
+        valid = MetricMeasurement(
+            "relay.requests",
+            MetricKind.Counter,
+            MetricValueType.U64,
+            1,
+        )
+        invalid = MetricMeasurement(
+            "relay.tokens",
+            MetricKind.Counter,
+            MetricValueType.I64,
+            -1,
+        )
+
+        with pytest.raises(ValueError, match="does not support value_type i64"):
+            scope.metric("invalid_metric", [valid, invalid])
+        subscribers.flush()
+        assert all(event.name != "invalid_metric" for event in subscribed_events)
 
     def test_get_handle_preserves_explicit_worker_thread_scope_stack(self):
         import threading

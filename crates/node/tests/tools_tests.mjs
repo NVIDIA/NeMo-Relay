@@ -922,7 +922,13 @@ describe('Tool intercepts', () => {
           wrapped: true,
         },
         annotation: downstream.annotation,
-        pendingMarks: [{ name: 'node.tool.execution' }],
+        pendingMarks: [
+          {
+            name: 'node.tool.execution',
+            dataSchema: { name: 'example.tool.mark', version: '1' },
+            severity: 'warning',
+          },
+        ],
       };
     });
     try {
@@ -956,6 +962,8 @@ describe('Tool intercepts', () => {
       assert.ok(end, 'expected tool end event');
       assert.ok(mark, 'expected tool execution pending mark');
       assert.deepEqual(end.category_profile.tool_result_annotation, { source: 'provider' });
+      assert.deepEqual(mark.data_schema, { name: 'example.tool.mark', version: '1' });
+      assert.equal(mark.metadata['nemo_relay.log.severity'], 'warn');
       assert.equal(mark.parent_uuid, start.uuid);
       assert.ok(events.indexOf(end) < events.indexOf(mark), 'expected tool end before pending mark');
       assert.ok(mark.timestamp > end.timestamp, 'expected pending mark timestamp after tool end');

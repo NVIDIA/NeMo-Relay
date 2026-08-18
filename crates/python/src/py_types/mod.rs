@@ -167,12 +167,18 @@ fn register_llm_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 fn register_event_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyLogSeverity>()?;
+    m.add_class::<PyMetricKind>()?;
+    m.add_class::<PyMetricValueType>()?;
+    m.add_class::<PyMetricMeasurement>()?;
     m.add_class::<PyScopeEvent>()?;
     m.add_class::<PyMarkEvent>()?;
     Ok(())
 }
 
 fn register_observability_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyOpenTelemetryRuntimeDiagnostic>()?;
+    m.add_class::<PyOpenTelemetryRuntimeDiagnostics>()?;
     m.add_class::<PyAtifExporter>()?;
     m.add_class::<PyAtofExporterMode>()?;
     m.add_class::<PyAtofEndpointConfig>()?;
@@ -180,6 +186,11 @@ fn register_observability_types(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAtofExporter>()?;
     m.add_class::<PyOpenTelemetryConfig>()?;
     m.add_class::<PyOpenTelemetrySubscriber>()?;
+    m.add_class::<PyOpenTelemetryLogConfig>()?;
+    m.add_class::<PyOpenTelemetryLogSubscriber>()?;
+    m.add_class::<PyMetricTemporality>()?;
+    m.add_class::<PyOpenTelemetryMetricConfig>()?;
+    m.add_class::<PyOpenTelemetryMetricSubscriber>()?;
     Ok(())
 }
 

@@ -235,7 +235,9 @@ fn py_api_helpers_and_scope_lifecycle_round_trip() {
             "mark",
             Some(child.clone()),
             Some(&py_dict(py, json!({"step": 1}))),
+            None,
             Some(&py_dict(py, json!({"source": "cov"}))),
+            None,
             None,
         )
         .unwrap();

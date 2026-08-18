@@ -3,6 +3,7 @@
 
 //! Unit tests for runtime middleware snapshot chains.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -10,6 +11,165 @@ use serde_json::{Map, json};
 
 use super::*;
 use crate::api::registry::{RegistryRecord, RequestIntercept};
+use crate::api::runtime::EventMetadataInjectorFn;
+
+#[tokio::test]
+async fn event_metadata_injection_accepts_flat_otel_values_and_empty_output() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("valid-injection")
+            .metadata(json!({"nv.test.existing": "original"}))
+            .build(),
+        None,
+        None,
+    ));
+    let noop: EventMetadataInjectorFn = Arc::new(|_| Box::pin(async { Ok(BTreeMap::new()) }));
+    let valid: EventMetadataInjectorFn = Arc::new(|_| {
+        Box::pin(async {
+            Ok(BTreeMap::from([
+                ("region".into(), json!("us-west")),
+                ("region_name".into(), json!("west")),
+                ("region-name".into(), json!("west")),
+                ("experiment.variant".into(), json!("value")),
+                ("nv.test.boolean".into(), json!(true)),
+                ("nv.test.number".into(), json!(42)),
+                ("nv.test.strings".into(), json!(["a", "b"])),
+                ("nv.test.booleans".into(), json!([true, false])),
+                ("nv.test.numbers".into(), json!([1, 2])),
+                ("nv.test.empty".into(), json!([])),
+            ]))
+        })
+    });
+
+    let injected = NemoRelayContextState::event_metadata_injection_snapshot_chain(
+        event,
+        &[
+            RegistryRecord::new("noop", 0, noop),
+            RegistryRecord::new("valid", 1, valid),
+        ],
+    )
+    .await;
+    let metadata = injected.metadata().expect("metadata should be an object");
+
+    assert_eq!(metadata["nv.test.existing"], json!("original"));
+    assert_eq!(metadata["region"], json!("us-west"));
+    assert_eq!(metadata["region_name"], json!("west"));
+    assert_eq!(metadata["region-name"], json!("west"));
+    assert_eq!(metadata["experiment.variant"], json!("value"));
+    assert_eq!(metadata["nv.test.boolean"], json!(true));
+    assert_eq!(metadata["nv.test.number"], json!(42));
+    assert_eq!(metadata["nv.test.strings"], json!(["a", "b"]));
+    assert_eq!(metadata["nv.test.booleans"], json!([true, false]));
+    assert_eq!(metadata["nv.test.numbers"], json!([1, 2]));
+    assert_eq!(metadata["nv.test.empty"], json!([]));
+}
+
+#[tokio::test]
+async fn event_metadata_injection_rejects_invalid_output_atomically() {
+    let invalid_outputs = [
+        BTreeMap::from([
+            ("telemetry.accepted_if_valid".into(), json!(true)),
+            ("invalid-value".into(), Json::Null),
+        ]),
+        BTreeMap::from([("".into(), json!(true))]),
+        BTreeMap::from([("   ".into(), json!(true))]),
+        BTreeMap::from([(".region".into(), json!(true))]),
+        BTreeMap::from([("region.".into(), json!(true))]),
+        BTreeMap::from([("literal..dots".into(), json!(true))]),
+        BTreeMap::from([("display name".into(), json!(true))]),
+        BTreeMap::from([("region/zone".into(), json!(true))]),
+        BTreeMap::from([("region@name".into(), json!(true))]),
+        BTreeMap::from([("region\nname".into(), json!(true))]),
+        BTreeMap::from([("nv.test.null".into(), Json::Null)]),
+        BTreeMap::from([("nv.test.object".into(), json!({"nested": true}))]),
+        BTreeMap::from([("nv.test.nested_list".into(), json!([[1]]))]),
+        BTreeMap::from([("nv.test.mixed_list".into(), json!([1, "two"]))]),
+    ];
+
+    for invalid_output in invalid_outputs {
+        let event = Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("invalid-injection")
+                .metadata(json!({"nv.test.existing": "original"}))
+                .build(),
+            None,
+            None,
+        ));
+        let expected = event.clone();
+        let injector: EventMetadataInjectorFn = Arc::new(move |_| {
+            let invalid_output = invalid_output.clone();
+            Box::pin(async move { Ok(invalid_output) })
+        });
+
+        let injected = NemoRelayContextState::event_metadata_injection_snapshot_chain(
+            event,
+            &[RegistryRecord::new("invalid", 0, injector)],
+        )
+        .await;
+
+        assert_eq!(injected, expected);
+    }
+}
+
+#[tokio::test]
+async fn event_metadata_injection_isolates_failures_and_preserves_non_object_metadata() {
+    let first: EventMetadataInjectorFn = Arc::new(|_| {
+        Box::pin(async { Ok(BTreeMap::from([("nv.test.first".into(), json!(true))])) })
+    });
+    let panicking: EventMetadataInjectorFn =
+        Arc::new(|_| Box::pin(async { panic!("expected injector panic") }));
+    let failing: EventMetadataInjectorFn = Arc::new(|_| {
+        Box::pin(async { Err(FlowError::Internal("expected injector failure".into())) })
+    });
+    let later_called = Arc::new(AtomicBool::new(false));
+    let later_called_by_callback = Arc::clone(&later_called);
+    let later: EventMetadataInjectorFn = Arc::new(move |_| {
+        later_called_by_callback.store(true, Ordering::Release);
+        Box::pin(async { Ok(BTreeMap::from([("nv.test.later".into(), json!(true))])) })
+    });
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("failure-isolation").build(),
+        None,
+        None,
+    ));
+
+    let injected = NemoRelayContextState::event_metadata_injection_snapshot_chain(
+        event,
+        &[
+            RegistryRecord::new("first", 0, first),
+            RegistryRecord::new("panicking", 1, panicking),
+            RegistryRecord::new("failing", 2, failing),
+            RegistryRecord::new("later", 3, later),
+        ],
+    )
+    .await;
+    let metadata = injected.metadata().expect("metadata should be created");
+
+    assert_eq!(metadata["nv.test.first"], json!(true));
+    assert_eq!(metadata["nv.test.later"], json!(true));
+    assert!(later_called.load(Ordering::Acquire));
+
+    let scalar_metadata_event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("non-object-metadata")
+            .metadata(json!("preserved"))
+            .build(),
+        None,
+        None,
+    ));
+    let expected = scalar_metadata_event.clone();
+    let injector: EventMetadataInjectorFn = Arc::new(|_| {
+        Box::pin(async { Ok(BTreeMap::from([("nv.test.omitted".into(), json!(true))])) })
+    });
+
+    let injected = NemoRelayContextState::event_metadata_injection_snapshot_chain(
+        scalar_metadata_event,
+        &[RegistryRecord::new("non-object", 0, injector)],
+    )
+    .await;
+
+    assert_eq!(injected, expected);
+}
 
 #[tokio::test]
 async fn sanitizer_snapshot_chains_fail_closed_on_callback_panics() {

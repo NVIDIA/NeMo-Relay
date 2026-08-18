@@ -40,6 +40,10 @@ class _EventSanitizeFields(TypedDict):
     category_profile: _JsonObject | None
     metadata: _Json | None
 
+class _DataSchema(TypedDict):
+    name: str
+    version: str
+
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str] | Awaitable[Optional[str]]]
 _LlmSanitizeRequestGuardrail: TypeAlias = Callable[
@@ -278,6 +282,61 @@ class ScopeType:
     Unknown: ScopeType
     """Unknown or unspecified scope type."""
 
+class LogSeverity:
+    """Typed severity attached to marks exported as OpenTelemetry logs."""
+
+    Trace: ClassVar[LogSeverity]
+    Debug: ClassVar[LogSeverity]
+    Info: ClassVar[LogSeverity]
+    Warn: ClassVar[LogSeverity]
+    Error: ClassVar[LogSeverity]
+
+class MetricKind:
+    """OpenTelemetry instrument kind recorded by a metric measurement."""
+
+    Counter: ClassVar[MetricKind]
+    UpDownCounter: ClassVar[MetricKind]
+    Gauge: ClassVar[MetricKind]
+    Histogram: ClassVar[MetricKind]
+
+class MetricValueType:
+    """Explicit numeric representation used by a metric measurement."""
+
+    U64: ClassVar[MetricValueType]
+    I64: ClassVar[MetricValueType]
+    F64: ClassVar[MetricValueType]
+
+class MetricMeasurement:
+    """One typed recording operation emitted by ``scope.metric``."""
+
+    def __init__(
+        self,
+        name: str,
+        kind: MetricKind,
+        value_type: MetricValueType,
+        value: int | float,
+        unit: str | None = ...,
+        description: str | None = ...,
+        attributes: Mapping[str, _JsonValue] | None = ...,
+        boundaries: Sequence[float] | None = ...,
+    ) -> None: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def kind(self) -> MetricKind: ...
+    @property
+    def value_type(self) -> MetricValueType: ...
+    @property
+    def value(self) -> int | float: ...
+    @property
+    def unit(self) -> str | None: ...
+    @property
+    def description(self) -> str | None: ...
+    @property
+    def attributes(self) -> _JsonObject | None: ...
+    @property
+    def boundaries(self) -> list[float] | None: ...
+
 class ScopeHandle:
     """An active execution scope in the scope stack.
 
@@ -440,6 +499,8 @@ class PendingMarkSpec:
         category_profile: Optional[_Json] = ...,
         data: Optional[_Json] = ...,
         metadata: Optional[_Json] = ...,
+        data_schema: Optional[_DataSchema] = ...,
+        severity: Optional[LogSeverity] = ...,
     ) -> None: ...
     @property
     def name(self) -> str: ...
@@ -450,7 +511,11 @@ class PendingMarkSpec:
     @property
     def data(self) -> Optional[_Json]: ...
     @property
+    def data_schema(self) -> Optional[_DataSchema]: ...
+    @property
     def metadata(self) -> Optional[_Json]: ...
+    @property
+    def severity(self) -> Optional[LogSeverity]: ...
 
 class LLMRequestInterceptOutcome:
     """Canonical result returned by an LLM request intercept."""
@@ -770,7 +835,7 @@ class ScopeEvent:
         """Return category-specific profile data, if any."""
         ...
     @property
-    def data_schema(self) -> Optional[_JsonObject]:
+    def data_schema(self) -> Optional[_DataSchema]:
         """Return a schema descriptor for ``data``, if one is present."""
         ...
     @property
@@ -832,6 +897,10 @@ class MarkEvent:
         """Return metadata attached to the event, if any."""
         ...
     @property
+    def severity(self) -> Optional[LogSeverity]:
+        """Return the typed log severity, if one is present."""
+        ...
+    @property
     def category(self) -> Optional[str]:
         """Return the semantic mark category, if present."""
         ...
@@ -840,7 +909,7 @@ class MarkEvent:
         """Return category-specific profile data, if any."""
         ...
     @property
-    def data_schema(self) -> Optional[_JsonObject]:
+    def data_schema(self) -> Optional[_DataSchema]:
         """Return a schema descriptor for ``data``, if one is present."""
         ...
     def to_dict(self) -> _JsonObject:
@@ -1113,6 +1182,107 @@ class OpenTelemetrySubscriber:
     def shutdown(self) -> None:
         """Shut down native OpenTelemetry resources."""
         ...
+    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics:
+        """Return a bounded snapshot of exporter and event-processing diagnostics."""
+        ...
+
+class OpenTelemetryRuntimeDiagnostic:
+    """One bounded runtime diagnostic from an OpenTelemetry subscriber."""
+
+    @property
+    def code(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+    @property
+    def count(self) -> int: ...
+
+class OpenTelemetryRuntimeDiagnostics:
+    """Bounded snapshot of runtime diagnostics from an OpenTelemetry subscriber."""
+
+    @property
+    def entries(self) -> list[OpenTelemetryRuntimeDiagnostic]: ...
+    def get(self, code: str) -> OpenTelemetryRuntimeDiagnostic | None: ...
+
+class OpenTelemetryLogConfig:
+    """Mutable configuration for ``OpenTelemetryLogSubscriber``."""
+
+    transport: Literal["http_binary", "grpc"]
+    endpoint: str
+    service_name: str
+    service_namespace: str | None
+    service_version: str | None
+    instrumentation_scope: str
+    timeout_millis: int
+    minimum_severity: LogSeverity
+    max_queue_size: int
+    max_export_batch_size: int
+    scheduled_delay_millis: int
+
+    def __init__(self, endpoint: str) -> None: ...
+    @property
+    def headers(self) -> dict[str, str]: ...
+    @headers.setter
+    def headers(self, value: dict[str, str]) -> None: ...
+    @property
+    def resource_attributes(self) -> dict[str, str]: ...
+    @resource_attributes.setter
+    def resource_attributes(self, value: dict[str, str]) -> None: ...
+    def set_header(self, key: str, value: str) -> None: ...
+    def set_resource_attribute(self, key: str, value: str) -> None: ...
+
+class OpenTelemetryLogSubscriber:
+    """Subscriber that exports severity-tagged marks through OTLP logs."""
+
+    def __init__(self, config: OpenTelemetryLogConfig) -> None: ...
+    def register(self, name: str) -> None: ...
+    def deregister(self, name: str) -> bool: ...
+    def force_flush(self) -> None: ...
+    def shutdown(self) -> None: ...
+    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics: ...
+
+class MetricTemporality:
+    """Preferred aggregation temporality for OTLP metric export."""
+
+    Cumulative: ClassVar[MetricTemporality]
+    Delta: ClassVar[MetricTemporality]
+    LowMemory: ClassVar[MetricTemporality]
+
+class OpenTelemetryMetricConfig:
+    """Mutable configuration for ``OpenTelemetryMetricSubscriber``."""
+
+    transport: Literal["http_binary", "grpc"]
+    endpoint: str
+    service_name: str
+    service_namespace: str | None
+    service_version: str | None
+    instrumentation_scope: str
+    timeout_millis: int
+    export_interval_millis: int
+    temporality: MetricTemporality
+    max_instruments: int
+    cardinality_limit: int
+
+    def __init__(self, endpoint: str) -> None: ...
+    @property
+    def headers(self) -> dict[str, str]: ...
+    @headers.setter
+    def headers(self, value: dict[str, str]) -> None: ...
+    @property
+    def resource_attributes(self) -> dict[str, str]: ...
+    @resource_attributes.setter
+    def resource_attributes(self, value: dict[str, str]) -> None: ...
+    def set_header(self, key: str, value: str) -> None: ...
+    def set_resource_attribute(self, key: str, value: str) -> None: ...
+
+class OpenTelemetryMetricSubscriber:
+    """Subscriber that records metric marks and exports them through OTLP metrics."""
+
+    def __init__(self, config: OpenTelemetryMetricConfig) -> None: ...
+    def register(self, name: str) -> None: ...
+    def deregister(self, name: str) -> bool: ...
+    def force_flush(self) -> None: ...
+    def shutdown(self) -> None: ...
+    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics: ...
 
 class OpenAIChatCodec:
     """Built-in codec for OpenAI Chat Completions requests and responses.
@@ -1451,7 +1621,9 @@ def event(
     *,
     handle: ScopeHandle | None = None,
     data: _Json | None = None,
+    data_schema: _DataSchema | None = None,
     metadata: _Json | None = None,
+    severity: LogSeverity | None = None,
     timestamp: datetime | None = None,
 ) -> None:
     """Emit a point-in-time mark event.
@@ -1461,7 +1633,9 @@ def event(
         handle: Optional parent scope handle. When omitted, the current
             top-of-stack scope becomes the parent.
         data: Optional JSON data payload recorded on the mark event.
+        data_schema: Optional name and version identifying the data schema.
         metadata: Optional JSON metadata payload recorded on the mark event.
+        severity: Optional typed severity used by OpenTelemetry log export.
         timestamp: Optional timezone-aware datetime recorded on the mark event.
             When omitted, the current runtime time is used.
 
@@ -1472,6 +1646,17 @@ def event(
         Raises for invalid JSON payloads, invalid timestamp types, or naive
         datetimes.
     """
+    ...
+
+def metric(
+    name: str,
+    measurements: list[MetricMeasurement],
+    *,
+    handle: ScopeHandle | None = None,
+    metadata: _Json | None = None,
+    timestamp: datetime | None = None,
+) -> None:
+    """Emit an atomic, validated group of metric recording operations."""
     ...
 
 def tool_call(

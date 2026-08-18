@@ -7,7 +7,20 @@ import { createRequire } from 'node:module';
 import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
-const { OpenTelemetrySubscriber, ScopeType, pushScope, popScope, event } = require('../index.js');
+const {
+  LogSeverity,
+  MetricKind,
+  MetricTemporality,
+  MetricValueType,
+  OpenTelemetryLogSubscriber,
+  OpenTelemetryMetricSubscriber,
+  OpenTelemetrySubscriber,
+  ScopeType,
+  pushScope,
+  popScope,
+  event,
+  metric,
+} = require('../index.js');
 
 function uniqueId(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -87,14 +100,8 @@ describe('OpenTelemetrySubscriber', () => {
         }),
       /attribute mapping key must not be blank/i,
     );
-    assert.throws(
-      () => new OpenTelemetrySubscriber({ endpoint: 'http://localhost:4318' }),
-      /missing field `type`/i,
-    );
-    assert.throws(
-      () => new OpenTelemetrySubscriber({ type: 'full' }),
-      /missing field `endpoint`/i,
-    );
+    assert.throws(() => new OpenTelemetrySubscriber({ endpoint: 'http://localhost:4318' }), /missing field `type`/i);
+    assert.throws(() => new OpenTelemetrySubscriber({ type: 'full' }), /missing field `endpoint`/i);
     assert.throws(
       () =>
         new OpenTelemetrySubscriber({
@@ -165,6 +172,117 @@ describe('OpenTelemetrySubscriber', () => {
       assertBodyContains(request.body, 'invoke_agent research-agent');
       assertBodyContains(request.body, 'gen_ai.operation.name');
       assert.equal(request.body.includes(Buffer.from('nemo_relay.', 'utf8')), false);
+    } finally {
+      subscriber.deregister(name);
+      subscriber.shutdown();
+      await collector.close();
+    }
+  });
+});
+
+describe('OpenTelemetry log and metric subscribers', () => {
+  it('constructs signal-specific subscribers and supports lifecycle methods', () => {
+    const logSubscriber = new OpenTelemetryLogSubscriber({
+      endpoint: 'http://localhost:4318/v1/logs',
+      minimumSeverity: LogSeverity.Warn,
+      maxQueueSize: 32,
+      maxExportBatchSize: 16,
+      scheduledDelayMillis: 100,
+      headers: { authorization: 'Bearer token' },
+      resourceAttributes: { 'deployment.environment': 'test' },
+    });
+    const logName = uniqueId('node_otel_log');
+    logSubscriber.register(logName);
+    assert.throws(() => logSubscriber.register(logName), /already exists/i);
+    assert.equal(logSubscriber.deregister(logName), true);
+    assert.equal(logSubscriber.deregister(logName), false);
+    logSubscriber.forceFlush();
+    assert.deepEqual(logSubscriber.runtimeDiagnostics(), []);
+    logSubscriber.shutdown();
+
+    const metricSubscriber = new OpenTelemetryMetricSubscriber({
+      endpoint: 'http://localhost:4318/v1/metrics',
+      exportIntervalMillis: 100,
+      temporality: MetricTemporality.Delta,
+      maxInstruments: 32,
+      cardinalityLimit: 100,
+      headers: { authorization: 'Bearer token' },
+      resourceAttributes: { 'deployment.environment': 'test' },
+    });
+    const metricName = uniqueId('node_otel_metric');
+    metricSubscriber.register(metricName);
+    assert.throws(() => metricSubscriber.register(metricName), /already exists/i);
+    assert.equal(metricSubscriber.deregister(metricName), true);
+    assert.equal(metricSubscriber.deregister(metricName), false);
+    metricSubscriber.forceFlush();
+    assert.deepEqual(metricSubscriber.runtimeDiagnostics(), []);
+    metricSubscriber.shutdown();
+  });
+
+  it('validates signal-specific limits', () => {
+    assert.throws(
+      () =>
+        new OpenTelemetryLogSubscriber({
+          endpoint: 'http://localhost:4318/v1/logs',
+          maxQueueSize: 0,
+        }),
+      /max_queue_size must be greater than 0/,
+    );
+    assert.throws(
+      () =>
+        new OpenTelemetryMetricSubscriber({
+          endpoint: 'http://localhost:4318/v1/metrics',
+          cardinalityLimit: 0,
+        }),
+      /cardinality_limit must be greater than 0/,
+    );
+  });
+
+  it('exports logs to the logs signal path', async () => {
+    const collector = await startCollector();
+    const subscriber = new OpenTelemetryLogSubscriber({ endpoint: collector.endpoint });
+    const name = uniqueId('node_otel_log_e2e');
+    subscriber.register(name);
+    try {
+      event('log_mark', null, { message: 'ready' }, null, null, null, LogSeverity.Info);
+      subscriber.forceFlush();
+      const request = await collector.nextRequest();
+      assert.equal(request.url, '/v1/logs');
+      assertBodyContains(request.body, 'log_mark');
+    } finally {
+      subscriber.deregister(name);
+      subscriber.shutdown();
+      await collector.close();
+    }
+  });
+
+  it('exports metrics to the metrics signal path', async () => {
+    const collector = await startCollector();
+    const subscriber = new OpenTelemetryMetricSubscriber({
+      endpoint: collector.endpoint,
+      exportIntervalMillis: 100,
+    });
+    const name = uniqueId('node_otel_metric_e2e');
+    subscriber.register(name);
+    try {
+      metric(
+        'metric_mark',
+        [
+          {
+            name: 'relay.tokens',
+            kind: MetricKind.Counter,
+            valueType: MetricValueType.U64,
+            value: 3,
+          },
+        ],
+        null,
+        null,
+        null,
+      );
+      subscriber.forceFlush();
+      const request = await collector.nextRequest();
+      assert.equal(request.url, '/v1/metrics');
+      assertBodyContains(request.body, 'relay.tokens');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();

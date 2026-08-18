@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use nemo_relay_worker::{
-    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest, PendingMarkSpec,
+    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest,
+    METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType, PendingMarkSpec,
 };
 use nemo_relay_worker::{
     JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolExecutionInterceptOutcome,
@@ -67,9 +68,16 @@ impl WorkerPlugin for FixtureWorkerPlugin {
         ctx.register_mark_sanitize_guardrail(
             "fixture_mark_sanitize_data",
             1,
-            |_, mut fields| async move {
-                fields.data = Some(json!({"worker_plugin_mark_data": true}));
-                Ok(fields)
+            |event, mut fields| {
+                let is_metric = event
+                    .data_schema()
+                    .is_some_and(|schema| schema.name == METRIC_DATA_SCHEMA_NAME);
+                async move {
+                    if !is_metric {
+                        fields.data = Some(json!({"worker_plugin_mark_data": true}));
+                    }
+                    Ok(fields)
+                }
             },
         );
         let nested_publication_runtime = runtime.clone();
@@ -107,6 +115,7 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             fixture_flag(config, "block_tool"),
             fixture_flag(config, "tool_request_error"),
             fixture_flag(config, "exit_in_tool_request"),
+            fixture_flag(config, "emit_tokenomics_metric"),
         );
         register_fixture_llm_hooks(
             ctx,
@@ -153,6 +162,7 @@ fn register_fixture_tool_hooks(
     block_tool: bool,
     tool_request_error: bool,
     exit_in_tool_request: bool,
+    emit_tokenomics_metric: bool,
 ) {
     ctx.register_tool_sanitize_request_guardrail(
         "fixture_tool_sanitize_request",
@@ -188,7 +198,26 @@ fn register_fixture_tool_hooks(
                     "fixture tool request error requested".into(),
                 ));
             }
-            emit_runtime_events(runtime).await?;
+            if emit_tokenomics_metric {
+                runtime
+                    .emit_metric(
+                        "tokenomics.measurements",
+                        vec![MetricMeasurement {
+                            name: "example.tokens.saved".into(),
+                            kind: MetricKind::Counter,
+                            value_type: MetricValueType::U64,
+                            value: json!(42),
+                            unit: Some("{token}".into()),
+                            description: Some("Tokens avoided".into()),
+                            attributes: Some(json!({"model": "example-model"})),
+                            boundaries: None,
+                        }],
+                        None,
+                    )
+                    .await?;
+            } else {
+                emit_runtime_events(runtime).await?;
+            }
             Ok(mark_json(args, "worker_plugin"))
         }
     });

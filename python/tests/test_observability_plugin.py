@@ -26,7 +26,10 @@ from nemo_relay.observability import (
     HttpStorageConfig,
     ObservabilityConfig,
     OpenTelemetryEndpointConfig,
+    OpenTelemetryLogSectionConfig,
+    OpenTelemetryMetricSectionConfig,
     OpenTelemetrySectionConfig,
+    OpenTelemetrySignalEndpointConfig,
     S3StorageConfig,
 )
 
@@ -151,11 +154,55 @@ class TestObservabilityConfigHelpers:
         assert wrapped["enabled"] is True
         wrapped_config = wrapped["config"]
         assert isinstance(wrapped_config, dict)
-        assert wrapped_config["version"] == 3
+        assert wrapped_config["version"] == 4
         assert wrapped_config["enable_full_payloads"] is False
 
         full_payload_config = ObservabilityConfig(enable_full_payloads=True).to_dict()
         assert full_payload_config["enable_full_payloads"] is True
+
+    def test_opentelemetry_signal_section_defaults_and_serialization(self):
+        endpoint = OpenTelemetrySignalEndpointConfig(
+            "https://collector.example/custom/logs",
+            headers={"x-static": "value"},
+            header_env={"authorization": "OTEL_AUTHORIZATION"},
+            resource_attributes={"nv.project": "observability-dev"},
+            service_namespace="telemetry",
+            service_version="1.0",
+        )
+        assert endpoint.to_dict() == {
+            "endpoint": "https://collector.example/custom/logs",
+            "transport": "http_binary",
+            "headers": {"x-static": "value"},
+            "header_env": {"authorization": "OTEL_AUTHORIZATION"},
+            "resource_attributes": {"nv.project": "observability-dev"},
+            "service_name": "unknown_service",
+            "service_namespace": "telemetry",
+            "service_version": "1.0",
+            "instrumentation_scope": "opentelemetry",
+            "timeout_millis": 3000,
+        }
+
+        logs = OpenTelemetryLogSectionConfig(enabled=True, endpoints=[endpoint])
+        metrics = OpenTelemetryMetricSectionConfig(enabled=True, endpoints=[endpoint])
+        assert OpenTelemetryLogSectionConfig().to_dict() == {
+            "enabled": False,
+            "minimum_severity": "info",
+            "max_queue_size": 2048,
+            "max_export_batch_size": 512,
+            "scheduled_delay_millis": 1000,
+        }
+        assert OpenTelemetryMetricSectionConfig().to_dict() == {
+            "enabled": False,
+            "export_interval_millis": 60000,
+            "temporality": "cumulative",
+            "max_instruments": 256,
+            "cardinality_limit": 2000,
+        }
+
+        section = OpenTelemetrySectionConfig(enabled=True, logs=logs, metrics=metrics).to_dict()
+        assert section["logs"] == logs.to_dict()
+        assert section["metrics"] == metrics.to_dict()
+        assert typing.cast(dict[str, object], section["metrics"])["endpoints"] == [endpoint.to_dict()]
 
     def test_validation_rejects_bad_values(self):
         report = plugin.validate(

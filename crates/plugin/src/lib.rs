@@ -21,8 +21,9 @@ use std::sync::{Arc, Mutex};
 
 pub use nemo_relay_types::Json;
 pub use nemo_relay_types::api::event::{
-    CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields, PendingMarkSpec,
-    ScopeCategory,
+    CategoryProfile, DataSchema, Event, EventCategory, EventSanitizeFields, LogSeverity,
+    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, MetricKind,
+    MetricMeasurement, MetricValueType, PendingMarkSpec, ScopeCategory,
 };
 pub use nemo_relay_types::api::llm::{LlmAttributes, LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::{HandleAttributes, ScopeAttributes, ScopeType};
@@ -45,14 +46,12 @@ use serde_json::Map;
 
 /// Native plugin ABI version supported by this crate.
 ///
-/// Version 4 adds completion-scoped codecs and pull-based LLM streams. Hosts
-/// retain frozen version-3 and version-2 tables for Relay 0.8-built plugins
-/// that target those layouts.
+/// Version 4 adds completion-scoped codecs, pull-based LLM streams, extended
+/// mark emission, and runtime diagnostics. Hosts retain frozen version-3 and
+/// version-2 tables for already-built plugins that target those layouts.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION: u32 = 4;
 /// ABI version that introduced completion-based asynchronous middleware.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE: u32 = 3;
-/// ABI version that introduced typed async middleware capabilities.
-pub const NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC: u32 = 4;
 
 /// Legacy native plugin ABI accepted by Relay hosts for compatibility.
 pub const NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY: u32 = 2;
@@ -1124,7 +1123,22 @@ pub struct NemoRelayNativeHostApiV3 {
     ) -> NemoRelayStatus,
 }
 
-/// ABI-v4 host extension for typed asynchronous native middleware.
+/// Extended native mark-emission function introduced in ABI v4.
+pub type NemoRelayNativeEmitMarkV2Fn = unsafe extern "C" fn(
+    name: *const NemoRelayNativeString,
+    parent: *const NemoRelayNativeScopeHandle,
+    data_json: *const NemoRelayNativeString,
+    metadata_json: *const NemoRelayNativeString,
+    data_schema_json: *const NemoRelayNativeString,
+    severity: *const NemoRelayNativeString,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus;
+
+/// Reads the active host runtime-diagnostics snapshot as canonical JSON.
+pub type NemoRelayNativeGetRuntimeDiagnosticsFn =
+    unsafe extern "C" fn(out_json: *mut *mut NemoRelayNativeString) -> NemoRelayStatus;
+
+/// ABI-v4 host extension for typed asynchronous middleware, mark options, and diagnostics.
 ///
 /// The complete ABI-v3 table is the prefix, preserving layout compatibility.
 #[repr(C)]
@@ -1180,6 +1194,10 @@ pub struct NemoRelayNativeHostApiV4 {
     /// rejection operation to decide whether that operation must be retried.
     pub async_stream_is_backpressured:
         unsafe extern "C" fn(stream: *const NemoRelayNativeAsyncStream) -> bool,
+    /// Emits a mark with optional data-schema and telemetry-severity fields.
+    pub emit_mark_v2: NemoRelayNativeEmitMarkV2Fn,
+    /// Returns a bounded snapshot of active host runtime diagnostics.
+    pub get_runtime_diagnostics: NemoRelayNativeGetRuntimeDiagnosticsFn,
 }
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
@@ -1234,6 +1252,37 @@ pub type NemoRelayNativePluginEntry = unsafe extern "C" fn(
 /// Result type used by the Rust native plugin SDK.
 pub type Result<T> = std::result::Result<T, String>;
 
+/// One bounded runtime diagnostic reported by the Relay host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct RuntimeDiagnostic {
+    /// Stable identifier for the diagnostic condition.
+    pub code: String,
+    /// Most recently recorded message for this condition.
+    pub message: String,
+    /// Total number of occurrences recorded for this condition.
+    pub count: u64,
+}
+
+/// Bounded snapshot of active host runtime diagnostics.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct RuntimeDiagnostics {
+    entries: Vec<RuntimeDiagnostic>,
+}
+
+impl RuntimeDiagnostics {
+    /// Return diagnostics in stable code order.
+    pub fn entries(&self) -> &[RuntimeDiagnostic] {
+        &self.entries
+    }
+
+    /// Return a diagnostic by its stable code.
+    pub fn get(&self, code: &str) -> Option<&RuntimeDiagnostic> {
+        self.entries
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+    }
+}
+
 /// Synchronous JSON chunk stream used by native LLM stream intercept helpers.
 pub type LlmJsonStream = Box<dyn Iterator<Item = Result<Json>> + Send>;
 
@@ -1241,12 +1290,21 @@ pub type LlmJsonStream = Box<dyn Iterator<Item = Result<Json>> + Send>;
 #[derive(Clone)]
 pub struct PluginRuntime {
     host: NemoRelayNativeHostApiV1,
+    emit_mark_v2: Option<NemoRelayNativeEmitMarkV2Fn>,
+    get_runtime_diagnostics: Option<NemoRelayNativeGetRuntimeDiagnosticsFn>,
 }
 
 impl PluginRuntime {
     /// Creates a runtime handle from the host ABI table.
     pub fn new(host: &NemoRelayNativeHostApiV1) -> Self {
-        Self { host: *host }
+        let v4 = (host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
+            && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>())
+        .then(|| unsafe { &*(host as *const _ as *const NemoRelayNativeHostApiV4) });
+        Self {
+            host: *host,
+            emit_mark_v2: v4.map(|host| host.emit_mark_v2),
+            get_runtime_diagnostics: v4.map(|host| host.get_runtime_diagnostics),
+        }
     }
 
     /// Returns the underlying host ABI table.
@@ -1305,6 +1363,66 @@ impl PluginRuntime {
         metadata: Option<&Json>,
     ) -> Result<()> {
         emit_mark(&self.host, name, data, metadata)
+    }
+
+    /// Emits a mark event with an optional data schema and telemetry severity.
+    ///
+    /// Hosts without the ABI-v4 mark extension accept this call only when both
+    /// new options are absent, in which case the legacy function is used.
+    pub fn emit_mark_with_options(
+        &self,
+        name: &str,
+        data: Option<&Json>,
+        metadata: Option<&Json>,
+        data_schema: Option<&DataSchema>,
+        severity: Option<LogSeverity>,
+    ) -> Result<()> {
+        match self.emit_mark_v2 {
+            Some(emit_mark_v2) => emit_mark_v2_call(
+                &self.host,
+                emit_mark_v2,
+                name,
+                data,
+                metadata,
+                data_schema,
+                severity,
+            ),
+            None if data_schema.is_none() && severity.is_none() => {
+                emit_mark(&self.host, name, data, metadata)
+            }
+            None => Err("mark data_schema and severity require native host ABI v4".into()),
+        }
+    }
+
+    /// Emits a validated Relay metric-measurement mark under the current scope.
+    pub fn emit_metric(
+        &self,
+        name: &str,
+        measurements: Vec<MetricMeasurement>,
+        metadata: Option<&Json>,
+    ) -> Result<()> {
+        let envelope = MetricEnvelope { measurements };
+        envelope.validate().map_err(|err| err.to_string())?;
+        let data = serde_json::to_value(envelope)
+            .map_err(|err| format!("failed to serialize metric mark: {err}"))?;
+        let data_schema = DataSchema::builder()
+            .name(METRIC_DATA_SCHEMA_NAME)
+            .version(METRIC_DATA_SCHEMA_VERSION)
+            .build();
+        self.emit_mark_with_options(name, Some(&data), metadata, Some(&data_schema), None)
+    }
+
+    /// Return a bounded snapshot of active host runtime diagnostics.
+    pub fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
+        let Some(get_runtime_diagnostics) = self.get_runtime_diagnostics else {
+            return Err(
+                "runtime diagnostics require the native host ABI v4 diagnostics extension".into(),
+            );
+        };
+        native_json_call(&self.host, "runtime diagnostics", |out| {
+            let status = unsafe { get_runtime_diagnostics(out) };
+            codec_status(&self.host, status)
+        })
     }
 
     /// Creates a new independent scope stack.
@@ -1777,6 +1895,65 @@ pub fn emit_mark(
         Ok(())
     } else {
         Err(format!("emit_mark failed: {status:?}"))
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Mirrors the append-only native ABI function.
+fn emit_mark_v2_call(
+    host: &NemoRelayNativeHostApiV1,
+    emit_mark_v2: NemoRelayNativeEmitMarkV2Fn,
+    name: &str,
+    data: Option<&Json>,
+    metadata: Option<&Json>,
+    data_schema: Option<&DataSchema>,
+    severity: Option<LogSeverity>,
+) -> Result<()> {
+    let name =
+        HostString::new(host, name).ok_or_else(|| "failed to allocate mark name".to_string())?;
+    let data = OptionalHostJson::new(host, data)?;
+    let metadata = OptionalHostJson::new(host, metadata)?;
+    let data_schema = data_schema
+        .map(|value| {
+            HostString::from_json(host, value)
+                .ok_or_else(|| "failed to serialize mark data schema".to_string())
+        })
+        .transpose()?;
+    let severity = severity
+        .map(|value| {
+            serde_json::to_value(value)
+                .map_err(|err| format!("failed to serialize mark severity: {err}"))
+                .and_then(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| "mark severity did not serialize as a string".to_string())
+                        .and_then(|value| {
+                            HostString::new(host, value)
+                                .ok_or_else(|| "failed to allocate mark severity".to_string())
+                        })
+                })
+        })
+        .transpose()?;
+    let status = unsafe {
+        emit_mark_v2(
+            name.as_ptr(),
+            ptr::null(),
+            data.as_ptr(),
+            metadata.as_ptr(),
+            data_schema
+                .as_ref()
+                .map(HostString::as_ptr)
+                .unwrap_or(ptr::null()),
+            severity
+                .as_ref()
+                .map(HostString::as_ptr)
+                .unwrap_or(ptr::null()),
+            ptr::null(),
+        )
+    };
+    if status == NemoRelayStatus::Ok {
+        Ok(())
+    } else {
+        Err(format!("emit_mark_v2 failed: {status:?}"))
     }
 }
 
@@ -2474,15 +2651,23 @@ fn native_codec_call<T: DeserializeOwned>(
     host: &NemoRelayNativeHostApiV1,
     call: impl FnOnce(*mut *mut NemoRelayNativeString) -> Result<()>,
 ) -> Result<T> {
+    native_json_call(host, "LLM codec operation", call)
+}
+
+fn native_json_call<T: DeserializeOwned>(
+    host: &NemoRelayNativeHostApiV1,
+    operation: &str,
+    call: impl FnOnce(*mut *mut NemoRelayNativeString) -> Result<()>,
+) -> Result<T> {
     let mut out = ptr::null_mut();
     call(&mut out)?;
     if out.is_null() {
-        return Err("LLM codec operation returned null".into());
+        return Err(format!("{operation} returned null"));
     }
     let out = HostString { host, ptr: out };
     let text = read_host_string(host, out.as_ptr())
-        .map_err(|_| "LLM codec operation returned invalid UTF-8".to_string())?;
-    serde_json::from_str(&text).map_err(|error| format!("invalid LLM codec result: {error}"))
+        .map_err(|_| format!("{operation} returned invalid UTF-8"))?;
+    serde_json::from_str(&text).map_err(|error| format!("invalid {operation} result: {error}"))
 }
 
 struct OptionalHostJson<'a>(Option<HostString<'a>>);
@@ -2513,7 +2698,7 @@ enum OwnedHostApi {
 
 impl OwnedHostApi {
     unsafe fn copy_from(host: &NemoRelayNativeHostApiV1) -> Self {
-        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC
+        if host.abi_version >= NEMO_RELAY_NATIVE_ABI_VERSION
             && host.struct_size >= std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             Self::V4(unsafe { *(host as *const _ as *const NemoRelayNativeHostApiV4) })
@@ -2791,7 +2976,9 @@ where
     P: NativePlugin,
     F: FnOnce() -> P,
 {
-    if host_ref.abi_version != NEMO_RELAY_NATIVE_ABI_VERSION {
+    let supported_abi = (NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY..=NEMO_RELAY_NATIVE_ABI_VERSION)
+        .contains(&host_ref.abi_version);
+    if !supported_abi {
         return NemoRelayStatus::InvalidArg;
     }
     if host_ref.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV1>() {

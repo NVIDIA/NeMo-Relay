@@ -183,6 +183,16 @@ typedef struct FfiLlmSanitizeRequestCodec FfiLlmSanitizeRequestCodec;
 typedef struct FfiLlmSanitizeResponseCodec FfiLlmSanitizeResponseCodec;
 
 /**
+ * Opaque OpenTelemetry log subscriber handle.
+ */
+typedef struct FfiOpenTelemetryLogSubscriber FfiOpenTelemetryLogSubscriber;
+
+/**
+ * Opaque OpenTelemetry metric subscriber handle.
+ */
+typedef struct FfiOpenTelemetryMetricSubscriber FfiOpenTelemetryMetricSubscriber;
+
+/**
  * Opaque OpenTelemetry subscriber handle.
  */
 typedef struct FfiOpenTelemetrySubscriber FfiOpenTelemetrySubscriber;
@@ -441,12 +451,169 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
                                               void *next_ctx);
 
 /**
+ * Integer-backed typed severity for a mark exported as an OpenTelemetry log.
+ *
+ * This is intentionally not a Rust enum because foreign callers can supply any
+ * `int32_t` value. Exported functions validate the value before converting it
+ * to the core log severity.
+ */
+typedef int32_t NemoRelayLogSeverity;
+
+/**
+ * Integer-backed OpenTelemetry instrument kind for one typed metric measurement.
+ *
+ * This is intentionally not a Rust enum because foreign callers can supply any
+ * `int32_t` value. Exported functions validate the value before converting it
+ * to the core metric kind. Zero is reserved as unspecified so a
+ * zero-initialized measurement cannot select a metric kind accidentally.
+ */
+typedef int32_t NemoRelayMetricKind;
+
+/**
+ * Integer-backed numeric representation selected from a typed metric
+ * measurement's value fields.
+ *
+ * This is intentionally not a Rust enum because foreign callers can supply any
+ * `int32_t` value. Exported functions validate the value before converting it
+ * to the core metric value type. Zero is reserved as unspecified so a
+ * zero-initialized measurement cannot select a value field accidentally.
+ */
+typedef int32_t NemoRelayMetricValueType;
+
+/**
+ * C representation of one typed metric SDK recording operation.
+ *
+ * `value_type` selects exactly one of `u64_value`, `i64_value`, or
+ * `f64_value`. `unit`, `description`, and `attributes_json` are optional.
+ * A null `boundaries` pointer with `boundaries_len == 0` leaves histogram
+ * boundaries unspecified. A non-null pointer with zero length requests an
+ * explicit empty boundary list. For nonzero lengths, `boundaries` must point
+ * to that many doubles.
+ */
+typedef struct NemoRelayMetricMeasurement {
+  /**
+   * Required null-terminated OpenTelemetry instrument name.
+   */
+  const char *name;
+  /**
+   * Required instrument kind. `NEMO_RELAY_METRIC_KIND_UNSPECIFIED` is invalid.
+   */
+  NemoRelayMetricKind kind;
+  /**
+   * Required numeric value representation. `NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED` is invalid.
+   */
+  NemoRelayMetricValueType value_type;
+  /**
+   * Unsigned value used when `value_type` is `U64`.
+   */
+  uint64_t u64_value;
+  /**
+   * Signed value used when `value_type` is `I64`.
+   */
+  int64_t i64_value;
+  /**
+   * Double value used when `value_type` is `F64`.
+   */
+  double f64_value;
+  /**
+   * Optional null-terminated ASCII unit.
+   */
+  const char *unit;
+  /**
+   * Optional null-terminated description.
+   */
+  const char *description;
+  /**
+   * Optional null-terminated JSON attributes object.
+   */
+  const char *attributes_json;
+  /**
+   * Optional histogram boundary array.
+   */
+  const double *boundaries;
+  /**
+   * Number of entries in `boundaries`.
+   */
+  uintptr_t boundaries_len;
+} NemoRelayMetricMeasurement;
+
+/**
  * Callback for tool execution (default callable). Receives arguments as JSON
  * and returns a serialized `ToolExecutionResult` with required `result` and
  * optional `annotation` fields. The returned string must be allocated with
  * `malloc` or equivalent.
  */
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
+
+/**
+ * Unspecified metric kind. This value is invalid for a measurement.
+ */
+#define NEMO_RELAY_METRIC_KIND_UNSPECIFIED 0
+
+/**
+ * Monotonic additive counter.
+ */
+#define NEMO_RELAY_METRIC_KIND_COUNTER 1
+
+/**
+ * Additive counter that may increase or decrease.
+ */
+#define NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER 2
+
+/**
+ * Current sampled value.
+ */
+#define NEMO_RELAY_METRIC_KIND_GAUGE 3
+
+/**
+ * Distribution sample.
+ */
+#define NEMO_RELAY_METRIC_KIND_HISTOGRAM 4
+
+/**
+ * Fine-grained tracing information.
+ */
+#define NEMO_RELAY_LOG_SEVERITY_TRACE 0
+
+/**
+ * Diagnostic information.
+ */
+#define NEMO_RELAY_LOG_SEVERITY_DEBUG 1
+
+/**
+ * Normal informational event.
+ */
+#define NEMO_RELAY_LOG_SEVERITY_INFO 2
+
+/**
+ * Warning condition.
+ */
+#define NEMO_RELAY_LOG_SEVERITY_WARN 3
+
+/**
+ * Error condition.
+ */
+#define NEMO_RELAY_LOG_SEVERITY_ERROR 4
+
+/**
+ * Unspecified metric value type. This value is invalid for a measurement.
+ */
+#define NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED 0
+
+/**
+ * Read `u64_value`.
+ */
+#define NEMO_RELAY_METRIC_VALUE_TYPE_U64 1
+
+/**
+ * Read `i64_value`.
+ */
+#define NEMO_RELAY_METRIC_VALUE_TYPE_I64 2
+
+/**
+ * Read `f64_value`.
+ */
+#define NEMO_RELAY_METRIC_VALUE_TYPE_F64 3
 
 /**
  * Initializes the Go binding runtime and installs default operational logging.
@@ -1565,12 +1732,169 @@ NemoRelayStatus nemo_relay_otel_subscriber_deregister(const char *name);
 NemoRelayStatus nemo_relay_otel_subscriber_force_flush(const struct FfiOpenTelemetrySubscriber *subscriber);
 
 /**
+ * Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries in stable code order. The caller owns `out_json` and must free it
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `subscriber` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_subscriber_runtime_diagnostics_json(const struct FfiOpenTelemetrySubscriber *subscriber,
+                                                                    char **out_json);
+
+/**
  * Shuts down the underlying tracer provider.
  *
  * # Safety
  * `subscriber` must be a valid, non-null pointer.
  */
 NemoRelayStatus nemo_relay_otel_subscriber_shutdown(const struct FfiOpenTelemetrySubscriber *subscriber);
+
+/**
+ * Creates an independently managed OpenTelemetry log subscriber.
+ *
+ * Numeric processing settings use their core-config defaults when zero.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_create(const char *transport,
+                                                      const char *endpoint,
+                                                      const char *headers_json,
+                                                      const char *resource_attributes_json,
+                                                      const char *service_name,
+                                                      const char *service_namespace,
+                                                      const char *service_version,
+                                                      const char *instrumentation_scope,
+                                                      uint64_t timeout_millis,
+                                                      const char *minimum_severity,
+                                                      uint64_t max_queue_size,
+                                                      uint64_t max_export_batch_size,
+                                                      uint64_t scheduled_delay_millis,
+                                                      struct FfiOpenTelemetryLogSubscriber **out);
+
+/**
+ * Registers an OpenTelemetry log subscriber globally.
+ *
+ * # Safety
+ * `subscriber` and `name` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_register(const struct FfiOpenTelemetryLogSubscriber *subscriber,
+                                                        const char *name);
+
+/**
+ * Deregisters a subscriber by name from the shared subscriber registry.
+ *
+ * Subscriber names share one global namespace across trace, log, and metric
+ * subscribers. This function does not verify the subscriber type.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_deregister(const char *name);
+
+/**
+ * Flushes queued Relay events and OTLP log batches.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_force_flush(const struct FfiOpenTelemetryLogSubscriber *subscriber);
+
+/**
+ * Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries in stable code order. The caller owns `out_json` and must free it
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `subscriber` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_runtime_diagnostics_json(const struct FfiOpenTelemetryLogSubscriber *subscriber,
+                                                                        char **out_json);
+
+/**
+ * Shuts down the OpenTelemetry logger provider.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoRelayStatus nemo_relay_otel_log_subscriber_shutdown(const struct FfiOpenTelemetryLogSubscriber *subscriber);
+
+/**
+ * Creates an independently managed OpenTelemetry metric subscriber.
+ *
+ * Numeric processing settings use their core-config defaults when zero.
+ *
+ * # Safety
+ * Any non-null C strings must be valid and `out` must be non-null.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_create(const char *transport,
+                                                         const char *endpoint,
+                                                         const char *headers_json,
+                                                         const char *resource_attributes_json,
+                                                         const char *service_name,
+                                                         const char *service_namespace,
+                                                         const char *service_version,
+                                                         const char *instrumentation_scope,
+                                                         uint64_t timeout_millis,
+                                                         uint64_t export_interval_millis,
+                                                         const char *temporality,
+                                                         uint64_t max_instruments,
+                                                         uint64_t cardinality_limit,
+                                                         struct FfiOpenTelemetryMetricSubscriber **out);
+
+/**
+ * Registers an OpenTelemetry metric subscriber globally.
+ *
+ * # Safety
+ * `subscriber` and `name` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_register(const struct FfiOpenTelemetryMetricSubscriber *subscriber,
+                                                           const char *name);
+
+/**
+ * Deregisters a subscriber by name from the shared subscriber registry.
+ *
+ * Subscriber names share one global namespace across trace, log, and metric
+ * subscribers. This function does not verify the subscriber type.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_deregister(const char *name);
+
+/**
+ * Flushes queued Relay events and collects current metric aggregates.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_force_flush(const struct FfiOpenTelemetryMetricSubscriber *subscriber);
+
+/**
+ * Return a bounded JSON snapshot of runtime diagnostics for this subscriber.
+ *
+ * The result is a JSON array of `{"code": "…", "message": "…", "count": N}`
+ * entries in stable code order. The caller owns `out_json` and must free it
+ * with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `subscriber` and `out_json` must be valid, non-null pointers.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_runtime_diagnostics_json(const struct FfiOpenTelemetryMetricSubscriber *subscriber,
+                                                                           char **out_json);
+
+/**
+ * Shuts down the OpenTelemetry meter provider and performs final collection.
+ *
+ * # Safety
+ * `subscriber` must be a valid, non-null pointer.
+ */
+NemoRelayStatus nemo_relay_otel_metric_subscriber_shutdown(const struct FfiOpenTelemetryMetricSubscriber *subscriber);
 
 /**
  * Load and activate dynamic plugins as one owned transaction.
@@ -2016,6 +2340,70 @@ NemoRelayStatus nemo_relay_event(const char *name,
                                  const char *data_json,
                                  const char *metadata_json,
                                  const int64_t *timestamp_unix_micros);
+
+/**
+ * Emit a named lifecycle event with optional data schema and log severity.
+ *
+ * This is the additive form of [`nemo_relay_event`]. The legacy function
+ * remains ABI-compatible and behaves as if both new arguments were null.
+ *
+ * # Parameters
+ * - `data_schema_json`: Optional `{"name":"...","version":"..."}` JSON.
+ * - `severity`: Optional typed telemetry-log severity.
+ *
+ * # Safety
+ * The pointer requirements are the same as [`nemo_relay_event`]. Optional
+ * pointers may be null and otherwise must remain valid for the call.
+ */
+NemoRelayStatus nemo_relay_event_v2(const char *name,
+                                    const struct FfiScopeHandle *parent,
+                                    const char *data_json,
+                                    const char *data_schema_json,
+                                    const char *metadata_json,
+                                    const NemoRelayLogSeverity *severity,
+                                    const int64_t *timestamp_unix_micros);
+
+/**
+ * Emit an atomic metric measurement mark from canonical JSON.
+ *
+ * `measurements_json` must be a nonempty JSON array using Relay's canonical
+ * `MetricMeasurement` shape. Relay validates the complete array before
+ * emitting the metric mark.
+ *
+ * # Safety
+ * `name` and `measurements_json` must be valid non-null C strings. Optional
+ * pointers may be null and otherwise must remain valid for the call.
+ */
+NemoRelayStatus nemo_relay_metric_json(const char *name,
+                                       const struct FfiScopeHandle *parent,
+                                       const char *measurements_json,
+                                       const char *metadata_json,
+                                       const int64_t *timestamp_unix_micros);
+
+/**
+ * Emit an atomic metric measurement mark from typed C measurements.
+ *
+ * `measurements` must reference `measurements_len` initialized entries. Each
+ * measurement's `value_type` selects the corresponding numeric value field.
+ * Relay validates the complete array before emitting any recording operation.
+ * Relay does not retain `measurements`, their strings, or histogram boundaries;
+ * caller-owned storage need only remain valid until this function returns.
+ *
+ * # Safety
+ * `name` must be a valid non-null C string. `measurements` must be non-null
+ * and valid for `measurements_len` reads when the length is nonzero. Every
+ * measurement name must be a valid C string; optional strings and JSON must
+ * be valid when non-null. A null `boundaries` pointer with zero length leaves
+ * boundaries unspecified, while a non-null pointer with zero length requests
+ * an explicit empty boundary list. For nonzero lengths, `boundaries` must
+ * reference `boundaries_len` doubles.
+ */
+NemoRelayStatus nemo_relay_metric(const char *name,
+                                  const struct FfiScopeHandle *parent,
+                                  const struct NemoRelayMetricMeasurement *measurements,
+                                  uintptr_t measurements_len,
+                                  const char *metadata_json,
+                                  const int64_t *timestamp_unix_micros);
 
 /**
  * Register a scope-local tool conditional execution guardrail.
@@ -2716,6 +3104,24 @@ void nemo_relay_atof_exporter_free(struct FfiAtofExporter *ptr);
  * `ptr` must be a valid pointer returned by `nemo_relay_otel_subscriber_create`, or null.
  */
 void nemo_relay_otel_subscriber_free(struct FfiOpenTelemetrySubscriber *ptr);
+
+/**
+ * Free an OpenTelemetry log subscriber handle.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by
+ * `nemo_relay_otel_log_subscriber_create`, or null.
+ */
+void nemo_relay_otel_log_subscriber_free(struct FfiOpenTelemetryLogSubscriber *ptr);
+
+/**
+ * Free an OpenTelemetry metric subscriber handle.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by
+ * `nemo_relay_otel_metric_subscriber_create`, or null.
+ */
+void nemo_relay_otel_metric_subscriber_free(struct FfiOpenTelemetryMetricSubscriber *ptr);
 
 /**
  * Free an adaptive runtime handle previously returned by

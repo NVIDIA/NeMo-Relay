@@ -17,6 +17,7 @@ const {
   pushScope,
   popScope,
   event,
+  metric,
   withScope,
   toolCallExecute,
   llmCallExecute,
@@ -24,6 +25,9 @@ const {
   deregisterSubscriber,
   flushSubscribers,
   ScopeType,
+  LogSeverity,
+  MetricKind,
+  MetricValueType,
 } = lib;
 
 const SCOPE_ATTR_PARALLEL = 0b01;
@@ -392,6 +396,115 @@ describe('Events', () => {
     const scope = pushScope('event_parent', ScopeType.Agent, null, null);
     event('child_event', scope, null, null);
     popScope(scope);
+  });
+
+  it('event accepts a data schema and typed log severity', async () => {
+    const events = [];
+    registerSubscriber('node_structured_log_collector', (e) => events.push(e));
+    try {
+      event(
+        'structured_log',
+        null,
+        { message: 'ready' },
+        { source: 'node' },
+        null,
+        { name: 'example.log', version: '1' },
+        LogSeverity.Warn,
+      );
+      await flushSubscribers();
+
+      const mark = events.find((e) => e.name === 'structured_log');
+      assert.deepEqual(mark.data_schema, { name: 'example.log', version: '1' });
+      assert.deepEqual(mark.metadata, {
+        source: 'node',
+        'nemo_relay.log.severity': 'warn',
+      });
+    } finally {
+      deregisterSubscriber('node_structured_log_collector');
+    }
+  });
+
+  it('event serializes representative log severities', async () => {
+    const events = [];
+    registerSubscriber('node_log_severity_collector', (e) => events.push(e));
+    try {
+      event('trace_log', null, null, null, null, null, LogSeverity.Trace);
+      event('error_log', null, null, null, null, null, LogSeverity.Error);
+      await flushSubscribers();
+
+      assert.equal(events.find((e) => e.name === 'trace_log')?.metadata?.['nemo_relay.log.severity'], 'trace');
+      assert.equal(events.find((e) => e.name === 'error_log')?.metadata?.['nemo_relay.log.severity'], 'error');
+    } finally {
+      deregisterSubscriber('node_log_severity_collector');
+    }
+  });
+
+  it('metric emits a validated metric mark', async () => {
+    const events = [];
+    registerSubscriber('node_metric_collector', (e) => events.push(e));
+    try {
+      metric(
+        'token_usage',
+        [
+          {
+            name: 'relay.tokens',
+            kind: MetricKind.Counter,
+            valueType: MetricValueType.U64,
+            value: 12,
+            unit: '{token}',
+            attributes: { model: 'test' },
+          },
+        ],
+        null,
+        { source: 'node' },
+        null,
+      );
+      await flushSubscribers();
+
+      const mark = events.find((e) => e.name === 'token_usage');
+      assert.deepEqual(mark.data_schema, {
+        name: 'nemo.relay.metric_measurements',
+        version: '1',
+      });
+      assert.equal(mark.data.measurements[0].name, 'relay.tokens');
+      assert.equal(mark.data.measurements[0].kind, 'counter');
+      assert.equal(mark.data.measurements[0].value_type, 'u64');
+      assert.equal(mark.data.measurements[0].value, 12);
+    } finally {
+      deregisterSubscriber('node_metric_collector');
+    }
+  });
+
+  it('metric rejects invalid measurements atomically', async () => {
+    const events = [];
+    registerSubscriber('node_invalid_metric_collector', (e) => events.push(e));
+    try {
+      assert.throws(
+        () =>
+          metric(
+            'invalid_metric',
+            [
+              {
+                name: 'relay.tokens',
+                kind: MetricKind.Counter,
+                valueType: MetricValueType.I64,
+                value: -1,
+              },
+            ],
+            null,
+            null,
+            null,
+          ),
+        /does not support value_type i64/,
+      );
+      await flushSubscribers();
+      assert.equal(
+        events.some((e) => e.name === 'invalid_metric'),
+        false,
+      );
+    } finally {
+      deregisterSubscriber('node_invalid_metric_collector');
+    }
   });
 });
 
