@@ -105,6 +105,7 @@ the subscriber before emitting marks. During graceful shutdown, deregister it,
 force-flush it, shut it down, and call `Close` to free its FFI handle:
 
 ```go
+// Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
 logs, err := nemo.NewOpenTelemetryLogSubscriber(
 	nemo.NewOpenTelemetryLogConfig("http://localhost:4318"),
 )

@@ -177,6 +177,7 @@ const {
   OpenTelemetryLogSubscriber, OpenTelemetryMetricSubscriber,
 } = require('nemo-relay-node');
 
+// Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
 const logs = new OpenTelemetryLogSubscriber({ endpoint: 'http://localhost:4318' });
 const metrics = new OpenTelemetryMetricSubscriber({ endpoint: 'http://localhost:4318' });
 logs.register('otlp-logs');

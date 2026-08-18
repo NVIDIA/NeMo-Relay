@@ -133,6 +133,7 @@ struct FfiOpenTelemetryMetricSubscriber *metrics = NULL;
 bool logs_registered = false;
 bool metrics_registered = false;
 
+/* Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively. */
 if (!relay_ok(nemo_relay_otel_log_subscriber_create(
     "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
     0, "info", 0, 0, 0, &logs

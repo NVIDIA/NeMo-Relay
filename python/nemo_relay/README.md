@@ -224,6 +224,7 @@ from nemo_relay import (
     OpenTelemetryMetricSubscriber,
 )
 
+# Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively.
 logs = OpenTelemetryLogSubscriber(OpenTelemetryLogConfig("http://localhost:4318"))
 metrics = OpenTelemetryMetricSubscriber(OpenTelemetryMetricConfig("http://localhost:4318"))
 logs.register("otlp-logs")
