@@ -6,11 +6,30 @@ use super::{
     NemoRelayStatus, ScopeAttributes, c_char, c_str_to_opt_json, c_str_to_string, clear_last_error,
     core_scope_api, set_last_error, status_from_error, unix_micros_to_opt_timestamp,
 };
+use crate::types::{NEMO_RELAY_METRIC_KIND_UNSPECIFIED, NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED};
 use crate::types::{log_severity_from_ffi, metric_kind_from_ffi, metric_value_type_from_ffi};
 
 // ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
+
+fn set_metric_discriminator_error(
+    index: usize,
+    field: &str,
+    value: i32,
+    unspecified: i32,
+    expected: &str,
+) {
+    if value == unspecified {
+        set_last_error(&format!(
+            "measurements[{index}].{field} is unspecified; set one of {expected}"
+        ));
+    } else {
+        set_last_error(&format!(
+            "measurements[{index}].{field} has invalid value {value}"
+        ));
+    }
+}
 
 /// Retrieve the current scope handle from the thread-local scope stack.
 ///
@@ -388,6 +407,8 @@ pub unsafe extern "C" fn nemo_relay_metric_json(
 /// `measurements` must reference `measurements_len` initialized entries. Each
 /// measurement's `value_type` selects the corresponding numeric value field.
 /// Relay validates the complete array before emitting any recording operation.
+/// Relay does not retain `measurements`, their strings, or histogram boundaries;
+/// caller-owned storage need only remain valid until this function returns.
 ///
 /// # Safety
 /// `name` must be a valid non-null C string. `measurements` must be non-null
@@ -430,17 +451,23 @@ pub unsafe extern "C" fn nemo_relay_metric(
             }
         };
         let Some(kind) = metric_kind_from_ffi(measurement.kind) else {
-            set_last_error(&format!(
-                "measurements[{index}].kind has invalid value {}",
-                measurement.kind
-            ));
+            set_metric_discriminator_error(
+                index,
+                "kind",
+                measurement.kind,
+                NEMO_RELAY_METRIC_KIND_UNSPECIFIED,
+                "NEMO_RELAY_METRIC_KIND_COUNTER, NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER, NEMO_RELAY_METRIC_KIND_GAUGE, or NEMO_RELAY_METRIC_KIND_HISTOGRAM",
+            );
             return NemoRelayStatus::InvalidArg;
         };
         let Some(value_type) = metric_value_type_from_ffi(measurement.value_type) else {
-            set_last_error(&format!(
-                "measurements[{index}].value_type has invalid value {}",
-                measurement.value_type
-            ));
+            set_metric_discriminator_error(
+                index,
+                "value_type",
+                measurement.value_type,
+                NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED,
+                "NEMO_RELAY_METRIC_VALUE_TYPE_U64, NEMO_RELAY_METRIC_VALUE_TYPE_I64, or NEMO_RELAY_METRIC_VALUE_TYPE_F64",
+            );
             return NemoRelayStatus::InvalidArg;
         };
         let value = match value_type {

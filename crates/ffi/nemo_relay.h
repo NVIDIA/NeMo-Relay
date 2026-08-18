@@ -464,7 +464,8 @@ typedef int32_t NemoRelayLogSeverity;
  *
  * This is intentionally not a Rust enum because foreign callers can supply any
  * `int32_t` value. Exported functions validate the value before converting it
- * to the core metric kind.
+ * to the core metric kind. Zero is reserved as unspecified so a
+ * zero-initialized measurement cannot select a metric kind accidentally.
  */
 typedef int32_t NemoRelayMetricKind;
 
@@ -474,7 +475,8 @@ typedef int32_t NemoRelayMetricKind;
  *
  * This is intentionally not a Rust enum because foreign callers can supply any
  * `int32_t` value. Exported functions validate the value before converting it
- * to the core metric value type.
+ * to the core metric value type. Zero is reserved as unspecified so a
+ * zero-initialized measurement cannot select a value field accidentally.
  */
 typedef int32_t NemoRelayMetricValueType;
 
@@ -494,11 +496,11 @@ typedef struct NemoRelayMetricMeasurement {
    */
   const char *name;
   /**
-   * Instrument kind.
+   * Required instrument kind. `NEMO_RELAY_METRIC_KIND_UNSPECIFIED` is invalid.
    */
   NemoRelayMetricKind kind;
   /**
-   * Numeric value representation.
+   * Required numeric value representation. `NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED` is invalid.
    */
   NemoRelayMetricValueType value_type;
   /**
@@ -544,24 +546,29 @@ typedef struct NemoRelayMetricMeasurement {
 typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 
 /**
+ * Unspecified metric kind. This value is invalid for a measurement.
+ */
+#define NEMO_RELAY_METRIC_KIND_UNSPECIFIED 0
+
+/**
  * Monotonic additive counter.
  */
-#define NEMO_RELAY_METRIC_KIND_COUNTER 0
+#define NEMO_RELAY_METRIC_KIND_COUNTER 1
 
 /**
  * Additive counter that may increase or decrease.
  */
-#define NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER 1
+#define NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER 2
 
 /**
  * Current sampled value.
  */
-#define NEMO_RELAY_METRIC_KIND_GAUGE 2
+#define NEMO_RELAY_METRIC_KIND_GAUGE 3
 
 /**
  * Distribution sample.
  */
-#define NEMO_RELAY_METRIC_KIND_HISTOGRAM 3
+#define NEMO_RELAY_METRIC_KIND_HISTOGRAM 4
 
 /**
  * Fine-grained tracing information.
@@ -589,19 +596,24 @@ typedef char *(*NemoRelayToolExecCb)(void *user_data, const char *args_json);
 #define NEMO_RELAY_LOG_SEVERITY_ERROR 4
 
 /**
+ * Unspecified metric value type. This value is invalid for a measurement.
+ */
+#define NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED 0
+
+/**
  * Read `u64_value`.
  */
-#define NEMO_RELAY_METRIC_VALUE_TYPE_U64 0
+#define NEMO_RELAY_METRIC_VALUE_TYPE_U64 1
 
 /**
  * Read `i64_value`.
  */
-#define NEMO_RELAY_METRIC_VALUE_TYPE_I64 1
+#define NEMO_RELAY_METRIC_VALUE_TYPE_I64 2
 
 /**
  * Read `f64_value`.
  */
-#define NEMO_RELAY_METRIC_VALUE_TYPE_F64 2
+#define NEMO_RELAY_METRIC_VALUE_TYPE_F64 3
 
 /**
  * Initializes the Go binding runtime and installs default operational logging.
@@ -2374,6 +2386,8 @@ NemoRelayStatus nemo_relay_metric_json(const char *name,
  * `measurements` must reference `measurements_len` initialized entries. Each
  * measurement's `value_type` selects the corresponding numeric value field.
  * Relay validates the complete array before emitting any recording operation.
+ * Relay does not retain `measurements`, their strings, or histogram boundaries;
+ * caller-owned storage need only remain valid until this function returns.
  *
  * # Safety
  * `name` must be a valid non-null C string. `measurements` must be non-null

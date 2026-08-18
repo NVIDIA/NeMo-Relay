@@ -1329,6 +1329,69 @@ fn test_ffi_manual_lifecycle_timestamps_reject_out_of_range_unix_micros() {
 }
 
 #[test]
+fn test_ffi_metric_discriminators_reject_zero_initialized_measurements() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let metric_name = cstring("ffi_metric");
+        let instrument_name = cstring("example.tokens.saved");
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_UNSPECIFIED, 0);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_COUNTER, 1);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER, 2);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_GAUGE, 3);
+        assert_eq!(types::NEMO_RELAY_METRIC_KIND_HISTOGRAM, 4);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED, 0);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_U64, 1);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_I64, 2);
+        assert_eq!(types::NEMO_RELAY_METRIC_VALUE_TYPE_F64, 3);
+        let zero_initialized: types::NemoRelayMetricMeasurement = std::mem::zeroed();
+        let unspecified_kind = types::NemoRelayMetricMeasurement {
+            name: instrument_name.as_ptr(),
+            f64_value: 12.5,
+            ..zero_initialized
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&unspecified_kind),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[0].kind is unspecified")
+        );
+        let unspecified_value_type = types::NemoRelayMetricMeasurement {
+            kind: types::NEMO_RELAY_METRIC_KIND_COUNTER,
+            u64_value: 42,
+            ..unspecified_kind
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&unspecified_value_type),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert!(
+            read_last_error()
+                .unwrap()
+                .contains("measurements[0].value_type is unspecified")
+        );
+    }
+}
+
+#[test]
 fn test_ffi_event_v2_and_metric_mark_contracts() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

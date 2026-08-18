@@ -138,17 +138,20 @@ pub enum NemoRelayScopeType {
 ///
 /// This is intentionally not a Rust enum because foreign callers can supply any
 /// `int32_t` value. Exported functions validate the value before converting it
-/// to the core metric kind.
+/// to the core metric kind. Zero is reserved as unspecified so a
+/// zero-initialized measurement cannot select a metric kind accidentally.
 pub type NemoRelayMetricKind = i32;
 
+/// Unspecified metric kind. This value is invalid for a measurement.
+pub const NEMO_RELAY_METRIC_KIND_UNSPECIFIED: NemoRelayMetricKind = 0;
 /// Monotonic additive counter.
-pub const NEMO_RELAY_METRIC_KIND_COUNTER: NemoRelayMetricKind = 0;
+pub const NEMO_RELAY_METRIC_KIND_COUNTER: NemoRelayMetricKind = 1;
 /// Additive counter that may increase or decrease.
-pub const NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER: NemoRelayMetricKind = 1;
+pub const NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER: NemoRelayMetricKind = 2;
 /// Current sampled value.
-pub const NEMO_RELAY_METRIC_KIND_GAUGE: NemoRelayMetricKind = 2;
+pub const NEMO_RELAY_METRIC_KIND_GAUGE: NemoRelayMetricKind = 3;
 /// Distribution sample.
-pub const NEMO_RELAY_METRIC_KIND_HISTOGRAM: NemoRelayMetricKind = 3;
+pub const NEMO_RELAY_METRIC_KIND_HISTOGRAM: NemoRelayMetricKind = 4;
 
 /// Integer-backed typed severity for a mark exported as an OpenTelemetry log.
 ///
@@ -194,15 +197,18 @@ pub(crate) fn metric_kind_from_ffi(value: NemoRelayMetricKind) -> Option<MetricK
 ///
 /// This is intentionally not a Rust enum because foreign callers can supply any
 /// `int32_t` value. Exported functions validate the value before converting it
-/// to the core metric value type.
+/// to the core metric value type. Zero is reserved as unspecified so a
+/// zero-initialized measurement cannot select a value field accidentally.
 pub type NemoRelayMetricValueType = i32;
 
+/// Unspecified metric value type. This value is invalid for a measurement.
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED: NemoRelayMetricValueType = 0;
 /// Read `u64_value`.
-pub const NEMO_RELAY_METRIC_VALUE_TYPE_U64: NemoRelayMetricValueType = 0;
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_U64: NemoRelayMetricValueType = 1;
 /// Read `i64_value`.
-pub const NEMO_RELAY_METRIC_VALUE_TYPE_I64: NemoRelayMetricValueType = 1;
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_I64: NemoRelayMetricValueType = 2;
 /// Read `f64_value`.
-pub const NEMO_RELAY_METRIC_VALUE_TYPE_F64: NemoRelayMetricValueType = 2;
+pub const NEMO_RELAY_METRIC_VALUE_TYPE_F64: NemoRelayMetricValueType = 3;
 
 pub(crate) fn metric_value_type_from_ffi(
     value: NemoRelayMetricValueType,
@@ -228,9 +234,9 @@ pub(crate) fn metric_value_type_from_ffi(
 pub struct NemoRelayMetricMeasurement {
     /// Required null-terminated OpenTelemetry instrument name.
     pub name: *const c_char,
-    /// Instrument kind.
+    /// Required instrument kind. `NEMO_RELAY_METRIC_KIND_UNSPECIFIED` is invalid.
     pub kind: NemoRelayMetricKind,
-    /// Numeric value representation.
+    /// Required numeric value representation. `NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED` is invalid.
     pub value_type: NemoRelayMetricValueType,
     /// Unsigned value used when `value_type` is `U64`.
     pub u64_value: u64,
