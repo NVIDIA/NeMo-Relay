@@ -326,6 +326,7 @@ async fn reinitialized_cache_starts_empty() {
          would let the second run hit on the first run's distinct prompts"
     );
 }
+
 #[tokio::test]
 async fn warm_hits_stay_within_the_latency_budget() {
     let _guard = TEST_MUTEX.lock().await;
