@@ -137,6 +137,23 @@ is recorded on the session scope rather than opening an empty turn to hold it.
 Codex and Claude Code report only `Stop`, so their turns stay lazily opened by
 the first event of the turn.
 
+## What is not represented
+
+**Tool results are truncated at 2000 characters** before they are forwarded, with
+the overflow replaced by a `... [truncated N chars]` suffix. The gateway
+therefore records what a tool returned, not necessarily all of it — a large file
+read or a long command output is cut. This keeps hook payloads bounded; raise
+`MAX_CONTENT_CHARS` in `index.ts` if a policy needs to see more.
+
+**Subagents.** pi ships no nested-agent hook of its own — the extension has
+nothing to derive a subagent id from — so `subagent_start` / `subagent_end` are
+empty for pi and every tool span parents to the turn. The multi-process case is
+worth stating separately: a child pi process running this extension resolves its
+*own* session id and posts under it, so it does not appear as a subagent of the
+parent. It appears as an unrelated session.
+
+**LLM spans**, until model redirection lands. See [Status](#status).
+
 ## Development
 
 ```bash
