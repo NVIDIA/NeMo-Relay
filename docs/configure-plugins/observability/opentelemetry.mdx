@@ -156,6 +156,12 @@ For example, `"nv."`, `"nv_"`, and `"nv-"` are valid literal prefixes.
 Leading or repeated dots, whitespace, other punctuation, and glob expressions
 such as `"nv.*"` are rejected.
 
+Matching is case-sensitive and compares the beginning of each key literally.
+Relay does not infer a dot or metadata-key segment boundary. For example,
+`"nv."` selects keys that begin with `nv.`, `"nv_"` selects keys that begin
+with `nv_`, and `"user"` selects keys such as `username` and `user_api_key`.
+Configure the narrowest prefix that selects the metadata you intend to export.
+
 Scope metadata is promoted when the scope-end Event completes the span, so each
 promoted key has one final value. Mark metadata is promoted to the attributes
 of the projected span event or tool span. The `gen_ai` projection continues to
@@ -169,9 +175,15 @@ containing the key and reason, but it does not record the rejected value or stop
 trace export.
 
 Projection-owned attributes and configured attribute-mapping aliases take
-precedence over promoted metadata with the same key. Promotion does not modify
-the Event or ATOF payload. Use `resource_attributes` instead for static values
-that must be attached to every span from an endpoint.
+precedence over promoted metadata with the same key. Relay also omits selected
+keys in namespaces owned by Relay or supported semantic projections:
+`nemo_relay.`, `gen_ai.`, `error.`, `exception.`, `input.`, `output.`, `llm.`,
+`openinference.`, `server.`, `service.`, `session.`, `tool.`, `tool_call.`, and
+`user.`. Relay omits the bare `metadata` key as well. Rejected keys produce a
+rate-limited operational diagnostic without dropping the Event or span.
+
+Promotion does not modify the Event or ATOF payload. Use `resource_attributes`
+instead for static values that must be attached to every span from an endpoint.
 
 ## Log and Metric Endpoint Resolution
 
