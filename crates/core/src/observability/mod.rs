@@ -534,6 +534,30 @@ pub(crate) struct MetadataPromotionIssue {
     pub(crate) reason: &'static str,
 }
 
+const RESERVED_OTEL_ATTRIBUTE_NAMESPACES: &[&str] = &[
+    "error.",
+    "exception.",
+    "gen_ai.",
+    "input.",
+    "llm.",
+    "nemo_relay.",
+    "openinference.",
+    "output.",
+    "server.",
+    "service.",
+    "session.",
+    "tool.",
+    "tool_call.",
+    "user.",
+];
+
+fn is_reserved_otel_attribute_key(key: &str) -> bool {
+    key == "metadata"
+        || RESERVED_OTEL_ATTRIBUTE_NAMESPACES
+            .iter()
+            .any(|namespace| key.starts_with(namespace))
+}
+
 /// Copies selected top-level Event metadata entries to typed OTLP attributes.
 ///
 /// Existing projection-owned attributes always win. Metadata is read without
@@ -558,7 +582,17 @@ pub(crate) fn promote_event_metadata_attributes(
         .collect::<std::collections::HashSet<_>>();
     let mut issues = Vec::new();
     for (key, value) in metadata {
-        if !prefixes.iter().any(|prefix| key.starts_with(prefix)) || existing_keys.contains(key) {
+        if !prefixes.iter().any(|prefix| key.starts_with(prefix)) {
+            continue;
+        }
+        if is_reserved_otel_attribute_key(key) {
+            issues.push(MetadataPromotionIssue {
+                key: key.clone(),
+                reason: "attribute key is reserved by Relay or an OpenTelemetry projection",
+            });
+            continue;
+        }
+        if existing_keys.contains(key) {
             continue;
         }
         match metadata_value_to_otel(value) {

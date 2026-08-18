@@ -233,6 +233,65 @@ fn promotes_matching_primitive_metadata_without_overwriting_owned_keys() {
 }
 
 #[test]
+fn rejects_metadata_keys_owned_by_relay_and_otel_projections() {
+    let reserved_keys = [
+        "error.type",
+        "exception.type",
+        "gen_ai.request.model",
+        "input.value",
+        "llm.model_name",
+        "metadata",
+        "nemo_relay.uuid",
+        "openinference.span.kind",
+        "output.value",
+        "server.address",
+        "service.name",
+        "session.id",
+        "tool.name",
+        "tool_call.id",
+        "user.id",
+    ];
+    let mut metadata = serde_json::Map::new();
+    for key in reserved_keys {
+        metadata.insert(key.to_string(), serde_json::json!("blocked"));
+    }
+    metadata.insert("nv.source".to_string(), serde_json::json!("allowed"));
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("reserved-metadata-promotion")
+            .metadata(serde_json::Value::Object(metadata))
+            .build(),
+        None,
+        None,
+    ));
+    let mut attributes = Vec::new();
+    let prefixes = reserved_keys
+        .iter()
+        .copied()
+        .chain(std::iter::once("nv."))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    let issues =
+        promote_event_metadata_attributes(&mut attributes, &event, &prefixes, &HashSet::new());
+
+    assert_eq!(
+        attributes,
+        vec![opentelemetry::KeyValue::new("nv.source", "allowed")]
+    );
+    assert_eq!(
+        issues
+            .iter()
+            .map(|issue| issue.key.as_str())
+            .collect::<std::collections::HashSet<_>>(),
+        std::collections::HashSet::from(reserved_keys)
+    );
+    assert!(issues.iter().all(|issue| {
+        issue.reason == "attribute key is reserved by Relay or an OpenTelemetry projection"
+    }));
+}
+
+#[test]
 fn reports_unsupported_metadata_array_shapes() {
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
