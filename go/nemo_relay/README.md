@@ -55,9 +55,9 @@ The Go package provides the following capabilities:
   diagnostics.
 - **Typed OpenTelemetry export**: `NewOpenTelemetryConfig` and
   `NewOpenTelemetrySubscriber` construct one independently managed `full`,
-  `gen_ai`, or `openinference` trace exporter. `NewOpenTelemetryLogSubscriber`
+  `gen_ai`, or `openinference` trace subscriber. `NewOpenTelemetryLogSubscriber`
   and `NewOpenTelemetryMetricSubscriber` construct independent log and metric
-  exporters.
+  subscribers.
 - **Structured marks and metrics**: `EmitEvent` accepts data-schema and
   severity options, and `EmitMetric` validates a complete metric-measurement
   group before emission.
