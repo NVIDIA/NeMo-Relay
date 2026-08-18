@@ -89,7 +89,8 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 | `session_start` / `session_shutdown` | session boundary | **Not** `agent_start`/`agent_end` — those repeat on re-entry |
 | `agent_start` / `agent_end` | attempt markers | Carry `attempt_index`; not a run boundary |
 | `agent_settled` | logical run boundary | Fires exactly once, from a `finally` |
-| `turn_start` / `turn_end` | turn boundary | Carries `turn_index` **and** `turn_seq` |
+| `turn_start` | turn boundary (open) | Carries `turn_index`, `turn_seq` and `attempt_index` |
+| `turn_end` | turn boundary (close) | Carries `turn_index` only |
 | `tool_call` | tool start, and the gate | The only blocking hook |
 | `tool_execution_end` | tool end | For **every** outcome, including blocked |
 | `tool_execution_start` | *not forwarded* | Fires before validation and for calls that never execute |
