@@ -127,6 +127,74 @@ event('initialized', handle, { binding: 'node' }, null, null, null, LogSeverity.
 Call `metric()` with `MetricMeasurement` objects for metrics; Relay validates
 the complete measurement group before publishing it.
 
+## OTLP Logs and Metrics
+
+For plugin-managed export, the `nemo-relay-node/observability` helpers create a
+version-4 component. Enabling logs and metrics without signal endpoints derives
+`/v1/logs` and `/v1/metrics` from the trace endpoint:
+
+```js
+const observability = require('nemo-relay-node/observability');
+
+const component = observability.ComponentSpec({
+  version: 4,
+  opentelemetry: observability.openTelemetryConfig({
+    enabled: true,
+    endpoints: [observability.openTelemetryEndpoint({
+      type: 'gen_ai', endpoint: 'http://localhost:4318/v1/traces',
+    })],
+    logs: observability.openTelemetryLogConfig({ enabled: true }),
+    metrics: observability.openTelemetryMetricConfig({ enabled: true }),
+  }),
+});
+```
+
+Use the final `dataSchema` and `severity` arguments for a typed log mark, and
+use `metric()` for an atomically validated metric group:
+
+```js
+const {
+  event, metric, LogSeverity, MetricKind, MetricValueType,
+} = require('nemo-relay-node');
+
+event(
+  'cache-nearly-full', null, { entries: 900 }, null, null,
+  { name: 'example.cache', version: '1' }, LogSeverity.Warn,
+);
+metric('cache-entries', [{
+  name: 'example.cache.entries', kind: MetricKind.Gauge,
+  valueType: MetricValueType.U64, value: 900,
+}]);
+```
+
+Direct log and metric subscribers are independently managed. Register each
+before emitting marks, then deregister, force-flush, and shut it down during
+graceful teardown. `runtimeDiagnostics()` returns bounded `code`, `message`,
+and `count` entries:
+
+```js
+const {
+  OpenTelemetryLogSubscriber, OpenTelemetryMetricSubscriber,
+} = require('nemo-relay-node');
+
+const logs = new OpenTelemetryLogSubscriber({ endpoint: 'http://localhost:4318' });
+const metrics = new OpenTelemetryMetricSubscriber({ endpoint: 'http://localhost:4318' });
+logs.register('otlp-logs');
+metrics.register('otlp-metrics');
+try {
+  for (const diagnostic of logs.runtimeDiagnostics()) {
+    console.error(diagnostic.code, diagnostic.message);
+  }
+} finally {
+  logs.deregister('otlp-logs');
+  logs.forceFlush();
+  logs.shutdown();
+  metrics.deregister('otlp-metrics');
+  metrics.forceFlush();
+  metrics.shutdown();
+}
+```
+
 Native subscriber delivery is asynchronous. Awaiting `flushSubscribers()` drains
 the native dispatcher and waits for managed terminal publications registered
 before the call and the JavaScript subscriber callbacks they queue, without

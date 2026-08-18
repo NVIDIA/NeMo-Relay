@@ -113,18 +113,42 @@ if err := logs.Register("otlp-logs"); err != nil {
 	logs.Close()
 	log.Fatal(err)
 }
+metrics, err := nemo.NewOpenTelemetryMetricSubscriber(
+	nemo.NewOpenTelemetryMetricConfig("http://localhost:4318"),
+)
+if err != nil {
+	_ = logs.Deregister("otlp-logs")
+	logs.Close()
+	log.Fatal(err)
+}
+if err := metrics.Register("otlp-metrics"); err != nil {
+	metrics.Close()
+	_ = logs.Deregister("otlp-logs")
+	logs.Close()
+	log.Fatal(err)
+}
 defer func() {
 	_ = logs.Deregister("otlp-logs")
 	_ = logs.ForceFlush()
 	_ = logs.Shutdown()
 	logs.Close()
+	_ = metrics.Deregister("otlp-metrics")
+	_ = metrics.ForceFlush()
+	_ = metrics.Shutdown()
+	metrics.Close()
 }()
+
+diagnostics, err := logs.RuntimeDiagnostics()
+if err != nil {
+	log.Fatal(err)
+}
+for _, diagnostic := range diagnostics {
+	log.Printf("%s: %s", diagnostic.Code, diagnostic.Message)
+}
 ```
 
-Use `NewOpenTelemetryMetricSubscriber` with `NewOpenTelemetryMetricConfig` for
-metrics and follow the same lifecycle. Direct trace, log, and metric
-subscribers expose `RuntimeDiagnostics` for bounded exporter and
-event-processing failures.
+Direct trace, log, and metric subscribers expose `RuntimeDiagnostics` for
+bounded exporter and event-processing failures.
 
 For plugin-managed export, `NewObservabilityConfig` creates version 4
 configuration. Enable `Logs` and `Metrics` while leaving their `Endpoints`

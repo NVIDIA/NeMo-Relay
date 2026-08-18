@@ -160,6 +160,86 @@ mark intended for log export. Use `nemo_relay.scope.metric()` with
 `nemo_relay.MetricMeasurement` objects for metrics; Relay validates the complete
 measurement group before publishing it.
 
+## OTLP Logs and Metrics
+
+For plugin-managed export, configure version 4 and enable `logs` and `metrics`.
+Omitting their endpoint lists derives `/v1/logs` and `/v1/metrics` from the
+trace endpoint:
+
+```python
+from nemo_relay.observability import (
+    ComponentSpec,
+    ObservabilityConfig,
+    OpenTelemetryEndpointConfig,
+    OpenTelemetryLogSectionConfig,
+    OpenTelemetryMetricSectionConfig,
+    OpenTelemetrySectionConfig,
+)
+
+component = ComponentSpec(
+    ObservabilityConfig(
+        opentelemetry=OpenTelemetrySectionConfig(
+            enabled=True,
+            endpoints=[
+                OpenTelemetryEndpointConfig(
+                    type="gen_ai", endpoint="http://localhost:4318/v1/traces"
+                )
+            ],
+            logs=OpenTelemetryLogSectionConfig(enabled=True),
+            metrics=OpenTelemetryMetricSectionConfig(enabled=True),
+        )
+    )
+)
+```
+
+Emit a typed log mark and an atomically validated metric group with the public
+scope helpers:
+
+```python
+from nemo_relay import DataSchema, LogSeverity, MetricKind, MetricMeasurement, MetricValueType
+from nemo_relay import scope
+
+scope.event(
+    "cache-nearly-full",
+    data={"entries": 900},
+    data_schema=DataSchema("example.cache", "1"),
+    severity=LogSeverity.Warn,
+)
+scope.metric(
+    "cache-entries",
+    [MetricMeasurement("example.cache.entries", MetricKind.Gauge, MetricValueType.U64, 900)],
+)
+```
+
+Direct log and metric subscribers are independently managed. Register each
+before emitting marks, then deregister, force-flush, and shut it down during
+graceful teardown. Their `runtime_diagnostics()` snapshots contain bounded
+`code`, `message`, and `count` entries:
+
+```python
+from nemo_relay import (
+    OpenTelemetryLogConfig,
+    OpenTelemetryLogSubscriber,
+    OpenTelemetryMetricConfig,
+    OpenTelemetryMetricSubscriber,
+)
+
+logs = OpenTelemetryLogSubscriber(OpenTelemetryLogConfig("http://localhost:4318"))
+metrics = OpenTelemetryMetricSubscriber(OpenTelemetryMetricConfig("http://localhost:4318"))
+logs.register("otlp-logs")
+metrics.register("otlp-metrics")
+try:
+    for diagnostic in logs.runtime_diagnostics().entries:
+        print(diagnostic.code, diagnostic.message)
+finally:
+    logs.deregister("otlp-logs")
+    logs.force_flush()
+    logs.shutdown()
+    metrics.deregister("otlp-metrics")
+    metrics.force_flush()
+    metrics.shutdown()
+```
+
 Native subscriber delivery is asynchronous, so call
 `nemo_relay.subscribers.flush()` before you read subscriber output or exit.
 From an `asyncio` task, use `await nemo_relay.subscribers.flush_async()` so

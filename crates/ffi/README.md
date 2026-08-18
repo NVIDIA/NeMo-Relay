@@ -70,25 +70,75 @@ registration.
 
 ## OTLP Logs and Metrics
 
-Use `nemo_relay_event_v2` when a mark needs a data schema or OTLP log severity.
-Pass `data_schema_json` as `{"name":"example.schema","version":"1"}` and a
-`NemoRelayLogSeverity` pointer when applicable. The legacy `nemo_relay_event`
-function remains valid for untyped marks.
+The raw C ABI remains experimental and source-first. Configure plugin-managed
+export with the same version-4 JSON document used by every binding. Leaving
+the log and metric endpoint lists absent derives their destinations from the
+trace endpoint:
 
-Use `nemo_relay_metric_json` for a nonempty JSON array of canonical metric
-measurements, or `nemo_relay_metric` for `NemoRelayMetricMeasurement` entries.
-Relay validates a complete measurement group before it emits any recording
-operation. Do not construct the reserved metric mark schema manually.
+```c
+const char *config_json =
+    "{\"version\":1,\"components\":[{\"kind\":\"observability\",\"config\":{"
+    "\"version\":4,\"opentelemetry\":{\"enabled\":true,\"endpoints\":[{"
+    "\"type\":\"gen_ai\",\"endpoint\":\"http://localhost:4318/v1/traces\"}],"
+    "\"logs\":{\"enabled\":true},\"metrics\":{\"enabled\":true}}}}]}";
+char *report_json = NULL;
+if (nemo_relay_initialize_plugins(config_json, &report_json) != NEMO_RELAY_STATUS_OK) {
+    /* inspect nemo_relay_last_error() */
+}
+nemo_relay_string_free(report_json);
+/* Call nemo_relay_clear_plugin_configuration() during process teardown. */
+```
 
-Create each direct OTLP log or metric subscriber independently. Register it
-with `nemo_relay_otel_log_subscriber_register` or
-`nemo_relay_otel_metric_subscriber_register`. During graceful shutdown,
-deregister the name, force-flush the subscriber, shut it down, and free its
-handle with the matching `nemo_relay_otel_*_subscriber_free` function. The log
-and metric APIs also expose bounded JSON runtime-diagnostics snapshots through
-their `nemo_relay_otel_*_subscriber_runtime_diagnostics_json` functions. The
-caller owns each returned `out_json` string and must release it with
-`nemo_relay_string_free`.
+Use `nemo_relay_event_v2` for a schema-tagged log mark and
+`nemo_relay_metric_json` for an atomically validated metric group. The legacy
+`nemo_relay_event` function remains valid for untyped marks:
+
+```c
+NemoRelayLogSeverity severity = NEMO_RELAY_LOG_SEVERITY_WARN;
+nemo_relay_event_v2(
+    "cache-nearly-full", NULL, "{\"entries\":900}",
+    "{\"name\":\"example.cache\",\"version\":\"1\"}", NULL, &severity, NULL
+);
+nemo_relay_metric_json(
+    "cache-entries", NULL,
+    "[{\"name\":\"example.cache.entries\",\"kind\":\"gauge\","
+    "\"value_type\":\"u64\",\"value\":900}]",
+    NULL, NULL
+);
+```
+
+Create direct log and metric subscribers independently. Register each before
+emitting marks, then deregister, force-flush, shut down, and free it during
+graceful teardown. Runtime diagnostics are a caller-owned JSON string:
+
+```c
+struct FfiOpenTelemetryLogSubscriber *logs = NULL;
+struct FfiOpenTelemetryMetricSubscriber *metrics = NULL;
+nemo_relay_otel_log_subscriber_create(
+    "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
+    0, "info", 0, 0, 0, &logs
+);
+nemo_relay_otel_metric_subscriber_create(
+    "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
+    0, 0, "cumulative", 0, 0, &metrics
+);
+nemo_relay_otel_log_subscriber_register(logs, "otlp-logs");
+nemo_relay_otel_metric_subscriber_register(metrics, "otlp-metrics");
+
+char *diagnostics_json = NULL;
+nemo_relay_otel_log_subscriber_runtime_diagnostics_json(logs, &diagnostics_json);
+/* Read diagnostics_json, then release it. */
+nemo_relay_string_free(diagnostics_json);
+
+nemo_relay_otel_log_subscriber_deregister("otlp-logs");
+nemo_relay_otel_log_subscriber_force_flush(logs);
+nemo_relay_otel_log_subscriber_shutdown(logs);
+nemo_relay_otel_log_subscriber_free(logs);
+nemo_relay_otel_metric_subscriber_deregister("otlp-metrics");
+nemo_relay_otel_metric_subscriber_force_flush(metrics);
+nemo_relay_otel_metric_subscriber_shutdown(metrics);
+nemo_relay_otel_metric_subscriber_free(metrics);
+```
 
 ## Installation
 
