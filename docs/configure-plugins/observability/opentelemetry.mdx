@@ -91,6 +91,7 @@ type = "gen_ai"
 endpoint = "http://localhost:4318/v1/traces"
 transport = "http_binary"
 service_name = "agent-service"
+promote_metadata_prefixes = ["nv."]
 max_queue_size = 4096
 max_export_batch_size = 512
 scheduled_delay_millis = 1000
@@ -143,6 +144,34 @@ to the other exporters.
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+| `promote_metadata_prefixes` | `[]` | Literal Event metadata prefixes copied to top-level span attributes. |
+
+## Event Metadata Promotion
+
+Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
+the final sanitized Event metadata into that endpoint's OpenTelemetry output.
+Prefixes use the Event metadata key syntax: ASCII letters, numbers, underscores,
+and hyphens in segments separated by single dots. A trailing dot is optional.
+For example, `"nv."`, `"nv_"`, and `"nv-"` are valid literal prefixes.
+Leading or repeated dots, whitespace, other punctuation, and glob expressions
+such as `"nv.*"` are rejected.
+
+Scope metadata is promoted when the scope-end Event completes the span, so each
+promoted key has one final value. Mark metadata is promoted to the attributes
+of the projected span event or tool span. The `gen_ai` projection continues to
+omit Marks.
+
+Promotion supports strings, booleans, signed 64-bit integers, floating-point
+numbers, and homogeneous arrays of those primitive types. Nulls, empty arrays,
+nested arrays, mixed-type arrays, objects, and unsigned integers larger than
+the signed 64-bit range are omitted. Relay records a bounded runtime diagnostic
+containing the key and reason, but it does not record the rejected value or stop
+trace export.
+
+Projection-owned attributes and configured attribute-mapping aliases take
+precedence over promoted metadata with the same key. Promotion does not modify
+the Event or ATOF payload. Use `resource_attributes` instead for static values
+that must be attached to every span from an endpoint.
 
 ## Log and Metric Endpoint Resolution
 
