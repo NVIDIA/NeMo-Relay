@@ -49,6 +49,12 @@ Plugin handlers should pass stable component-local names such as `"tool"` or `"s
 
 Registers an event subscriber and records its rollback closure.
 
+#### `register_event_metadata_injector`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_event_metadata_injector(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: <a href=\"../api/runtime/callbacks/type-eventmetadatainjectorfn\">EventMetadataInjectorFn</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
+
+Registers an Event metadata injector and records its rollback closure.
+
 #### `register_mark_sanitize_guardrail`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_mark_sanitize_guardrail(\n    &amp;mut self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    priority: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.i32.html\">i32</a>,\n    callback: <a href=\"../api/runtime/callbacks/type-eventsanitizefn\">EventSanitizeFn</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;"}} /></pre>
