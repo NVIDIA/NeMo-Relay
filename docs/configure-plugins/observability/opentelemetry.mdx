@@ -564,9 +564,14 @@ Every direct trace, log, and metric subscriber exposes a bounded runtime
 diagnostics snapshot: `runtime_diagnostics()` in Rust and Python,
 `runtimeDiagnostics()` in Node.js, and `RuntimeDiagnostics()` in Go. It reports
 each runtime condition's stable code, occurrence count, and most recent
-message. Use it to monitor rejected metric marks, capacity limits, and delivery
-failures without configuring the observability plugin. The plugin continues to
-include the same conditions in its runtime report.
+message. C FFI callers use `nemo_relay_otel_subscriber_runtime_diagnostics_json`,
+`nemo_relay_otel_log_subscriber_runtime_diagnostics_json`, or
+`nemo_relay_otel_metric_subscriber_runtime_diagnostics_json`. Each writes a
+caller-owned bounded JSON array of diagnostic entries that the caller must
+release with `nemo_relay_string_free`. Use diagnostics to monitor rejected
+metric marks, capacity limits, and delivery failures without configuring the
+observability plugin. The plugin continues to include the same conditions in
+its runtime report.
 
 ## Migrating from Version 3 to Version 4
 

@@ -109,35 +109,68 @@ nemo_relay_metric_json(
 
 Create direct log and metric subscribers independently. Register each before
 emitting marks, then deregister, force-flush, shut down, and free it during
-graceful teardown. Runtime diagnostics are a caller-owned JSON string:
+graceful teardown. Runtime diagnostics are a caller-owned, bounded JSON array
+of `{"code":"...","message":"...","count":N}` entries; release the result
+with `nemo_relay_string_free` after parsing it. Check every returned status
+before continuing. On failure, read `nemo_relay_last_error()` immediately,
+before another FFI call clears the thread-local message:
 
 ```c
+#include <stdbool.h>
+#include <stdio.h>
+
+static bool relay_ok(NemoRelayStatus status) {
+    if (status == NEMO_RELAY_STATUS_OK) {
+        return true;
+    }
+    const char *message = nemo_relay_last_error();
+    fprintf(stderr, "nemo-relay: %s\n", message != NULL ? message : "unknown error");
+    return false;
+}
+
 struct FfiOpenTelemetryLogSubscriber *logs = NULL;
 struct FfiOpenTelemetryMetricSubscriber *metrics = NULL;
-nemo_relay_otel_log_subscriber_create(
+bool logs_registered = false;
+bool metrics_registered = false;
+
+if (!relay_ok(nemo_relay_otel_log_subscriber_create(
     "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
     0, "info", 0, 0, 0, &logs
-);
-nemo_relay_otel_metric_subscriber_create(
+))) goto cleanup;
+if (!relay_ok(nemo_relay_otel_metric_subscriber_create(
     "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
     0, 0, "cumulative", 0, 0, &metrics
-);
-nemo_relay_otel_log_subscriber_register(logs, "otlp-logs");
-nemo_relay_otel_metric_subscriber_register(metrics, "otlp-metrics");
+))) goto cleanup;
+if (!relay_ok(nemo_relay_otel_log_subscriber_register(logs, "otlp-logs"))) goto cleanup;
+logs_registered = true;
+if (!relay_ok(nemo_relay_otel_metric_subscriber_register(metrics, "otlp-metrics"))) goto cleanup;
+metrics_registered = true;
 
 char *diagnostics_json = NULL;
-nemo_relay_otel_log_subscriber_runtime_diagnostics_json(logs, &diagnostics_json);
-/* Read diagnostics_json, then release it. */
-nemo_relay_string_free(diagnostics_json);
+if (relay_ok(nemo_relay_otel_log_subscriber_runtime_diagnostics_json(
+    logs, &diagnostics_json
+))) {
+    /* Parse diagnostics_json, then release it. */
+    nemo_relay_string_free(diagnostics_json);
+}
 
-nemo_relay_otel_log_subscriber_deregister("otlp-logs");
-nemo_relay_otel_log_subscriber_force_flush(logs);
-nemo_relay_otel_log_subscriber_shutdown(logs);
-nemo_relay_otel_log_subscriber_free(logs);
-nemo_relay_otel_metric_subscriber_deregister("otlp-metrics");
-nemo_relay_otel_metric_subscriber_force_flush(metrics);
-nemo_relay_otel_metric_subscriber_shutdown(metrics);
-nemo_relay_otel_metric_subscriber_free(metrics);
+cleanup:
+if (metrics_registered) {
+    (void)relay_ok(nemo_relay_otel_metric_subscriber_deregister("otlp-metrics"));
+}
+if (metrics != NULL) {
+    (void)relay_ok(nemo_relay_otel_metric_subscriber_force_flush(metrics));
+    (void)relay_ok(nemo_relay_otel_metric_subscriber_shutdown(metrics));
+    nemo_relay_otel_metric_subscriber_free(metrics);
+}
+if (logs_registered) {
+    (void)relay_ok(nemo_relay_otel_log_subscriber_deregister("otlp-logs"));
+}
+if (logs != NULL) {
+    (void)relay_ok(nemo_relay_otel_log_subscriber_force_flush(logs));
+    (void)relay_ok(nemo_relay_otel_log_subscriber_shutdown(logs));
+    nemo_relay_otel_log_subscriber_free(logs);
+}
 ```
 
 ## Installation
