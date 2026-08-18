@@ -74,6 +74,10 @@ or invalid JSON bytes. JSON null annotations normalize to absence.
 - **Additive mark options**: `EmitMarkRequest.data_schema` carries a
   `nemo.relay.DataSchema@1` envelope and `severity` carries the canonical log
   severity string. Omitting both is wire-compatible with legacy workers.
+- **Runtime diagnostics**: Authenticated `GetRuntimeDiagnostics` returns the
+  bounded active-host `{ code, message, count }` snapshot. Older hosts return
+  gRPC `UNIMPLEMENTED`; current SDKs surface that as an explicit unsupported
+  runtime-diagnostics error.
 
 ## Installation
 

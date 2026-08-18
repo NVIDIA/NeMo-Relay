@@ -183,8 +183,8 @@ protobuf or payload semantic changes must increment `worker_protocol`.
 additively supports `data_schema` (a `nemo.relay.DataSchema@1` JSON envelope)
 and canonical `severity` (`trace`, `debug`, `info`, `warn`, or `error`). An
 empty severity and an absent schema preserve legacy behavior. Worker SDKs keep
-the original `emit_mark(name, data, metadata)` call and expose optional fields;
-the Rust SDK also provides `emit_metric` for validated
+the original `emit_mark(name, data, metadata)` call and expose optional fields.
+The Rust and Python SDKs also provide `emit_metric` for validated
 `nemo.relay.metric_measurements` marks.
 
 `GetRuntimeDiagnosticsRequest` carries the activation ID and token. Its closed
