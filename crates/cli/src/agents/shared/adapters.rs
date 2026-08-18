@@ -40,6 +40,13 @@ pub(super) struct ClassificationRules<'a> {
     subagent_end: &'a [&'a str],
     tool_start: &'a [&'a str],
     tool_end: &'a [&'a str],
+    /// Hook names that additionally close the turn scope.
+    ///
+    /// Claude Code and Codex both spell this `Stop`; pi has an explicit
+    /// `turn_end`. The event is emitted alongside the primary one so the
+    /// session manager can close the turn and snapshot ATIF without closing
+    /// the agent scope.
+    turn_end: &'a [&'a str],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -707,9 +714,10 @@ fn event_detail_result(payload: &Value, normalized_event: &str) -> Option<Value>
 /// Classify a raw hook event into one or more normalized events.
 ///
 /// Most hook events produce a single normalized event from `classify_primary`.
-/// The exception is `Stop` for Claude Code and Codex: it emits both the
-/// existing `LlmHint` and a `TurnEnded` so the session manager can snapshot ATIF
-/// without closing the agent scope.
+/// The exception is a turn-end hook -- `Stop` for Claude Code and Codex,
+/// `turn_end` for pi -- which emits both the primary event and a `TurnEnded` so
+/// the session manager can close the turn and snapshot ATIF without closing the
+/// agent scope.
 ///
 /// If the primary event is already terminal, the snapshot is skipped to avoid
 /// double-writing and accidentally recreating an empty session.
@@ -754,7 +762,12 @@ fn classify(
         return vec![NormalizedEvent::HookMark(event)];
     }
     let primary = classify_primary(payload, headers, extractor, rules, &fallback_session_id);
-    if normalized == "stop" && !primary.is_terminal() {
+    if rules
+        .turn_end
+        .iter()
+        .any(|name| normalize_name(name) == normalized)
+        && !primary.is_terminal()
+    {
         return vec![
             primary,
             NormalizedEvent::TurnEnded(common_session_event_with_fallback(

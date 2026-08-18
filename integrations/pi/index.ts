@@ -71,8 +71,36 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   let turnSeq = 0;
   /** Tool names by call id, so the end payload can name the tool pi started. */
   const toolNames = new Map<string, string>();
-  /** In-flight observability posts, drained at shutdown so none are lost. */
-  const inFlight = new Set<Promise<void>>();
+
+  /**
+   * Serializes every post to the gateway, in hook order.
+   *
+   * Firing posts concurrently reorders them: the gateway derives session and
+   * turn boundaries from arrival order, so a late `agent_start` can land after
+   * a `turn_start`, and a `session_shutdown` that overtakes an in-flight post
+   * closes the session and lets the straggler open a second one. Both were
+   * observed in an acceptance trace before this queue existed.
+   *
+   * The chain absorbs failures so one bad post cannot stall the rest, and
+   * observability hooks still do not block pi -- they are enqueued, not
+   * awaited. The gating hook does await, which means it also waits for
+   * anything queued ahead of it; that ordering guarantee is worth the latency,
+   * because a tool span opened under the wrong turn is simply wrong.
+   */
+  let chain: Promise<unknown> = Promise.resolve();
+
+  // Declared as a function rather than a generic arrow: `<T>(...) => ...` in a
+  // .ts file is ambiguous with JSX, and pi's jiti loader resolves it that way
+  // and fails to load the extension -- silently, because pi collects extension
+  // load errors rather than aborting.
+  function enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const result = chain.then(job, job);
+    chain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
 
   /**
    * Resolve configuration lazily.
@@ -86,11 +114,10 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     return config;
   };
 
-  /** Fire an observability-only hook without charging pi's critical path. */
+  /** Queue an observability-only hook without charging pi's critical path. */
   const emit = (ctx: ExtensionContext, payload: Record<string, unknown>): void => {
-    const pending = postAndForget(ensureConfig(ctx), payload);
-    inFlight.add(pending);
-    void pending.finally(() => inFlight.delete(pending));
+    const active = ensureConfig(ctx);
+    void enqueue(() => postAndForget(active, payload));
   };
 
   // ---------------------------------------------------------------------------
@@ -107,8 +134,10 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
   pi.on('session_shutdown', async (_event: SessionShutdownEvent, ctx: ExtensionContext) => {
     emit(ctx, { hook_event_name: 'session_shutdown' });
-    // Drain before the process exits, or trailing spans are lost.
-    await Promise.allSettled([...inFlight]);
+    // Drain before the process exits, or trailing spans are lost. Because the
+    // queue is serial, this also guarantees session_shutdown is the last post
+    // to reach the gateway rather than merely one of the last.
+    await chain;
   });
 
   // ---------------------------------------------------------------------------
@@ -178,12 +207,17 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       ctx: ExtensionContext,
     ): Promise<ToolCallEventResult | undefined> => {
       const active = ensureConfig(ctx);
-      const outcome = await postHook(active, {
-        hook_event_name: 'tool_call',
-        tool_call_id: event.toolCallId,
-        tool_name: event.toolName,
-        input: event.input,
-      });
+      // Enqueued rather than posted directly, so any observability hook fired
+      // earlier in the same turn reaches the gateway first and the tool span
+      // opens under the right turn.
+      const outcome = await enqueue(() =>
+        postHook(active, {
+          hook_event_name: 'tool_call',
+          tool_call_id: event.toolCallId,
+          tool_name: event.toolName,
+          input: event.input,
+        }),
+      );
 
       const decision =
         outcome.kind === 'fault' ? resolveFault(active, outcome.detail, event.toolName) : outcome;

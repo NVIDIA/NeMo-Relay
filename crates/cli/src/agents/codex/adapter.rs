@@ -27,6 +27,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             subagent_end: &["subagentStop", "subagentEnd", "subagent_stop"],
             tool_start: &["preToolUse", "toolStarted", "tool_start"],
             tool_end: &["postToolUse", "toolEnded", "tool_end", "toolFailed"],
+            turn_end: &["Stop", "stop"],
         },
     );
     AdapterOutcome {

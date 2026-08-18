@@ -44,6 +44,12 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             subagent_end: &[],
             tool_start: &["tool_call", "toolCall"],
             tool_end: &["tool_execution_end", "toolExecutionEnd"],
+            // pi has an explicit turn boundary, unlike Codex and Claude Code
+            // which only signal it through `Stop`. `agent_settled` is
+            // deliberately not here: it marks the end of a logical agent run,
+            // which can span several turns, and closing the turn there would
+            // merge every re-entry attempt into one.
+            turn_end: &["turn_end", "turnEnd"],
         },
     );
     AdapterOutcome {

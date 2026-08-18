@@ -38,6 +38,7 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
                 "PermissionDenied",
                 "permissionDenied",
             ],
+            turn_end: &["Stop", "stop"],
         },
     );
     // Response shape is decided by the primary event (first in the vec); secondary events like
