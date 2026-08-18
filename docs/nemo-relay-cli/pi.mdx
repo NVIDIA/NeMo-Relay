@@ -1,0 +1,216 @@
+---
+title: "pi"
+description: ""
+position: 6
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+
+Use this guide to observe local [pi](https://github.com/earendil-works/pi)
+sessions and to gate pi tool calls on a NeMo Relay policy. The pi integration is
+a proof of concept: tool and turn activity reach Relay, and LLM traffic does not
+yet, so there are no LLM spans and no model-call enforcement.
+
+<Warning>
+pi ships breaking changes through *minor* releases and has no major-release
+channel. The integration is verified against pi `v0.84.0`. Re-verify hook
+signatures after a pi upgrade; a silent shape change appears as missing spans,
+not as an error.
+</Warning>
+
+## How It Differs From Codex and Claude Code
+
+pi has no native hook-configuration file, and its external event stream is
+observation-only, so hook calls cannot be injected from outside the process.
+They must originate inside a pi *extension*. Relay ships one at
+`integrations/pi/`, and it is a thin HTTP client: it forwards pi's lifecycle to
+`POST /hooks/pi` and gates tool calls on the gateway's verdict. All policy and
+all span construction stay in the gateway.
+
+Three consequences follow from that shape:
+
+- There is no persistent plugin install. pi has no plugin marketplace — no
+  manifest, no `pi plugin` verb, and no MCP client for a plugin-owned server to
+  serve — so `nemo-relay install pi` is unsupported and says so. Install the
+  extension with `pi install <source>` or place it in an auto-discovered
+  directory (`~/.pi/agent/extensions/`, `.pi/extensions/`).
+- The extension pays a round trip per gated tool call. pi awaits extension
+  handlers on its critical path, so a blocking hook is synchronous by
+  construction. Observability-only hooks are queued rather than awaited and
+  drained at shutdown, so they do not charge that path.
+- Model traffic is not redirected. pi resolves `baseUrl` per model from a
+  generated catalog and has no base-URL flag or generic environment override,
+  so redirection requires the extension to register a gateway-backed provider.
+  That work is not done yet.
+
+## Requirements
+
+Install pi 0.84.0 or newer, and confirm the NeMo Relay extension is reachable:
+
+```bash
+nemo-relay doctor pi
+```
+
+## Transparent Run
+
+Use the wrapper for no-install local observability. pi has no `nemo-relay pi`
+shortcut of its own, unlike Claude Code and Codex; run it through `run`:
+
+```bash
+nemo-relay run --agent pi
+```
+
+The wrapper starts a gateway on a dynamic `127.0.0.1` port, loads the NeMo Relay
+extension with `pi -e <path>`, and passes the gateway URL to it through
+`NEMO_RELAY_PI_GATEWAY_URL`. `pi -e` is the reliable loader here: it is
+trust-ungated, loads before extension discovery, and survives `--no-extensions`,
+so a launched session is instrumented regardless of the user's own pi
+configuration.
+
+Set `NEMO_RELAY_PI_EXTENSION` to the extension entry point. Unlike Claude Code
+and Codex, there is no Relay-managed install location to fall back on, because
+pi extensions live in the user's own configuration directories. Launch fails
+with that instruction when the extension cannot be located.
+
+Inspect what would be launched without starting pi:
+
+```bash
+nemo-relay run --dry-run --print --agent pi
+```
+
+## Standalone Gateway
+
+Run a long-lived gateway and point pi at it by hand:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040 &
+NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
+  pi -e integrations/pi/index.ts
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
+| `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
+| `NEMO_RELAY_PI_FAIL` | `open` | Set to `closed` to block tool calls when the gateway is unreachable |
+
+<Warning>
+Run headless pi with `< /dev/null`. pi drains piped standard input before the
+session starts and returns early only for a TTY, so under an automated harness
+it can block indefinitely before any hook fires.
+</Warning>
+
+## Tool Gating
+
+`tool_call` is the only pi hook that can block, and for model-invoked tools it
+is the only pre-execution decision point that sees arguments: pi applies
+`--tools`, `--exclude-tools`, `--no-tools`, and the runtime `setActiveTools` at
+tool-registry construction, never per call.
+
+A guardrail rejection surfaces as HTTP 403 with
+`error.type = "nemo_relay_guardrail_rejected"` and the guardrail's own words in
+`error.reason`. The extension turns that into pi's `{block, reason}`.
+
+| Gateway response | Extension behavior |
+| --- | --- |
+| 2xx | Allow |
+| 403 with the guardrail marker | Block, using `error.reason` |
+| 403 without that marker | Fault — an authorization failure is not a policy decision |
+| Other status, timeout, unreachable | Fault, resolved by `NEMO_RELAY_PI_FAIL` |
+
+pi passes the block reason to the model verbatim, with no framing. Write
+guardrail reasons as guidance rather than as error codes: a reason that names a
+safe alternative produces a model that adapts, and a bare denial produces one
+that gives up.
+
+The default is fail-open, so an unreachable gateway does not brick the agent.
+`NEMO_RELAY_PI_FAIL=closed` opts in to blocking, and the block reason then says
+explicitly that it is an infrastructure fault rather than a judgment about the
+request.
+
+## Captured Events
+
+The extension posts 11 hooks. pi reports both ends of a turn, so Relay opens the
+turn scope at pi's own `turn_start` instead of inferring one, and a mark that
+arrives between turns is recorded on the session scope rather than opening an
+empty turn to hold it.
+
+| pi hook | Relay lifecycle |
+| --- | --- |
+| `session_start` / `session_shutdown` | Session scope. `session_shutdown` is ignored for `reason: "reload"`, which continues the same session |
+| `agent_start` / `agent_end` / `agent_settled` | Marks on the session scope |
+| `turn_start` / `turn_end` | Turn scope open and close |
+| `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
+| `session_compact` | Canonical `compaction` mark |
+| `tool_call` | Tool span start, and the gate |
+| `tool_execution_end` | Tool span end, for every outcome including blocked |
+
+pi's `tool_execution_start` is deliberately not forwarded: it fires before
+argument validation and also for calls that never execute. `tool_result` is not
+forwarded either, because it does not fire at all for blocked calls and in the
+parallel path it fires before `tool_execution_end`.
+
+A blocked call still produces a well-formed tool span. The guardrail rejects
+before the span opens, but pi fires `tool_execution_end` for blocked calls too,
+and the gateway synthesizes the missing pair, tagged
+`tool_correlation_status: "agent_fallback"`.
+
+## Agent-Run Attribution
+
+One pi prompt can re-enter the agent run several times — provider retry,
+post-compaction recovery, or a queued follow-up — and pi's own `turnIndex`
+resets to 0 on each re-entry, so turn indices collide within one prompt.
+
+Relay's session model is flat (session → turn → tool) and is shared with Codex
+and Claude Code, so it gains no attempt level for pi. **Re-entry is therefore
+not nested**: two attempts of one prompt appear as more turns under one session.
+To keep them distinguishable, the extension sends two counters on every
+attributable hook, and the gateway promotes both into event metadata:
+
+- `attempt_index` — which agent-run attempt this event belongs to.
+- `turn_seq` — a session-monotonic turn counter, where pi's `turn_index` resets.
+
+Read them from `metadata` on turn scopes and tool spans, and from either
+`metadata` or the mark's `data` on marks. The turn scope's own `turn_index` is
+assigned by Relay and is monotonic; pi's colliding value stays in the payload.
+
+<Warning>
+`turn_seq` can repeat within one session. The counters live in the extension
+runtime, and pi rebuilds that runtime on `/reload` while the session id stays
+the same, so the counter restarts at 0. It orders turns within a runtime, not
+strictly within a session.
+</Warning>
+
+Subagents are not represented. pi has no nested-agent hook of its own, and a
+child pi process running this extension posts under its own session id, so it
+appears as an unrelated session rather than as a subagent.
+
+## Smoke Test
+
+Check hook forwarding directly. A 200 is an allow; a 403 with the guardrail
+marker is a block:
+
+```bash
+curl -f http://127.0.0.1:4040/healthz
+curl -s -w '\nHTTP:%{http_code}\n' -X POST http://127.0.0.1:4040/hooks/pi \
+  -H 'content-type: application/json' \
+  -d '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}'
+```
+
+## Verify Export
+
+Complete a pi turn, then confirm the exporter output. With an ATOF file sink
+configured in `plugins.toml`, a single-tool turn produces a `pi` session scope,
+one `pi-turn` scope with `turn_source: turn_start`, and the tool span nested
+under it.
+
+If turn scopes are missing entirely, the extension is not loading. pi collects
+extension load errors rather than aborting, so a failure is silent — run pi with
+`-e` pointing at the entry point directly to isolate it.
+
+## Troubleshoot Missing LLM Spans
+
+There are none yet, and this is expected. pi's model traffic does not traverse
+the gateway, so LLM lifecycle capture and model-call enforcement are both
+unavailable. Tool and turn activity are unaffected.

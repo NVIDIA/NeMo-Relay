@@ -315,6 +315,7 @@ coverage.
 |:--|:--:|:--:|:--:|:--|
 | Claude Code | Yes | Yes | Partial | Hook forwarding, pre-tool blocking, and gateway-routed LLM observability are supported. |
 | Codex | Yes | Yes | Partial | Persistent install verifies the exact plugin hooks. Each `Stop` finalizes a turn snapshot; the supported generated schema does not install `SessionEnd`. |
+| pi | Partial | Partial | No | Proof of concept. A Relay-authored pi extension forwards tool and turn activity and gates tool calls; pi's model traffic does not traverse the gateway, so there are no LLM spans. |
 | Hermes Agent | Yes | Yes | Partial | NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay plugin configurations. No separate observability plugin or Relay CLI setup is required. |
 
 ### Public API Integrations

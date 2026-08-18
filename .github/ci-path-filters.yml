@@ -190,6 +190,14 @@ node:
 openclaw:
   - 'integrations/openclaw/**'
 
+# The pi extension is a hook client for the CLI gateway, so its contract is
+# shared with the Rust adapter and route -- a change on either side can break
+# the other.
+pi:
+  - 'crates/cli/src/agents/pi/**'
+  - 'crates/cli/src/agents/shared/adapters.rs'
+  - 'integrations/pi/**'
+
 python:
   - 'crates/python/Cargo.toml'
   - 'crates/python/src/**'

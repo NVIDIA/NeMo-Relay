@@ -25,6 +25,9 @@ the payload in a shared gateway envelope.
 - `POST /hooks/claude-code` accepts Claude Code hook JSON and returns
   Claude-compatible fields such as `continue` and permission decisions when the
   hook event supports them.
+- `POST /hooks/pi` accepts the hook JSON posted by the NeMo Relay pi extension.
+  It returns an empty object for an allowed call and HTTP 403 with
+  `error.type = "nemo_relay_guardrail_rejected"` when a guardrail blocks one.
 
 When a hook closes a turn, subagent, or session scope, Relay returns the hook
 response after subscribers finish processing that scope-end event. This makes
@@ -474,6 +477,11 @@ calling NeMo Relay APIs.
   agent-thought hook. These hints are not emitted as NeMo Relay events.
 - Compaction, notification, and unknown hook events become mark events under
   the active session scope.
+- Harnesses that report the *start* of a turn as well as its end open the turn
+  scope at that signal instead of lazily. pi does; Claude Code and Codex report
+  only `Stop`, so their turns stay lazily opened by the first event of the turn.
+  For a harness with an explicit turn start, a mark that arrives between turns
+  is recorded on the session scope rather than opening a turn to hold it.
 - Gateway requests emit NeMo Relay LLM start and end events under the active
   session scope. Before each LLM start, the gateway uses explicit subagent
   headers, pending hints, shared conversation/generation/request identifiers,
@@ -515,6 +523,7 @@ Generated hook bundles subscribe to the events needed for that mapping:
 | --- | --- | --- |
 | Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
 | Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
+| pi | none yet — pi's model traffic does not reach the gateway | `session_start`, `session_shutdown`, `agent_start`, `agent_end`, `agent_settled`, `turn_start`, `turn_end`, `session_before_compact`, `session_compact`, `tool_call`, `tool_execution_end` |
 
 ## Hook Forwarding
 
@@ -564,6 +573,7 @@ application-mode caveats.
 
 - [Claude Code](/nemo-relay-cli/claude-code)
 - [Codex](/nemo-relay-cli/codex)
+- [pi](/nemo-relay-cli/pi)
 - [Coding Agent Installation](/nemo-relay-cli/plugin-installation)
 
 Each guide covers transparent run setup, gateway routing, hook smoke tests,

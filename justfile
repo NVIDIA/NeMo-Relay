@@ -1141,6 +1141,7 @@ clean:
         integrations/openclaw/.test-dist \
         integrations/openclaw/dist \
         integrations/openclaw/node_modules \
+        integrations/pi/node_modules \
         node_modules \
         docs/_build/ \
         docs/reference/api/**/_generated/ \
@@ -1568,8 +1569,23 @@ test-openclaw:
     npm run test:live --workspace=nemo-relay-openclaw
     npm run pack:check --workspace=nemo-relay-openclaw
 
+# --set [ci=true|false]
+test-pi:
+    #!/usr/bin/env bash
+    {{ bash_helpers }}
+    cd "$NEMO_RELAY_REPO_ROOT"
+    if is_true "{{ ci }}"; then
+        npm ci --ignore-scripts
+    else
+        npm install --ignore-scripts
+    fi
+    # No `build-debug` for the Node binding: the pi extension is a sidecar HTTP
+    # client and loads no native addon, so nothing here depends on it.
+    npm run typecheck --workspace=nemo-relay-pi
+    npm test --workspace=nemo-relay-pi
+
 # --set [output_dir=<path>] [ci=true|false]
-test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw
+test-all: test-rust test-python test-python-langchain test-go test-node test-openclaw test-pi
 
 # [version] or --set ref_name=<version>
 set-version version="":
