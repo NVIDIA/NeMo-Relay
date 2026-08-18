@@ -90,6 +90,76 @@ export interface OpenTelemetryConfig {
 }
 ```
 
+### `OpenTelemetryLogConfig`
+
+Configuration object for `OpenTelemetryLogSubscriber`.
+
+```ts
+export interface OpenTelemetryLogConfig {
+  /** OTLP endpoint. Bare HTTP origins append `/v1/logs`. */
+  endpoint: string
+  /** `"http_binary"` (default) or `"grpc"`. */
+  transport?: "http_binary" | "grpc"
+  /** Extra exporter headers/metadata as string key/value pairs. */
+  headers?: Record<string, string>
+  /** Extra OpenTelemetry resource attributes as string key/value pairs. */
+  resourceAttributes?: Record<string, string>
+  /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
+  serviceName?: string
+  /** Optional `service.namespace` resource attribute. */
+  serviceNamespace?: string
+  /** Optional `service.version` resource attribute. */
+  serviceVersion?: string
+  /** Instrumentation scope name. Defaults to `"opentelemetry"`. */
+  instrumentationScope?: string
+  /** Export timeout in milliseconds. Defaults to `3000`. */
+  timeoutMillis?: number
+  /** Minimum severity exported. Defaults to `LogSeverity.Info`. */
+  minimumSeverity?: LogSeverity
+  /** Maximum queued log records. Defaults to `2048`. */
+  maxQueueSize?: number
+  /** Maximum records per export batch. Defaults to `512`. */
+  maxExportBatchSize?: number
+  /** Maximum delay before a partial batch is exported. Defaults to `1000`. */
+  scheduledDelayMillis?: number
+}
+```
+
+### `OpenTelemetryMetricConfig`
+
+Configuration object for `OpenTelemetryMetricSubscriber`.
+
+```ts
+export interface OpenTelemetryMetricConfig {
+  /** OTLP endpoint. Bare HTTP origins append `/v1/metrics`. */
+  endpoint: string
+  /** `"http_binary"` (default) or `"grpc"`. */
+  transport?: "http_binary" | "grpc"
+  /** Extra exporter headers/metadata as string key/value pairs. */
+  headers?: Record<string, string>
+  /** Extra OpenTelemetry resource attributes as string key/value pairs. */
+  resourceAttributes?: Record<string, string>
+  /** `service.name` resource attribute. Defaults to `"unknown_service"`. */
+  serviceName?: string
+  /** Optional `service.namespace` resource attribute. */
+  serviceNamespace?: string
+  /** Optional `service.version` resource attribute. */
+  serviceVersion?: string
+  /** Instrumentation scope name. Defaults to `"opentelemetry"`. */
+  instrumentationScope?: string
+  /** Export timeout in milliseconds. Defaults to `3000`. */
+  timeoutMillis?: number
+  /** Collection interval in milliseconds. Defaults to `60000`. */
+  exportIntervalMillis?: number
+  /** Preferred aggregation temporality. Defaults to cumulative. */
+  temporality?: MetricTemporality
+  /** Maximum number of retained instrument descriptors. Defaults to `256`. */
+  maxInstruments?: number
+  /** Maximum series cardinality per instrument. Defaults to `2000`. */
+  cardinalityLimit?: number
+}
+```
+
 ### `JsLlmCodecIdentity`
 
 Structured codec identity delivered to JavaScript LLM sanitizers.
@@ -98,6 +168,34 @@ Structured codec identity delivered to JavaScript LLM sanitizers.
 export interface JsLlmCodecIdentity {
   kind: string
   id?: string
+}
+```
+
+### `DataSchema`
+
+Schema identifier attached to an event's opaque data payload.
+
+```ts
+export interface DataSchema {
+  name: string
+  version: string
+}
+```
+
+### `MetricMeasurement`
+
+One typed recording operation emitted by `metric`.
+
+```ts
+export interface MetricMeasurement {
+  name: string
+  kind: MetricKind
+  valueType: MetricValueType
+  value: number
+  unit?: string
+  description?: string
+  attributes?: Json
+  boundaries?: Array<number>
 }
 ```
 
@@ -213,6 +311,48 @@ export declare class OpenTelemetrySubscriber {
   /** Force a flush of finished spans through the exporter. */
   forceFlush(): void
   /** Shut down the underlying tracer provider. */
+  shutdown(): void
+}
+```
+
+### `OpenTelemetryLogSubscriber`
+
+Subscriber that exports severity-tagged marks through OTLP logs.
+
+```ts
+export declare class OpenTelemetryLogSubscriber {
+  /** Create a log subscriber from a config object. */
+  constructor(config: OpenTelemetryLogConfig)
+  /** Register this subscriber globally with the given name. */
+  register(name: string): void
+  /** Deregister a subscriber by name. */
+  deregister(name: string): boolean
+  /** Flush queued Relay events and the OTLP log processor. */
+  forceFlush(): void
+  /** Return bounded runtime diagnostics recorded by this subscriber. */
+  runtimeDiagnostics(): Array<{ code: string; message: string; count: number }>
+  /** Shut down the underlying logger provider. */
+  shutdown(): void
+}
+```
+
+### `OpenTelemetryMetricSubscriber`
+
+Subscriber that records metric marks and exports them through OTLP metrics.
+
+```ts
+export declare class OpenTelemetryMetricSubscriber {
+  /** Create a metric subscriber from a config object. */
+  constructor(config: OpenTelemetryMetricConfig)
+  /** Register this subscriber globally with the given name. */
+  register(name: string): void
+  /** Deregister a subscriber by name. */
+  deregister(name: string): boolean
+  /** Collect and export current metric aggregates immediately. */
+  forceFlush(): void
+  /** Return bounded runtime diagnostics recorded by this subscriber. */
+  runtimeDiagnostics(): Array<{ code: string; message: string; count: number }>
+  /** Shut down the underlying meter provider. */
   shutdown(): void
 }
 ```
@@ -522,6 +662,57 @@ export const enum ScopeType {
 }
 ```
 
+### `LogSeverity`
+
+Severity attached to a mark projected as an OpenTelemetry log.
+
+```ts
+export const enum LogSeverity {
+  Trace = 0,
+  Debug = 1,
+  Info = 2,
+  Warn = 3,
+  Error = 4
+}
+```
+
+### `MetricKind`
+
+OpenTelemetry instrument kind recorded by a metric measurement.
+
+```ts
+export const enum MetricKind {
+  Counter = 0,
+  UpDownCounter = 1,
+  Gauge = 2,
+  Histogram = 3
+}
+```
+
+### `MetricValueType`
+
+Explicit numeric representation used by a metric measurement.
+
+```ts
+export const enum MetricValueType {
+  U64 = 0,
+  I64 = 1,
+  F64 = 2
+}
+```
+
+### `MetricTemporality`
+
+Preferred aggregation temporality for OTLP metric export.
+
+```ts
+export const enum MetricTemporality {
+  Cumulative = 0,
+  Delta = 1,
+  LowMemory = 2
+}
+```
+
 ## Functions
 
 ### `pushStreamChunk`
@@ -708,10 +899,20 @@ export declare function withScope(name: string, scopeType: ScopeType, callback: 
 
 Emit a custom mark event on the current scope.
 
-Emits a named event with optional `data` and `metadata` payloads. If `handle` is provided, the event is associated with that scope; otherwise it uses the current top scope. Optional `timestamp` is a Unix timestamp in microseconds recorded on the mark event. It must be a safe integer number; omit it to use the current runtime time.
+Emits a named event with optional `data` and `metadata` payloads. If `handle` is provided, the event is associated with that scope; otherwise it uses the current top scope. Optional `timestamp` is a Unix timestamp in microseconds recorded on the mark event. It must be a safe integer number; omit it to use the current runtime time. Optional `dataSchema` identifies the shape of `data`; `severity` supplies the typed severity used by OpenTelemetry log exporters.
 
 ```ts
-export declare function event(name: string, handle?: ScopeHandle | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
+export declare function event(name: string, handle?: ScopeHandle | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null, dataSchema?: DataSchema | undefined | null, severity?: LogSeverity | undefined | null): void
+```
+
+### `metric`
+
+Emit an atomic, validated group of OpenTelemetry metric recording operations.
+
+`name` is the metric mark name. Every measurement is validated before any event is published. Optional `handle`, `metadata`, and microsecond `timestamp` have the same behavior as the corresponding `event` parameters.
+
+```ts
+export declare function metric(name: string, measurements: Array<MetricMeasurement>, handle?: ScopeHandle | undefined | null, metadata?: Json | undefined | null, timestamp?: number | undefined | null): void
 ```
 
 ### `toolCall`
@@ -943,7 +1144,7 @@ Register a tool execution intercept following the middleware chain pattern.
 The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
+export declare function registerToolExecutionIntercept(name: string, priority: number, callable: (args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>): void
 ```
 
 ### `deregisterToolExecutionIntercept`
@@ -1245,7 +1446,7 @@ Register a scope-local tool execution intercept following the middleware chain p
 The `callable` receives the args and a `next` function. Call `next(args)` to invoke the next intercept or original implementation; skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after `callable` settles.
 
 ```ts
-export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>): void
+export declare function scopeRegisterToolExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>): void
 ```
 
 ### `scopeDeregisterToolExecutionIntercept`
@@ -1419,7 +1620,7 @@ export declare function toolConditionalExecution(name: string, args: Json): Prom
 Run the registered LLM request intercept chain on the given request. The `request` should be a JSON object with `headers` and `content` fields matching the `LlmRequest` schema. Returns the transformed request as JSON.
 
 ```ts
-export declare function llmRequestIntercepts(name: string, request: Json): Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>
+export declare function llmRequestIntercepts(name: string, request: Json): Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<import('./plugin').PendingMarkSpec>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>
 ```
 
 ### `llmConditionalExecution`
