@@ -53,10 +53,11 @@ The Go package provides the following capabilities:
   event sanitizers at global, scope-local, and plugin-context levels.
 - **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
-- **Typed OpenTelemetry export**: `NewOpenTelemetryConfig` and
-  `NewOpenTelemetrySubscriber` construct one independently managed `full`,
-  `gen_ai`, or `openinference` trace subscriber. `NewOpenTelemetryLogSubscriber`
-  and `NewOpenTelemetryMetricSubscriber` construct independent log and metric
+- **Typed OpenTelemetry export**: `NewOpenTelemetryConfig` returns configuration
+  for a `full`, `gen_ai`, or `openinference` trace subscriber.
+  `NewOpenTelemetrySubscriber` constructs the independently managed trace
+  subscriber. `NewOpenTelemetryLogSubscriber` and
+  `NewOpenTelemetryMetricSubscriber` construct independent log and metric
   subscribers.
 - **Structured marks and metrics**: `EmitEvent` accepts data-schema and
   severity options, and `EmitMetric` validates a complete metric-measurement
