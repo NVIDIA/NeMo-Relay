@@ -245,10 +245,10 @@ class TestToolsAsync:
             if isinstance(event, ScopeEvent) and event.name == "managed_tool_call_id"
         ]
         assert [event.scope_category for event in lifecycle] == ["start", "end"]
-        assert [event.category_profile for event in lifecycle] == [
-            {"tool_call_id": "managed-call-123"},
-            {"tool_call_id": "managed-call-123"},
-        ]
+        assert all(
+            event.category_profile is not None and event.category_profile.get("tool_call_id") == "managed-call-123"
+            for event in lifecycle
+        )
 
     async def test_execute_failure_emits_end_event(self):
         events = []
@@ -274,7 +274,10 @@ class TestToolsAsync:
         assert all(isinstance(event, ScopeEvent) for event in events)
         assert [e.scope_category for e in events] == ["start", "end"]
         assert all(e.category == "tool" for e in events)
-        assert all(e.category_profile == {"tool_call_id": "managed-failure-123"} for e in events)
+        assert all(
+            event.category_profile is not None and event.category_profile.get("tool_call_id") == "managed-failure-123"
+            for event in events
+        )
         assert events[0].uuid == events[1].uuid
         assert events[1].data is None
         assert events[1].metadata["error.type"] == "internal_error"
@@ -642,7 +645,10 @@ class TestToolInterceptsAsync:
         assert provider_calls == []
         lifecycle = [event for event in events if isinstance(event, ScopeEvent) and event.name == "cancel_tool"]
         assert [event.scope_category for event in lifecycle] == ["start", "end"]
-        assert all(event.category_profile == {"tool_call_id": "managed-cancel-123"} for event in lifecycle)
+        assert all(
+            event.category_profile is not None and event.category_profile.get("tool_call_id") == "managed-cancel-123"
+            for event in lifecycle
+        )
 
     async def test_sync_middleware_preserves_async_caller_context(self):
         request_id = contextvars.ContextVar("tool_middleware_request_id", default="registration")

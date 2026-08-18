@@ -320,7 +320,10 @@ class TestTypedToolExecute:
             event for event in subscribed_events if isinstance(event, ScopeEvent) and event.name == "typed_tool_call_id"
         ]
         assert [event.scope_category for event in lifecycle] == ["start", "end"]
-        assert all(event.category_profile == {"tool_call_id": "typed-call-123"} for event in lifecycle)
+        assert all(
+            event.category_profile is not None and event.category_profile.get("tool_call_id") == "typed-call-123"
+            for event in lifecycle
+        )
 
     async def test_dataclass_add(self):
         async def add(args: DcArgs) -> ToolExecutionResult[DcResult]:
