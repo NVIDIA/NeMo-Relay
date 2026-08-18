@@ -83,7 +83,7 @@ pub struct ToolCacheConfig {
     pub default: ToolClass,
     /// Named tool classes.
     pub classes: BTreeMap<String, ToolClass>,
-    /// Per-tool refinements keyed by exact name or wildcard.
+    /// Per-tool refinements keyed by exact name, `prefix*`, `*suffix`, or `*contains*`.
     pub overrides: BTreeMap<String, ToolOverride>,
 }
 
@@ -133,7 +133,7 @@ pub struct ToolClass {
     pub tool_version: Option<String>,
     /// Top-level argument keys dropped before keying.
     pub arg_skip: Vec<String>,
-    /// Exact tool names or `*` wildcard patterns in this class.
+    /// Exact tool names, `prefix*`, `*suffix`, or `*contains*` patterns in this class.
     pub members: Vec<String>,
 }
 
@@ -164,8 +164,16 @@ nemo_relay::editor_config! {
         ttl_seconds => { label: "ttl_seconds", kind: Integer, optional: true },
         bypass_rate => { label: "bypass_rate", kind: Float, optional: true },
         tool_version => { label: "tool_version", kind: String, optional: true },
-        arg_skip => { label: "arg_skip", kind: Json },
-        members => { label: "members", kind: Json },
+        arg_skip => {
+            label: "arg_skip",
+            kind: List,
+            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
+        },
+        members => {
+            label: "members",
+            kind: List,
+            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
+        },
     }
 }
 
@@ -175,6 +183,11 @@ nemo_relay::editor_config! {
         ttl_seconds => { label: "ttl_seconds", kind: Integer, optional: true },
         bypass_rate => { label: "bypass_rate", kind: Float, optional: true },
         tool_version => { label: "tool_version", kind: String, optional: true },
-        arg_skip => { label: "arg_skip", kind: Json, optional: true },
+        arg_skip => {
+            label: "arg_skip",
+            kind: List,
+            optional: true,
+            list: &nemo_relay::config_editor::STRING_LIST_ITEM,
+        },
     }
 }

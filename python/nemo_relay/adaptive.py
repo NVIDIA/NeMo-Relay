@@ -266,9 +266,9 @@ class ToolClass:
             member. A per-tool override replaces it when set.
         arg_skip: Argument keys dropped before keying (default empty: key on all args).
         members: Tool names in this class (unused for the ``default`` bucket).
-            Names may use ``*`` wildcards; an exact member wins over any
-            wildcard match, the most-specific pattern wins among wildcards, and
-            unmatched tools fall to ``default``.
+            Names may be exact or use ``prefix*``, ``*suffix``, or ``*contains*``;
+            an exact member wins over any wildcard match, the most-specific
+            pattern wins among wildcards, and unmatched tools fall to ``default``.
     """
 
     cacheable: bool = False
@@ -343,8 +343,9 @@ class ToolCacheConfig:
         default: Policy for tools not listed in any class (defaults to not cached).
         classes: Named tool classes, each with its own policy and member list.
         overrides: Per-tool refinements applied on top of the resolved class.
-            Keys may be exact tool names or ``*`` patterns; an exact key wins
-            outright, then the most-specific matching pattern applies.
+            Keys may be exact tool names or use ``prefix*``, ``*suffix``, or
+            ``*contains*``; an exact key wins outright, then the most-specific
+            matching pattern applies.
     """
 
     enabled: bool = False

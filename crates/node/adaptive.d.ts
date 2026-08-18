@@ -90,6 +90,7 @@ export interface ToolClass {
   bypassRate?: number;
   toolVersion?: string;
   argSkip?: string[];
+  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
   members?: string[];
 }
 
@@ -114,6 +115,7 @@ export interface ToolCacheConfig {
   cacheErrors?: boolean;
   default?: ToolClass;
   classes?: Record<string, ToolClass>;
+  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
   overrides?: Record<string, ToolOverride>;
 }
 

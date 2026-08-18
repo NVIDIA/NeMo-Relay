@@ -2477,16 +2477,28 @@ async fn wildcard_member_validation_rules() {
         report.diagnostics
     );
 
-    for catch_all in ["*", "**"] {
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("everything".to_string(), cacheable_class(&["*"]));
+    let report = validate(classes);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_member"),
+        "a cacheable '*' member must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    for invalid_pattern in ["**", "docs_*_lookup", "docs**"] {
         let mut classes = std::collections::BTreeMap::new();
-        classes.insert("everything".to_string(), cacheable_class(&[catch_all]));
+        classes.insert("invalid".to_string(), cacheable_class(&[invalid_pattern]));
         let report = validate(classes);
         assert!(
             report
                 .diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_member"),
-            "a cacheable '{catch_all}' member must be rejected: {:?}",
+                .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_pattern"),
+            "unsupported pattern '{invalid_pattern}' must be rejected: {:?}",
             report.diagnostics
         );
     }
@@ -2517,6 +2529,35 @@ async fn wildcard_member_validation_rules() {
             .iter()
             .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_override"),
         "a cacheable '*' override must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "docs_*_lookup".to_string(),
+        ToolOverride {
+            cacheable: Some(true),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_pattern"),
+        "an unsupported override pattern must be rejected: {:?}",
         report.diagnostics
     );
 

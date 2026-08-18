@@ -230,4 +230,22 @@ fn tool_class_editor_schema_exposes_optional_version() {
         EditorFieldKind::String
     );
     assert!(tool_class.field("tool_version").unwrap().optional);
+    for field_name in ["arg_skip", "members"] {
+        let field = tool_class.field(field_name).unwrap();
+        assert_eq!(field.kind, EditorFieldKind::List);
+        assert_eq!(
+            field.list_item.expect("string-list item metadata").kind,
+            EditorFieldKind::String
+        );
+    }
+
+    let arg_skip = crate::response_cache::config::ToolOverride::editor_schema()
+        .field("arg_skip")
+        .unwrap();
+    assert_eq!(arg_skip.kind, EditorFieldKind::List);
+    assert!(arg_skip.optional);
+    assert_eq!(
+        arg_skip.list_item.expect("string-list item metadata").kind,
+        EditorFieldKind::String
+    );
 }

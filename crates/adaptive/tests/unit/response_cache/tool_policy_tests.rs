@@ -142,10 +142,9 @@ fn wildcard_matching_and_overlap_cover_edge_cases() {
         ("*", "", true),
         ("docs_*", "docs_lookup", true),
         ("docs_*", "doc_lookup", false),
-        ("get_*_price", "get_stock_price", true),
-        ("get_*_price", "get_price", false),
-        ("a*a", "a", false),
-        ("a*a", "aba", true),
+        ("*_price", "stock_price", true),
+        ("*stock*", "get_stock_price", true),
+        ("get_*_price", "get_stock_price", false),
         ("Docs_*", "docs_lookup", false),
     ] {
         assert_eq!(
@@ -158,6 +157,12 @@ fn wildcard_matching_and_overlap_cover_edge_cases() {
     assert!(!wildcard_patterns_overlap("docs_*", "send_*"));
     assert!(wildcard_patterns_overlap("é*", "*é"));
     assert_eq!(wildcard_rank("*é*").0, 1);
+    for pattern in ["docs_lookup", "docs_*", "*_lookup", "*docs*", "*"] {
+        assert!(is_supported_tool_pattern(pattern), "{pattern:?}");
+    }
+    for pattern in ["**", "docs_*_lookup", "docs**", "*docs**"] {
+        assert!(!is_supported_tool_pattern(pattern), "{pattern:?}");
+    }
 }
 
 // The rest of the policy cases stay in the crate test tree so they retain
@@ -286,13 +291,10 @@ fn wildcard_match_table() {
         ("docs_*", "doc_lookup", false),
         ("*_price", "stock_price", true),
         ("*_price", "price", false),
-        ("get_*_price", "get_stock_price", true),
-        ("get_*_price", "get_price", false),
-        ("a*a", "a", false),
-        ("a*a", "aa", true),
-        ("a*a", "aba", true),
-        ("a*b*c", "abc", true),
-        ("a*b*c", "acb", false),
+        ("*stock*", "get_stock_price", true),
+        ("*stock*", "get_price", false),
+        ("get_*_price", "get_stock_price", false),
+        ("a*a", "aba", false),
         ("Docs_*", "docs_lookup", false), // case-sensitive
         ("abc*", "abc*", true),           // no escaping: '*' matches itself via the span
     ];
@@ -311,9 +313,11 @@ fn wildcard_overlap_table() {
         ("*_email", "send_*", true),
         ("delete_*", "*_record", true),
         ("docs_*", "send_*", false),
-        ("a*b*c", "a*c", true),
+        ("*docs*", "send_*", true),
         ("é*", "*é", true),
         ("foo*", "bar*", false),
+        ("*foo", "*bar", false),
+        ("a*b*c", "a*c", false),
     ];
     for (left, right, expected) in cases {
         assert_eq!(
@@ -381,7 +385,7 @@ fn most_specific_wildcard_wins() {
 #[test]
 fn equal_literals_fewer_stars_then_smaller_pattern_break_ties() {
     let mut classes = BTreeMap::new();
-    classes.insert("two_stars".to_string(), class(false, &["a*b*"]));
+    classes.insert("two_stars".to_string(), class(false, &["*ab*"]));
     classes.insert("one_star".to_string(), class(true, &["ab*"]));
     let tools = ToolCacheConfig {
         classes,

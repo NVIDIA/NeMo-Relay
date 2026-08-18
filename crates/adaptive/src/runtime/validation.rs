@@ -10,7 +10,7 @@ use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
 use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
-use crate::response_cache::tool::wildcard_patterns_overlap;
+use crate::response_cache::tool::{is_supported_tool_pattern, wildcard_patterns_overlap};
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
     let mut report = ConfigReport::default();
@@ -242,6 +242,16 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
             class.bypass_rate,
         );
         for member in &class.members {
+            if !is_supported_tool_pattern(member) {
+                report.diagnostics.push(response_cache_error(
+                    "response_cache.tool_invalid_pattern",
+                    Some("tools.classes"),
+                    format!(
+                        "tool member '{member}' in class '{class_name}' must be an exact name, \
+                         'prefix*', '*suffix', or '*contains*'"
+                    ),
+                ));
+            }
             if let Some(previous) = owning_class.get(member.as_str()) {
                 if *previous != class_name.as_str() {
                     report.diagnostics.push(response_cache_error(
@@ -257,7 +267,7 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
             } else {
                 owning_class.insert(member.as_str(), class_name.as_str());
             }
-            if class.cacheable && !member.is_empty() && member.chars().all(|c| c == '*') {
+            if class.cacheable && member == "*" {
                 report.diagnostics.push(response_cache_error(
                     "response_cache.tool_catch_all_member",
                     Some("tools.classes"),
@@ -274,16 +284,23 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
     validate_conflicting_tool_class_patterns(report, tools);
 
     for (tool_name, over) in &tools.overrides {
+        if !is_supported_tool_pattern(tool_name) {
+            report.diagnostics.push(response_cache_error(
+                "response_cache.tool_invalid_pattern",
+                Some("tools.overrides"),
+                format!(
+                    "tool override '{tool_name}' must be an exact name, 'prefix*', '*suffix', or \
+                     '*contains*'"
+                ),
+            ));
+        }
         validate_tool_policy(
             report,
             &format!("overrides.{tool_name}"),
             over.ttl_seconds,
             over.bypass_rate,
         );
-        if over.cacheable == Some(true)
-            && !tool_name.is_empty()
-            && tool_name.chars().all(|c| c == '*')
-        {
+        if over.cacheable == Some(true) && tool_name == "*" {
             report.diagnostics.push(response_cache_error(
                 "response_cache.tool_catch_all_override",
                 Some("tools.overrides"),

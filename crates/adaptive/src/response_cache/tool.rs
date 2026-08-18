@@ -7,7 +7,6 @@
 //! enabled only for tools that are read-only and stable for the configured TTL.
 //! Key and store failures fail open to the real call.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -129,6 +128,39 @@ fn best_wildcard_match<'a, T>(
 
 type WildcardRank<'a> = (usize, std::cmp::Reverse<usize>, std::cmp::Reverse<&'a str>);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WildcardPattern<'a> {
+    Prefix(&'a str),
+    Suffix(&'a str),
+    Contains(&'a str),
+}
+
+fn parse_wildcard_pattern(pattern: &str) -> Option<WildcardPattern<'_>> {
+    if pattern == "*" {
+        return Some(WildcardPattern::Contains(""));
+    }
+    if let Some(contains) = pattern
+        .strip_prefix('*')
+        .and_then(|pattern| pattern.strip_suffix('*'))
+    {
+        return (!contains.is_empty() && !contains.contains('*'))
+            .then_some(WildcardPattern::Contains(contains));
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return (!suffix.is_empty() && !suffix.contains('*'))
+            .then_some(WildcardPattern::Suffix(suffix));
+    }
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return (!prefix.is_empty() && !prefix.contains('*'))
+            .then_some(WildcardPattern::Prefix(prefix));
+    }
+    None
+}
+
+pub(crate) fn is_supported_tool_pattern(pattern: &str) -> bool {
+    !pattern.contains('*') || parse_wildcard_pattern(pattern).is_some()
+}
+
 /// Returns the deterministic specificity order for a wildcard pattern.
 ///
 /// Literal and wildcard counts are Unicode-character based. The final
@@ -145,69 +177,30 @@ fn wildcard_rank(pattern: &str) -> WildcardRank<'_> {
     )
 }
 
-/// Returns whether two `*` patterns can match at least one common tool name.
-///
-/// This evaluates the product of the two wildcard automata, so it is exact for
-/// this deliberately small pattern language without constructing a sample name.
+/// Returns whether two supported wildcard patterns can match a common tool name.
 pub(crate) fn wildcard_patterns_overlap(left: &str, right: &str) -> bool {
-    let left: Vec<char> = left.chars().collect();
-    let right: Vec<char> = right.chars().collect();
-    let mut pending = vec![(0, 0)];
-    let mut visited = HashSet::new();
-
-    while let Some((left_index, right_index)) = pending.pop() {
-        if !visited.insert((left_index, right_index)) {
-            continue;
+    let (Some(left), Some(right)) = (parse_wildcard_pattern(left), parse_wildcard_pattern(right))
+    else {
+        return false;
+    };
+    match (left, right) {
+        (WildcardPattern::Prefix(left), WildcardPattern::Prefix(right)) => {
+            left.starts_with(right) || right.starts_with(left)
         }
-        if left_index == left.len() && right_index == right.len() {
-            return true;
+        (WildcardPattern::Suffix(left), WildcardPattern::Suffix(right)) => {
+            left.ends_with(right) || right.ends_with(left)
         }
-
-        if left.get(left_index) == Some(&'*') {
-            pending.push((left_index + 1, right_index));
-        }
-        if right.get(right_index) == Some(&'*') {
-            pending.push((left_index, right_index + 1));
-        }
-
-        let (Some(left_character), Some(right_character)) =
-            (left.get(left_index), right.get(right_index))
-        else {
-            continue;
-        };
-        if *left_character == '*' || *right_character == '*' || left_character == right_character {
-            pending.push((
-                left_index + usize::from(*left_character != '*'),
-                right_index + usize::from(*right_character != '*'),
-            ));
-        }
+        _ => true,
     }
-
-    false
 }
 
 fn wildcard_match(pattern: &str, name: &str) -> bool {
-    if !pattern.contains('*') {
-        return pattern == name;
+    match parse_wildcard_pattern(pattern) {
+        Some(WildcardPattern::Prefix(prefix)) => name.starts_with(prefix),
+        Some(WildcardPattern::Suffix(suffix)) => name.ends_with(suffix),
+        Some(WildcardPattern::Contains(contains)) => name.contains(contains),
+        None => !pattern.contains('*') && pattern == name,
     }
-    let segments: Vec<&str> = pattern.split('*').collect();
-    let (first, rest) = segments
-        .split_first()
-        .expect("split always yields a segment");
-    if !name.starts_with(first) {
-        return false;
-    }
-    let mut cursor = first.len();
-    let (last, middles) = rest
-        .split_last()
-        .expect("a starred pattern splits into at least two segments");
-    for segment in middles {
-        match name[cursor..].find(segment) {
-            Some(position) => cursor += position + segment.len(),
-            None => return false,
-        }
-    }
-    name.len() >= cursor + last.len() && name.ends_with(last)
 }
 
 pub(crate) fn make_tool_intercept(

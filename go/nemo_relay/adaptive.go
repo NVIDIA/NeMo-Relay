@@ -106,10 +106,11 @@ type ResponseCacheToolsConfig struct {
 	// cache hits; a pointer to 0 selects outermost.
 	Priority *int32 `json:"priority,omitempty"`
 	// CacheErrors lets error-shaped tool results be cached (default false).
-	CacheErrors bool                                 `json:"cache_errors"`
-	Default     *ResponseCacheToolClass              `json:"default,omitempty"`
-	Classes     map[string]ResponseCacheToolClass    `json:"classes,omitempty"`
-	Overrides   map[string]ResponseCacheToolOverride `json:"overrides,omitempty"`
+	CacheErrors bool                              `json:"cache_errors"`
+	Default     *ResponseCacheToolClass           `json:"default,omitempty"`
+	Classes     map[string]ResponseCacheToolClass `json:"classes,omitempty"`
+	// Overrides keys are exact tool names or prefix*, *suffix, and *contains* patterns.
+	Overrides map[string]ResponseCacheToolOverride `json:"overrides,omitempty"`
 }
 
 // ResponseCacheToolClass defines a shared tool-cache policy.
@@ -119,7 +120,8 @@ type ResponseCacheToolClass struct {
 	BypassRate  *float64 `json:"bypass_rate,omitempty"`
 	ToolVersion *string  `json:"tool_version,omitempty"`
 	ArgSkip     []string `json:"arg_skip,omitempty"`
-	Members     []string `json:"members,omitempty"`
+	// Members contains exact tool names or prefix*, *suffix, and *contains* patterns.
+	Members []string `json:"members,omitempty"`
 }
 
 // ResponseCacheToolOverride refines a resolved tool-cache policy.
