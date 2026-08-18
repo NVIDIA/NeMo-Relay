@@ -16,19 +16,14 @@ all policy and all span construction happen in the gateway.
 
 ## Status
 
-Proof of concept, tracked under
-[RELAY-727](https://linear.app/nvidia/issue/RELAY-727),
-[RELAY-728](https://linear.app/nvidia/issue/RELAY-728),
-[RELAY-729](https://linear.app/nvidia/issue/RELAY-729) and
-[RELAY-730](https://linear.app/nvidia/issue/RELAY-730). Verified against pi
-`v0.84.0`. pi ships breaking changes through *minor* releases and has no
-major-release channel, so re-verify hook signatures before relying on them.
+Proof of concept. Verified against pi `v0.84.0`. pi ships breaking changes
+through *minor* releases and has no major-release channel, so re-verify hook
+signatures before relying on them.
 
-**Model traffic is redirected conditionally**
-([RELAY-732](https://linear.app/nvidia/issue/RELAY-732)). pi has no base-URL
-flag and no generic environment override — it resolves `baseUrl` per model from
-a generated catalog — so the extension points the active model's provider at the
-gateway itself. It only does so when the gateway forwards to the endpoint that
+**Model traffic is redirected conditionally.** pi has no base-URL flag and no
+generic environment override — it resolves `baseUrl` per model from a generated
+catalog — so the extension points the active model's provider at the gateway
+itself. It only does so when the gateway forwards to the endpoint that
 model would otherwise have called; see [Model redirection](#model-redirection).
 When it does not, you get tool and turn activity but no LLM spans.
 
