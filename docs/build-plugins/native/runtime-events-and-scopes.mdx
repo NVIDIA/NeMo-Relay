@@ -78,6 +78,36 @@ pub(crate) fn emit_configured_runtime_events(
 dropping an unclosed guard still follows the SDK cleanup path. `with_current` restores
 the prior stack after either `Ok` or `Err`, and dropping `isolated` releases the stack.
 
+## Emit Typed Telemetry and Read Diagnostics
+
+Use `emit_mark_with_options` when a mark needs a data schema or log severity. Use
+`emit_metric` to create a validated Relay metric mark rather than constructing the
+reserved metric schema yourself. The following code adds metadata to a policy mark and
+then reads one runtime diagnostic:
+
+```rust
+let schema = DataSchema::builder()
+    .name("example.policy.decision")
+    .version("1")
+    .build();
+runtime.emit_mark_with_options(
+    "example.native.policy_decision",
+    Some(&json!({ "allowed": true })),
+    None,
+    Some(&schema),
+    Some(LogSeverity::Info),
+)?;
+
+let diagnostics = runtime.runtime_diagnostics()?;
+if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
+    eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
+}
+```
+
+The diagnostic snapshot is bounded and ordered by code. It is a host-level view, so it
+does not identify the plugin that recorded a diagnostic. These operations require the
+native host ABI v4 extensions.
+
 ## Configure the SDK Executor
 
 `NativePlugin::executor_config` supplies the plugin-wide default. The SDK default and the
