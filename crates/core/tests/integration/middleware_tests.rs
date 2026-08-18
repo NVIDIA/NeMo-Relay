@@ -1340,6 +1340,123 @@ async fn test_tool_execution_outcome_marks_follow_end_with_tool_parentage() {
 }
 
 #[tokio::test]
+async fn managed_tool_call_id_projects_to_atif_and_otel() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let agent = setup_isolated_scope("managed-tool-exporter-correlation");
+
+    let atif = AtifExporter::new(
+        "managed-tool-exporter-correlation".to_string(),
+        AtifAgentInfo {
+            name: "test-agent".to_string(),
+            version: "1.0.0".to_string(),
+            model_name: None,
+            tool_definitions: None,
+            extra: None,
+        },
+    );
+    register_subscriber("managed_tool_exporter_atif", atif.subscriber()).unwrap();
+
+    let otel_exporter = InMemorySpanExporterBuilder::new().build();
+    let otel_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(otel_exporter.clone())
+        .build();
+    let otel =
+        OpenTelemetrySubscriber::from_tracer_provider(otel_provider, "managed-tool-exporter-otel");
+    register_subscriber("managed_tool_exporter_otel", otel.subscriber()).unwrap();
+
+    let tool_call_id = "call-managed-exporter-42";
+    llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("model-call")
+            .request(LlmRequest {
+                headers: serde_json::Map::new(),
+                content: json!({
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "weather in NYC"}],
+                }),
+            })
+            .func(Arc::new(move |_| {
+                Box::pin(async move {
+                    Ok(json!({
+                        "model": "test-model",
+                        "choices": [{
+                            "message": {
+                                "role": "assistant",
+                                "content": null,
+                                "tool_calls": [{
+                                    "id": tool_call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": "{\\\"city\\\":\\\"NYC\\\"}",
+                                    },
+                                }],
+                            },
+                        }],
+                    }))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    tool_call_execute(
+        nemo_relay::api::tool::ToolCallExecuteParams::builder()
+            .name("get_weather")
+            .args(json!({"city": "NYC"}))
+            .tool_call_id(tool_call_id)
+            .func(Arc::new(|args| {
+                Box::pin(async move { Ok(ToolExecutionResult::new(args)) })
+            }))
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&agent.uuid)
+            .build(),
+    )
+    .unwrap();
+    flush_subscribers().unwrap();
+
+    let trajectory = atif.export().unwrap();
+    let agent_step = trajectory
+        .steps
+        .iter()
+        .find(|step| step.source == "agent")
+        .expect("managed LLM event must create an agent step");
+    assert_eq!(
+        agent_step.tool_calls.as_ref().unwrap()[0].tool_call_id,
+        tool_call_id
+    );
+    assert_eq!(
+        agent_step.observation.as_ref().unwrap().results[0]
+            .source_call_id
+            .as_deref(),
+        Some(tool_call_id)
+    );
+
+    otel.force_flush().unwrap();
+    let tool_span = otel_exporter
+        .get_finished_spans()
+        .unwrap()
+        .into_iter()
+        .find(|span| span.name.as_ref() == "get_weather")
+        .expect("managed tool span must be exported");
+    assert!(tool_span.attributes.iter().any(|attribute| {
+        attribute.key.as_str() == "nemo_relay.tool_call_id"
+            && attribute.value.to_string() == tool_call_id
+    }));
+
+    deregister_subscriber("managed_tool_exporter_atif").unwrap();
+    deregister_subscriber("managed_tool_exporter_otel").unwrap();
+}
+
+#[tokio::test]
 async fn test_managed_tool_pending_marks_project_through_trace_exporters_only() {
     let _lock = TEST_MUTEX.lock().unwrap();
     reset_global();
