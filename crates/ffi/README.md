@@ -46,8 +46,13 @@ binding consumes it through CGo.
   isolation.
 - **Typed OpenTelemetry export**:
   `nemo_relay_otel_subscriber_create` constructs one `full`, `gen_ai`, or
-  `openinference` endpoint subscriber. The endpoint and projection type are
-  required.
+  `openinference` trace subscriber. Independently managed log and metric
+  subscribers use `nemo_relay_otel_log_subscriber_create` and
+  `nemo_relay_otel_metric_subscriber_create`.
+- **Structured marks and metrics**: `nemo_relay_event_v2` adds optional data
+  schema JSON and `NemoRelayLogSeverity` to the compatible mark API.
+  `nemo_relay_metric_json` and `nemo_relay_metric` emit atomically validated
+  Relay metric measurements.
 - **Generated header**: A committed `nemo_relay.h` file for C-compatible
   consumers.
 - **Native library outputs**: Shared and static libraries for platform
@@ -62,6 +67,26 @@ callback on a native thread and waits for it to return. Blocking I/O and other
 long-running callback work therefore occupy that thread and can reduce
 middleware throughput. The FFI does not expose completion-based middleware
 registration.
+
+## OTLP Logs and Metrics
+
+Use `nemo_relay_event_v2` when a mark needs a data schema or OTLP log severity.
+Pass `data_schema_json` as `{"name":"example.schema","version":"1"}` and a
+`NemoRelayLogSeverity` pointer when applicable. The legacy `nemo_relay_event`
+function remains valid for untyped marks.
+
+Use `nemo_relay_metric_json` for a nonempty JSON array of canonical metric
+measurements, or `nemo_relay_metric` for `NemoRelayMetricMeasurement` entries.
+Relay validates a complete measurement group before it emits any recording
+operation. Do not construct the reserved metric mark schema manually.
+
+Create each direct OTLP log or metric subscriber independently. Register it
+with `nemo_relay_otel_log_subscriber_register` or
+`nemo_relay_otel_metric_subscriber_register`. During graceful shutdown,
+deregister the name, force-flush the subscriber, shut it down, and free its
+handle with the matching `nemo_relay_otel_*_subscriber_free` function. The log
+and metric APIs also expose bounded JSON runtime-diagnostics snapshots through
+their `nemo_relay_otel_*_subscriber_runtime_diagnostics_json` functions.
 
 ## Installation
 
