@@ -205,8 +205,8 @@ and agent-specific diagnostics.
 > [!TIP]
 > Start by trusting the raw Agent Trajectory Observability Format (ATOF) JSONL.
 > It shows the lifecycle events Relay actually captured before anything is
-> translated into Agent Trajectory Interchange Format (ATIF) or typed
-> OpenTelemetry output, including the OpenInference projection.
+> translated into Agent Trajectory Interchange Format (ATIF) or OpenTelemetry
+> traces, logs, and metrics, including the OpenInference projection.
 
 ## Quick Start Applications
 

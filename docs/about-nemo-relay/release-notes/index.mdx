@@ -63,6 +63,15 @@ The following updates expand native Rust plugin capabilities:
   preserve sanitized tool result annotations without flattening their
   application-defined schemas.
 
+### OpenTelemetry Logs and Metrics
+
+- Independent OTLP log and metric pipelines are available alongside trace
+  export. Observability configuration version 4 derives log and metric
+  destinations from a trace endpoint when their endpoint lists are omitted.
+- Rust, Python, Node.js, Go, and the experimental C FFI expose typed mark
+  schema and severity options plus metric helpers. Direct subscribers and
+  native and worker plugin SDKs expose bounded runtime diagnostics snapshots.
+
 ### Support Matrix and Compatibility Updates
 
 The [Support Matrix](/reference/support-matrix) is the canonical reference for

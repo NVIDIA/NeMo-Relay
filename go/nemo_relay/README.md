@@ -77,7 +77,9 @@ completion-based middleware registration.
 ## OTLP Logs and Metrics
 
 Use `EmitEvent` with `WithEventDataSchema` and `WithEventSeverity` for a typed
-mark. Use `EmitMetric` for an atomically validated metric group:
+mark. Use `EmitMetric` for an atomically validated metric group. The examples
+below assume `nemo` is imported as
+`nemo "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"`:
 
 ```go
 if err := nemo.EmitEvent(

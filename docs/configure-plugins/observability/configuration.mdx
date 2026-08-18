@@ -13,9 +13,7 @@ can install ATOF, ATIF, and OpenTelemetry exporters.
 |---|---|
 | `atof` | Writes or streams raw ATOF lifecycle events. |
 | `atif` | Writes completed ATIF agent trajectories. |
-| `opentelemetry.endpoints` | Fans out trace events to typed `full`, `gen_ai`, or `openinference` OTLP endpoints. |
-| `opentelemetry.logs` | Exports sanitized non-metric marks as OTLP logs. |
-| `opentelemetry.metrics` | Records Relay metric-schema marks and exports OTLP metrics. |
+| `opentelemetry` | Configures typed OTLP traces and optional log and metric pipelines. |
 
 Generated and programmatic observability configuration uses `version = 4`.
 Relay continues to accept version 3 for trace-only configuration.
@@ -216,24 +214,26 @@ const component = observability.ComponentSpec({
 </Tab>
 <Tab title="Go" language="go">
 ```go
-config := nemo_relay.NewObservabilityConfig()
-otel := nemo_relay.NewObservabilityOpenTelemetryConfig()
+import nemo "github.com/NVIDIA/NeMo-Relay/go/nemo_relay"
+
+config := nemo.NewObservabilityConfig()
+otel := nemo.NewObservabilityOpenTelemetryConfig()
 otel.Enabled = true
-otel.Endpoints = []nemo_relay.ObservabilityOpenTelemetryEndpointConfig{
-    nemo_relay.NewObservabilityOpenTelemetryEndpointConfig(
-        nemo_relay.OpenTelemetryTypeGenAI,
+otel.Endpoints = []nemo.ObservabilityOpenTelemetryEndpointConfig{
+    nemo.NewObservabilityOpenTelemetryEndpointConfig(
+        nemo.OpenTelemetryTypeGenAI,
         "http://localhost:4318/v1/traces",
     ),
 }
-logs := nemo_relay.NewObservabilityOpenTelemetryLogConfig()
+logs := nemo.NewObservabilityOpenTelemetryLogConfig()
 logs.Enabled = true
-metrics := nemo_relay.NewObservabilityOpenTelemetryMetricConfig()
+metrics := nemo.NewObservabilityOpenTelemetryMetricConfig()
 metrics.Enabled = true
 otel.Logs = &logs
 otel.Metrics = &metrics
 config.OpenTelemetry = &otel
 config.EnableFullPayloads = true
-component := nemo_relay.NewObservabilityComponentSpec(config)
+component := nemo.NewObservabilityComponentSpec(config)
 ```
 </Tab>
 </Tabs>
@@ -241,7 +241,7 @@ component := nemo_relay.NewObservabilityComponentSpec(config)
 Validate programmatic configuration before initialization. Clear the plugin
 during graceful shutdown so every exporter gets a teardown attempt.
 
-## Migrating from Version 3
+## Migrating from Version 3 to Version 4
 
 Version 4 adds independent OTLP log and metric sections while preserving the
 version-3 trace endpoint list. Change `version = 3` to `version = 4`, then add
@@ -272,5 +272,4 @@ maps into its new endpoint. Use `header_env` when a header value comes from an
 environment variable.
 
 For before-and-after TOML and Rust, Python, Node.js, Go, and C API changes,
-refer to
-[Migration Guides](/reference/migration-guides#observability-configuration-version-3).
+refer to the [OpenTelemetry version-2-to-version-3 migration](/configure-plugins/observability/opentelemetry#version-2-to-version-3).

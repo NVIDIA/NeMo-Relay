@@ -213,6 +213,11 @@ await ctx.runtime.emit_metric(
 )
 ```
 
+`LogSeverity` in this worker SDK comes from `nemo_relay_plugin`, whose members
+are uppercase, such as `LogSeverity.INFO`. Application code uses the separate
+`nemo_relay.LogSeverity` enum with title-case members such as
+`LogSeverity.Warn`.
+
 Relay validates the schema and severity at the host boundary. It validates the
 metric mark after sanitization, so an invalid measurement group is rejected
 atomically and is not exported as a log.

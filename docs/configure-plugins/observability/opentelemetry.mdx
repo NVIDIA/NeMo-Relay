@@ -51,7 +51,8 @@ The `gen_ai` projection targets the
 Use that pinned snapshot when comparing emitted operation and attribute names
 with collector or backend schemas.
 
-NeMo Relay uses OpenTelemetry Rust `0.32`. It deterministically derives
+NeMo Relay uses the currently vendored OpenTelemetry Rust SDK (`0.32`). It
+deterministically derives
 compliant trace and span IDs from Relay lifecycle UUIDs, so endpoints that
 receive the same event stream use the same identifiers and parentage. Different
 endpoint types must therefore use independent OTLP destinations; configuring
@@ -241,11 +242,11 @@ and the SDK can attempt to export queued spans.
 
 ## Endpoint Capacity and Sizing
 
-NeMo Relay does not impose a maximum number of OpenTelemetry destinations.
-Each trace, log, or metric destination owns an exporter, signal provider,
+NeMo Relay does not impose a maximum number of OpenTelemetry endpoints.
+Each trace, log, or metric endpoint owns an exporter, signal provider,
 processor or reader, and exporter runtime resources. Nothing in those export
-stacks is shared between destinations. Queue capacity and memory are per
-destination, and total export traffic grows with the destination count.
+stacks is shared between endpoints. Queue capacity and memory are per endpoint,
+and total export traffic grows with the endpoint count.
 
 Typical deployments need one to three endpoints. Validate configurations with
 tens or hundreds of endpoints against the process limits for threads, memory,
@@ -278,6 +279,46 @@ attribute named `nemo_relay.tool.result.annotation`. Relay does not flatten the
 annotation's application-defined keys. The `gen_ai` projection omits this
 Relay-private attribute.
 
+## Emit Log and Metric Marks
+
+Rust, Python, and Node.js generic mark APIs accept optional `data_schema` and
+`severity` values. Prefer the typed metric helper rather than constructing the
+reserved schema by hand: `metric` in Rust, Python, and Node.js, or `EmitMetric`
+in Go. The helper validates the complete measurement group before publishing the
+mark. The exporter validates the sanitized payload again before recording any
+measurement.
+
+The following Python example emits one warning log mark and one metric mark:
+
+```python
+from nemo_relay import LogSeverity, MetricKind, MetricMeasurement, MetricValueType
+from nemo_relay import scope
+
+scope.event(
+    "budget-nearly-exhausted",
+    data={"remaining_tokens": 128},
+    severity=LogSeverity.Warn,
+)
+
+scope.metric(
+    "tokenomics",
+    [
+        MetricMeasurement(
+            "example.tokens.saved",
+            MetricKind.Counter,
+            MetricValueType.U64,
+            42,
+            unit="{token}",
+            description="Tokens avoided",
+            attributes={"model": "example-model"},
+        )
+    ],
+)
+```
+
+Mark sanitizers run for both calls. Routing uses the immutable `data_schema`
+after sanitization, and a metric mark never falls back to the log pipeline.
+
 ## Log Export
 
 The log pipeline exports one OTLP `LogRecord` for each sanitized non-metric
@@ -299,7 +340,7 @@ alias for `warn`.
 The `logs` section applies these processing settings to every log endpoint:
 
 | Field | Default | Notes |
-|---|---:|---|
+|---|---|---|
 | `minimum_severity` | `info` | Independent telemetry-log threshold. It does not inherit process logging settings. |
 | `max_queue_size` | `2048` | Maximum queued log records. |
 | `max_export_batch_size` | `512` | Maximum records in one batch; must not exceed the queue size. |
@@ -315,8 +356,9 @@ The log attributes preserve the mark name, UUID, optional parent UUID,
 category and category profile, schema, sanitized metadata, and ATOF version
 under `nemo_relay.*` keys. A mark in a resolvable active or completed scope
 receives trace and span context. An orphan mark receives no invented trace
-context. Relay leaves OTLP `event_name` unset with OpenTelemetry SDK `0.32` and
-retains the dynamic name in `nemo_relay.mark.name`.
+context. Relay leaves OTLP `event_name` unset with the currently vendored
+OpenTelemetry SDK (`0.32`) and retains the dynamic name in
+`nemo_relay.mark.name`.
 
 <Warning>
 Telemetry logs are separate from NeMo Relay's operational stderr and file
@@ -367,7 +409,7 @@ OTLP point:
 | `histogram` | `u64`, or finite `f64` | Distribution sample |
 
 Unsigned values must not exceed `i64::MAX`, which prevents loss in the pinned
-OTLP conversion. Metric names must be 1–255 ASCII bytes, start with a letter,
+OTLP conversion. Metric names must be 1 to 255 ASCII bytes, start with a letter,
 and contain only letters, digits, `_`, `.`, `-`, or `/`. Units must be ASCII
 and at most 63 bytes. Optional histogram boundaries can include negative
 values, but every boundary must be finite, strictly increasing, unique, and the
@@ -388,55 +430,16 @@ description, and histogram boundaries for the lifetime of that destination.
 The `metrics` section applies these settings to every metric endpoint:
 
 | Field | Default | Notes |
-|---|---:|---|
+|---|---|---|
 | `export_interval_millis` | `60000` | Periodic collection interval. |
 | `temporality` | `cumulative` | `cumulative`, `delta`, or `low_memory`. |
 | `max_instruments` | `256` | Retained instrument descriptors per destination. |
 | `cardinality_limit` | `2000` | SDK series limit per instrument. |
 
-Metric points use SDK collection timestamps. SDK `0.32` cannot preserve the
-source mark timestamp or attach a trace-linked exemplar through this path.
-Relay does not emulate correlation with high-cardinality attributes.
-
-### Emit Log and Metric Marks
-
-Rust, Python, and Node.js generic mark APIs accept optional `data_schema` and
-`severity` values. Prefer the typed metric helper—`metric` in Rust, Python, and
-Node.js, or `EmitMetric` in Go—over constructing the reserved schema by hand.
-The helper validates the complete measurement group before publishing the
-mark. The exporter validates the sanitized payload again before recording any
-measurement.
-
-The following Python example emits one warning log mark and one metric mark:
-
-```python
-from nemo_relay import LogSeverity, MetricKind, MetricMeasurement, MetricValueType
-from nemo_relay import scope
-
-scope.event(
-    "budget-nearly-exhausted",
-    data={"remaining_tokens": 128},
-    severity=LogSeverity.Warn,
-)
-
-scope.metric(
-    "tokenomics",
-    [
-        MetricMeasurement(
-            "example.tokens.saved",
-            MetricKind.Counter,
-            MetricValueType.U64,
-            42,
-            unit="{token}",
-            description="Tokens avoided",
-            attributes={"model": "example-model"},
-        )
-    ],
-)
-```
-
-Mark sanitizers run for both calls. Routing uses the immutable `data_schema`
-after sanitization, and a metric mark never falls back to the log pipeline.
+Metric points use SDK collection timestamps. The currently vendored
+OpenTelemetry SDK (`0.32`) cannot preserve the source mark timestamp or attach
+a trace-linked exemplar through this path. Relay does not emulate correlation
+with high-cardinality attributes.
 
 ## GenAI Projection
 
@@ -565,17 +568,12 @@ message. Use it to monitor rejected metric marks, capacity limits, and delivery
 failures without configuring the observability plugin. The plugin continues to
 include the same conditions in its runtime report.
 
-## Version 3 to Version 4
+## Migrating from Version 3 to Version 4
 
 Version 4 adds the sibling `opentelemetry.logs` and
-`opentelemetry.metrics` sections. It is the generated and programmatic default.
-Version 3 remains valid for trace-only configuration and rejects either new
-signal section, even when that section is disabled. Trace endpoint behavior
-and projection controls are unchanged.
-
-To upgrade a version-3 configuration, change `version = 3` to `version = 4`,
-then add either signal section only when that export is needed. Omitting the
-sections preserves trace-only behavior.
+`opentelemetry.metrics` sections. For the complete upgrade path and
+programmatic configuration, see
+[Migrating from Version 3 to Version 4](/configure-plugins/observability/configuration#migrating-from-version-3-to-version-4).
 
 ## Version 2 to Version 3
 
