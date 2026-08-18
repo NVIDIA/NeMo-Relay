@@ -163,8 +163,9 @@ already accepted typed middleware before the plugin library unloads.
 message, count }` entries for the active host configuration. Relay aggregates
 repeated codes, retains the latest message, saturates counts, orders entries by
 code, and caps the snapshot at 32 entries. The result is host-level and does
-not attribute an entry to the plugin that emitted it. The ABI remains v4; an
-older, shorter v4 host table returns an explicit unsupported-capability error.
+not attribute an entry to the plugin that emitted it. ABI v4 requires the
+complete finalized host table. Plugins loaded through the frozen ABI-v3 or
+ABI-v2 compatibility tables cannot use runtime diagnostics.
 
 Relay scope context is restored around every poll of a registered middleware
 future. Child tasks created with `tokio::spawn` do not automatically inherit

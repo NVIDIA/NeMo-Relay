@@ -166,10 +166,9 @@ The snapshot is host-level, not per-plugin: Relay does not currently preserve
 emitting-plugin provenance for runtime diagnostics. It aggregates repeated
 codes, retains the most recently recorded message, saturates counts, and
 contains at most 32 entries. It is empty when no plugin configuration is
-active. The trailing ABI-v4 diagnostics callback is negotiated through
-`struct_size`; a plugin built with this SDK reports an unsupported-capability
-error when an older, shorter v4 host table does not include it. Existing v4
-typed-async and typed-mark capabilities remain usable with that older table.
+active. ABI v4 requires the complete finalized host table. Plugins loaded
+through the frozen ABI-v3 or ABI-v2 compatibility tables cannot use
+`runtime_diagnostics()`.
 
 Relay negotiates v4, then the separately frozen v3 table, then the legacy v2
 table. An entry that rejects a newer table with `InvalidArg` is retried with the
