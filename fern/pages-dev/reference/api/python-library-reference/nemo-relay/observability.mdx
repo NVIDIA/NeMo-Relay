@@ -125,6 +125,48 @@ def to_dict() -> JsonObject
 
 Serialize this endpoint to the canonical plugin shape.
 
+### `OpenTelemetrySignalEndpointConfig`
+
+One signal-specific OTLP destination for logs or metrics.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this signal endpoint to the canonical plugin shape.
+
+### `OpenTelemetryLogSectionConfig`
+
+OTLP log pipeline settings sourced from non-metric marks.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this log section to the canonical plugin shape.
+
+### `OpenTelemetryMetricSectionConfig`
+
+OTLP metric pipeline settings sourced from metric marks.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this metric section to the canonical plugin shape.
+
 ### `OpenTelemetrySectionConfig`
 
 Multi-endpoint OpenTelemetry plugin settings.

@@ -23,6 +23,24 @@ Observability fields returned by event sanitizer callbacks.
 
 Structured identity of the codec active for one worker invocation.
 
+### `RuntimeDiagnostic`
+
+One bounded runtime diagnostic reported by the Relay host.
+
+### `RuntimeDiagnostics`
+
+Bounded snapshot of active host runtime diagnostics.
+
+#### Methods
+
+##### `get`
+
+```python
+def get(code: str) -> RuntimeDiagnostic | None
+```
+
+Return the diagnostic with `code`, when present.
+
 ### `LlmSanitizeRequestContext`
 
 Structured per-call context provided to an LLM request sanitizer.
@@ -86,6 +104,36 @@ async def decode(response: Json) -> Json
 ```
 
 Decode a wire response with the active host codec.
+
+### `DataSchema`
+
+Identify the schema of a mark's opaque data payload.
+
+#### Methods
+
+##### `to_json`
+
+```python
+def to_json() -> dict[str, str]
+```
+
+Return the canonical JSON representation.
+
+### `LogSeverity(str, Enum)`
+
+Telemetry severity assigned to an exported mark log.
+
+### `MetricKind(str, Enum)`
+
+OpenTelemetry instrument kind recorded by a metric mark.
+
+### `MetricValueType(str, Enum)`
+
+Explicit numeric representation of a metric measurement value.
+
+### `MetricMeasurement(TypedDict)`
+
+One recording operation in a Relay metric-measurement mark.
 
 ### `WorkerSdkError(Exception)`
 
@@ -494,10 +542,26 @@ Create an instance.
 ##### `emit_mark`
 
 ```python
-async def emit_mark(name: str, data: Json | None = None, metadata: Json | None = None, *, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
+async def emit_mark(name: str, data: Json | None = None, metadata: Json | None = None, *, data_schema: DataSchema | Mapping[str, Json] | None = None, severity: LogSeverity | str | None = None, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
 ```
 
 Emit a mark event through the Relay host runtime.
+
+##### `runtime_diagnostics`
+
+```python
+async def runtime_diagnostics() -> RuntimeDiagnostics
+```
+
+Return a bounded snapshot of active host runtime diagnostics.
+
+##### `emit_metric`
+
+```python
+async def emit_metric(name: str, measurements: Iterable[MetricMeasurement | Mapping[str, Json]], metadata: Json | None = None, *, scope_stack_id: str | None = None, parent_scope_id: str | None = None) -> None
+```
+
+Emit a Relay metric-measurement mark through the host runtime.
 
 ##### `create_scope_stack`
 
@@ -643,6 +707,7 @@ Run a local `grpc-v1` worker until the Relay host shuts it down.
 
 - `ANNOTATED_LLM_REQUEST_SCHEMA`
 - `AnnotatedLlmRequest`
+- `DATA_SCHEMA_SCHEMA`
 - `EVENT_SCHEMA`
 - `Event`
 - `EventSanitizeCallback`
@@ -657,6 +722,8 @@ Run a local `grpc-v1` worker until the Relay host shuts it down.
 - `LlmSanitizeRequestCallback`
 - `LlmSanitizeResponseCallback`
 - `LlmStreamExecutionCallback`
+- `METRIC_DATA_SCHEMA_NAME`
+- `METRIC_DATA_SCHEMA_VERSION`
 - `PLUGIN_DIAGNOSTICS_SCHEMA`
 - `SubscriberCallback`
 - `ToolConditionalCallback`

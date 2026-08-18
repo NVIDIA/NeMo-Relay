@@ -42,10 +42,18 @@ Pop a scope previously returned by `push()` or `scope()`.
 ### `event`
 
 ```python
-def event(name: str, *, handle: ScopeHandle | None = None, data: Json | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None
+def event(name: str, *, handle: ScopeHandle | None = None, data: Json | None = None, data_schema: DataSchema | None = None, metadata: Json | None = None, severity: LogSeverity | None = None, timestamp: datetime | None = None) -> None
 ```
 
 Emit a `Mark` event under the current or provided scope.
+
+### `metric`
+
+```python
+def metric(name: str, measurements: Sequence[MetricMeasurement], *, handle: ScopeHandle | None = None, metadata: Json | None = None, timestamp: datetime | None = None) -> None
+```
+
+Emit a validated group of OpenTelemetry metric recording operations.
 
 ### `scope`
 

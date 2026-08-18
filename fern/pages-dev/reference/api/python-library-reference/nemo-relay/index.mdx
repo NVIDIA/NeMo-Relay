@@ -15,6 +15,10 @@ Python bindings for the NeMo Relay runtime.
 
 ## Classes
 
+### `DataSchema(TypedDict)`
+
+Schema identifier attached to an event's opaque data payload.
+
 ### `EventSanitizeFields(TypedDict)`
 
 Observability fields returned by mark and scope event sanitizers.
@@ -147,8 +151,19 @@ Install a scope stack into the current thread's native runtime context.
 - `LlmSanitizeRequestContext`
 - `LlmSanitizeResponseCodec`
 - `LlmSanitizeResponseContext`
+- `LogSeverity`
 - `MarkEvent`
+- `MetricKind`
+- `MetricMeasurement`
+- `MetricTemporality`
+- `MetricValueType`
 - `OpenTelemetryConfig`
+- `OpenTelemetryLogConfig`
+- `OpenTelemetryLogSubscriber`
+- `OpenTelemetryMetricConfig`
+- `OpenTelemetryMetricSubscriber`
+- `OpenTelemetryRuntimeDiagnostic`
+- `OpenTelemetryRuntimeDiagnostics`
 - `OpenTelemetrySubscriber`
 - `PendingMarkSpec`
 - `PropagationContext`
