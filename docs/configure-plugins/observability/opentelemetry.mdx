@@ -557,6 +557,14 @@ and then flushes the provider. Log shutdown drains the batch queue. Metric
 shutdown performs the reader's final collection; it does not add a second
 metric flush.
 
+Every direct trace, log, and metric subscriber exposes a bounded runtime
+diagnostics snapshot: `runtime_diagnostics()` in Rust and Python,
+`runtimeDiagnostics()` in Node.js, and `RuntimeDiagnostics()` in Go. It reports
+each runtime condition's stable code, occurrence count, and most recent
+message. Use it to monitor rejected metric marks, capacity limits, and delivery
+failures without configuring the observability plugin. The plugin continues to
+include the same conditions in its runtime report.
+
 ## Version 3 to Version 4
 
 Version 4 adds the sibling `opentelemetry.logs` and
@@ -568,14 +576,6 @@ and projection controls are unchanged.
 To upgrade a version-3 configuration, change `version = 3` to `version = 4`,
 then add either signal section only when that export is needed. Omitting the
 sections preserves trace-only behavior.
-
-Every direct trace, log, and metric subscriber exposes a bounded runtime
-diagnostics snapshot: `runtime_diagnostics()` in Rust and Python,
-`runtimeDiagnostics()` in Node.js, and `RuntimeDiagnostics()` in Go. It reports
-each runtime condition's stable code, occurrence count, and most recent
-message. Use it to monitor rejected metric marks, capacity limits, and delivery
-failures without configuring the observability plugin. The plugin continues to
-include the same conditions in its runtime report.
 
 ## Version 2 to Version 3
 
