@@ -2611,6 +2611,7 @@ async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
                 "classes": {
                     "read_only": {
                         "cacheable": true,
+                        "tool_version": "class-v1",
                         "members": ["docs_lookup"],
                         "not_a_field": 7
                     }

@@ -128,6 +128,9 @@ pub struct ToolClass {
     /// Live-rerun probability; inherits the response-cache rate when unset.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bypass_rate: Option<f64>,
+    /// Version string folded into cache keys for members of this class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_version: Option<String>,
     /// Top-level argument keys dropped before keying.
     pub arg_skip: Vec<String>,
     /// Exact tool names or `*` wildcard patterns in this class.
@@ -160,6 +163,7 @@ nemo_relay::editor_config! {
         cacheable => { label: "cacheable", kind: Boolean },
         ttl_seconds => { label: "ttl_seconds", kind: Integer, optional: true },
         bypass_rate => { label: "bypass_rate", kind: Float, optional: true },
+        tool_version => { label: "tool_version", kind: String, optional: true },
         arg_skip => { label: "arg_skip", kind: Json },
         members => { label: "members", kind: Json },
     }

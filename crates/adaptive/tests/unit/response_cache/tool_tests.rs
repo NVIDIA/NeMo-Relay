@@ -79,6 +79,35 @@ fn counting_next(calls: Arc<AtomicUsize>, result: Json) -> ToolExecutionNextFn {
     })
 }
 
+fn versioned_tools(class_version: &str, override_version: Option<&str>) -> Arc<ToolCacheConfig> {
+    let classes = std::collections::BTreeMap::from([(
+        "read_only".to_string(),
+        ToolClass {
+            cacheable: true,
+            tool_version: Some(class_version.to_string()),
+            members: vec!["docs_lookup".to_string()],
+            ..ToolClass::default()
+        },
+    )]);
+    let overrides = override_version
+        .map(|version| {
+            std::collections::BTreeMap::from([(
+                "docs_lookup".to_string(),
+                ToolOverride {
+                    tool_version: Some(version.to_string()),
+                    ..ToolOverride::default()
+                },
+            )])
+        })
+        .unwrap_or_default();
+    Arc::new(ToolCacheConfig {
+        enabled: true,
+        classes,
+        overrides,
+        ..ToolCacheConfig::default()
+    })
+}
+
 #[test]
 fn conventional_tool_error_detection_is_deliberately_narrow() {
     assert!(is_error_shaped_tool_result(&serde_json::json!({
@@ -337,6 +366,79 @@ async fn cache_error_policy_partitions_tool_keys() {
     .unwrap();
     assert_eq!(hit.result, serde_json::json!({"answer": "fresh"}));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn class_tool_version_partitions_keys_unless_an_override_replaces_it() {
+    let store = Arc::new(InMemoryCacheStore::new(1 << 20));
+    let response_cache = cache_config();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let args = serde_json::json!({"query": "relay"});
+
+    let class_v1 = run_tool_cache(
+        "docs_lookup".to_string(),
+        args.clone(),
+        counting_next(
+            Arc::clone(&calls),
+            serde_json::json!({"version": "class-v1"}),
+        ),
+        store.clone(),
+        Arc::clone(&response_cache),
+        versioned_tools("class-v1", None),
+    )
+    .await
+    .unwrap();
+    let class_v2 = run_tool_cache(
+        "docs_lookup".to_string(),
+        args.clone(),
+        counting_next(
+            Arc::clone(&calls),
+            serde_json::json!({"version": "class-v2"}),
+        ),
+        store.clone(),
+        Arc::clone(&response_cache),
+        versioned_tools("class-v2", None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(class_v1.result, serde_json::json!({"version": "class-v1"}));
+    assert_eq!(class_v2.result, serde_json::json!({"version": "class-v2"}));
+
+    let overridden = run_tool_cache(
+        "docs_lookup".to_string(),
+        args.clone(),
+        counting_next(
+            Arc::clone(&calls),
+            serde_json::json!({"version": "override"}),
+        ),
+        store.clone(),
+        Arc::clone(&response_cache),
+        versioned_tools("class-v1", Some("tool-v1")),
+    )
+    .await
+    .unwrap();
+    let override_hit = run_tool_cache(
+        "docs_lookup".to_string(),
+        args,
+        counting_next(
+            Arc::clone(&calls),
+            serde_json::json!({"version": "unexpected"}),
+        ),
+        store,
+        response_cache,
+        versioned_tools("class-v2", Some("tool-v1")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        overridden.result,
+        serde_json::json!({"version": "override"})
+    );
+    assert_eq!(
+        override_hit.result,
+        serde_json::json!({"version": "override"})
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]

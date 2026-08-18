@@ -114,11 +114,12 @@ type ResponseCacheToolsConfig struct {
 
 // ResponseCacheToolClass defines a shared tool-cache policy.
 type ResponseCacheToolClass struct {
-	Cacheable  bool     `json:"cacheable,omitempty"`
-	TTLSeconds *uint64  `json:"ttl_seconds,omitempty"`
-	BypassRate *float64 `json:"bypass_rate,omitempty"`
-	ArgSkip    []string `json:"arg_skip,omitempty"`
-	Members    []string `json:"members,omitempty"`
+	Cacheable   bool     `json:"cacheable,omitempty"`
+	TTLSeconds  *uint64  `json:"ttl_seconds,omitempty"`
+	BypassRate  *float64 `json:"bypass_rate,omitempty"`
+	ToolVersion *string  `json:"tool_version,omitempty"`
+	ArgSkip     []string `json:"arg_skip,omitempty"`
+	Members     []string `json:"members,omitempty"`
 }
 
 // ResponseCacheToolOverride refines a resolved tool-cache policy.

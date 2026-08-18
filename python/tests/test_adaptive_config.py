@@ -225,7 +225,13 @@ class TestDynamicConfigContract:
         tools = ToolCacheConfig(
             enabled=True,
             cache_errors=True,
-            classes={"read_only": ToolClass(cacheable=True, members=["docs_lookup"])},
+            classes={
+                "read_only": ToolClass(
+                    cacheable=True,
+                    tool_version="class-v1",
+                    members=["docs_lookup"],
+                )
+            },
             overrides={"docs_lookup": ToolOverride(tool_version="v1")},
         )
         serialized = ResponseCacheConfig(tools=tools).to_dict()["tools"]
@@ -234,7 +240,14 @@ class TestDynamicConfigContract:
             "cache_errors": True,
             "priority": 150,
             "default": {"cacheable": False, "arg_skip": [], "members": []},
-            "classes": {"read_only": {"cacheable": True, "arg_skip": [], "members": ["docs_lookup"]}},
+            "classes": {
+                "read_only": {
+                    "cacheable": True,
+                    "tool_version": "class-v1",
+                    "arg_skip": [],
+                    "members": ["docs_lookup"],
+                }
+            },
             "overrides": {"docs_lookup": {"tool_version": "v1"}},
         }
 

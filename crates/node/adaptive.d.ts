@@ -88,6 +88,7 @@ export interface ToolClass {
   cacheable?: boolean;
   ttlSeconds?: number;
   bypassRate?: number;
+  toolVersion?: string;
   argSkip?: string[];
   members?: string[];
 }
@@ -116,9 +117,10 @@ export interface ToolCacheConfig {
   overrides?: Record<string, ToolOverride>;
 }
 
-type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'argSkip'> & {
+type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
   ttl_seconds?: number;
   bypass_rate?: number;
+  tool_version?: string;
   arg_skip?: string[];
 };
 

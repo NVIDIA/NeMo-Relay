@@ -188,12 +188,12 @@ const RESPONSE_CACHE_PLUGIN_FIELDS = {
 const TOOL_CLASS_PLUGIN_FIELDS = {
   ttlSeconds: 'ttl_seconds',
   bypassRate: 'bypass_rate',
+  toolVersion: 'tool_version',
   argSkip: 'arg_skip',
 };
 
 const TOOL_OVERRIDE_PLUGIN_FIELDS = {
   ...TOOL_CLASS_PLUGIN_FIELDS,
-  toolVersion: 'tool_version',
 };
 
 const TOOL_CACHE_PLUGIN_FIELDS = {

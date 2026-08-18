@@ -32,6 +32,7 @@ fn policy_resolution_inherits_class_values_and_honors_an_override() {
             cacheable: true,
             ttl_seconds: Some(300),
             bypass_rate: Some(0.2),
+            tool_version: Some("class-v1".to_string()),
             arg_skip: vec!["request_id".to_string()],
             members: vec!["docs_*".to_string()],
         },
@@ -42,7 +43,7 @@ fn policy_resolution_inherits_class_values_and_honors_an_override() {
         ToolOverride {
             cacheable: Some(false),
             arg_skip: Some(vec![]),
-            tool_version: Some("v1".to_string()),
+            tool_version: Some("tool-v2".to_string()),
             ..ToolOverride::default()
         },
     );
@@ -60,6 +61,7 @@ fn policy_resolution_inherits_class_values_and_honors_an_override() {
     assert!(class_only.cacheable);
     assert_eq!(class_only.ttl, Duration::from_secs(300));
     assert_eq!(class_only.bypass_rate, 0.2);
+    assert_eq!(class_only.tool_version.as_deref(), Some("class-v1"));
     assert_eq!(class_only.arg_skip, ["request_id"]);
 
     let overridden = resolve_policy("docs_lookup", &response_cache(), &tools);
@@ -67,7 +69,7 @@ fn policy_resolution_inherits_class_values_and_honors_an_override() {
     assert_eq!(overridden.ttl, Duration::from_secs(300));
     assert_eq!(overridden.bypass_rate, 0.2);
     assert!(overridden.arg_skip.is_empty());
-    assert_eq!(overridden.tool_version.as_deref(), Some("v1"));
+    assert_eq!(overridden.tool_version.as_deref(), Some("tool-v2"));
 }
 
 #[test]

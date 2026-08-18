@@ -63,7 +63,9 @@ fn resolve_policy(
         None => class.arg_skip.clone(),
     };
 
-    let tool_version = over.and_then(|over| over.tool_version.clone());
+    let tool_version = over
+        .and_then(|over| over.tool_version.clone())
+        .or_else(|| class.tool_version.clone());
 
     ResolvedToolPolicy {
         cacheable,

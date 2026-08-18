@@ -7,7 +7,7 @@ use super::*;
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind};
 use serde_json::json;
 
-use crate::response_cache::config::ToolCacheConfig;
+use crate::response_cache::config::{ToolCacheConfig, ToolClass};
 
 #[test]
 fn test_adaptive_config_defaults() {
@@ -220,4 +220,14 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
         tools.field("default").unwrap().kind,
         EditorFieldKind::Section
     );
+}
+
+#[test]
+fn tool_class_editor_schema_exposes_optional_version() {
+    let tool_class = ToolClass::editor_schema();
+    assert_eq!(
+        tool_class.field("tool_version").unwrap().kind,
+        EditorFieldKind::String
+    );
+    assert!(tool_class.field("tool_version").unwrap().optional);
 }

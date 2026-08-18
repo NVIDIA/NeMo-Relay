@@ -266,9 +266,14 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 	tools.Enabled = true
 	tools.CacheErrors = true
 	zero := int32(0)
+	classVersion := "class-v1"
 	tools.Priority = &zero
 	tools.Classes = map[string]ResponseCacheToolClass{
-		"read_only": {Cacheable: true, Members: []string{"docs_lookup"}},
+		"read_only": {
+			Cacheable:   true,
+			ToolVersion: &classVersion,
+			Members:     []string{"docs_lookup"},
+		},
 	}
 	rc.Tools = &tools
 
@@ -303,6 +308,10 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 	classes, ok := toolsSection["classes"].(map[string]any)
 	if !ok || classes["read_only"] == nil {
 		t.Fatalf("tools.classes not preserved: %#v", toolsSection)
+	}
+	readOnly, ok := classes["read_only"].(map[string]any)
+	if !ok || readOnly["tool_version"] != "class-v1" {
+		t.Fatalf("class tool_version not preserved: %#v", classes["read_only"])
 	}
 
 	report, err := ValidateAdaptiveConfig(config)

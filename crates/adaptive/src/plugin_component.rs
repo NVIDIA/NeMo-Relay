@@ -396,6 +396,7 @@ fn validate_response_cache_tools_fields(
         "cacheable",
         "ttl_seconds",
         "bypass_rate",
+        "tool_version",
         "arg_skip",
         "members",
     ];

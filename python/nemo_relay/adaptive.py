@@ -262,6 +262,8 @@ class ToolClass:
             when ``None``.
         bypass_rate: Live-rerun probability for this class; inherits
             ``response_cache.bypass_rate`` when ``None``.
+        tool_version: Version string folded into the cache key for every class
+            member. A per-tool override replaces it when set.
         arg_skip: Argument keys dropped before keying (default empty: key on all args).
         members: Tool names in this class (unused for the ``default`` bucket).
             Names may use ``*`` wildcards; an exact member wins over any
@@ -272,6 +274,7 @@ class ToolClass:
     cacheable: bool = False
     ttl_seconds: int | None = None
     bypass_rate: float | None = None
+    tool_version: str | None = None
     arg_skip: list[str] = field(default_factory=list)
     members: list[str] = field(default_factory=list)
 
@@ -282,6 +285,7 @@ class ToolClass:
                 "cacheable": self.cacheable,
                 "ttl_seconds": self.ttl_seconds,
                 "bypass_rate": self.bypass_rate,
+                "tool_version": self.tool_version,
                 "arg_skip": self.arg_skip,
                 "members": self.members,
             }
