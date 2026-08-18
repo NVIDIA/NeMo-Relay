@@ -21,6 +21,7 @@ pub(crate) enum AgentArg {
     #[value(name = "claude", alias = "claude-code")]
     Claude,
     Codex,
+    Pi,
 }
 
 impl From<AgentArg> for CodingAgent {
@@ -28,6 +29,7 @@ impl From<AgentArg> for CodingAgent {
         match value {
             AgentArg::Claude => Self::ClaudeCode,
             AgentArg::Codex => Self::Codex,
+            AgentArg::Pi => Self::Pi,
         }
     }
 }

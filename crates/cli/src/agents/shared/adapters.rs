@@ -5,6 +5,8 @@
 pub(crate) mod claude_code;
 #[path = "../codex/adapter.rs"]
 pub(crate) mod codex;
+#[path = "../pi/adapter.rs"]
+pub(crate) mod pi;
 
 pub(crate) const SKILL_LOAD_SOURCE_KEY: &str = "skill_load_source";
 pub(crate) const SKILL_LOAD_SOURCE_PROMPT_EXPANSION: &str = "prompt_expansion";
@@ -182,10 +184,26 @@ pub(crate) trait AgentPayloadExtractor {
 
 pub(super) struct ClaudeCodePayloadExtractor;
 pub(super) struct CodexPayloadExtractor;
+pub(super) struct PiPayloadExtractor;
 
 pub(super) static CLAUDE_CODE_PAYLOAD_EXTRACTOR: ClaudeCodePayloadExtractor =
     ClaudeCodePayloadExtractor;
 pub(super) static CODEX_PAYLOAD_EXTRACTOR: CodexPayloadExtractor = CodexPayloadExtractor;
+pub(super) static PI_PAYLOAD_EXTRACTOR: PiPayloadExtractor = PiPayloadExtractor;
+
+/// pi hooks are emitted by a NeMo Relay-authored extension, so the payload uses
+/// the canonical key names and needs no path deviations. The one override is the
+/// session-header policy: pi is not Claude Code installed mode and must not
+/// adopt an `x-claude-code-session-id` that happens to be in the environment.
+impl AgentPayloadExtractor for PiPayloadExtractor {
+    fn session_header_policy(&self) -> SessionHeaderPolicy {
+        SessionHeaderPolicy::RelayOnly
+    }
+
+    fn tool_paths(&self) -> &'static ToolPathSet {
+        PI_TOOL_PATHS
+    }
+}
 
 /// Claude Code reports its native tool identifier as `tool_use_id`, so it uses
 /// a tool path set that prefers that key. Every other hook field matches the
@@ -364,6 +382,15 @@ const CODEX_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
     call_id: TOOL_CALL_ID_PATHS,
     name: TOOL_NAME_PATHS,
     arguments: CODEX_TOOL_ARGUMENT_PATHS,
+    result: TOOL_RESULT_PATHS,
+    status: TOOL_STATUS_PATHS,
+};
+/// pi sends its native `tool_call` arguments under `input`, which the shared
+/// argument precedence already covers ahead of `arguments`/`args`.
+const PI_TOOL_PATHS: &ToolPathSet = &ToolPathSet {
+    call_id: TOOL_CALL_ID_PATHS,
+    name: TOOL_NAME_PATHS,
+    arguments: TOOL_ARGUMENT_PATHS,
     result: TOOL_RESULT_PATHS,
     status: TOOL_STATUS_PATHS,
 };

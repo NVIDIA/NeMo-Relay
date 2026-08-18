@@ -1792,7 +1792,10 @@ fn cli_agents_json_emits_supported_agent_shapes() {
         .iter()
         .map(|agent| agent["name"].as_str().unwrap())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(names, std::collections::BTreeSet::from(["claude", "codex"]));
+    assert_eq!(
+        names,
+        std::collections::BTreeSet::from(["claude", "codex", "pi"])
+    );
     assert!(agents.iter().all(|agent| agent["status"].is_string()));
 }
 

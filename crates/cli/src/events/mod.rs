@@ -9,6 +9,7 @@ pub(crate) mod json_path;
 pub(crate) enum AgentKind {
     Codex,
     ClaudeCode,
+    Pi,
     Gateway,
 }
 
@@ -19,6 +20,7 @@ impl AgentKind {
         match self {
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
+            Self::Pi => "pi",
             Self::Gateway => "gateway",
         }
     }

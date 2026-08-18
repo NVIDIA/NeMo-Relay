@@ -2281,6 +2281,99 @@ async fn pre_tool_hook_rejects_when_conditional_guardrail_blocks() {
     );
     assert_eq!(body["error"]["reason"], json!("blocked by policy"));
 }
+
+// pi's extension gates a tool call on this endpoint's verdict, so the 403 shape
+// is a wire contract, not an internal detail: the extension turns
+// `error.reason` into pi's `{block, reason}`, which pi hands to the model
+// verbatim as an error tool result.
+#[tokio::test]
+async fn pi_tool_call_hook_rejects_when_conditional_guardrail_blocks() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_tool_conditional_execution_guardrail("cli-pi-tool-blocker");
+    const BLOCKED_TEST_TOOL: &str = "read";
+    register_tool_conditional_execution_guardrail(
+        "cli-pi-tool-blocker",
+        1,
+        Arc::new(|name, args| {
+            Box::pin(async move {
+                let targets_secret = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| path.ends_with(".env"));
+                Ok((name == BLOCKED_TEST_TOOL && targets_secret)
+                    .then(|| "read .env is blocked; use .env.example".to_string()))
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolGuardrailCleanup("cli-pi-tool-blocker");
+
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/pi")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "pi-guardrail-session",
+                        "hook_event_name": "tool_call",
+                        "tool_call_id": "call-1",
+                        "tool_name": BLOCKED_TEST_TOOL,
+                        "input": { "path": "/work/.env" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["error"]["type"],
+        json!("nemo_relay_guardrail_rejected")
+    );
+    // The reason must survive verbatim: it is what the model reads.
+    assert_eq!(
+        body["error"]["reason"],
+        json!("read .env is blocked; use .env.example")
+    );
+}
+
+// The same endpoint must stay out of the way when no guardrail objects,
+// otherwise every pi tool call would be blocked by a fail-closed extension.
+#[tokio::test]
+async fn pi_tool_call_hook_allows_when_no_guardrail_objects() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/pi")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "pi-allow-session",
+                        "hook_event_name": "tool_call",
+                        "tool_call_id": "call-2",
+                        "tool_name": "read",
+                        "input": { "path": "/work/README.md" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn gateway_forwards_openai_json_without_rewriting_payload() {
     let upstream = spawn_upstream(false).await;
