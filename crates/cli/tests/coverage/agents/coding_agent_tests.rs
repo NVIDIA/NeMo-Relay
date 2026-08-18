@@ -22,7 +22,7 @@ fn agent_descriptors_are_complete_and_unique() {
     assert_eq!(CodingAgent::ClaudeCode.hook_events().len(), 14);
     assert_eq!(CodingAgent::Codex.hook_events().len(), 10);
     assert_eq!(CodingAgent::Pi.label(), "pi");
-    assert_eq!(CodingAgent::Pi.hook_events().len(), 11);
+    assert_eq!(CodingAgent::Pi.hook_events().len(), 12);
     for agent in CodingAgent::ALL {
         let events = agent.hook_events();
         assert!(events.iter().all(|event| !event.is_empty()));

@@ -38,10 +38,17 @@
  *
  * Load it with `pi -e <path-to-this-file>`, or let `nemo-relay launch pi` do it.
  *
+ * **Model redirection.** pi resolves a base URL per model from a generated
+ * catalog, so the extension points the active model's provider at the gateway
+ * itself -- but only when the gateway forwards to the endpoint that model would
+ * otherwise call. See `src/provider-redirect.ts`.
+ *
  * Environment (set by the launcher, overridable by hand):
  * - `NEMO_RELAY_PI_GATEWAY_URL`  gateway base URL (default `http://127.0.0.1:4040`)
  * - `NEMO_RELAY_PI_TIMEOUT_MS`   per-request timeout (default 5000)
  * - `NEMO_RELAY_PI_FAIL`         `closed` to block when the gateway is unreachable
+ * - `NEMO_RELAY_PI_REDIRECT`     `force` to skip the upstream check, `off` to disable
+ * - `NEMO_RELAY_PI_{OPENAI,ANTHROPIC}_UPSTREAM`  what the gateway forwards to
  */
 import {
   type GatewayConfig,
@@ -50,12 +57,19 @@ import {
   postHook,
   resolveFault,
 } from './src/gateway-client.ts';
+import {
+  type RedirectConfig,
+  decideRedirect,
+  isNotable,
+  redirectConfigFromEnv,
+} from './src/provider-redirect.ts';
 import type {
   AgentEndEvent,
   AgentSettledEvent,
   AgentStartEvent,
   ExtensionAPI,
   ExtensionContext,
+  ModelSelectEvent,
   SessionBeforeCompactEvent,
   SessionCompactEvent,
   SessionShutdownEvent,
@@ -127,6 +141,27 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   };
 
   /**
+   * Forward a hook and wait for the gateway to have processed it.
+   *
+   * Used only for the two turn boundaries. Everything else the extension sends
+   * is observability that can settle late, but a turn boundary *defines the
+   * parent* of whatever comes next -- and model traffic does not travel through
+   * this queue at all. pi sends model requests to the gateway directly over
+   * HTTP, so a queued `turn_end` races them: an acceptance trace showed the
+   * next turn's LLM span opening under the previous turn, because pi's request
+   * beat our post. Awaiting these two costs two local round trips per turn and
+   * removes the race, on the same reasoning that already makes `tool_call`
+   * await -- a span opened under the wrong turn is simply wrong.
+   */
+  const emitOrdered = async (
+    ctx: ExtensionContext,
+    payload: Record<string, unknown>,
+  ): Promise<void> => {
+    const active = ensureConfig(ctx);
+    await enqueue(() => postAndForget(active, payload));
+  };
+
+  /**
    * The attempt and turn a hook belongs to.
    *
    * Both counters hold the *next* value -- they are incremented as soon as the
@@ -146,6 +181,46 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     turn_seq: Math.max(0, turnSeq - 1),
   });
 
+  /** Providers already pointed at the gateway, so the redirect is idempotent. */
+  const redirectedProviders = new Set<string>();
+  let redirect: RedirectConfig | null = null;
+
+  /**
+   * Point the active model's provider at the gateway, when that is safe.
+   *
+   * Runs on `session_start` and again on every `model_select`, because the
+   * decision is per-model: switching from a provider the gateway fronts to one
+   * it does not must not leave the new provider redirected. Each outcome is
+   * reported to the gateway as a mark, so a trace with no LLM spans says why in
+   * the trace itself rather than only in the user's terminal.
+   */
+  const applyRedirect = (ctx: ExtensionContext, source: string): void => {
+    const active = ensureConfig(ctx);
+    redirect ??= redirectConfigFromEnv(active.url);
+    const decision = decideRedirect(ctx.model, redirect, redirectedProviders);
+    if (decision.kind === 'redirect') {
+      // Only baseUrl: pi rewrites the URL of every existing model for this
+      // provider and keeps their API, headers and costs.
+      pi.registerProvider(decision.provider, { baseUrl: redirect.gatewayUrl });
+      redirectedProviders.add(decision.provider);
+    }
+    // A transient skip -- no model resolved yet, or a provider already pointed
+    // at the gateway -- explains nothing, and a mark per session_start for it
+    // is noise in every trace.
+    if (!isNotable(decision)) return;
+    emit(ctx, {
+      hook_event_name: 'model_redirect',
+      source,
+      outcome: decision.kind,
+      reason: decision.reason,
+      ...(decision.provider ? { provider: decision.provider } : {}),
+      ...(decision.api ? { model_api: decision.api } : {}),
+      ...(decision.kind === 'redirect' ? { upstream: decision.upstream } : {}),
+      ...(ctx.model ? { model_id: ctx.model.id } : {}),
+      ...attribution(),
+    });
+  };
+
   // ---------------------------------------------------------------------------
   // Session lifecycle
   //
@@ -156,6 +231,17 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
   pi.on('session_start', async (event: SessionStartEvent, ctx: ExtensionContext) => {
     emit(ctx, { hook_event_name: 'session_start', reason: event.reason, cwd: ctx.cwd });
+    applyRedirect(ctx, 'session_start');
+  });
+
+  /**
+   * Re-evaluate on every model switch.
+   *
+   * pi fires this for the initial selection too, so a session that resolves its
+   * model after `session_start` is still covered.
+   */
+  pi.on('model_select', async (_event: ModelSelectEvent, ctx: ExtensionContext) => {
+    applyRedirect(ctx, 'model_select');
   });
 
   /**
@@ -224,7 +310,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   pi.on('turn_start', async (event: TurnStartEvent, ctx: ExtensionContext) => {
     const seq = turnSeq;
     turnSeq += 1;
-    emit(ctx, {
+    await emitOrdered(ctx, {
       hook_event_name: 'turn_start',
       // pi's turn_index resets to 0 on re-entry; turn_seq does not, so a
       // consumer can still order turns across the whole session.
@@ -235,7 +321,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   });
 
   pi.on('turn_end', async (event: TurnEndEvent, ctx: ExtensionContext) => {
-    emit(ctx, {
+    await emitOrdered(ctx, {
       hook_event_name: 'turn_end',
       // pi carries turn_index on the close but not turn_seq, so the close could
       // not be matched to its own open across a re-entry, where turn_index 0

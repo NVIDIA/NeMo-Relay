@@ -1640,3 +1640,66 @@ fn make_executable(path: &Path) {
     permissions.set_mode(0o755);
     std::fs::set_permissions(path, permissions).unwrap();
 }
+
+// The extension redirects pi's model traffic only when the gateway forwards to the endpoint the
+// selected model would otherwise call. It cannot discover that on its own -- the gateway resolves
+// one upstream per API family from static configuration and strips client-supplied dispatch
+// headers -- so the launcher has to tell it. Without these two variables the extension has no safe
+// basis to redirect and deliberately stays put, which shows up as a session with no LLM spans.
+#[test]
+fn pi_launch_passes_the_gateway_upstreams_the_extension_redirects_against() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let extension = std::env::temp_dir().join("nemo-relay-pi-launch-test-extension.ts");
+    std::fs::write(&extension, "export default () => {};").unwrap();
+    let _env = EnvScope::set(&[(
+        crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
+        Some(extension.as_os_str()),
+    )]);
+
+    let resolved = ResolvedConfig {
+        gateway: GatewayConfig {
+            openai_base_url: "https://integrate.api.nvidia.com/v1".into(),
+            anthropic_base_url: "https://anthropic.internal.example/".into(),
+            ..GatewayConfig::default()
+        },
+        agents: AgentConfigs::default(),
+        ..ResolvedConfig::default()
+    };
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &resolved,
+        false,
+    )
+    .unwrap();
+
+    let env = |name: &str| {
+        prepared
+            .env
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(
+        env(crate::agents::pi::launch::PI_OPENAI_UPSTREAM_ENV),
+        Some("https://integrate.api.nvidia.com/v1"),
+    );
+    assert_eq!(
+        env(crate::agents::pi::launch::PI_ANTHROPIC_UPSTREAM_ENV),
+        Some("https://anthropic.internal.example/"),
+    );
+    assert_eq!(
+        env(crate::agents::pi::launch::PI_GATEWAY_URL_ENV),
+        Some("http://127.0.0.1:4040"),
+    );
+
+    // The note has to state the condition, not promise LLM spans: a model on any other provider
+    // keeps calling its own endpoint.
+    let note = prepared.notes.join(" ");
+    assert!(
+        note.contains("https://integrate.api.nvidia.com/v1"),
+        "the launch note should name the upstream redirection is judged against: {note}"
+    );
+    let _ = std::fs::remove_file(&extension);
+}

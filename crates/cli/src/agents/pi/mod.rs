@@ -44,6 +44,9 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "turn_end",
         "tool_call",
         "tool_execution_end",
+        // Not a pi hook name: the extension posts this after deciding whether to point the active
+        // model's provider at the gateway, so a trace with no LLM spans carries its own reason.
+        "model_redirect",
     ],
 };
 

@@ -523,7 +523,7 @@ Generated hook bundles subscribe to the events needed for that mapping:
 | --- | --- | --- |
 | Claude Code | `UserPromptSubmit`, `Stop` | `SessionStart`, `SessionEnd`, `UserPromptExpansion`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `Notification`, `PreCompact`, `PostCompact` |
 | Codex | `UserPromptSubmit`, `Stop` | `SessionStart`, `SubagentStart`, `SubagentStop`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `PreCompact`, `PostCompact` |
-| pi | none yet — pi's model traffic does not reach the gateway | `session_start`, `session_shutdown`, `agent_start`, `agent_end`, `agent_settled`, `turn_start`, `turn_end`, `session_before_compact`, `session_compact`, `tool_call`, `tool_execution_end` |
+| pi | none — pi's LLM spans come from real gateway traffic, not from hooks | `session_start`, `session_shutdown`, `agent_start`, `agent_end`, `agent_settled`, `turn_start`, `turn_end`, `session_before_compact`, `session_compact`, `tool_call`, `tool_execution_end` |
 
 ## Hook Forwarding
 

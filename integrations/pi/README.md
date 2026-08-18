@@ -24,12 +24,13 @@ Proof of concept, tracked under
 `v0.84.0`. pi ships breaking changes through *minor* releases and has no
 major-release channel, so re-verify hook signatures before relying on them.
 
-**Model traffic does not traverse the gateway yet**
+**Model traffic is redirected conditionally**
 ([RELAY-732](https://linear.app/nvidia/issue/RELAY-732)). pi has no base-URL
 flag and no generic environment override — it resolves `baseUrl` per model from
-a generated catalog — so redirection needs this extension to register a
-gateway-backed provider, and nothing does that yet. Until it lands there are no
-LLM spans and no model-call enforcement, only tool and turn activity.
+a generated catalog — so the extension points the active model's provider at the
+gateway itself. It only does so when the gateway forwards to the endpoint that
+model would otherwise have called; see [Model redirection](#model-redirection).
+When it does not, you get tool and turn activity but no LLM spans.
 
 ## Usage
 
@@ -53,6 +54,9 @@ directory (`~/.pi/agent/extensions/`, `.pi/extensions/`).
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls when the gateway is unreachable |
+| `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without checking the upstream; `off` disables redirection |
+| `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |
+| `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM` | unset | What the gateway forwards Anthropic traffic to. Set by the launcher |
 
 ## How tool gating works
 
@@ -74,6 +78,44 @@ The block reason reaches the model **verbatim**: pi hands it to
 `createErrorToolResult` with no framing. Write guardrail reasons as guidance, not
 as error codes — a reason that says what to do instead produces a model that
 adapts rather than one that gives up.
+
+## Model redirection
+
+pi resolves a base URL per model from a generated catalog, so there is no flag or
+environment variable to point it at the gateway. The extension does it directly:
+
+```ts
+pi.registerProvider(providerId, { baseUrl: gatewayUrl });
+```
+
+With `baseUrl` and no `models`, pi rewrites the URL of every existing model for
+that provider and keeps their API, headers, costs and context windows. That is
+much cheaper than pi's own `custom-provider-*` examples, which register a
+`streamSimple` and re-implement a provider protocol.
+
+**It is conditional, and the condition is the point.** The gateway forwards to
+one statically configured upstream per API family — `--openai-base-url` and
+`--anthropic-base-url` — and a client cannot override that per request. So
+redirecting is only correct when the gateway's upstream *is* the endpoint the
+selected model would otherwise call. Pointing an NVIDIA model at a gateway
+configured for `api.openai.com` does not degrade to "no spans"; it breaks the
+session. The extension therefore redirects only on a match, and records every
+outcome as a `model_redirect` mark so a trace without LLM spans explains itself.
+
+| Situation | Outcome |
+|---|---|
+| Gateway upstream equals the model's endpoint | Redirected; LLM spans appear under the turn |
+| Gateway forwards somewhere else | Skipped, `upstream-mismatch` |
+| Model's API has no gateway route (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex) | Skipped, `unserviceable-api` |
+| Launched outside `nemo-relay run --agent pi`, so the upstream is unknown | Skipped, `unknown-upstream` — set `NEMO_RELAY_PI_REDIRECT=force` to override |
+
+`nemo-relay run --agent pi` sets the two upstream variables for you. Running pi
+by hand against a standalone gateway means setting them yourself, or forcing.
+
+The decision is re-evaluated on every `model_select`, so switching to a model the
+gateway does not front stops redirecting rather than silently misrouting.
+
+32 of pi's 38 providers speak an API the gateway serves; the six above do not.
 
 ## Hook mapping
 
@@ -120,8 +162,9 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 | `session_start` / `session_shutdown` | session boundary | **Not** `agent_start`/`agent_end` — those repeat on re-entry. `session_shutdown` is ignored for `reason: "reload"`, which continues the same session |
 | `agent_start` / `agent_end` | run-level marks | Carry `attempt_index`; not a run boundary. Recorded on the session scope, not inside a turn |
 | `agent_settled` | run-level mark | Fires exactly once, from a `finally`. Carries `attempts` (the count) and `attempt_index` (the last one) |
-| `turn_start` | turn scope **open** | Carries `turn_index`, `turn_seq`, `attempt_index` |
-| `turn_end` | turn scope **close** | Carries `turn_index`, `turn_seq`, `attempt_index` |
+| `turn_start` | turn scope **open** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, so the turn exists before pi's model call arrives |
+| `turn_end` | turn scope **close** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, for the same reason |
+| `model_select` | `model_redirect` mark | Re-evaluates redirection for the newly selected model |
 | `session_before_compact` | mark | Announced, not done, and cancellable by a later extension. Carries `reason`, `will_retry`, `tokens_before` |
 | `session_compact` | compaction | The completed compaction, which the runtime treats as proof the context was rebuilt |
 | `tool_call` | tool start, and the gate | The only blocking hook. Carries `attempt_index`, `turn_seq` |

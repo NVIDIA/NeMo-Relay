@@ -131,12 +131,30 @@ export type ToolCallEventResult = {
   reason?: string;
 };
 
+/** A model, narrowed to the fields this extension reads. */
+export type PiModel = {
+  id: string;
+  api: string;
+  provider: string;
+  baseUrl: string;
+};
+
+/** Fired when a model is selected, including the initial selection. */
+export type ModelSelectEvent = {
+  type: 'model_select';
+  model: PiModel;
+  previousModel?: PiModel;
+  source?: string;
+};
+
 /** Minimal view of pi's extension context. */
 export type ExtensionContext = {
   cwd: string;
   mode: string;
   hasUI: boolean;
   sessionManager: { getSessionId(): string };
+  /** The active model. Undefined before one is resolved. */
+  model?: PiModel;
 };
 
 export type ExtensionHandler<TEvent, TResult = void> = (
@@ -158,4 +176,16 @@ export type ExtensionAPI = {
   on(event: 'tool_execution_start', handler: ExtensionHandler<ToolExecutionStartEvent>): void;
   on(event: 'tool_execution_end', handler: ExtensionHandler<ToolExecutionEndEvent>): void;
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
+  on(event: 'model_select', handler: ExtensionHandler<ModelSelectEvent>): void;
+
+  /**
+   * Register or override a model provider.
+   *
+   * With `baseUrl` and no `models`, pi rewrites the URL of every existing model
+   * for that provider and preserves their API, headers and costs
+   * (`core/provider-composer.ts:215`). During initial extension load the call is
+   * queued and applied once the runner binds its context, so calling it from a
+   * factory is safe.
+   */
+  registerProvider(name: string, config: { baseUrl?: string }): void;
 };

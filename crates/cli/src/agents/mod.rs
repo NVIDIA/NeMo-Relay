@@ -398,7 +398,7 @@ pub(crate) fn prepare_launch(
     agent: CodingAgent,
     launch: &mut crate::process::PreparedAgentLaunch,
     gateway_url: &str,
-    _resolved: &crate::configuration::ResolvedConfig,
+    resolved: &crate::configuration::ResolvedConfig,
     proxy_credential: &crate::provider_auth::TransparentProxyCredential,
     dry_run: bool,
 ) -> Result<(), crate::error::CliError> {
@@ -411,7 +411,10 @@ pub(crate) fn prepare_launch(
         CodingAgent::ClaudeCode => {
             claude::launch::prepare(launch, gateway_url, proxy_credential, dry_run)
         }
-        CodingAgent::Pi => pi::launch::prepare(launch, gateway_url),
+        // pi is the only agent whose launcher needs the gateway's upstream configuration: its
+        // extension redirects model traffic only when the selected model already targets that
+        // upstream. See `pi::launch::prepare`.
+        CodingAgent::Pi => pi::launch::prepare(launch, gateway_url, &resolved.gateway),
     }
 }
 

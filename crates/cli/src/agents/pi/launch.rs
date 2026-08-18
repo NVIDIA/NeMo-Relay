@@ -29,8 +29,33 @@ pub(crate) const PI_GATEWAY_URL_ENV: &str = "NEMO_RELAY_PI_GATEWAY_URL";
 /// Environment variable pointing pi at the NeMo Relay extension entry point.
 pub(crate) const PI_EXTENSION_PATH_ENV: &str = "NEMO_RELAY_PI_EXTENSION";
 
-pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Result<(), CliError> {
+/// Upstream this gateway forwards OpenAI-compatible traffic to.
+pub(crate) const PI_OPENAI_UPSTREAM_ENV: &str = "NEMO_RELAY_PI_OPENAI_UPSTREAM";
+
+/// Upstream this gateway forwards Anthropic traffic to.
+pub(crate) const PI_ANTHROPIC_UPSTREAM_ENV: &str = "NEMO_RELAY_PI_ANTHROPIC_UPSTREAM";
+
+pub(crate) fn prepare(
+    launch: &mut PreparedAgentLaunch,
+    gateway_url: &str,
+    gateway: &crate::configuration::GatewayConfig,
+) -> Result<(), CliError> {
     set_env(launch, PI_GATEWAY_URL_ENV, gateway_url);
+
+    // Tell the extension what this gateway actually forwards to.
+    //
+    // Redirection is only correct when the gateway's upstream is the same endpoint the selected
+    // model would otherwise call: the gateway resolves one OpenAI base and one Anthropic base from
+    // static configuration (`ProviderRoute::upstream_url`) and there is no per-request override a
+    // client can set -- inbound internal dispatch headers are stripped. Without these two values
+    // the extension would have to redirect blind, and pointing (say) an NVIDIA model at a gateway
+    // configured for `api.openai.com` breaks a session that worked a moment earlier.
+    set_env(launch, PI_OPENAI_UPSTREAM_ENV, &gateway.openai_base_url);
+    set_env(
+        launch,
+        PI_ANTHROPIC_UPSTREAM_ENV,
+        &gateway.anthropic_base_url,
+    );
 
     // `-e` is the right loader here: it is trust-ungated, loads before
     // discovery, and survives `--no-extensions`, so a launched session gets the
@@ -49,16 +74,18 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
         ["-e".to_string(), rendered],
     );
 
-    // Do not claim redirection here: the extension does not yet register a
-    // gateway-backed provider, so model calls still go straight to the
-    // provider. Only tool and turn activity reaches Relay today.
-    launch.notes.push(
-        "pi tool and turn activity is reported to NeMo Relay by the extension; model calls are \
-         NOT yet routed through the gateway, so there are no LLM spans. pi has no base-URL flag \
-         or generic environment override, so redirection requires the extension to register a \
-         gateway-backed provider"
-            .to_string(),
-    );
+    // Redirection is conditional, so say what the condition is rather than promising LLM spans.
+    launch.notes.push(format!(
+        "pi tool and turn activity is reported to NeMo Relay by the extension. Model calls are \
+         routed through the gateway only when the selected model's provider already targets this \
+         gateway's upstream (openai={openai}, anthropic={anthropic}); pi resolves a base URL per \
+         model from a generated catalog, and the gateway forwards to one statically configured \
+         upstream per API family. A model on any other provider keeps calling its own endpoint \
+         and produces no LLM spans -- select a matching model, or start the gateway with \
+         --openai-base-url / --anthropic-base-url pointing at that provider",
+        openai = gateway.openai_base_url,
+        anthropic = gateway.anthropic_base_url,
+    ));
     Ok(())
 }
 

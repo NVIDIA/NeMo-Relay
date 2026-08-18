@@ -8,9 +8,11 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use this guide to observe local [pi](https://github.com/earendil-works/pi)
-sessions and to gate pi tool calls on a NeMo Relay policy. The pi integration is
-a proof of concept: tool and turn activity reach Relay, and LLM traffic does not
-yet, so there are no LLM spans and no model-call enforcement.
+sessions and to gate pi tool calls and model calls on a NeMo Relay policy. The pi
+integration is a proof of concept. Tool and turn activity always reach Relay;
+model traffic reaches it when the gateway forwards to the endpoint the selected
+model would otherwise call, which is what [Model
+Redirection](#model-redirection) explains.
 
 <Warning>
 pi ships breaking changes through *minor* releases and has no major-release
@@ -39,10 +41,11 @@ Three consequences follow from that shape:
   handlers on its critical path, so a blocking hook is synchronous by
   construction. Observability-only hooks are queued rather than awaited and
   drained at shutdown, so they do not charge that path.
-- Model traffic is not redirected. pi resolves `baseUrl` per model from a
-  generated catalog and has no base-URL flag or generic environment override,
-  so redirection requires the extension to register a gateway-backed provider.
-  That work is not done yet.
+- Model traffic is redirected by the extension, not by configuration. pi
+  resolves `baseUrl` per model from a generated catalog and has no base-URL flag
+  or generic environment override, so the extension calls
+  `registerProvider(provider, { baseUrl })` itself — and only when doing so is
+  safe. See [Model Redirection](#model-redirection).
 
 ## Requirements
 
@@ -94,6 +97,9 @@ NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
 | `NEMO_RELAY_PI_FAIL` | `open` | Set to `closed` to block tool calls when the gateway is unreachable |
+| `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without verifying the upstream; `off` disables redirection |
+| `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by `nemo-relay run` |
+| `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM` | unset | What the gateway forwards Anthropic traffic to. Set by `nemo-relay run` |
 
 <Warning>
 Run headless pi with `< /dev/null`. pi drains piped standard input before the
@@ -143,6 +149,7 @@ empty turn to hold it.
 | `turn_start` / `turn_end` | Turn scope open and close |
 | `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
 | `session_compact` | Canonical `compaction` mark |
+| `model_select` | `model_redirect` mark recording whether redirection applied |
 | `tool_call` | Tool span start, and the gate |
 | `tool_execution_end` | Tool span end, for every outcome including blocked |
 
@@ -155,6 +162,53 @@ A blocked call still produces a well-formed tool span. The guardrail rejects
 before the span opens, but pi fires `tool_execution_end` for blocked calls too,
 and the gateway synthesizes the missing pair, tagged
 `tool_correlation_status: "agent_fallback"`.
+
+## Model Redirection
+
+pi has no base-URL flag and no generic environment override — it resolves a base
+URL per model from a generated catalog — so the extension points the active
+model's provider at the gateway directly, with
+`registerProvider(provider, { baseUrl })`. pi rewrites the URL of every existing
+model for that provider and keeps their API, headers, costs and context windows.
+
+Redirection is **conditional**. The gateway forwards to one statically
+configured upstream per API family, set by `--openai-base-url` and
+`--anthropic-base-url`, and a client cannot override that per request.
+Redirecting is therefore only correct when the gateway's upstream is the endpoint
+the selected model would otherwise have called. Pointing an NVIDIA model at a
+gateway configured for `api.openai.com` does not produce a trace without spans;
+it breaks the session.
+
+`nemo-relay run --agent pi` passes the gateway's upstreams to the extension, and
+the extension redirects only on a match:
+
+| Situation | Outcome |
+| --- | --- |
+| Gateway upstream equals the model's endpoint | Redirected; LLM spans appear under the turn |
+| Gateway forwards elsewhere | Skipped (`upstream-mismatch`) |
+| Model's API has no gateway route | Skipped (`unserviceable-api`) |
+| Upstream unknown, e.g. a standalone gateway | Skipped (`unknown-upstream`) |
+
+Every outcome is recorded as a `model_redirect` mark on the session scope, so a
+trace with no LLM spans states its own reason. The decision is re-made on each
+model switch.
+
+To capture a specific provider, point the gateway at it:
+
+```bash
+nemo-relay --bind 127.0.0.1:4040 \
+  --openai-base-url https://integrate.api.nvidia.com/v1
+```
+
+32 of pi's 38 providers speak an API the gateway serves. The six that do not are
+Amazon Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, and
+OpenAI Codex.
+
+<Warning>
+Point pi at the gateway **root**, not the root plus `/v1`. The Anthropic SDK
+appends `/v1/messages` itself, while the OpenAI SDK appends `/chat/completions`;
+the gateway serves both shapes from the root.
+</Warning>
 
 ## Agent-Run Attribution
 
@@ -211,6 +265,11 @@ extension load errors rather than aborting, so a failure is silent — run pi wi
 
 ## Troubleshoot Missing LLM Spans
 
-There are none yet, and this is expected. pi's model traffic does not traverse
-the gateway, so LLM lifecycle capture and model-call enforcement are both
-unavailable. Tool and turn activity are unaffected.
+Look for the `model_redirect` mark on the session scope: it names the outcome and
+the reason. The common ones are `upstream-mismatch` (start the gateway with
+`--openai-base-url` or `--anthropic-base-url` pointing at the model's provider),
+`unknown-upstream` (launch through `nemo-relay run --agent pi`, or set
+`NEMO_RELAY_PI_REDIRECT=force`), and `unserviceable-api` (the model's provider
+speaks an API the gateway has no route for — pick another model).
+
+Tool and turn activity are unaffected by any of these.
