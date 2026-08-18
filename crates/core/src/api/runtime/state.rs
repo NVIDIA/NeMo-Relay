@@ -1786,18 +1786,12 @@ fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Re
 }
 
 fn is_valid_event_metadata_attribute_key(key: &str) -> bool {
-    let mut segment_has_character = false;
-    for character in key.chars() {
-        match character {
-            '.' if segment_has_character => segment_has_character = false,
-            '.' => return false,
-            character if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') => {
-                segment_has_character = true;
-            }
-            _ => return false,
-        }
-    }
-    segment_has_character
+    key.split('.').all(|segment| {
+        !segment.is_empty()
+            && segment.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+    })
 }
 
 fn is_otel_compatible_attribute_value(value: &Json) -> bool {
