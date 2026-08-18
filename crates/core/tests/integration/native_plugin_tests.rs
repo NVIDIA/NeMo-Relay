@@ -293,6 +293,20 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             .unwrap()["native_plugin_mark"],
         true
     );
+    let metric = find_event(&first_events, "fixture.native.metric", None);
+    assert_eq!(
+        metric.data_schema().expect("native metric schema").name,
+        "nemo.relay.metric_measurements"
+    );
+    assert_eq!(
+        metric.data_schema().expect("native metric schema").version,
+        "1"
+    );
+    let measurement = &metric.data().unwrap()["measurements"][0];
+    assert_eq!(measurement["name"], "fixture.native.count");
+    assert_eq!(measurement["kind"], "counter");
+    assert_eq!(measurement["value_type"], "u64");
+    assert_eq!(measurement["value"], 1);
     assert_parent(
         &first_events,
         "fixture.native.scope",
@@ -1129,6 +1143,48 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
     }])
     .expect("native plugin should load from manifest directory");
     activation.clear();
+}
+
+#[test]
+fn native_loader_falls_back_to_abi_v3_plugins() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_text(ManifestOptions {
+        manifest_dir: fixture.manifest_dir.path(),
+        plugin_id: "fixture_native_v3",
+        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        library: &fixture.library_path.to_string_lossy(),
+        symbol: "nemo_relay_fixture_native_plugin_v3",
+        integrity: None,
+    });
+
+    let activation = load_native_plugins([load_spec("fixture_native_v3", &manifest_ref)])
+        .expect("ABI-v3 fixture should load through compatibility fallback");
+    activation.clear();
+}
+
+#[test]
+fn native_loader_supports_current_v4_and_legacy_v2_plugins() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_plugin();
+
+    for (plugin_id, symbol) in [
+        ("fixture_native_v4", "nemo_relay_fixture_native_plugin_v4"),
+        ("fixture_native_v2", "nemo_relay_fixture_native_plugin_v2"),
+    ] {
+        let manifest_ref = write_manifest_text(ManifestOptions {
+            manifest_dir: fixture.manifest_dir.path(),
+            plugin_id,
+            relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+            library: &fixture.library_path.to_string_lossy(),
+            symbol,
+            integrity: None,
+        });
+
+        let activation = load_native_plugins([load_spec(plugin_id, &manifest_ref)])
+            .unwrap_or_else(|error| panic!("ABI compatibility fixture should load: {error}"));
+        activation.clear();
+    }
 }
 
 #[test]

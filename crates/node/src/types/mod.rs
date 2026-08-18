@@ -13,7 +13,11 @@ use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{
+    DataSchema as CoreDataSchema, Event, LogSeverity as CoreLogSeverity,
+    MetricKind as CoreMetricKind, MetricMeasurement as CoreMetricMeasurement,
+    MetricValueType as CoreMetricValueType,
+};
 use nemo_relay::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
 use nemo_relay::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
 use nemo_relay::api::tool::{
@@ -85,6 +89,129 @@ impl From<CoreScopeType> for ScopeType {
             CoreScopeType::Evaluator => ScopeType::Evaluator,
             CoreScopeType::Custom => ScopeType::Custom,
             CoreScopeType::Unknown => ScopeType::Unknown,
+        }
+    }
+}
+
+/// Severity attached to a mark projected as an OpenTelemetry log.
+#[napi]
+pub enum LogSeverity {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl From<LogSeverity> for CoreLogSeverity {
+    fn from(value: LogSeverity) -> Self {
+        match value {
+            LogSeverity::Trace => Self::Trace,
+            LogSeverity::Debug => Self::Debug,
+            LogSeverity::Info => Self::Info,
+            LogSeverity::Warn => Self::Warn,
+            LogSeverity::Error => Self::Error,
+        }
+    }
+}
+
+/// OpenTelemetry instrument kind recorded by a metric measurement.
+#[napi]
+pub enum MetricKind {
+    Counter,
+    UpDownCounter,
+    Gauge,
+    Histogram,
+}
+
+impl From<MetricKind> for CoreMetricKind {
+    fn from(value: MetricKind) -> Self {
+        match value {
+            MetricKind::Counter => Self::Counter,
+            MetricKind::UpDownCounter => Self::UpDownCounter,
+            MetricKind::Gauge => Self::Gauge,
+            MetricKind::Histogram => Self::Histogram,
+        }
+    }
+}
+
+/// Explicit numeric representation used by a metric measurement.
+#[napi]
+pub enum MetricValueType {
+    U64,
+    I64,
+    F64,
+}
+
+/// Preferred aggregation temporality for OTLP metric export.
+#[napi]
+pub enum MetricTemporality {
+    Cumulative,
+    Delta,
+    LowMemory,
+}
+
+impl From<MetricTemporality> for nemo_relay::observability::otel_metrics::MetricTemporality {
+    fn from(value: MetricTemporality) -> Self {
+        match value {
+            MetricTemporality::Cumulative => Self::Cumulative,
+            MetricTemporality::Delta => Self::Delta,
+            MetricTemporality::LowMemory => Self::LowMemory,
+        }
+    }
+}
+
+impl From<MetricValueType> for CoreMetricValueType {
+    fn from(value: MetricValueType) -> Self {
+        match value {
+            MetricValueType::U64 => Self::U64,
+            MetricValueType::I64 => Self::I64,
+            MetricValueType::F64 => Self::F64,
+        }
+    }
+}
+
+/// Schema identifier attached to an event's opaque data payload.
+#[napi(object)]
+pub struct DataSchema {
+    pub name: String,
+    pub version: String,
+}
+
+impl From<DataSchema> for CoreDataSchema {
+    fn from(value: DataSchema) -> Self {
+        Self {
+            name: value.name,
+            version: value.version,
+        }
+    }
+}
+
+/// One typed recording operation emitted by `metric`.
+#[napi(object)]
+pub struct MetricMeasurement {
+    pub name: String,
+    pub kind: MetricKind,
+    pub value_type: MetricValueType,
+    #[napi(ts_type = "number")]
+    pub value: Json,
+    pub unit: Option<String>,
+    pub description: Option<String>,
+    pub attributes: Option<Json>,
+    pub boundaries: Option<Vec<f64>>,
+}
+
+impl From<MetricMeasurement> for CoreMetricMeasurement {
+    fn from(value: MetricMeasurement) -> Self {
+        Self {
+            name: value.name,
+            kind: value.kind.into(),
+            value_type: value.value_type.into(),
+            value: value.value,
+            unit: value.unit,
+            description: value.description,
+            attributes: value.attributes,
+            boundaries: value.boundaries,
         }
     }
 }

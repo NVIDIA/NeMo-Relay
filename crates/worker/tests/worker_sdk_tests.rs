@@ -19,7 +19,8 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
+    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, Json, JsonStream, LlmNext,
+    LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
     PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
     WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
     serve_plugin_arc_with_config,
@@ -30,10 +31,11 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
-    InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
+    GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest, HostAck, InvokeRequest,
+    InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegistrationSurface,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
@@ -789,6 +791,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(stream_auth.code(), tonic::Code::PermissionDenied);
 
     let calls = host.calls();
+    assert!(calls.contains(&"runtime_diagnostics".into()));
     assert!(calls.contains(&"mark:tool-exec:stack-1:parent-1".into()));
     assert!(calls.contains(&"create_scope_stack".into()));
     assert!(calls.contains(&"mark:tool-exec-isolated:isolated-stack:".into()));
@@ -805,6 +808,49 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"mark:stream-poll:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:scope-agent:explicit-stack:".into()));
     assert!(calls.contains(&"push:scope-unknown:explicit-stack:".into()));
+    let telemetry_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-telemetry")
+        .expect("extended mark request");
+    assert_eq!(telemetry_mark.severity, "warn");
+    let data_schema = telemetry_mark.data_schema.expect("mark data schema");
+    assert_eq!(data_schema.schema, "nemo.relay.DataSchema@1");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&data_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
+    let metric_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-metric")
+        .expect("metric mark request");
+    let metric_schema = metric_mark.data_schema.expect("metric data schema");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&metric_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
+    assert_eq!(
+        decode_json_envelope::<Json>(&metric_mark.data.expect("metric data")).unwrap(),
+        json!({
+            "measurements": [{
+                "name": "worker.requests",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 1,
+                "unit": null,
+                "description": null,
+                "attributes": null,
+                "boundaries": null
+            }]
+        })
+    );
 
     worker_handle.abort();
     host_handle.abort();
@@ -1441,6 +1487,13 @@ async fn worker_service_propagates_host_runtime_errors() {
     for (failures, expected) in [
         (
             MockHostFailures {
+                runtime_diagnostics_unimplemented: true,
+                ..Default::default()
+            },
+            "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension",
+        ),
+        (
+            MockHostFailures {
                 emit_mark: HostFailure::WorkerError,
                 ..Default::default()
             },
@@ -1813,7 +1866,49 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_tool_execution_intercept("tool-exec", 1, move |_, value, next: ToolNext| {
             let runtime = tool_runtime.clone();
             async move {
+                let diagnostics = runtime.runtime_diagnostics().await?;
+                if diagnostics
+                    .get("otel.metric_mark_invalid")
+                    .map(|diagnostic| diagnostic.count)
+                    != Some(3)
+                {
+                    return Err(WorkerSdkError::Callback(
+                        "runtime diagnostics response did not contain the expected entry".into(),
+                    ));
+                }
                 runtime.emit_mark("tool-exec", None, None).await?;
+                runtime
+                    .emit_mark_with_options(
+                        "tool-exec-telemetry",
+                        Some(json!({"measurements": []})),
+                        None,
+                        EmitMarkOptions {
+                            data_schema: Some(
+                                DataSchema::builder()
+                                    .name("nemo.relay.metric_measurements")
+                                    .version("1")
+                                    .build(),
+                            ),
+                            severity: Some(LogSeverity::Warn),
+                        },
+                    )
+                    .await?;
+                runtime
+                    .emit_metric(
+                        "tool-exec-metric",
+                        vec![MetricMeasurement {
+                            name: "worker.requests".into(),
+                            kind: MetricKind::Counter,
+                            value_type: MetricValueType::U64,
+                            value: json!(1),
+                            unit: None,
+                            description: None,
+                            attributes: None,
+                            boundaries: None,
+                        }],
+                        None,
+                    )
+                    .await?;
                 let stack_id = runtime.create_scope_stack().await?;
                 let isolated_runtime = runtime.clone();
                 runtime
@@ -2030,6 +2125,7 @@ enum MockStreamMode {
 
 #[derive(Clone, Copy, Default)]
 struct MockHostFailures {
+    runtime_diagnostics_unimplemented: bool,
     emit_mark: HostFailure,
     create_scope_stack: bool,
     push_scope: bool,
@@ -2047,6 +2143,7 @@ struct MockHostFailures {
 #[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
+    marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
 }
 
@@ -2057,6 +2154,10 @@ impl MockHost {
 
     fn record(&self, call: impl Into<String>) {
         self.calls.lock().expect("calls lock").push(call.into());
+    }
+
+    fn marks(&self) -> Vec<EmitMarkRequest> {
+        self.marks.lock().expect("marks lock").clone()
     }
 
     fn failures(&self) -> MockHostFailures {
@@ -2070,12 +2171,32 @@ impl MockHost {
 
 #[tonic::async_trait]
 impl RelayHostRuntime for MockHost {
+    async fn get_runtime_diagnostics(
+        &self,
+        request: Request<GetRuntimeDiagnosticsRequest>,
+    ) -> std::result::Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record("runtime_diagnostics");
+        if self.failures().runtime_diagnostics_unimplemented {
+            return Err(Status::unimplemented("runtime diagnostics are unavailable"));
+        }
+        Ok(Response::new(GetRuntimeDiagnosticsResponse {
+            entries: vec![ProtoRuntimeDiagnostic {
+                code: "otel.metric_mark_invalid".into(),
+                message: "metric mark has an unsupported value".into(),
+                count: 3,
+            }],
+        }))
+    }
+
     async fn emit_mark(
         &self,
         request: Request<EmitMarkRequest>,
     ) -> std::result::Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.marks.lock().expect("marks lock").push(request.clone());
         let scope = request.scope.expect("scope context");
         self.record(format!(
             "mark:{}:{}:{}",

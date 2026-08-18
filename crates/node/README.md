@@ -48,9 +48,11 @@ The Node.js package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM boundaries,
   plus mark and scope event sanitizers for `data`, `categoryProfile`, and
   `metadata`.
-- **Observability exporters**: `OpenTelemetrySubscriber` accepts one required
-  `full`, `gen_ai`, or `openinference` endpoint configuration. The
-  `nemo-relay-node/observability` helper configures plugin-owned endpoint
+- **Observability exporters**: `OpenTelemetrySubscriber` exports traces;
+  `OpenTelemetryLogSubscriber` and `OpenTelemetryMetricSubscriber` export
+  severity-tagged marks and typed metric measurements. Bare OTLP/HTTP origins
+  resolve to `/v1/traces`, `/v1/logs`, or `/v1/metrics` for the selected signal.
+  The `nemo-relay-node/observability` helper configures plugin-owned endpoint
   fan-out.
 - **Additional entry points**: `nemo-relay-node/typed`,
   `nemo-relay-node/plugin`, `nemo-relay-node/adaptive`, and
@@ -112,6 +114,18 @@ const execution = await toolCallExecuteAsync('lookup', { query: 'relay' }, async
 
 console.log(execution.result.answer);
 ```
+
+The core mark contract uses positional optional arguments. Pass `null` for
+`dataSchema` before supplying the final `severity` argument:
+
+```js
+const { LogSeverity } = require('nemo-relay-node');
+
+event('initialized', handle, { binding: 'node' }, null, null, null, LogSeverity.Info);
+```
+
+Call `metric()` with `MetricMeasurement` objects for metrics; Relay validates
+the complete measurement group before publishing it.
 
 Native subscriber delivery is asynchronous. Awaiting `flushSubscribers()` drains
 the native dispatcher and waits for managed terminal publications registered

@@ -76,7 +76,7 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
-from typing import Any, ClassVar, Protocol, TypeAlias, TypedDict
+from typing import Any, ClassVar, NotRequired, Protocol, TypeAlias, TypedDict
 from urllib.parse import urlsplit
 
 grpc: Any = importlib.import_module("grpc")
@@ -109,6 +109,26 @@ class LlmCodecIdentity:
 
     kind: str
     id: str | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeDiagnostic:
+    """One bounded runtime diagnostic reported by the Relay host."""
+
+    code: str
+    message: str
+    count: int
+
+
+@dataclass(frozen=True)
+class RuntimeDiagnostics:
+    """Bounded snapshot of active host runtime diagnostics."""
+
+    entries: tuple[RuntimeDiagnostic, ...]
+
+    def get(self, code: str) -> RuntimeDiagnostic | None:
+        """Return the diagnostic with ``code``, when present."""
+        return next((diagnostic for diagnostic in self.entries if diagnostic.code == code), None)
 
 
 @dataclass(frozen=True)
@@ -205,6 +225,9 @@ def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
 
 WORKER_PROTOCOL = "grpc-v1"
 JSON_SCHEMA = "nemo.relay.Json@1"
+DATA_SCHEMA_SCHEMA = "nemo.relay.DataSchema@1"
+METRIC_DATA_SCHEMA_NAME = "nemo.relay.metric_measurements"
+METRIC_DATA_SCHEMA_VERSION = "1"
 EVENT_SCHEMA = "nemo.relay.Event@1"
 LLM_REQUEST_SCHEMA = "nemo.relay.LlmRequest@1"
 ANNOTATED_LLM_REQUEST_SCHEMA = "nemo.relay.AnnotatedLlmRequest@2"
@@ -223,6 +246,66 @@ _SCOPE_CONTEXT: contextvars.ContextVar[_BoundScopeContext | None] = contextvars.
     "nemo_relay_plugin_scope_context",
     default=None,
 )
+
+
+@dataclass(frozen=True)
+class DataSchema:
+    """Identify the schema of a mark's opaque data payload."""
+
+    name: str
+    version: str
+
+    def __post_init__(self) -> None:
+        """Validate required schema identity fields."""
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("data schema name must be a non-empty string")
+        if not isinstance(self.version, str) or not self.version.strip():
+            raise ValueError("data schema version must be a non-empty string")
+
+    def to_json(self) -> dict[str, str]:
+        """Return the canonical JSON representation."""
+        return {"name": self.name, "version": self.version}
+
+
+class LogSeverity(str, Enum):
+    """Telemetry severity assigned to an exported mark log."""
+
+    TRACE = "trace"
+    DEBUG = "debug"
+    INFO = "info"
+    WARN = "warn"
+    WARNING = "warn"
+    ERROR = "error"
+
+
+class MetricKind(str, Enum):
+    """OpenTelemetry instrument kind recorded by a metric mark."""
+
+    COUNTER = "counter"
+    UP_DOWN_COUNTER = "up_down_counter"
+    GAUGE = "gauge"
+    HISTOGRAM = "histogram"
+
+
+class MetricValueType(str, Enum):
+    """Explicit numeric representation of a metric measurement value."""
+
+    U64 = "u64"
+    I64 = "i64"
+    F64 = "f64"
+
+
+class MetricMeasurement(TypedDict):
+    """One recording operation in a Relay metric-measurement mark."""
+
+    name: str
+    kind: MetricKind | str
+    value_type: MetricValueType | str
+    value: int | float
+    unit: NotRequired[str]
+    description: NotRequired[str]
+    attributes: NotRequired[dict[str, Json]]
+    boundaries: NotRequired[list[float] | None]
 
 
 class WorkerSdkError(Exception):
@@ -334,6 +417,8 @@ class PendingMarkSpec:
     category_profile: Json | None = None
     data: Json | None = None
     metadata: Json | None = None
+    data_schema: DataSchema | Mapping[str, Json] | None = None
+    severity: LogSeverity | str | None = None
 
     def to_json(self) -> dict[str, Json]:
         """Convert this pending mark to its canonical JSON object."""
@@ -341,7 +426,11 @@ class PendingMarkSpec:
             raise WorkerSdkError("pending mark name must be a string")
         if self.category is not None and not isinstance(self.category, str):
             raise WorkerSdkError("pending mark category must be a string or None")
-        return asdict(self)
+        severity = _log_severity_value(self.severity)
+        encoded = asdict(self)
+        encoded["data_schema"] = _data_schema_json(self.data_schema)
+        encoded["severity"] = severity or None
+        return encoded
 
 
 @dataclass(slots=True)
@@ -1376,6 +1465,8 @@ class PluginRuntime:
         data: Json | None = None,
         metadata: Json | None = None,
         *,
+        data_schema: DataSchema | Mapping[str, Json] | None = None,
+        severity: LogSeverity | str | None = None,
         scope_stack_id: str | None = None,
         parent_scope_id: str | None = None,
     ) -> None:
@@ -1385,6 +1476,9 @@ class PluginRuntime:
             name: Mark event name.
             data: Optional JSON application payload.
             metadata: Optional JSON metadata attached to the event.
+            data_schema: Optional typed schema identity for ``data``.
+            severity: Optional telemetry log severity. ``warning`` is accepted
+                as an alias for ``warn``.
             scope_stack_id: Optional host-issued stack to correlate the event
                 with. When omitted, the current local binding is used.
             parent_scope_id: Optional parent scope for the event. When omitted,
@@ -1403,9 +1497,70 @@ class PluginRuntime:
                 name=name,
                 data=_optional_json_envelope(data),
                 metadata=_optional_json_envelope(metadata),
+                data_schema=_optional_json_envelope(
+                    _data_schema_json(data_schema),
+                    DATA_SCHEMA_SCHEMA,
+                ),
+                severity=_log_severity_value(severity),
             )
         )
         _ack_to_result(response)
+
+    async def runtime_diagnostics(self) -> RuntimeDiagnostics:
+        """Return a bounded snapshot of active host runtime diagnostics.
+
+        Raises:
+            WorkerSdkError: The host rejects the request or lacks the additive
+                ``grpc-v1`` runtime-diagnostics operation.
+        """
+        try:
+            response = await self._host_stub.GetRuntimeDiagnostics(
+                pb.GetRuntimeDiagnosticsRequest(
+                    activation_id=self._activation_id,
+                    auth_token=self._auth_token,
+                )
+            )
+        except grpc.aio.AioRpcError as exc:
+            if exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                raise WorkerSdkError(
+                    "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension"
+                ) from exc
+            raise WorkerSdkError(f"GetRuntimeDiagnostics failed: {exc.details()}") from exc
+        return RuntimeDiagnostics(
+            entries=tuple(
+                RuntimeDiagnostic(code=entry.code, message=entry.message, count=entry.count)
+                for entry in response.entries
+            )
+        )
+
+    async def emit_metric(
+        self,
+        name: str,
+        measurements: Iterable[MetricMeasurement | Mapping[str, Json]],
+        metadata: Json | None = None,
+        *,
+        scope_stack_id: str | None = None,
+        parent_scope_id: str | None = None,
+    ) -> None:
+        """Emit a Relay metric-measurement mark through the host runtime.
+
+        Relay performs authoritative metric-schema validation after the mark is
+        sanitized. This helper supplies the reserved schema and preserves each
+        measurement mapping without maintaining a second validator in the SDK.
+        """
+        encoded: list[dict[str, Json]] = []
+        for measurement in measurements:
+            if not isinstance(measurement, Mapping):
+                raise TypeError("measurements must contain mappings")
+            encoded.append({key: value for key, value in measurement.items()})
+        await self.emit_mark(
+            name,
+            {"measurements": encoded},
+            metadata,
+            data_schema=DataSchema(METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION),
+            scope_stack_id=scope_stack_id,
+            parent_scope_id=parent_scope_id,
+        )
 
     async def create_scope_stack(self) -> str:
         """Create an isolated, host-owned scope stack.
@@ -2297,6 +2452,38 @@ def _optional_json_envelope(value: Json | None, schema: str = JSON_SCHEMA) -> An
     if value is None:
         return None
     return _json_envelope(schema, value)
+
+
+def _data_schema_json(value: DataSchema | Mapping[str, Json] | None) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if isinstance(value, DataSchema):
+        return value.to_json()
+    if not isinstance(value, Mapping):
+        raise TypeError("data_schema must be DataSchema, a mapping, or None")
+    if set(value) != {"name", "version"}:
+        raise ValueError("data_schema must contain exactly name and version")
+    name = value["name"]
+    version = value["version"]
+    if not isinstance(name, str) or not isinstance(version, str):
+        raise ValueError("data_schema name and version must be strings")
+    return DataSchema(name=name, version=version).to_json()
+
+
+def _log_severity_value(value: LogSeverity | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, LogSeverity):
+        return value.value
+    if not isinstance(value, str):
+        raise TypeError("severity must be LogSeverity, a string, or None")
+    normalized = value.strip().lower()
+    if normalized == "warning":
+        normalized = "warn"
+    try:
+        return LogSeverity(normalized).value
+    except ValueError as exc:
+        raise ValueError(f"invalid log severity: {value!r}") from exc
 
 
 def _decode_required_envelope(envelope: Any, field: str, expected_schema: str = JSON_SCHEMA) -> Json:

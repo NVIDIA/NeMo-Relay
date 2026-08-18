@@ -47,9 +47,13 @@ The Python package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for tool and LLM requests,
   responses, and execution, plus mark and scope event sanitizers for `data`,
   `category_profile`, and `metadata`.
-- **Subscribers and exporters**: `OpenTelemetrySubscriber` accepts one required
-  `full`, `gen_ai`, or `openinference` endpoint configuration. The
-  `nemo_relay.observability` helpers configure plugin-owned endpoint fan-out.
+- **Subscribers and exporters**: `OpenTelemetrySubscriber` exports traces;
+  `OpenTelemetryLogSubscriber` and `OpenTelemetryMetricSubscriber` export
+  severity-tagged marks and typed metric measurements. Bare OTLP/HTTP origins
+  resolve to `/v1/traces`, `/v1/logs`, or `/v1/metrics` for the selected signal.
+  Each direct OTLP subscriber exposes `runtime_diagnostics()` for bounded
+  exporter and event-processing failure summaries.
+  The `nemo_relay.observability` helpers configure plugin-owned endpoint fan-out.
 - **Plugin and typed helpers**: Public modules for plugins, codecs, typed
   wrappers, adaptive runtime behavior, and observability plugin configuration.
 - **Shared Rust runtime semantics**: Python behavior aligned with the Rust
@@ -150,6 +154,11 @@ with nemo_relay.scope.scope("demo-agent", nemo_relay.ScopeType.Agent) as handle:
 nemo_relay.subscribers.flush()
 nemo_relay.subscribers.deregister("printer")
 ```
+
+Use `nemo_relay.scope.event(..., severity=nemo_relay.LogSeverity.Info)` for a
+mark intended for log export. Use `nemo_relay.scope.metric()` with
+`nemo_relay.MetricMeasurement` objects for metrics; Relay validates the complete
+measurement group before publishing it.
 
 Native subscriber delivery is asynchronous, so call
 `nemo_relay.subscribers.flush()` before you read subscriber output or exit.

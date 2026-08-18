@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use tokio::runtime::{Handle, Runtime};
 
 use super::{
-    Bound, Duration, HashMap, PyAny, PyRef, PyResult, Python, json_to_py, py_string_map,
-    py_to_json, to_python_json_string, to_python_json_value,
+    Bound, Duration, HashMap, PyAny, PyLogSeverity, PyRef, PyResult, Python, json_to_py,
+    py_string_map, py_to_json, to_python_json_string, to_python_json_value,
 };
 #[cfg(test)]
 use super::{
@@ -17,6 +17,60 @@ use super::{
 // ---------------------------------------------------------------------------
 // AtifExporter
 // ---------------------------------------------------------------------------
+
+/// One bounded runtime diagnostic from an OpenTelemetry subscriber.
+#[pyclass(name = "OpenTelemetryRuntimeDiagnostic", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyOpenTelemetryRuntimeDiagnostic {
+    inner: nemo_relay::observability::OpenTelemetryRuntimeDiagnostic,
+}
+
+#[pymethods]
+impl PyOpenTelemetryRuntimeDiagnostic {
+    #[getter]
+    fn code(&self) -> &str {
+        &self.inner.code
+    }
+
+    #[getter]
+    fn message(&self) -> &str {
+        &self.inner.message
+    }
+
+    #[getter]
+    fn count(&self) -> u64 {
+        self.inner.count
+    }
+}
+
+/// Bounded snapshot of runtime diagnostics from an OpenTelemetry subscriber.
+#[pyclass(name = "OpenTelemetryRuntimeDiagnostics", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyOpenTelemetryRuntimeDiagnostics {
+    inner: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+}
+
+#[pymethods]
+impl PyOpenTelemetryRuntimeDiagnostics {
+    /// Return diagnostics in stable code order.
+    #[getter]
+    fn entries(&self) -> Vec<PyOpenTelemetryRuntimeDiagnostic> {
+        self.inner
+            .entries()
+            .iter()
+            .cloned()
+            .map(|inner| PyOpenTelemetryRuntimeDiagnostic { inner })
+            .collect()
+    }
+
+    /// Return the diagnostic with ``code``, when present.
+    fn get(&self, code: &str) -> Option<PyOpenTelemetryRuntimeDiagnostic> {
+        self.inner
+            .get(code)
+            .cloned()
+            .map(|inner| PyOpenTelemetryRuntimeDiagnostic { inner })
+    }
+}
 
 /// ATIF trajectory exporter that collects events and exports ATIF trajectories.
 ///
@@ -452,20 +506,8 @@ impl PyOpenTelemetryConfig {
                 )));
             }
         };
-        if self.endpoint.trim().is_empty() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "endpoint is required and must be nonblank",
-            ));
-        }
-        let transport = match self.transport.as_str() {
-            "http_binary" => nemo_relay::observability::otel::OtlpTransport::HttpBinary,
-            "grpc" => nemo_relay::observability::otel::OtlpTransport::Grpc,
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "transport must be 'http_binary' or 'grpc', got {other:?}"
-                )));
-            }
-        };
+        validate_otel_signal_endpoint(&self.endpoint)?;
+        let transport = parse_otel_signal_transport(&self.transport)?;
         let mut config = nemo_relay::observability::otel::OpenTelemetryConfig::new(
             otel_type,
             self.endpoint.clone(),
@@ -666,8 +708,405 @@ impl PyOpenTelemetrySubscriber {
         })
     }
 
+    /// Return a bounded snapshot of exporter and event-processing diagnostics.
+    pub(crate) fn runtime_diagnostics(&self) -> PyResult<PyOpenTelemetryRuntimeDiagnostics> {
+        self.with_runtime_context(|| {
+            Ok(PyOpenTelemetryRuntimeDiagnostics {
+                inner: self.inner.runtime_diagnostics(),
+            })
+        })
+    }
+
     pub(crate) fn __repr__(&self) -> String {
         "<OpenTelemetrySubscriber>".to_string()
+    }
+}
+
+fn parse_otel_signal_transport(
+    transport: &str,
+) -> PyResult<nemo_relay::observability::otel::OtlpTransport> {
+    match transport {
+        "http_binary" => Ok(nemo_relay::observability::otel::OtlpTransport::HttpBinary),
+        "grpc" => Ok(nemo_relay::observability::otel::OtlpTransport::Grpc),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "transport must be 'http_binary' or 'grpc', got {other:?}"
+        ))),
+    }
+}
+
+fn validate_otel_signal_endpoint(endpoint: &str) -> PyResult<()> {
+    if endpoint.trim().is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "endpoint is required and must be nonblank",
+        ));
+    }
+    Ok(())
+}
+
+/// Mutable configuration for an OTLP log subscriber.
+#[pyclass(name = "OpenTelemetryLogConfig")]
+pub struct PyOpenTelemetryLogConfig {
+    #[pyo3(get, set)]
+    pub(crate) transport: String,
+    #[pyo3(get, set)]
+    pub(crate) endpoint: String,
+    #[pyo3(get, set)]
+    pub(crate) service_name: String,
+    #[pyo3(get, set)]
+    pub(crate) service_namespace: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) service_version: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) instrumentation_scope: String,
+    #[pyo3(get, set)]
+    pub(crate) timeout_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) minimum_severity: PyLogSeverity,
+    #[pyo3(get, set)]
+    pub(crate) max_queue_size: usize,
+    #[pyo3(get, set)]
+    pub(crate) max_export_batch_size: usize,
+    #[pyo3(get, set)]
+    pub(crate) scheduled_delay_millis: u64,
+    pub(crate) headers: HashMap<String, String>,
+    pub(crate) resource_attributes: HashMap<String, String>,
+}
+
+impl PyOpenTelemetryLogConfig {
+    fn to_rust_config(
+        &self,
+    ) -> PyResult<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
+        validate_otel_signal_endpoint(&self.endpoint)?;
+        let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(
+            self.endpoint.clone(),
+        )
+        .with_transport(parse_otel_signal_transport(&self.transport)?)
+        .with_service_name(self.service_name.clone())
+        .with_instrumentation_scope(self.instrumentation_scope.clone())
+        .with_timeout(Duration::from_millis(self.timeout_millis))
+        .with_minimum_severity(self.minimum_severity.into())
+        .with_max_queue_size(self.max_queue_size)
+        .with_max_export_batch_size(self.max_export_batch_size)
+        .with_scheduled_delay(Duration::from_millis(self.scheduled_delay_millis));
+        if let Some(namespace) = &self.service_namespace {
+            config = config.with_service_namespace(namespace.clone());
+        }
+        if let Some(version) = &self.service_version {
+            config = config.with_service_version(version.clone());
+        }
+        for (key, value) in &self.headers {
+            config = config.with_header(key.clone(), value.clone());
+        }
+        for (key, value) in &self.resource_attributes {
+            config = config.with_resource_attribute(key.clone(), value.clone());
+        }
+        Ok(config)
+    }
+}
+
+#[pymethods]
+impl PyOpenTelemetryLogConfig {
+    #[new]
+    fn new(endpoint: String) -> Self {
+        Self {
+            transport: "http_binary".into(),
+            endpoint,
+            service_name: "unknown_service".into(),
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: "opentelemetry".into(),
+            timeout_millis: 3_000,
+            minimum_severity: PyLogSeverity::Info,
+            max_queue_size: 2_048,
+            max_export_batch_size: 512,
+            scheduled_delay_millis: 1_000,
+            headers: HashMap::new(),
+            resource_attributes: HashMap::new(),
+        }
+    }
+
+    #[getter]
+    fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &serde_json::to_value(&self.headers).unwrap_or_default())
+    }
+
+    #[setter]
+    fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.headers = py_string_map(headers, "headers")?;
+        Ok(())
+    }
+
+    #[getter]
+    fn resource_attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.resource_attributes).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    fn set_resource_attributes(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.resource_attributes = py_string_map(value, "resource_attributes")?;
+        Ok(())
+    }
+
+    fn set_header(&mut self, key: String, value: String) {
+        self.headers.insert(key, value);
+    }
+
+    fn set_resource_attribute(&mut self, key: String, value: String) {
+        self.resource_attributes.insert(key, value);
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<OpenTelemetryLogConfig transport={:?} endpoint={:?}>",
+            self.transport, self.endpoint
+        )
+    }
+}
+
+/// OTLP log-backed Relay event subscriber.
+#[pyclass(name = "OpenTelemetryLogSubscriber")]
+pub struct PyOpenTelemetryLogSubscriber {
+    inner: nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+}
+
+#[pymethods]
+impl PyOpenTelemetryLogSubscriber {
+    #[new]
+    fn new(config: PyRef<'_, PyOpenTelemetryLogConfig>) -> PyResult<Self> {
+        let inner = nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber::new(
+            config.to_rust_config()?,
+        )
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    fn register(&self, name: String) -> PyResult<()> {
+        self.inner
+            .register(&name)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    fn deregister(&self, name: String) -> PyResult<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.force_flush())
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.shutdown())
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// Return a bounded snapshot of exporter and event-processing diagnostics.
+    fn runtime_diagnostics(&self) -> PyOpenTelemetryRuntimeDiagnostics {
+        PyOpenTelemetryRuntimeDiagnostics {
+            inner: self.inner.runtime_diagnostics(),
+        }
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "<OpenTelemetryLogSubscriber>"
+    }
+}
+
+/// Preferred aggregation temporality for OTLP metrics.
+#[pyclass(name = "MetricTemporality", eq, eq_int, from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub enum PyMetricTemporality {
+    Cumulative = 0,
+    Delta = 1,
+    LowMemory = 2,
+}
+
+impl From<PyMetricTemporality> for nemo_relay::observability::otel_metrics::MetricTemporality {
+    fn from(value: PyMetricTemporality) -> Self {
+        match value {
+            PyMetricTemporality::Cumulative => Self::Cumulative,
+            PyMetricTemporality::Delta => Self::Delta,
+            PyMetricTemporality::LowMemory => Self::LowMemory,
+        }
+    }
+}
+
+/// Mutable configuration for an OTLP metric subscriber.
+#[pyclass(name = "OpenTelemetryMetricConfig")]
+pub struct PyOpenTelemetryMetricConfig {
+    #[pyo3(get, set)]
+    pub(crate) transport: String,
+    #[pyo3(get, set)]
+    pub(crate) endpoint: String,
+    #[pyo3(get, set)]
+    pub(crate) service_name: String,
+    #[pyo3(get, set)]
+    pub(crate) service_namespace: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) service_version: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) instrumentation_scope: String,
+    #[pyo3(get, set)]
+    pub(crate) timeout_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) export_interval_millis: u64,
+    #[pyo3(get, set)]
+    pub(crate) temporality: PyMetricTemporality,
+    #[pyo3(get, set)]
+    pub(crate) max_instruments: usize,
+    #[pyo3(get, set)]
+    pub(crate) cardinality_limit: usize,
+    pub(crate) headers: HashMap<String, String>,
+    pub(crate) resource_attributes: HashMap<String, String>,
+}
+
+impl PyOpenTelemetryMetricConfig {
+    fn to_rust_config(
+        &self,
+    ) -> PyResult<nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig> {
+        validate_otel_signal_endpoint(&self.endpoint)?;
+        let mut config = nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig::new(
+            self.endpoint.clone(),
+        )
+        .with_transport(parse_otel_signal_transport(&self.transport)?)
+        .with_service_name(self.service_name.clone())
+        .with_instrumentation_scope(self.instrumentation_scope.clone())
+        .with_timeout(Duration::from_millis(self.timeout_millis))
+        .with_export_interval(Duration::from_millis(self.export_interval_millis))
+        .with_temporality(self.temporality.into())
+        .with_max_instruments(self.max_instruments)
+        .with_cardinality_limit(self.cardinality_limit);
+        if let Some(namespace) = &self.service_namespace {
+            config = config.with_service_namespace(namespace.clone());
+        }
+        if let Some(version) = &self.service_version {
+            config = config.with_service_version(version.clone());
+        }
+        for (key, value) in &self.headers {
+            config = config.with_header(key.clone(), value.clone());
+        }
+        for (key, value) in &self.resource_attributes {
+            config = config.with_resource_attribute(key.clone(), value.clone());
+        }
+        Ok(config)
+    }
+}
+
+#[pymethods]
+impl PyOpenTelemetryMetricConfig {
+    #[new]
+    fn new(endpoint: String) -> Self {
+        Self {
+            transport: "http_binary".into(),
+            endpoint,
+            service_name: "unknown_service".into(),
+            service_namespace: None,
+            service_version: None,
+            instrumentation_scope: "opentelemetry".into(),
+            timeout_millis: 3_000,
+            export_interval_millis: 60_000,
+            temporality: PyMetricTemporality::Cumulative,
+            max_instruments: 256,
+            cardinality_limit: 2_000,
+            headers: HashMap::new(),
+            resource_attributes: HashMap::new(),
+        }
+    }
+
+    #[getter]
+    fn headers(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &serde_json::to_value(&self.headers).unwrap_or_default())
+    }
+
+    #[setter]
+    fn set_headers(&mut self, headers: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.headers = py_string_map(headers, "headers")?;
+        Ok(())
+    }
+
+    #[getter]
+    fn resource_attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(
+            py,
+            &serde_json::to_value(&self.resource_attributes).unwrap_or_default(),
+        )
+    }
+
+    #[setter]
+    fn set_resource_attributes(&mut self, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.resource_attributes = py_string_map(value, "resource_attributes")?;
+        Ok(())
+    }
+
+    fn set_header(&mut self, key: String, value: String) {
+        self.headers.insert(key, value);
+    }
+
+    fn set_resource_attribute(&mut self, key: String, value: String) {
+        self.resource_attributes.insert(key, value);
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<OpenTelemetryMetricConfig transport={:?} endpoint={:?}>",
+            self.transport, self.endpoint
+        )
+    }
+}
+
+/// OTLP metric-backed Relay event subscriber.
+#[pyclass(name = "OpenTelemetryMetricSubscriber")]
+pub struct PyOpenTelemetryMetricSubscriber {
+    inner: nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+}
+
+#[pymethods]
+impl PyOpenTelemetryMetricSubscriber {
+    #[new]
+    fn new(config: PyRef<'_, PyOpenTelemetryMetricConfig>) -> PyResult<Self> {
+        let inner = nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber::new(
+            config.to_rust_config()?,
+        )
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    fn register(&self, name: String) -> PyResult<()> {
+        self.inner
+            .register(&name)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    fn deregister(&self, name: String) -> PyResult<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    fn force_flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.force_flush())
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    fn shutdown(&self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| self.inner.shutdown())
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))
+    }
+
+    /// Return a bounded snapshot of exporter and event-processing diagnostics.
+    fn runtime_diagnostics(&self) -> PyOpenTelemetryRuntimeDiagnostics {
+        PyOpenTelemetryRuntimeDiagnostics {
+            inner: self.inner.runtime_diagnostics(),
+        }
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "<OpenTelemetryMetricSubscriber>"
     }
 }
 

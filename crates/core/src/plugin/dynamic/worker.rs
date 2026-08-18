@@ -20,14 +20,16 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HandshakeResponse,
+    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
+    GetRuntimeDiagnosticsResponse, GuardrailResult, HandshakeRequest, HandshakeResponse,
     HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
     LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest,
     LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk,
+    Registration, RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext,
+    ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
@@ -61,7 +63,7 @@ use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tower::service_fn;
 
-use crate::api::event::{Event, EventSanitizeFields};
+use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
@@ -81,7 +83,8 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin_registration_checked, register_plugin_tracked,
+    active_runtime_diagnostics_snapshot, deregister_plugin_registration_checked,
+    register_plugin_tracked,
 };
 
 use super::{
@@ -91,6 +94,7 @@ use super::{
 };
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
+const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -2473,19 +2477,54 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         &self,
         request: Request<EmitMarkRequest>,
     ) -> Result<Response<HostAck>, Status> {
-        let request = request.into_inner();
-        self.state
-            .authorize(&request.activation_id, &request.auth_token)?;
-        let result = self.with_stack(request.scope.as_ref(), || {
+        let EmitMarkRequest {
+            activation_id,
+            auth_token,
+            scope,
+            name,
+            data,
+            metadata,
+            data_schema,
+            severity,
+        } = request.into_inner();
+        self.state.authorize(&activation_id, &auth_token)?;
+        let data_schema = optional_typed_envelope::<DataSchema>(
+            data_schema,
+            "mark data_schema",
+            DATA_SCHEMA_SCHEMA,
+        );
+        let severity = optional_log_severity(&severity);
+        let result = self.with_stack(scope.as_ref(), || {
             emit_scope_mark(
                 EmitMarkEventParams::builder()
-                    .name(&request.name)
-                    .data_opt(optional_envelope_to_json(request.data)?)
-                    .metadata_opt(optional_envelope_to_json(request.metadata)?)
+                    .name(&name)
+                    .data_opt(optional_envelope_to_json(data)?)
+                    .metadata_opt(optional_envelope_to_json(metadata)?)
+                    .data_schema_opt(data_schema?)
+                    .severity_opt(severity?)
                     .build(),
             )
         });
         Ok(Response::new(host_ack(result)))
+    }
+
+    async fn get_runtime_diagnostics(
+        &self,
+        request: Request<GetRuntimeDiagnosticsRequest>,
+    ) -> Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        Ok(Response::new(GetRuntimeDiagnosticsResponse {
+            entries: active_runtime_diagnostics_snapshot()
+                .into_iter()
+                .map(|diagnostic| ProtoRuntimeDiagnostic {
+                    code: diagnostic.code,
+                    message: diagnostic.message,
+                    count: diagnostic.count,
+                })
+                .collect(),
+        }))
     }
 
     async fn push_scope(
@@ -3031,6 +3070,35 @@ fn optional_envelope_to_json(value: Option<JsonEnvelope>) -> FlowResult<Option<J
                 .map_err(|err| FlowError::Internal(format!("invalid JSON envelope: {err}")))
         })
         .transpose()
+}
+
+fn optional_typed_envelope<T: serde::de::DeserializeOwned>(
+    value: Option<JsonEnvelope>,
+    field: &str,
+    expected_schema: &str,
+) -> FlowResult<Option<T>> {
+    value
+        .map(|value| {
+            if value.schema != expected_schema {
+                return Err(FlowError::InvalidArgument(format!(
+                    "{field} has schema {:?}; expected {expected_schema:?}",
+                    value.schema
+                )));
+            }
+            decode_json_envelope::<T>(&value).map_err(|err| {
+                FlowError::InvalidArgument(format!("{field} has an invalid value: {err}"))
+            })
+        })
+        .transpose()
+}
+
+fn optional_log_severity(value: &str) -> FlowResult<Option<LogSeverity>> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_value(Json::String(value.to_owned()))
+        .map(Some)
+        .map_err(|err| FlowError::InvalidArgument(format!("mark severity is invalid: {err}")))
 }
 
 fn host_ack(result: FlowResult<()>) -> HostAck {

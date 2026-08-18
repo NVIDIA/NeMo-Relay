@@ -1052,7 +1052,7 @@ impl CodecIdentityInvocation {
 
 impl PluginContext<'_> {
     fn host_v4(&self) -> Result<HostV4> {
-        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_TYPED_ASYNC
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION
             || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV4>()
         {
             return Err("typed async native middleware requires Relay ABI v4".into());

@@ -10,7 +10,7 @@
 //! - rollback bookkeeping for registrations created during plugin setup
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -219,6 +219,16 @@ pub struct RuntimeDiagnostic {
     /// Number of failures aggregated into this entry.
     pub count: u64,
 }
+
+/// Read-only projection of runtime diagnostics exposed to dynamic plugins.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct RuntimeDiagnosticsSnapshotEntry {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) count: u64,
+}
+
+const MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS: usize = 32;
 
 impl ConfigReport {
     /// Returns `true` when the report contains at least one error diagnostic.
@@ -1713,6 +1723,7 @@ fn install_previous_configuration_for_teardown(
     *guard = Some(ActivePluginConfiguration {
         config: previous_state.config.clone(),
         report: previous_state.report.clone(),
+        runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
         registrations: Vec::new(),
     });
     Ok(())
@@ -1781,9 +1792,10 @@ async fn restore_previous_plugin_configuration(
     .await
     {
         Ok(registrations) => {
-            store_active_plugin_configuration(
+            store_active_plugin_configuration_with_runtime_diagnostics(
                 previous_state.config,
                 previous_state.report,
+                previous_state.runtime_diagnostics,
                 registrations,
             )?;
             log::warn!(
@@ -2480,6 +2492,19 @@ pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     let Some(state) = guard.as_mut() else {
         return;
     };
+    if let Some(existing) = state.runtime_diagnostics.get_mut(&diagnostic.code) {
+        existing.message = diagnostic.message.clone();
+        existing.count = existing.count.saturating_add(diagnostic.count);
+    } else if state.runtime_diagnostics.len() < MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS {
+        state.runtime_diagnostics.insert(
+            diagnostic.code.clone(),
+            RuntimeDiagnosticsSnapshotEntry {
+                code: diagnostic.code.clone(),
+                message: diagnostic.message.clone(),
+                count: diagnostic.count,
+            },
+        );
+    }
     if let Some(existing) = state
         .report
         .runtime_diagnostics
@@ -2496,6 +2521,19 @@ pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     } else {
         state.report.runtime_diagnostics.push(diagnostic);
     }
+}
+
+/// Return a bounded, active-only runtime-diagnostics snapshot for dynamic plugins.
+pub(crate) fn active_runtime_diagnostics_snapshot() -> Vec<RuntimeDiagnosticsSnapshotEntry> {
+    ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|state| state.runtime_diagnostics.values().cloned().collect())
+        })
+        .unwrap_or_default()
 }
 
 /// Rolls back registrations in reverse order, ignoring rollback failures.
@@ -2566,6 +2604,7 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 struct ActivePluginConfiguration {
     config: PluginConfig,
     report: ConfigReport,
+    runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
 }
 
@@ -2688,12 +2727,27 @@ fn store_active_plugin_configuration(
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
 ) -> Result<()> {
+    store_active_plugin_configuration_with_runtime_diagnostics(
+        config,
+        report,
+        BTreeMap::new(),
+        registrations,
+    )
+}
+
+fn store_active_plugin_configuration_with_runtime_diagnostics(
+    config: PluginConfig,
+    report: ConfigReport,
+    runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
     let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
         PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
     })?;
     *guard = Some(ActivePluginConfiguration {
         config,
         report,
+        runtime_diagnostics,
         registrations,
     });
     if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {

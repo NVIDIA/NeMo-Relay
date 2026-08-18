@@ -12,6 +12,7 @@ use std::future::Future;
 use std::panic::resume_unwind;
 use std::sync::Arc;
 
+use nemo_relay::api::event::DataSchema;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
@@ -51,10 +52,10 @@ use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json
 use crate::py_callable;
 use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyGeminiGenerateContentCodec,
-    PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream, PyOCIGenAIChatCodec,
-    PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext, PyScopeAttributes,
-    PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding, PyToolAttributes,
-    PyToolExecutionResult, PyToolHandle,
+    PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream, PyLogSeverity, PyMetricMeasurement,
+    PyOCIGenAIChatCodec, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
+    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
+    PyToolAttributes, PyToolExecutionResult, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -62,6 +63,15 @@ pub(crate) type RustJsonStream = LlmJsonStream;
 /// Convert an [`FlowError`] into a Python `RuntimeError`.
 fn to_py_err(e: FlowError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+}
+
+fn metric_to_py_err(error: FlowError) -> PyErr {
+    match error {
+        FlowError::InvalidArgument(_) => {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string())
+        }
+        other => to_py_err(other),
+    }
 }
 
 #[pyfunction(name = "_shutdown_default_logging")]
@@ -616,7 +626,9 @@ fn pop_scope(
 ///     name: Event name.
 ///     handle: Optional parent scope handle. Defaults to current top of stack.
 ///     data: Optional JSON-serializable application data.
+///     data_schema: Optional object with string ``name`` and ``version`` fields.
 ///     metadata: Optional JSON-serializable metadata.
+///     severity: Optional typed severity used by OpenTelemetry log export.
 ///     timestamp: Optional timezone-aware ``datetime.datetime`` for the emitted mark event.
 ///         When omitted, the current runtime time is used.
 ///
@@ -630,18 +642,32 @@ fn pop_scope(
     *,
 	    handle: "ScopeHandle | None"=None,
 	    data: "object | None"=None,
+	    data_schema: "dict[str, str] | None"=None,
 	    metadata: "object | None"=None,
+	    severity: "LogSeverity | None"=None,
 	    timestamp: "datetime.datetime | None"=None
-) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, data_schema: dict[str, str] | None = None, metadata: object | None = None, severity: LogSeverity | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn event(
     _py: Python<'_>,
     name: &str,
     handle: Option<PyScopeHandle>,
     data: Option<&Bound<'_, PyAny>>,
+    data_schema: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
+    severity: Option<PyLogSeverity>,
     timestamp: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let data = opt_py_to_json(data)?;
+    let data_schema = data_schema
+        .map(py_to_json)
+        .transpose()?
+        .map(serde_json::from_value::<DataSchema>)
+        .transpose()
+        .map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "data_schema must contain string name and version fields: {error}"
+            ))
+        })?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
     with_python_publication_context(|| {
@@ -650,12 +676,52 @@ fn event(
                 .name(name)
                 .parent_opt(handle.as_ref().map(|h| &h.inner))
                 .data_opt(data)
+                .data_schema_opt(data_schema)
                 .metadata_opt(metadata)
+                .severity_opt(severity.map(Into::into))
                 .timestamp_opt(timestamp)
                 .build(),
         )
     })
     .map_err(to_py_err)
+}
+
+/// Emit one validated metric mark under the current or specified scope.
+#[pyfunction]
+#[pyo3(signature = (
+    name: "str",
+    measurements: "list[MetricMeasurement]",
+    *,
+    handle: "ScopeHandle | None"=None,
+    metadata: "object | None"=None,
+    timestamp: "datetime.datetime | None"=None
+) -> "None", text_signature = "(name: str, measurements: list[MetricMeasurement], *, handle: ScopeHandle | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+fn metric(
+    name: &str,
+    measurements: Vec<PyMetricMeasurement>,
+    handle: Option<PyScopeHandle>,
+    metadata: Option<&Bound<'_, PyAny>>,
+    timestamp: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let metadata = opt_py_to_json(metadata)?;
+    let timestamp = opt_py_to_timestamp(timestamp)?;
+    with_python_publication_context(|| {
+        core_scope_api::metric(
+            core_scope_api::EmitMetricEventParams::builder()
+                .name(name)
+                .measurements(
+                    measurements
+                        .into_iter()
+                        .map(|measurement| measurement.inner)
+                        .collect(),
+                )
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
+    .map_err(metric_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -2131,6 +2197,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(push_scope, m)?)?;
     m.add_function(wrap_pyfunction!(pop_scope, m)?)?;
     m.add_function(wrap_pyfunction!(event, m)?)?;
+    m.add_function(wrap_pyfunction!(metric, m)?)?;
 
     // Tool lifecycle
     m.add_function(wrap_pyfunction!(tool_call, m)?)?;

@@ -19,7 +19,7 @@ function tempDir(prefix) {
 
 describe('observability plugin helpers', () => {
   it('builds defaults and plugin component shape', () => {
-    assert.deepEqual(observability.defaultConfig(), { version: 3 });
+    assert.deepEqual(observability.defaultConfig(), { version: 4 });
     assert.equal(
       observability.ComponentSpec({ version: 3, enable_full_payloads: true }).config.enable_full_payloads,
       true,
@@ -63,6 +63,83 @@ describe('observability plugin helpers', () => {
     const component = observability.ComponentSpec({ version: 3, atof: observability.atofConfig() });
     assert.equal(component.kind, observability.OBSERVABILITY_PLUGIN_KIND);
     assert.equal(component.enabled, true);
+  });
+
+  it('builds OTLP log and metric sections with signal defaults', () => {
+    const endpoint = observability.openTelemetrySignalEndpoint({
+      endpoint: 'https://collector.example/custom/logs',
+      headers: { 'x-static': 'value' },
+      header_env: { authorization: 'OTEL_AUTHORIZATION' },
+      resource_attributes: { 'nv.project': 'observability-dev' },
+      service_namespace: 'telemetry',
+      service_version: '1.0',
+    });
+    assert.deepEqual(endpoint, {
+      endpoint: 'https://collector.example/custom/logs',
+      transport: 'http_binary',
+      headers: { 'x-static': 'value' },
+      header_env: { authorization: 'OTEL_AUTHORIZATION' },
+      resource_attributes: { 'nv.project': 'observability-dev' },
+      service_name: 'unknown_service',
+      service_namespace: 'telemetry',
+      service_version: '1.0',
+      instrumentation_scope: 'opentelemetry',
+      timeout_millis: 3000,
+    });
+
+    const logs = observability.openTelemetryLogConfig({ enabled: true, endpoints: [endpoint] });
+    const metrics = observability.openTelemetryMetricConfig({ enabled: true, endpoints: [] });
+    assert.deepEqual(observability.openTelemetryLogConfig(), {
+      enabled: false,
+      minimum_severity: 'info',
+      max_queue_size: 2048,
+      max_export_batch_size: 512,
+      scheduled_delay_millis: 1000,
+    });
+    assert.deepEqual(observability.openTelemetryMetricConfig(), {
+      enabled: false,
+      export_interval_millis: 60000,
+      temporality: 'cumulative',
+      max_instruments: 256,
+      cardinality_limit: 2000,
+    });
+    assert.deepEqual(observability.openTelemetryConfig({ enabled: true, logs, metrics }), {
+      enabled: true,
+      endpoints: [],
+      logs,
+      metrics,
+    });
+    assert.deepEqual(metrics.endpoints, []);
+
+    assert.throws(() => observability.openTelemetrySignalEndpoint(), /config is required/);
+    assert.throws(() => observability.openTelemetrySignalEndpoint({ endpoint: ' ' }), /nonblank/);
+  });
+
+  it('initializes a version 4 log and metric configuration without exporting signals', async () => {
+    const config = {
+      version: 4,
+      opentelemetry: observability.openTelemetryConfig({
+        enabled: true,
+        logs: observability.openTelemetryLogConfig({
+          enabled: true,
+          endpoints: [observability.openTelemetrySignalEndpoint({ endpoint: 'http://127.0.0.1:4318/v1/logs' })],
+        }),
+        metrics: observability.openTelemetryMetricConfig({
+          enabled: true,
+          endpoints: [observability.openTelemetrySignalEndpoint({ endpoint: 'http://127.0.0.1:4318/v1/metrics' })],
+        }),
+      }),
+    };
+
+    await plugin.initialize({
+      version: 1,
+      components: [observability.ComponentSpec(config)],
+    });
+    try {
+      assert.deepEqual(plugin.report()?.runtime_diagnostics ?? [], []);
+    } finally {
+      plugin.clear();
+    }
   });
 
   it('lists builtin observability kind and validates bad values', () => {

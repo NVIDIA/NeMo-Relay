@@ -21,7 +21,7 @@ use std::task::{Context, Poll};
 
 use futures_util::FutureExt;
 
-use crate::api::event::{Event, EventSanitizeFields};
+use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn,
@@ -45,7 +45,8 @@ use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin_registration_checked, register_plugin_tracked,
+    active_runtime_diagnostics_snapshot, deregister_plugin_registration_checked,
+    register_plugin_tracked,
 };
 use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
@@ -399,9 +400,9 @@ fn load_one_native_plugin(
                 ))
             })?;
         let mut status = entry(native_host_api(), &mut plugin);
-        // Older SDKs reject newer tables. Negotiate through separately frozen
-        // v4, v3, and v2 tables so their struct sizes and function pointers do
-        // not change as the current ABI grows.
+        // Older SDKs reject newer tables. Negotiate from the current v4 table
+        // through separately frozen v3 and v2 tables so their struct sizes and
+        // function pointers do not change as the current ABI grows.
         if status == NemoRelayStatus::InvalidArg {
             drop_native_plugin_descriptor(&mut plugin);
             status = entry(native_host_api_v3(), &mut plugin);
@@ -919,6 +920,8 @@ fn build_native_host_api_v4() -> NemoRelayNativeHostApiV4 {
         async_llm_stream_release: native_async_llm_stream_release,
         async_completion_retain: native_async_completion_retain,
         async_stream_is_backpressured: native_async_stream_is_backpressured,
+        emit_mark_v2: native_emit_mark_v2,
+        get_runtime_diagnostics: native_get_runtime_diagnostics,
     }
 }
 
@@ -1002,6 +1005,38 @@ fn optional_json_from_native_string(
         set_native_last_error(format!("{field} is not valid JSON: {err}"));
         NemoRelayStatus::InvalidJson
     })
+}
+
+fn optional_typed_json_from_native_string<T: serde::de::DeserializeOwned>(
+    value: *const NemoRelayNativeString,
+    field: &str,
+) -> Result<Option<T>, NemoRelayStatus> {
+    optional_json_from_native_string(value, field)?
+        .map(|value| {
+            serde_json::from_value(value).map_err(|err| {
+                set_native_last_error(format!("{field} has an invalid shape: {err}"));
+                NemoRelayStatus::InvalidArg
+            })
+        })
+        .transpose()
+}
+
+fn optional_severity_from_native_string(
+    value: *const NemoRelayNativeString,
+) -> Result<Option<LogSeverity>, NemoRelayStatus> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = read_native_string(value).map_err(|err| {
+        set_native_last_error(err.to_string());
+        NemoRelayStatus::InvalidUtf8
+    })?;
+    serde_json::from_value(Json::String(value))
+        .map(Some)
+        .map_err(|err| {
+            set_native_last_error(format!("mark severity is invalid: {err}"));
+            NemoRelayStatus::InvalidArg
+        })
 }
 
 fn optional_timestamp_from_native(
@@ -1196,6 +1231,78 @@ unsafe extern "C" fn native_emit_mark(
     ) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_flow_error(err),
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // Mirrors the append-only native ABI function.
+unsafe extern "C" fn native_emit_mark_v2(
+    name: *const NemoRelayNativeString,
+    parent: *const NemoRelayNativeScopeHandle,
+    data_json: *const NemoRelayNativeString,
+    metadata_json: *const NemoRelayNativeString,
+    data_schema_json: *const NemoRelayNativeString,
+    severity: *const NemoRelayNativeString,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let name = match read_name(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let data = match optional_json_from_native_string(data_json, "mark data") {
+        Ok(data) => data,
+        Err(status) => return status,
+    };
+    let metadata = match optional_json_from_native_string(metadata_json, "mark metadata") {
+        Ok(metadata) => metadata,
+        Err(status) => return status,
+    };
+    let data_schema = match optional_typed_json_from_native_string::<DataSchema>(
+        data_schema_json,
+        "mark data schema",
+    ) {
+        Ok(data_schema) => data_schema,
+        Err(status) => return status,
+    };
+    let severity = match optional_severity_from_native_string(severity) {
+        Ok(severity) => severity,
+        Err(status) => return status,
+    };
+    let timestamp = match optional_timestamp_from_native(timestamp_unix_micros) {
+        Ok(timestamp) => timestamp,
+        Err(status) => return status,
+    };
+    let parent_ref = native_scope_ref(parent);
+    match emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name(&name)
+            .parent_opt(parent_ref)
+            .data_opt(data)
+            .metadata_opt(metadata)
+            .data_schema_opt(data_schema)
+            .severity_opt(severity)
+            .timestamp_opt(timestamp)
+            .build(),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(err) => status_from_flow_error(err),
+    }
+}
+
+unsafe extern "C" fn native_get_runtime_diagnostics(
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    clear_native_last_error();
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    match serde_json::to_value(diagnostics) {
+        Ok(entries) => {
+            let value = Json::Object(Map::from_iter([("entries".into(), entries)]));
+            write_native_json(&value, out_json)
+        }
+        Err(error) => {
+            set_native_last_error(format!("failed to serialize runtime diagnostics: {error}"));
+            NemoRelayStatus::Internal
+        }
     }
 }
 

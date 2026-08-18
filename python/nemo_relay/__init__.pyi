@@ -88,10 +88,43 @@ from nemo_relay._native import (
     LlmSanitizeResponseContext as LlmSanitizeResponseContext,
 )
 from nemo_relay._native import (
+    LogSeverity as LogSeverity,
+)
+from nemo_relay._native import (
     MarkEvent as MarkEvent,
 )
 from nemo_relay._native import (
+    MetricKind as MetricKind,
+)
+from nemo_relay._native import (
+    MetricMeasurement as MetricMeasurement,
+)
+from nemo_relay._native import (
+    MetricTemporality as MetricTemporality,
+)
+from nemo_relay._native import (
+    MetricValueType as MetricValueType,
+)
+from nemo_relay._native import (
     OpenTelemetryConfig as OpenTelemetryConfig,
+)
+from nemo_relay._native import (
+    OpenTelemetryLogConfig as OpenTelemetryLogConfig,
+)
+from nemo_relay._native import (
+    OpenTelemetryLogSubscriber as OpenTelemetryLogSubscriber,
+)
+from nemo_relay._native import (
+    OpenTelemetryMetricConfig as OpenTelemetryMetricConfig,
+)
+from nemo_relay._native import (
+    OpenTelemetryMetricSubscriber as OpenTelemetryMetricSubscriber,
+)
+from nemo_relay._native import (
+    OpenTelemetryRuntimeDiagnostic as OpenTelemetryRuntimeDiagnostic,
+)
+from nemo_relay._native import (
+    OpenTelemetryRuntimeDiagnostics as OpenTelemetryRuntimeDiagnostics,
 )
 from nemo_relay._native import (
     OpenTelemetrySubscriber as OpenTelemetrySubscriber,
@@ -156,6 +189,12 @@ Json: TypeAlias = JsonValue
 """Shorthand for any JSON-compatible payload accepted by the Python binding."""
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
 """Policy used by config helpers when unknown fields or values are encountered."""
+
+class DataSchema(TypedDict):
+    """Schema identifier attached to an event's opaque data payload."""
+
+    name: str
+    version: str
 
 class EventSanitizeFields(TypedDict):
     """Observability fields returned by mark and scope event sanitizers."""

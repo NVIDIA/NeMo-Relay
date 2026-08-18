@@ -1477,6 +1477,14 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
             ..PluginConfig::default()
         }))
         .unwrap();
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "atif.remote_delivery_failed".into(),
+        component: "observability".into(),
+        field: Some("storage[0]".into()),
+        message: "HTTP 500".into(),
+        session_id: Some("session-123".into()),
+        count: 1,
+    });
 
     let err = runtime
         .block_on(initialize_plugins_exact(PluginConfig {
@@ -1494,6 +1502,19 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
     assert_eq!(RESTORE_FAIL_REGISTRATIONS.load(Ordering::SeqCst), 1);
     let restored_report = active_plugin_report().expect("previous config should be restored");
     assert!(restored_report.diagnostics.is_empty());
+    assert_eq!(restored_report.runtime_diagnostics.len(), 1);
+    let restored = &restored_report.runtime_diagnostics[0];
+    assert_eq!(restored.code, "atif.remote_delivery_failed");
+    assert_eq!(restored.component, "observability");
+    assert_eq!(restored.field.as_deref(), Some("storage[0]"));
+    assert_eq!(restored.message, "HTTP 500");
+    assert_eq!(restored.session_id.as_deref(), Some("session-123"));
+    assert_eq!(restored.count, 1);
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "atif.remote_delivery_failed");
+    assert_eq!(diagnostics[0].message, "HTTP 500");
+    assert_eq!(diagnostics[0].count, 1);
     let names = recorded_names().lock().unwrap().clone();
     assert_eq!(
         names,
@@ -1828,6 +1849,96 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
 
     clear_plugin_configuration_inner();
     assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn dynamic_plugin_runtime_diagnostics_are_active_only_and_aggregated_by_code() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+
+    for diagnostic in [
+        RuntimeDiagnostic {
+            code: "zeta".into(),
+            component: "observability".into(),
+            field: None,
+            message: "first zeta".into(),
+            session_id: None,
+            count: 2,
+        },
+        RuntimeDiagnostic {
+            code: "alpha".into(),
+            component: "observability".into(),
+            field: Some("logs[0]".into()),
+            message: "alpha".into(),
+            session_id: None,
+            count: 1,
+        },
+        RuntimeDiagnostic {
+            code: "zeta".into(),
+            component: "observability".into(),
+            field: Some("metrics[0]".into()),
+            message: "latest zeta".into(),
+            session_id: None,
+            count: u64::MAX,
+        },
+    ] {
+        record_active_plugin_runtime_diagnostic(diagnostic);
+    }
+
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code.as_str(),
+                diagnostic.message.as_str(),
+                diagnostic.count
+            ))
+            .collect::<Vec<_>>(),
+        vec![("alpha", "alpha", 1), ("zeta", "latest zeta", u64::MAX)]
+    );
+
+    clear_plugin_configuration_inner();
+    assert!(active_runtime_diagnostics_snapshot().is_empty());
+    reset_global();
+}
+
+#[test]
+fn dynamic_plugin_runtime_diagnostics_snapshot_is_bounded() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+
+    for index in 0..=MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS {
+        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+            code: format!("diagnostic.{index:02}"),
+            component: "observability".into(),
+            field: None,
+            message: "runtime diagnostic".into(),
+            session_id: None,
+            count: 1,
+        });
+    }
+
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(diagnostics.len(), MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS);
+    assert_eq!(
+        diagnostics
+            .first()
+            .map(|diagnostic| diagnostic.code.as_str()),
+        Some("diagnostic.00")
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "diagnostic.32")
+    );
+
+    clear_plugin_configuration_inner();
     reset_global();
 }
 

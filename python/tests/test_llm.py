@@ -17,6 +17,7 @@ from nemo_relay import (
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
+    LogSeverity,
     PendingMarkSpec,
     PropagationContext,
     ScopeEvent,
@@ -538,7 +539,12 @@ class TestLLMIntercepts:
         assert intercepts.deregister_llm_request("py_llm_req")
 
     def test_request_intercepts_direct(self):
-        pending_mark = PendingMarkSpec("request.direct", data={"source": "python"})
+        pending_mark = PendingMarkSpec(
+            "request.direct",
+            data={"source": "python"},
+            data_schema={"name": "example.pending", "version": "1"},
+            severity=LogSeverity.Info,
+        )
 
         def intercept_fn(name, request, annotated):
             content = request.content
@@ -557,6 +563,8 @@ class TestLLMIntercepts:
         assert len(transformed.pending_marks) == 1
         assert transformed.pending_marks[0].name == pending_mark.name
         assert transformed.pending_marks[0].data == pending_mark.data
+        assert transformed.pending_marks[0].data_schema == pending_mark.data_schema
+        assert transformed.pending_marks[0].severity == LogSeverity.Info
 
     def test_request_intercept_raises_on_exception(self):
         intercepts.register_llm_request(
