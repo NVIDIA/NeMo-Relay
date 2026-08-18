@@ -1342,8 +1342,9 @@ impl OtelEventProcessor {
                 &self.attribute_mappings,
             ));
         }
-        // Preserve every projection-owned start/end key while promoting the
-        // final metadata carried by the scope-end Event.
+        // Scope-end key presence is authoritative even when the final value
+        // cannot be represented as an OTLP attribute. Do not restore a stale
+        // promoted value retained from scope start.
         active_span.projection_attribute_keys.extend(
             attributes
                 .iter()

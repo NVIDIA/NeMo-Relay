@@ -668,6 +668,55 @@ fn promotes_final_scope_metadata_across_trace_projections() {
 }
 
 #[test]
+fn omits_scope_metadata_when_final_value_is_unsupported_across_trace_projections() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "unsupported-final-metadata-promotion-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                runtime_diagnostics.clone(),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "unsupported-final-metadata-promotion-scope",
+            json!({"nv.source": "start"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "unsupported-final-metadata-promotion-scope",
+            ScopeType::Agent,
+            json!({"nv.source": {"unsupported": true}}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert!(!attr_map(&spans[0].attributes).contains_key("nv.source"));
+
+        let diagnostics = runtime_diagnostics.snapshot();
+        let diagnostic = diagnostics
+            .get("otel.metadata_promotion_value_unsupported")
+            .expect("unsupported final metadata diagnostic");
+        assert_eq!(diagnostic.count, 1);
+        assert!(diagnostic.message.contains("nv.source"));
+    }
+}
+
+#[test]
 fn promotes_start_only_scope_metadata_across_trace_projections() {
     for otel_type in [
         OpenTelemetryType::Full,
