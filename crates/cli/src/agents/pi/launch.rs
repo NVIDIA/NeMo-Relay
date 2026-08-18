@@ -49,9 +49,14 @@ pub(crate) fn prepare(launch: &mut PreparedAgentLaunch, gateway_url: &str) -> Re
         ["-e".to_string(), rendered],
     );
 
+    // Do not claim redirection here: the extension does not yet register a
+    // gateway-backed provider, so model calls still go straight to the
+    // provider. Only tool and turn activity reaches Relay today.
     launch.notes.push(
-        "pi model traffic is redirected by the NeMo Relay extension registering a gateway-backed \
-         provider; pi has no base-URL flag or generic environment override"
+        "pi tool and turn activity is reported to NeMo Relay by the extension; model calls are \
+         NOT yet routed through the gateway, so there are no LLM spans. pi has no base-URL flag \
+         or generic environment override, so redirection requires the extension to register a \
+         gateway-backed provider"
             .to_string(),
     );
     Ok(())
