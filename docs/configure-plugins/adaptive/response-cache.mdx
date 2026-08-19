@@ -350,7 +350,9 @@ normalization, under the default `key_strategy = "exact_request"`:
   fragment the keyspace.
 - Request headers stay out of the key unless named in `header_allowlist`.
   Allowlist every trusted, non-secret response-affecting header; an omitted
-  header does not partition the key. Known auth headers are rejected, but
+  header contributes no value. A non-empty normalized allowlist policy also
+  partitions the key, even when a listed header is absent; an empty allowlist
+  preserves the version-1 key shape. Known auth headers are rejected, but
   validation cannot recognize every custom credential name, so never allowlist
   credentials.
 - The provider name and required namespace partition every key. A
@@ -379,22 +381,28 @@ explicitly before enabling the tool surface:
 enabled = true
 cache_errors = false # default: do not store conventional in-band error results
 
-[components.config.response_cache.tools.classes.read_only]
+[components.config.response_cache.tools.classes.docs]
 cacheable = true
 ttl_seconds = 300
+tool_version = "docs-v1"
 arg_skip = ["trace_id"]
-members = ["docs_*", "unit_convert"]
+members = ["docs_search", "docs_lookup"]
 
 [components.config.response_cache.tools.overrides.docs_search]
-tool_version = "v1" # identifies the deployed tool contract
+tool_version = "docs-search-v2" # identifies the deployed tool contract
 ```
 
-An exact class member wins. Otherwise, Relay selects the most-specific matching
-`*` pattern; an exact override wins over a wildcard override. Configuration
-validation rejects overlapping wildcard class patterns or wildcard overrides
-that disagree on `cacheable`, so a broad deny policy cannot silently become a
-cacheable result. Unmatched tools use `tools.default`, which must remain
-uncacheable; classify every cacheable tool through a named class or override.
+Prefer exact names for cacheable tools. Wildcards are appropriate only for a
+controlled namespace whose current and future matching tools are guaranteed to
+remain read-only and TTL-stable. Supported wildcard forms are `prefix*`,
+`*suffix`, `*contains*`, and the catch-all `*` for noncacheable policies; other
+placements are rejected. An exact class member wins over a wildcard, and an
+exact override wins over a wildcard override. Among wildcard matches, Relay
+selects the most-specific pattern.
+Configuration validation rejects overlapping wildcard class patterns or
+wildcard overrides that disagree on `cacheable`, so a broad deny policy cannot
+silently become a cacheable result. Unmatched tools use `tools.default`, which
+must remain uncacheable.
 
 ### Tool Keys and Identity
 
@@ -417,12 +425,12 @@ separate keyspace instead of reusing values created under a different policy.
 ### Tool Errors and Middleware Order
 
 Tool callbacks that return an actual execution error are never stored. By
-default, Relay also does not store a JSON object with a non-null `error` field
-or `isError = true`; these are conventional in-band error signals rather than a
-universal tool-result schema. Set `tools.cache_errors = true` only when such
-results are stable and safe to reuse. With the default, a sampled refresh that
-returns one of these error-shaped values leaves a previously stored successful
-result in place.
+default, Relay also does not store a JSON object with a non-null `error` field,
+`isError = true`, or `is_error = true`; these are conventional in-band error
+signals rather than a universal tool-result schema. Set
+`tools.cache_errors = true` only when such results are stable and safe to reuse.
+With the default, a sampled refresh that returns one of these error-shaped
+values leaves a previously stored successful result in place.
 
 Tool conditional-execution guardrails and tool request interceptors run before
 the cache derives its key. Sanitize guardrails affect emitted observability
@@ -476,7 +484,7 @@ cacheable classes and cacheable overrides, plus the default policy.
 | `bypass_rate` | `0.0` | Probability in `[0.0, 1.0]` of running a cacheable call live. A sampled call attempts to refresh the entry when its result is cacheable and the write succeeds. |
 | `cache_nondeterministic` | `false` | Only requests with an explicit numeric `temperature = 0` are eligible. Set `true` to cache and reuse sampled responses. |
 | `key_strategy` | `"exact_request"` | The only supported strategy: reuse requires the same normalized request. |
-| `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). Known auth headers are rejected. |
+| `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). A non-empty normalized allowlist policy also partitions the key. Known auth headers are rejected. |
 | `backend.kind` | `"in_memory"` | `"in_memory"`, or `"redis"` (requires building with the `redis-backend` feature). |
 | `backend.config.max_bytes` | 256 MiB | In-memory size budget; the oldest entries are evicted first. |
 | `backend.config.url` | — | Redis connection URL. Required for the `redis` backend. |
@@ -492,7 +500,7 @@ The following fields configure the separately opt-in tool-result surface:
 | `tools.priority` | `150` | Tool execution-intercept priority. Lower values run earlier and outermost. |
 | `tools.cache_errors` | `false` | Store conventional in-band error objects only when `true`; callback errors are never stored. |
 | `tools.default` | uncacheable | Policy for tools that match no class. Keep it uncacheable; classify every cacheable tool through a named class or override. |
-| `tools.classes.<name>` | — | Named policy with `cacheable`, optional `ttl_seconds` and `bypass_rate`, top-level `arg_skip`, and `members` containing exact names or `*` patterns. Omitted TTL and bypass rate inherit the response-cache values. |
+| `tools.classes.<name>` | — | Named policy with `cacheable`, optional `ttl_seconds`, `bypass_rate`, and `tool_version`, top-level `arg_skip`, and `members` containing exact names or supported wildcard forms. An omitted TTL or bypass rate inherits the response-cache value. |
 | `tools.overrides.<name>` | — | Per-tool refinement after class resolution. `cacheable`, `ttl_seconds`, `bypass_rate`, and `tool_version` override when supplied; `arg_skip` replaces the class list, including when set to `[]`. |
 
 For a gateway that uses Switchyard, `switchyard.priority` must be lower than
@@ -526,6 +534,7 @@ Redis capacity and eviction in Redis itself.
   `response_cache.priority`.
 - A tool policy sets `ttl_seconds = 0` or a `bypass_rate` outside `[0.0, 1.0]`,
   or the same member name or pattern appears in two classes.
+- A tool class member or override key uses an unsupported wildcard form.
 - Overlapping wildcard class patterns or wildcard overrides disagree on
   `cacheable`. `tools.default.cacheable` and a cacheable catch-all `*` member
   or override are rejected; use named classes to limit caching to explicitly
@@ -538,6 +547,7 @@ Tool-cache diagnostics use the following error codes.
 | `response_cache.tool_default_members` | `tools.default.members` is non-empty. The default bucket is not a matcher. |
 | `response_cache.tool_cacheable_default` | `tools.default.cacheable` is true. |
 | `response_cache.tool_multiple_classes` | The same exact member or pattern appears in more than one named class. |
+| `response_cache.tool_invalid_pattern` | A class member or override key is not exact, `*`, `prefix*`, `*suffix`, or `*contains*`. |
 | `response_cache.tool_invalid_ttl` | A class, default policy, or override sets `ttl_seconds = 0`. |
 | `response_cache.tool_invalid_bypass_rate` | A class, default policy, or override sets `bypass_rate` outside `[0.0, 1.0]`. |
 | `response_cache.tool_catch_all_member` | A cacheable class uses a catch-all `*` member. |
