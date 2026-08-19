@@ -11,7 +11,13 @@ use crate::test_support::EnvScope;
 /// A directory pi would see as this extension: a package manifest naming it.
 fn write_relay_package(dir: &std::path::Path) {
     std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(dir.join("package.json"), r#"{"name": "nemo-relay-pi"}"#).unwrap();
+    // The declared entry point matters: it is what a `packages` filter's patterns are matched
+    // against, so a fixture without one reads as "cannot tell" rather than as enabled.
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"name": "nemo-relay-pi", "pi": {"extensions": ["./index.ts"]}}"#,
+    )
+    .unwrap();
     std::fs::write(dir.join("index.ts"), "export default 1").unwrap();
 }
 
@@ -363,6 +369,96 @@ fn an_object_form_package_entry_is_found() {
 // A non-empty pattern list is matched against the package manifest, which this
 // module does not read. Reporting it as loaded is the deliberate direction: a false
 // negative here is the exact failure the whole module exists to prevent.
+// The other side of the same table. A `+` include, a bare name, and anything this module
+// cannot decide -- a glob, which pi expands with `minimatch` -- all count as enabled, because
+// a false warning costs more than a missing one.
+#[test]
+fn an_object_form_entry_whose_patterns_leave_it_loaded_is_not_reported_as_disabled() {
+    for body in [
+        r#"{"packages": [{"source": "../checkout", "extensions": ["+index.ts"]}]}"#,
+        r#"{"packages": [{"source": "../checkout", "extensions": ["index.ts"]}]}"#,
+        r#"{"packages": [{"source": "../checkout", "autoload": false, "extensions": ["+index.ts"]}]}"#,
+        // Deliberate fail-open: pi's glob matcher is not reimplemented here.
+        r#"{"packages": [{"source": "../checkout", "extensions": ["!*.ts"]}]}"#,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let agent_dir = temp.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        write_relay_package(&temp.path().join("checkout"));
+        std::fs::write(agent_dir.join("settings.json"), body).unwrap();
+
+        let _env = scoped(None, Some(agent_dir.as_os_str()));
+        let sites = relay_extension_sites(temp.path());
+
+        assert_eq!(sites.len(), 1, "{body}: {sites:?}");
+        assert!(!sites[0].disabled_by_settings, "{body}");
+    }
+}
+
+// B1: two copies inside ONE source. pi resolves every distinct package source, so both load
+// and post every hook twice -- and stopping at the first match hid exactly that.
+#[test]
+fn two_copies_recorded_in_one_settings_file_are_both_reported() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    write_relay_package(&temp.path().join("one"));
+    write_relay_package(&temp.path().join("two"));
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"packages": ["../one", "../two"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+
+    assert_eq!(sites.len(), 2, "{sites:?}");
+    let launched = launchable_extension_path(temp.path()).unwrap();
+    assert!(conflicting_extension_site(temp.path(), &launched).is_some());
+}
+
+#[test]
+fn two_copies_in_one_extensions_directory_are_both_reported() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let extensions = agent_dir.join("extensions");
+    write_relay_package(&extensions.join("nemo-relay"));
+    write_relay_package(&extensions.join("nemo-relay-copy"));
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+
+    assert_eq!(sites.len(), 2, "{sites:?}");
+    let launched = launchable_extension_path(temp.path()).unwrap();
+    assert!(conflicting_extension_site(temp.path(), &launched).is_some());
+}
+
+// B2: a copy pi's own settings switch off is reliably *not* a load, so counting it refused a
+// launch over a copy that was never going to register a hook.
+#[test]
+fn a_copy_pi_switched_off_is_not_a_second_copy() {
+    for body in [
+        r#"{"packages": [{"source": "../off", "extensions": []}]}"#,
+        r#"{"packages": [{"source": "../off", "autoload": false}]}"#,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let agent_dir = temp.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        write_relay_package(&temp.path().join("off"));
+        let explicit = temp.path().join("checkout");
+        write_relay_package(&explicit);
+        std::fs::write(agent_dir.join("settings.json"), body).unwrap();
+
+        let _env = scoped(Some(explicit.as_os_str()), Some(agent_dir.as_os_str()));
+        assert_eq!(
+            conflicting_extension_site(temp.path(), &explicit),
+            None,
+            "{body}"
+        );
+    }
+}
+
 #[test]
 fn an_object_form_entry_with_extension_patterns_is_still_found() {
     let temp = tempfile::tempdir().unwrap();
@@ -390,6 +486,12 @@ fn an_object_form_entry_whose_extensions_are_disabled_is_reported_as_disabled() 
     for body in [
         r#"{"packages": [{"source": "../checkout", "extensions": []}]}"#,
         r#"{"packages": [{"source": "../checkout", "autoload": false}]}"#,
+        // What pi's own configuration selector writes when a user switches this extension off:
+        // `-<path>`, a force-exclude pi applies last and unconditionally. Reading a non-empty
+        // list as "enabled" reported a plain Pass for a package pi loads nothing from.
+        r#"{"packages": [{"source": "../checkout", "extensions": ["-index.ts"]}]}"#,
+        r#"{"packages": [{"source": "../checkout", "extensions": ["-./index.ts"]}]}"#,
+        r#"{"packages": [{"source": "../checkout", "autoload": false, "extensions": ["-index.ts"]}]}"#,
     ] {
         let temp = tempfile::tempdir().unwrap();
         let agent_dir = temp.path().join("agent");

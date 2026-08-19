@@ -86,6 +86,24 @@ pub(crate) fn prepare(
             duplicate.display()
         )));
     }
+    // A project-scoped copy is the one duplicate that cannot be decided from here. pi loads
+    // `<cwd>/.pi/extensions` only for a trusted project, and that decision is made inside the
+    // run -- `-a` overrides it, `defaultProjectTrust` can pre-answer it, and "trust this session
+    // only" persists nothing -- so refusing would block every launch in an untrusted project
+    // over a copy that will not load. Say what happens if the project *is* trusted instead.
+    for site in super::doctor::relay_extension_sites(&current_dir())
+        .iter()
+        .filter(|site| site.scope == super::doctor::ExtensionScope::Project)
+    {
+        launch.notes.push(format!(
+            "{} is a second copy of this extension under the project's `.pi/`. pi loads it \
+             beside the one passed with `-e` whenever the project is trusted, and then every \
+             turn, tool and inline-shell event is reported twice. Remove it, or run in an \
+             untrusted project",
+            site.path.display()
+        ));
+    }
+
     let rendered = path.display().to_string();
     set_env(launch, PI_EXTENSION_PATH_ENV, &rendered);
     insert_after_host(

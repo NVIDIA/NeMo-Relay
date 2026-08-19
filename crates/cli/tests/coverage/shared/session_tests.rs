@@ -5566,8 +5566,95 @@ async fn pi_turn_scopes_open_at_pis_own_boundary_and_carry_attempt_attribution()
         1,
         "the one turn should close exactly once"
     );
+
+    // Every scope end names its own closer, not the hook that opened the scope. The session end
+    // reported `session_start` while `close_agent_scope` had no metadata channel, so bucketing
+    // ATOF by `hook_event_name` never yielded a session end at all.
+    let scope_end = |name: &str| {
+        captured
+            .iter()
+            .find(|(candidate, category, _)| {
+                candidate == name && *category == Some(ScopeCategory::End)
+            })
+            .unwrap_or_else(|| panic!("{name} should have closed"))
+            .2
+            .clone()
+    };
+    assert_eq!(
+        scope_end("pi")["hook_event_name"],
+        json!("session_shutdown")
+    );
+    assert_eq!(scope_end("pi-turn")["hook_event_name"], json!("turn_end"));
+    assert_eq!(
+        scope_end("read")["hook_event_name"],
+        json!("tool_execution_end")
+    );
+    // The opening identity is untouched, so a start and its end remain distinguishable.
+    let session_start = captured
+        .iter()
+        .find(|(name, category, _)| name == "pi" && *category == Some(ScopeCategory::Start))
+        .expect("the session scope should exist");
+    assert_eq!(session_start.2["hook_event_name"], json!("session_start"));
+
     drop(captured);
     deregister_subscriber(subscriber_name).unwrap();
+}
+
+// A pi hook that resolves to nothing -- an empty object, an unknown name -- still opens a
+// session, under a synthetic id no later `session_shutdown` can ever match. pi's marks land on
+// the session scope rather than a turn, which is what `has_explicit_turn_start` is for, and the
+// idle sweeper's precondition was an open turn -- so those sessions were resident until process
+// shutdown while Codex's and Claude Code's were swept.
+#[tokio::test]
+async fn pi_sessions_that_only_ever_held_a_mark_are_swept() {
+    let manager = SessionManager::new(session_test_config());
+    for index in 0..3 {
+        apply_pi_hook(
+            &manager,
+            json!({ "session_id": format!("pi-sparse-{index}") }),
+        )
+        .await;
+    }
+    assert_eq!(manager.inner.lock().await.len(), 3);
+
+    let closed = manager
+        .close_idle_sessions_at(Instant::now(), Duration::from_secs(0), "idle_timeout")
+        .await
+        .unwrap();
+
+    assert_eq!(closed, 3, "every unannounced session should be swept");
+    assert_eq!(manager.inner.lock().await.len(), 0);
+}
+
+// The guard that keeps the sweep narrow. A session pi announced is a user sitting at an idle
+// prompt between turns, and closing it there would split one run into two traces.
+#[tokio::test]
+async fn an_announced_pi_session_idling_between_turns_is_not_swept() {
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-announced-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0 }),
+        json!({ "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0 }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    let closed = manager
+        .close_idle_sessions_at(Instant::now(), Duration::from_secs(0), "idle_timeout")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        closed, 0,
+        "an announced session between turns is not idle debris"
+    );
+    assert_eq!(manager.inner.lock().await.len(), 1);
 }
 
 // The re-entry case, which is why `turn_seq` exists: pi's `turn_index` restarts at 0 on every

@@ -799,7 +799,7 @@ impl Session {
     }
 
     fn is_idle_for(&self, now: Instant, timeout: Duration) -> bool {
-        self.turn_scope.is_some()
+        (self.turn_scope.is_some() || self.holds_only_an_unannounced_agent_scope())
             && self.active_gateway_calls == 0
             && self.llms.is_empty()
             && self.tools.is_empty()
@@ -1265,11 +1265,48 @@ impl Session {
         }
         let (_, turn_delivery) = self.close_turn_for_reason("closed_by_agent_end").await?;
         self.clear_correlation_state();
-        let agent_delivery = self.close_agent_scope(event.payload)?;
+        let agent_delivery = self.close_agent_scope(event.payload, Some(event.metadata))?;
         self.session_started = false;
         // Agent end is queued after turn end on the serial dispatcher. Waiting for the later
         // receipt therefore covers both terminal events without a process-wide flush.
         Ok(agent_delivery.or(turn_delivery))
+    }
+
+    // Closes what the idle sweeper found, which is normally the open turn.
+    //
+    // A session no harness lifecycle event ever announced has no turn to close: for a harness
+    // with an explicit turn start, a mark opens only the agent scope, so closing the turn alone
+    // would leave that scope -- and the session holding it -- resident until process shutdown.
+    // Sessions the harness *did* announce are left alone, because sitting at an idle prompt
+    // between turns is normal and closing the session there would split one run into two traces.
+    async fn close_idle_scopes_for_reason(
+        &mut self,
+        reason: &str,
+    ) -> Result<(Vec<String>, Option<SubscriberDelivery>), CliError> {
+        let (closed_subagents, turn_delivery) = self.close_turn_for_reason(reason).await?;
+        if !self.holds_only_an_unannounced_agent_scope() {
+            return Ok((closed_subagents, turn_delivery));
+        }
+        let agent_delivery = self.close_agent_scope(json!({ "status": reason }), None)?;
+        Ok((closed_subagents, agent_delivery.or(turn_delivery)))
+    }
+
+    // Whether this session's only content is an agent scope no harness lifecycle event asked for.
+    //
+    // `turn_index` stays at zero until the first turn opens, so a session that did real work
+    // keeps its agent scope even when its session-start hook was lost -- without that guard, a
+    // later `turn_start` would open a second agent scope on the same stack and split the trace.
+    fn holds_only_an_unannounced_agent_scope(&self) -> bool {
+        !self.session_started
+            && self.turn_index == 0
+            && self.agent_scope.is_some()
+            && self.turn_scope.is_none()
+            && self.subagents.is_empty()
+            && self.subagent_stacks.is_empty()
+            && self.subagent_stack.is_empty()
+            && self.llms.is_empty()
+            && self.tools.is_empty()
+            && self.active_gateway_calls == 0
     }
 
     async fn close_for_shutdown(&mut self, reason: &str) -> Result<(), CliError> {
@@ -1282,7 +1319,7 @@ impl Session {
                 }
                 let _ = self.close_turn_for_reason(reason).await?;
                 self.clear_correlation_state();
-                let _ = self.close_agent_scope(payload)?;
+                let _ = self.close_agent_scope(payload, None)?;
                 self.session_started = false;
                 Ok(())
             })
@@ -1352,9 +1389,15 @@ impl Session {
 
     // Ends the root agent scope when present. Duplicate agent-end hooks can reach this path after the
     // scope is already gone, so absence is treated as a no-op.
+    // Takes the closing hook's metadata for the same reason `close_turn_scope` does: a scope end
+    // otherwise repeats the metadata its scope was *opened* with, so pi's session end named
+    // `session_start` as the hook that produced it and bucketing ATOF by `hook_event_name` never
+    // yielded a session end. Synthetic closes pass `None` and keep the opening identity, because
+    // no hook stands behind them.
     fn close_agent_scope(
         &mut self,
         payload: Value,
+        boundary_metadata: Option<Value>,
     ) -> Result<Option<SubscriberDelivery>, CliError> {
         let Some(scope) = self.agent_scope.take() else {
             return Ok(None);
@@ -1363,6 +1406,7 @@ impl Session {
             PopScopeParams::builder()
                 .handle_uuid(&scope.uuid)
                 .output(payload)
+                .metadata_opt(boundary_metadata)
                 .build(),
         )?;
         Ok(Some(subscriber_delivery))

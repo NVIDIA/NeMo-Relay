@@ -524,6 +524,26 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
         .filter(|site| site.scope == crate::agents::pi::doctor::ExtensionScope::Project)
         .collect();
 
+    // Ahead of the project warning, because a project copy must not hide it: the two ungated
+    // copies load whether or not the project is trusted, and that is the louder problem.
+    if let Some(site) = sites.first()
+        && let Some(duplicate) =
+            crate::agents::pi::doctor::conflicting_extension_site(cwd, &site.path)
+    {
+        return Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "two copies would load: {} and {}. pi de-duplicates by path, not by package, \
+                 so both register hooks and every event is reported twice -- each turn is \
+                 closed as superseded by its own duplicate, and the inline-shell gate decides \
+                 one command twice. Keep one copy",
+                site.path.display(),
+                duplicate.display()
+            ),
+        };
+    }
+
     if let Some(project) = project_sites.first() {
         return Check {
             name: NAME,
@@ -543,23 +563,6 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
     }
 
     match sites.first() {
-        // Reachable without the launcher at all: pi scans its extensions directory and its
-        // recorded packages independently, so a user holding both a copy and an install
-        // double-loads under plain `pi`, with no Relay command involved.
-        Some(site)
-            if let Some(duplicate) =
-                crate::agents::pi::doctor::conflicting_extension_site(cwd, &site.path) =>
-        {
-            Check {
-                name: NAME,
-                status: Status::Warn,
-                details: format!(
-                    "two copies would load: {} and {}. pi de-duplicates by path, not by                      package, so both register hooks and every event is reported twice -- each                      turn is closed as superseded by its own duplicate, and the inline-shell                      gate decides one command twice. Keep one copy",
-                    site.path.display(),
-                    duplicate.display()
-                ),
-            }
-        }
         // Installed, and switched off in pi's own settings. Same silent drop as the trust gate,
         // from the other direction -- and `-e` ignores those filters, so the launcher still
         // instruments a session the user's own `pi` runs are missing.
@@ -567,7 +570,10 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
             name: NAME,
             status: Status::Warn,
             details: format!(
-                "{} is recorded in pi's settings with its extensions filtered off, so pi does                  not load it -- remove the `extensions` filter, or the `autoload: false`, on                  that entry. `nemo-relay run --agent pi` is unaffected: it passes `-e`, which                  applies no settings filter",
+                "{} is recorded in pi's settings with its extensions filtered off, so pi does not \
+                 load it -- remove the `extensions` filter, or the `autoload: false`, on \
+                 that entry. `nemo-relay run --agent pi` is unaffected: it passes `-e`, \
+                 which applies no settings filter",
                 site.path.display()
             ),
         },
