@@ -437,12 +437,8 @@ the cache derives its key. Sanitize guardrails affect emitted observability
 payloads only; they do not change the real arguments, result, or cache key.
 `tools.priority` controls the tool execution interceptor: lower priorities run
 outermost. A hit returns before later execution interceptors and the managed
-callback. For example, the default tool cache priority (`150`) runs after a
-NeMo Guardrails execution interceptor at its default priority (`100`), so that
-interceptor runs on a hit. Give a rail a strictly lower priority than the cache
-if it must run on both hits and misses. In that arrangement, a miss is written
-before the outer rail transforms its result, so choose the ordering and
-stored-result semantics deliberately.
+callback. In NeMo Relay 0.8, do not combine tool-result caching with the
+deprecated built-in NeMo Guardrails `tool_input` or `tool_output` rails.
 
 ## Observability
 
@@ -497,7 +493,7 @@ The following fields configure the separately opt-in tool-result surface:
 | Field | Default | Notes |
 |---|---|---|
 | `tools.enabled` | `false` | Master switch. Classes and overrides are validated even when the surface is disabled. |
-| `tools.priority` | `150` | Tool execution-intercept priority. Lower values run earlier and outermost. |
+| `tools.priority` | `100` | Tool execution-intercept priority. Lower values run earlier and outermost. |
 | `tools.cache_errors` | `false` | Store conventional in-band error objects only when `true`; callback errors are never stored. |
 | `tools.default` | uncacheable | Policy for tools that match no class. Keep it uncacheable; classify every cacheable tool through a named class or override. |
 | `tools.classes.<name>` | — | Named policy with `cacheable`, optional `ttl_seconds`, `bypass_rate`, and `tool_version`, top-level `arg_skip`, and `members` containing exact names or supported wildcard forms. An omitted TTL or bypass rate inherits the response-cache value. |
