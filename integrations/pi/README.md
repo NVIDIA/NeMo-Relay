@@ -227,7 +227,9 @@ which pi records exactly as if the command had run:
 
 `NEMO_RELAY_PI_FAIL` governs this path too: a gateway that cannot be reached
 allows the command by default, and refuses it under `closed` with a reason that
-says explicitly that it is an infrastructure fault rather than a judgment.
+says explicitly that it is an infrastructure fault rather than a judgment — and
+whether the gateway never answered or answered without a decision, so the reader
+is not sent to debug a socket that is working.
 
 **A rewritten command is refused, not run.** pi's `user_bash` result can replace
 the *result* or the execution backend, but never the command — both call sites
@@ -373,8 +375,25 @@ the first event of the turn.
 **Tool results are truncated at 2000 characters** before they are forwarded, with
 the overflow replaced by a `... [truncated N chars]` suffix. The gateway
 therefore records what a tool returned, not necessarily all of it — a large file
-read or a long command output is cut. This keeps hook payloads bounded; raise
-`MAX_CONTENT_CHARS` in `index.ts` if a policy needs to see more.
+read or a long command output is cut. Raise `MAX_CONTENT_CHARS` in `index.ts` if
+a policy needs to see more.
+
+**Tool arguments are not truncated, and must not be.** The `tool_call` post is
+the gated one: a guardrail decides on exactly those arguments, and a request
+intercept can send a rewritten copy back for pi to execute. Truncating them would
+mean deciding on text the tool will not run — and worse, the rewrite that comes
+back would carry the truncation, because the shape invariant checks JSON types
+and key sets rather than content, so a shortened `content` is applied verbatim
+and a `write` lands on disk cut short. A result has no path back into execution,
+which is why only results are bounded.
+
+The ceiling is therefore the gateway's, not the extension's:
+`gateway.max_hook_payload_bytes`, 20 MiB by default. A post above it is rejected
+with HTTP 413 before any event exists, so the call is decided by
+`NEMO_RELAY_PI_FAIL` — under `open` it runs ungated, leaving a span synthesized
+from `tool_execution_end` with no arguments. Model-authored arguments do not
+approach that ceiling; if some tool ever does, raise the gateway limit rather
+than cutting the arguments.
 
 **Subagents.** pi ships no nested-agent hook of its own — the extension has
 nothing to derive a subagent id from — so `subagent_start` / `subagent_end` are

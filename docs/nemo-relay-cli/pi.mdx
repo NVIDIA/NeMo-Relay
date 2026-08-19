@@ -195,7 +195,9 @@ that gives up.
 The default is fail-open, so an unreachable gateway does not brick the agent.
 `NEMO_RELAY_PI_FAIL=closed` opts in to blocking, and the block reason then says
 explicitly that it is an infrastructure fault rather than a judgment about the
-request.
+request — and which fault it was, because a gateway that never answered and one
+that answered without a decision (a rejected payload, an unreadable body, a 403
+with no guardrail marker) are debugged in different places.
 
 ## Argument Transforms
 

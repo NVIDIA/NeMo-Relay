@@ -505,7 +505,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       );
 
       const decision =
-        outcome.kind === 'fault' ? resolveFault(active, outcome.detail, event.toolName) : outcome;
+        outcome.kind === 'fault' ? resolveFault(active, outcome, event.toolName) : outcome;
 
       if (decision.kind === 'block') return { block: true, reason: decision.reason };
 
@@ -639,7 +639,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
         const decision =
           outcome.kind === 'fault'
-            ? resolveFault(active, outcome.detail, USER_BASH_TOOL_NAME)
+            ? resolveFault(active, outcome, USER_BASH_TOOL_NAME)
             : outcome;
 
         if (decision.kind === 'block') {
@@ -678,7 +678,9 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         const detail = error instanceof Error ? error.message : String(error);
         const fault = resolveFault(
           config ?? configFromEnv(safeSessionId(ctx)),
-          `the inline-shell gate failed: ${detail}`,
+          // Not `reached`: this is the handler failing, not the gateway. Whatever the
+          // gateway said, no decision came out of it here.
+          { kind: 'fault', reached: false, detail: `the inline-shell gate failed: ${detail}` },
           USER_BASH_TOOL_NAME,
         );
         if (fault.kind === 'block') return { result: refusalResult(fault.reason) };

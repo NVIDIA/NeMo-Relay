@@ -29,7 +29,19 @@ export type HookOutcome =
   /** Allowed. `body` carries a rewritten payload when a request intercept produced one. */
   | { kind: 'allow'; body?: { tool_call?: { tool_call_id?: unknown; input?: unknown } } }
   | { kind: 'block'; reason: string }
-  | { kind: 'fault'; detail: string };
+  /**
+   * Neither a verdict nor a usable success.
+   *
+   * `reached` is false when nothing came back -- the connection failed, or nothing
+   * answered in time -- and true when the gateway did answer and the answer was not
+   * a decision, such as a rejected payload or a body that will not parse. Both block
+   * under `NEMO_RELAY_PI_FAIL=closed`, but they send whoever reads the block to two
+   * different places, so the reason has to say which one happened.
+   */
+  | { kind: 'fault'; detail: string; reached: boolean };
+
+/** The fault arm of {@link HookOutcome}, named so a caller can build one. */
+export type HookFault = Extract<HookOutcome, { kind: 'fault' }>;
 
 export type GatewayConfig = {
   /** Base URL of the gateway, e.g. `http://127.0.0.1:4040`. */
@@ -91,7 +103,11 @@ export async function postHook(
       // is an infrastructure fault, resolved by `NEMO_RELAY_PI_FAIL` like any other.
       const body = await safeJson(response);
       if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-        return { kind: 'fault', detail: 'gateway returned a success body that is not a JSON object' };
+        return {
+          kind: 'fault',
+          reached: true,
+          detail: 'gateway returned a success body that is not a JSON object',
+        };
       }
       return { kind: 'allow', body };
     }
@@ -104,16 +120,18 @@ export async function postHook(
       }
       // A 403 without the guardrail marker is an authorization fault, not a
       // policy decision; do not present it to the model as one.
-      return { kind: 'fault', detail: `gateway returned 403 without a guardrail reason` };
+      return { kind: 'fault', reached: true, detail: `gateway returned 403 without a guardrail reason` };
     }
 
-    return { kind: 'fault', detail: `gateway returned HTTP ${response.status}` };
+    return { kind: 'fault', reached: true, detail: `gateway returned HTTP ${response.status}` };
   } catch (error) {
     const detail =
       error instanceof Error && error.name === 'AbortError'
         ? `gateway did not respond within ${config.timeoutMs}ms`
         : `gateway request failed: ${error instanceof Error ? error.message : String(error)}`;
-    return { kind: 'fault', detail };
+    // Nothing usable came back: a transport failure, or a timeout that may have arrived
+    // and never answered. Either way there is no response to have misread.
+    return { kind: 'fault', reached: false, detail };
   } finally {
     clearTimeout(timer);
   }
@@ -137,14 +155,25 @@ export function postAndForget(
 }
 
 /** Resolve a fault into an allow/block decision using the configured policy. */
-export function resolveFault(config: GatewayConfig, detail: string, toolName: string): HookOutcome {
+export function resolveFault(
+  config: GatewayConfig,
+  fault: HookFault,
+  toolName: string,
+): HookOutcome {
   if (config.onFault === 'open') return { kind: 'allow' };
+  // Two openings, one tail. The tail is the part a model has to act on and it is the
+  // same either way: nothing judged the request, so the request is not what to change.
+  // The opening differs because "could not be reached", said of a gateway that replied
+  // 413, sends the reader to debug connectivity -- the one thing that is working. This
+  // string reaches the model verbatim, so it is also what the user reads.
+  const opening = fault.reached
+    ? `The NeMo Relay policy gateway answered this ${toolName} call without a usable decision`
+    : `The NeMo Relay policy gateway could not be reached to authorize this ${toolName} call`;
   return {
     kind: 'block',
     reason:
-      `The NeMo Relay policy gateway could not be reached to authorize this ${toolName} call, ` +
-      `so it was blocked rather than allowed through unchecked. This is an infrastructure fault, ` +
-      `not a judgment about the request. Details: ${detail}`,
+      `${opening}, so it was blocked rather than allowed through unchecked. This is an ` +
+      `infrastructure fault, not a judgment about the request. Details: ${fault.detail}`,
   };
 }
 

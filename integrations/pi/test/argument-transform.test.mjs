@@ -5,10 +5,12 @@
  * The argument-transform decision matrix.
  *
  * pi validates tool arguments *before* the `tool_call` hook and never
- * re-validates, and the extension cannot read the tool's schema, so a rewrite
- * that violates the schema would execute. The shape check is what stands in for
- * validation: same keys, same JSON types, recursively. These tests pin both the
- * cases it must allow and the ones it must refuse.
+ * re-validates, so a rewrite that violates the schema would execute. The schema
+ * is reachable -- `pi.getAllTools()` exposes it -- and deliberately not used,
+ * because pi's tool set is per-session mutable and one read goes stale. The
+ * shape check is what stands in for validation instead: same keys, same JSON
+ * types, recursively. These tests pin both the cases it must allow and the ones
+ * it must refuse.
  *
  * Run: node --test integrations/pi/test/*.test.mjs
  */
@@ -112,11 +114,25 @@ describe('transform decision', () => {
 });
 
 describe('what the shape check does not promise', () => {
-  // Documented limitation, asserted so it is not mistaken for validation: the extension cannot see
-  // the tool's schema, so pattern/enum/range violations pass the check and will execute.
+  // Documented limitation, asserted so it is not mistaken for validation: the check does not
+  // consult the tool's schema, so pattern/enum/range violations pass and will execute.
   it('allows a value the schema might still reject', () => {
     assert.equal(shapeViolation({ path: 'a.txt' }, { path: '../../etc/shadow' }), null);
     assert.equal(shapeViolation({ mode: 'read' }, { mode: 'not-an-enum-member' }), null);
+  });
+
+  // The check is structural, not content-aware: a shortened string is still a string, so a
+  // truncated argument would come back rewritten and be applied verbatim -- a `write` would land
+  // on disk cut short. This is why the gated post forwards arguments whole while results are
+  // bounded at 2000 characters. See "What Is Not Represented" in the README.
+  it('cannot tell a shortened string from the original, which is why arguments are never truncated', () => {
+    assert.equal(
+      shapeViolation(
+        { path: '/work/a.txt', content: 'a much longer original body' },
+        { path: '/work/a.txt', content: 'short' },
+      ),
+      null,
+    );
   });
 });
 
