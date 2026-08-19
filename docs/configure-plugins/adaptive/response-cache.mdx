@@ -437,8 +437,7 @@ the cache derives its key. Sanitize guardrails affect emitted observability
 payloads only; they do not change the real arguments, result, or cache key.
 `tools.priority` controls the tool execution interceptor: lower priorities run
 outermost. A hit returns before later execution interceptors and the managed
-callback. In NeMo Relay 0.8, do not combine tool-result caching with the
-deprecated built-in NeMo Guardrails `tool_input` or `tool_output` rails.
+callback.
 
 ## Observability
 
