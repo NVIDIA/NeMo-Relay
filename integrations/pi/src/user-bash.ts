@@ -28,7 +28,7 @@
  * - `cancelled` and `truncated` are false: nothing was started, so nothing was
  *   interrupted, and the message is whole.
  *
- * ⚠️ **Never throw from the handler.** `emitUserBash` wraps handlers in
+ * **Never throw from the handler.** `emitUserBash` wraps handlers in
  * try/catch and moves on, so a thrown error fails *open* and the command runs
  * unchecked -- the opposite of `tool_call`, which has no try/catch and fails
  * closed. Every path here returns an explicit decision.

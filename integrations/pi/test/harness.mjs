@@ -4,7 +4,7 @@
 /**
  * Shared test harness: a stub gateway, and a driver that fires pi's hooks.
  *
- * ⚠️ **The two gated hooks resolve competing handlers by different rules, and
+ * **The two gated hooks resolve competing handlers by different rules, and
  * the driver has to model each one.** A driver that picks either rule for both
  * misrepresents one of them, and preemption is exactly what these tests exist
  * to pin.

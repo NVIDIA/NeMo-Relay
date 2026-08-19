@@ -143,7 +143,7 @@ export type ToolCallEvent = {
 /**
  * Returning `{block: true}` short-circuits the remaining `tool_call` handlers.
  *
- * ⚠️ Nothing else does. A truthy result without `block` is *retained* but does not
+ * Nothing else does. A truthy result without `block` is *retained* but does not
  * stop iteration, so a handler that runs after this one still sees -- and can
  * still mutate -- the same `input` object, with no re-validation before it
  * executes. Loading first protects against being pre-empted; it does not make the
@@ -178,7 +178,7 @@ export type UserBashEvent = {
  * keeps the original command. There is no block-and-reason form, so a refusal
  * is a synthetic failed result -- see `src/user-bash.ts`.
  *
- * ⚠️ Unlike `tool_call`, `emitUserBash` wraps handlers in try/catch, so an
+ * Unlike `tool_call`, `emitUserBash` wraps handlers in try/catch, so an
  * exception here fails **open**: pi logs it and runs the command. And the first
  * handler to return anything at all wins, so an earlier-loading extension can
  * preempt this one -- `pi -e` loads first, `pi install` loads last.

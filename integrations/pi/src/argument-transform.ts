@@ -30,7 +30,7 @@
  * is refused. An object that satisfied the schema before therefore still has
  * the required keys, of the required types, afterwards.
  *
- * ⚠️ **This is a structural guarantee, not schema validation.** Value-level
+ * **This is a structural guarantee, not schema validation.** Value-level
  * constraints -- `pattern`, `enum`, `minimum`, `format` -- are not checked. That
  * is a choice, not a limit: see point 2. A transform that rewrites a string to
  * one the schema would reject still executes.
