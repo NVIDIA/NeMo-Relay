@@ -34,6 +34,10 @@ const PI_CONFIG_DIR: &str = ".pi";
 /// Where pi records installed packages, in both scopes.
 const PI_SETTINGS_FILE: &str = "settings.json";
 
+/// This extension's package name -- how it is told apart from anyone else's.
+/// Must match `integrations/pi/package.json`.
+const RELAY_PACKAGE_NAME: &str = "nemo-relay-pi";
+
 /// Gateway URL the extension falls back to when nothing else resolves one.
 /// Kept in step with `configFromEnv` in `integrations/pi/src/gateway-client.ts`.
 const DEFAULT_GATEWAY_URL: &str = "http://127.0.0.1:4040";
@@ -51,6 +55,17 @@ pub(crate) enum ExtensionScope {
     Project,
 }
 
+impl ExtensionScope {
+    /// How this route behaves, in the words the check reports.
+    pub(crate) fn describe(self) -> &'static str {
+        match self {
+            Self::Explicit => "passed with `-e`, which loads first and is never trust-gated",
+            Self::User => "user scope, which is never trust-gated",
+            Self::Project => "project scope, which pi loads only for a trusted project",
+        }
+    }
+}
+
 /// A place a pi extension was found, and how pi would reach it.
 #[derive(Debug, Clone)]
 pub(crate) struct ExtensionSite {
@@ -59,23 +74,33 @@ pub(crate) struct ExtensionSite {
 }
 
 /// Human-readable hook status for `nemo-relay doctor`.
+///
+/// Shares its answer with the load-path check, deliberately. While this read only
+/// the environment variable and that scanned directories, one `doctor` run could
+/// report "pi extension not located" *and* a passing load path for the same
+/// machine, in the same output.
 pub(crate) fn hook_status() -> Result<String, String> {
-    match extension_location() {
-        Some(path) => Ok(format!(
-            "pi extension resolved at {} (hooks are emitted by the extension, not by pi itself)",
-            path.display()
+    match relay_extension_sites(&current_dir()).first() {
+        Some(site) => Ok(format!(
+            "NeMo Relay pi extension resolved at {} ({}); hooks are emitted by the extension, \
+             not by pi itself",
+            site.path.display(),
+            site.scope.describe()
         )),
         None => Ok(format!(
-            "pi extension not located; set {PI_EXTENSION_PATH_ENV}, or install the extension with \
-             `pi install <source>` or into an auto-discovered directory \
-             (`~/.pi/agent/extensions/`, `.pi/extensions/`)"
+            "NeMo Relay pi extension not located; set {PI_EXTENSION_PATH_ENV}, run \
+             `pi install <path to integrations/pi>`, or copy it into `~/.pi/agent/extensions/`"
         )),
     }
 }
 
-/// Whether the extension entry point can be found.
+/// Whether *this* extension -- not merely some pi extension -- can be found.
 pub(crate) fn extension_configured() -> bool {
-    extension_location().is_some()
+    !relay_extension_sites(&current_dir()).is_empty()
+}
+
+fn current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn extension_location() -> Option<PathBuf> {
@@ -125,7 +150,7 @@ pub(crate) fn gateway_url(bind: Option<std::net::SocketAddr>) -> String {
 /// reported "no pi extension found" to a user who had just run the install
 /// command the docs recommend, and could not see a trust-gated `--local` entry
 /// at all, which is the case this whole module exists to catch.
-pub(crate) fn extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
+pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
     let mut sites = Vec::new();
     if let Some(path) = extension_location() {
         sites.push(ExtensionSite {
@@ -134,60 +159,104 @@ pub(crate) fn extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
         });
     }
     if let Some(dir) = user_extensions_dir()
-        && directory_has_entries(&dir)
-    {
-        sites.push(ExtensionSite {
-            path: dir,
-            scope: ExtensionScope::User,
-        });
-    }
-    if let Some(path) = user_settings_path()
-        && settings_declare_packages(&path)
+        && let Some(path) = relay_entry_in_directory(&dir)
     {
         sites.push(ExtensionSite {
             path,
             scope: ExtensionScope::User,
         });
     }
-    let project_dir = cwd.join(PI_CONFIG_DIR).join("extensions");
-    if directory_has_entries(&project_dir) {
+    if let Some(settings) = user_settings_path()
+        && let Some(path) = relay_package_in_settings(&settings)
+    {
         sites.push(ExtensionSite {
-            path: project_dir,
+            path,
+            scope: ExtensionScope::User,
+        });
+    }
+    if let Some(path) = relay_entry_in_directory(&cwd.join(PI_CONFIG_DIR).join("extensions")) {
+        sites.push(ExtensionSite {
+            path,
             scope: ExtensionScope::Project,
         });
     }
-    let project_settings = cwd.join(PI_CONFIG_DIR).join(PI_SETTINGS_FILE);
-    if settings_declare_packages(&project_settings) {
+    if let Some(path) = relay_package_in_settings(&cwd.join(PI_CONFIG_DIR).join(PI_SETTINGS_FILE)) {
         sites.push(ExtensionSite {
-            path: project_settings,
+            path,
             scope: ExtensionScope::Project,
         });
     }
     sites
 }
 
+/// The NeMo Relay extension inside a pi auto-discovery directory, if it is there.
+///
+/// Matched on the package name, not on "the directory is non-empty". A user with
+/// somebody else's pi extension installed was otherwise told their *Relay*
+/// extension was fine -- and, worse, a project-scoped install of an unrelated
+/// package raised a Relay trust warning about a file that has nothing to do with
+/// Relay.
+fn relay_entry_in_directory(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| is_relay_extension(path))
+}
+
+/// Whether a path is this extension: a package directory whose manifest names it,
+/// or a file sitting inside one.
+fn is_relay_extension(path: &Path) -> bool {
+    if manifest_names_relay(&path.join("package.json")) {
+        return true;
+    }
+    path.parent()
+        .is_some_and(|parent| manifest_names_relay(&parent.join("package.json")))
+}
+
+fn manifest_names_relay(manifest: &Path) -> bool {
+    std::fs::read_to_string(manifest)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|value| {
+            value
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(|name| name == RELAY_PACKAGE_NAME)
+        })
+        .unwrap_or(false)
+}
+
+/// The NeMo Relay package among the sources `pi install` recorded, if any.
+///
+/// Each entry is a source string, and a local one is a path relative to the
+/// settings file's own directory. Only a local source can be resolved from here
+/// -- an npm or git source is a name, not a location -- so those fall back to
+/// matching the package name inside the specifier, which is the best signal
+/// available without fetching anything.
+fn relay_package_in_settings(settings: &Path) -> Option<PathBuf> {
+    let base = settings.parent()?;
+    let raw = std::fs::read_to_string(settings).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get("packages")?
+        .as_array()?
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .find_map(|source| {
+            let resolved = base.join(source);
+            if is_relay_extension(&resolved) {
+                return Some(resolved);
+            }
+            source
+                .contains(RELAY_PACKAGE_NAME)
+                .then(|| PathBuf::from(source))
+        })
+}
+
 /// `<agent dir>/settings.json`, where `pi install` records a user-scope package.
 fn user_settings_path() -> Option<PathBuf> {
     Some(pi_agent_dir()?.join(PI_SETTINGS_FILE))
-}
-
-/// Whether a pi settings file declares at least one installed package.
-///
-/// Deliberately tolerant: an unreadable or malformed settings file is reported as
-/// "no packages" rather than as an error. This check exists to find something the
-/// user installed, and a parse failure here is pi's problem to report, not a
-/// reason for `doctor` to fail.
-fn settings_declare_packages(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|settings| {
-            settings
-                .get("packages")
-                .and_then(serde_json::Value::as_array)
-                .map(|packages| !packages.is_empty())
-        })
-        .unwrap_or(false)
 }
 
 /// `~/.pi/agent`, honoring pi's own directory override.
@@ -206,10 +275,6 @@ fn pi_agent_dir() -> Option<PathBuf> {
 /// `~/.pi/agent/extensions`, the auto-discovery directory.
 fn user_extensions_dir() -> Option<PathBuf> {
     Some(pi_agent_dir()?.join("extensions"))
-}
-
-fn directory_has_entries(path: &Path) -> bool {
-    std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
 }
 
 #[cfg(test)]

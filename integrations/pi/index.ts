@@ -82,7 +82,6 @@ import {
 } from './src/user-bash.ts';
 import type {
   AgentEndEvent,
-  BeforeProviderHeadersEvent,
   AgentSettledEvent,
   AgentStartEvent,
   ExtensionAPI,
@@ -213,6 +212,8 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
   /** Providers already pointed at the gateway, so the redirect is idempotent. */
   const redirectedProviders = new Set<string>();
+  /** Session id the current registrations carry, so a replacement can invalidate them. */
+  let registeredSessionKey: string | null = null;
   let redirect: RedirectConfig | null = null;
   /**
    * Each provider's catalog as it was *before* we touched it.
@@ -245,6 +246,16 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   const applyRedirect = (ctx: ExtensionContext, source: string): void => {
     const active = ensureConfig(ctx);
     redirect ??= redirectConfigFromEnv(active.url);
+
+    // The join key is baked into the registration, so it cannot follow a session
+    // replacement on its own: `/new`, `/resume` and `/fork` keep this runtime
+    // alive and give it a new session id, leaving every redirected provider
+    // stamping the old one onto its requests. Re-register when it moves.
+    const sessionKey = safeSessionId(ctx);
+    if (registeredSessionKey !== null && registeredSessionKey !== sessionKey) {
+      redirectedProviders.clear();
+    }
+    registeredSessionKey = sessionKey;
     const decision = decideRedirect(
       ctx.model,
       redirect,
@@ -252,9 +263,22 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       ctx.model ? siblingsOf(ctx, ctx.model.provider) : [],
     );
     if (decision.kind === 'redirect') {
-      // Only baseUrl: pi rewrites the URL of every existing model for this
-      // provider and keeps their API, headers and costs.
-      pi.registerProvider(decision.provider, { baseUrl: redirect.gatewayUrl });
+      // `baseUrl` rewrites the URL of every existing model for this provider and
+      // keeps their API and costs. `headers` is the session join key.
+      //
+      // It goes here rather than in a `before_provider_headers` handler because
+      // that hook is **global and carries no request identity**: its event has
+      // only the headers, and its context is freshly built, so `ctx.model` is
+      // whatever is selected *now*, not what this request is for. Scoping on it
+      // gets both directions wrong -- omitting the key from a redirected call
+      // whose model was captured before a switch, and leaking an internal session
+      // id to a third-party provider we deliberately did not redirect. Attaching
+      // it to the registration makes the scope structural: only providers we
+      // actually pointed at the gateway ever send it.
+      pi.registerProvider(decision.provider, {
+        baseUrl: redirect.gatewayUrl,
+        headers: { 'x-nemo-relay-session-id': sessionKey },
+      });
       redirectedProviders.add(decision.provider);
     }
     // A transient skip -- no model resolved yet, or a provider already pointed
@@ -288,29 +312,6 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   pi.on('session_start', async (event: SessionStartEvent, ctx: ExtensionContext) => {
     emit(ctx, { hook_event_name: 'session_start', reason: event.reason, cwd: ctx.cwd });
     applyRedirect(ctx, 'session_start');
-  });
-
-  /**
-   * Put the session id on redirected model requests.
-   *
-   * Hook posts carry `x-nemo-relay-session-id`; a redirected provider request is
-   * the extension's other stream and carried nothing, so with two pi sessions
-   * against one gateway an unkeyed model call is deliberately given an isolated
-   * root -- separating its LLM spans from the session and turn they belong to.
-   *
-   * Gated on `redirectedProviders`, because the hook is **global**: it fires for
-   * every provider request, including models we deliberately did not redirect.
-   * Sending an internal session id to a third-party provider is not acceptable
-   * just to simplify the handler.
-   *
-   * The id is read live rather than from the cached config, which is pinned for
-   * the runtime's life and would go stale across a session replacement. Headers
-   * are mutated in place; a returned value is ignored.
-   */
-  pi.on('before_provider_headers', async (event: BeforeProviderHeadersEvent, ctx) => {
-    const provider = ctx.model?.provider;
-    if (!provider || !redirectedProviders.has(provider)) return;
-    event.headers['x-nemo-relay-session-id'] = safeSessionId(ctx);
   });
 
   /**

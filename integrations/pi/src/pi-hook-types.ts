@@ -185,18 +185,6 @@ export type PiModel = {
   baseUrl: string;
 };
 
-/**
- * Fired before a provider request goes out, to let an extension add headers.
- *
- * `headers` is mutated in place; a returned object is ignored. The event carries
- * no model or provider, so a handler that must scope itself reads `ctx.model` --
- * which is the *currently selected* model and can drift from the request's.
- */
-export type BeforeProviderHeadersEvent = {
-  type: 'before_provider_headers';
-  headers: Record<string, string>;
-};
-
 /** Fired when a model is selected, including the initial selection. */
 export type ModelSelectEvent = {
   type: 'model_select';
@@ -245,10 +233,6 @@ export type ExtensionAPI = {
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<ModelSelectEvent>): void;
-  on(
-    event: 'before_provider_headers',
-    handler: ExtensionHandler<BeforeProviderHeadersEvent>,
-  ): void;
 
   /**
    * Register or override a model provider.
@@ -259,5 +243,8 @@ export type ExtensionAPI = {
    * queued and applied once the runner binds its context, so calling it from a
    * factory is safe.
    */
-  registerProvider(name: string, config: { baseUrl?: string }): void;
+  registerProvider(
+    name: string,
+    config: { baseUrl?: string; headers?: Record<string, string> },
+  ): void;
 };

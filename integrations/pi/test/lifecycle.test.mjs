@@ -596,3 +596,92 @@ describe('what an interrupted session loses', () => {
     );
   });
 });
+
+describe('the session join key on redirected providers', () => {
+  let ctx;
+
+  before(async () => {
+    ctx = stubGateway();
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
+    process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://api.openai.com/v1';
+  });
+
+  after(() => {
+    ctx.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+    delete process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM;
+  });
+
+  beforeEach(() => {
+    ctx.posts.length = 0;
+  });
+
+  const model = {
+    id: 'gpt-test',
+    api: 'openai-completions',
+    provider: 'openai',
+    baseUrl: 'https://api.openai.com/v1',
+  };
+
+  /** Drive the extension while recording what it registers, and with a settable session id. */
+  function loadRecording(sessionId) {
+    const registrations = [];
+    const handlers = new Map();
+    let current = sessionId;
+    extension({
+      on(name, handler) {
+        if (!handlers.has(name)) handlers.set(name, []);
+        handlers.get(name).push(handler);
+      },
+      registerProvider: (name, config) => registrations.push({ name, config }),
+    });
+    const context = {
+      cwd: '/work',
+      mode: 'interactive',
+      hasUI: true,
+      sessionManager: { getSessionId: () => current },
+      model,
+      modelRegistry: { getAll: () => [model] },
+    };
+    const fire = async (name, event = {}) => {
+      for (const handler of handlers.get(name) ?? []) {
+        await handler({ type: name, ...event }, context);
+      }
+    };
+    return { fire, registrations, setSession: (id) => (current = id) };
+  }
+
+  // The header rides on the registration, not on a per-request hook: pi's
+  // `before_provider_headers` carries no request identity, and its context reports
+  // the *currently selected* model -- so scoping on it would both omit the key from
+  // a redirected call whose model was captured before a switch, and leak an internal
+  // session id to a provider we deliberately did not redirect.
+  it('rides on the provider registration, so only redirected providers send it', async () => {
+    const { fire, registrations } = loadRecording('sess-one');
+    await fire('session_start', { reason: 'startup' });
+
+    assert.equal(registrations.length, 1, 'the matching provider should be redirected');
+    assert.equal(registrations[0].name, 'openai');
+    assert.equal(registrations[0].config.headers['x-nemo-relay-session-id'], 'sess-one');
+  });
+
+  // The key is baked in at registration, so it cannot follow a replacement on its
+  // own -- `/new`, `/resume` and `/fork` keep this runtime alive with a new id.
+  it('is refreshed when the session is replaced under the same runtime', async () => {
+    const { fire, registrations, setSession } = loadRecording('sess-one');
+    await fire('session_start', { reason: 'startup' });
+
+    setSession('sess-two');
+    await fire('session_start', { reason: 'resume' });
+
+    assert.equal(registrations.length, 2, 'a replacement must re-register, not reuse');
+    assert.equal(registrations[1].config.headers['x-nemo-relay-session-id'], 'sess-two');
+  });
+
+  it('does not re-register when the session id has not moved', async () => {
+    const { fire, registrations } = loadRecording('sess-one');
+    await fire('session_start', { reason: 'startup' });
+    await fire('model_select', { model });
+    assert.equal(registrations.length, 1, 'the redirect must stay idempotent');
+  });
+});

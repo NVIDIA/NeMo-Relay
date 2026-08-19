@@ -520,7 +520,7 @@ async fn agent_preflight_checks(
 /// place a user finds out before wondering why NeMo Relay "does nothing".
 fn pi_extension_trust_check(cwd: &Path) -> Check {
     const NAME: &str = "pi extension load path";
-    let sites = crate::agents::pi::doctor::extension_sites(cwd);
+    let sites = crate::agents::pi::doctor::relay_extension_sites(cwd);
     let project_sites: Vec<&crate::agents::pi::doctor::ExtensionSite> = sites
         .iter()
         .filter(|site| site.scope == crate::agents::pi::doctor::ExtensionScope::Project)
@@ -545,23 +545,14 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
         Some(site) => Check {
             name: NAME,
             status: Status::Pass,
-            details: format!(
-                "{} ({})",
-                site.path.display(),
-                match site.scope {
-                    crate::agents::pi::doctor::ExtensionScope::Explicit =>
-                        "passed with `-e`, which loads first and is never trust-gated",
-                    crate::agents::pi::doctor::ExtensionScope::User =>
-                        "user scope, which is never trust-gated",
-                    crate::agents::pi::doctor::ExtensionScope::Project => "project scope",
-                }
-            ),
+            details: format!("{} ({})", site.path.display(), site.scope.describe()),
         },
         None => Check {
             name: NAME,
             status: Status::Info,
             details: format!(
-                "no pi extension found; set {} or install one into `~/.pi/agent/extensions/`",
+                "the NeMo Relay pi extension was not found; set {} or install it with \
+                 `pi install <path to integrations/pi>`",
                 crate::agents::pi::launch::PI_EXTENSION_PATH_ENV
             ),
         },

@@ -8,6 +8,24 @@ use crate::test_support::EnvScope;
 
 /// Isolate the three environment variables that steer extension discovery, so a
 /// developer's own pi install cannot make these pass or fail.
+/// A directory pi would see as this extension: a package manifest naming it.
+fn write_relay_package(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("package.json"), r#"{"name": "nemo-relay-pi"}"#).unwrap();
+    std::fs::write(dir.join("index.ts"), "export default 1").unwrap();
+}
+
+/// Somebody else's pi extension, installed the same way.
+fn write_other_package(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        r#"{"name": "someone-elses-pi-thing"}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("index.ts"), "export default 1").unwrap();
+}
+
 fn scoped(extension: Option<&OsStr>, agent_dir: Option<&OsStr>) -> EnvScope {
     EnvScope::set(&[
         (PI_EXTENSION_PATH_ENV, extension),
@@ -20,12 +38,12 @@ fn a_project_scoped_extension_is_reported_because_pi_will_not_say_so() {
     let temp = tempfile::tempdir().unwrap();
     let project_extensions = temp.path().join(".pi").join("extensions");
     std::fs::create_dir_all(&project_extensions).unwrap();
-    std::fs::write(project_extensions.join("nemo-relay.ts"), "export default 1").unwrap();
+    write_relay_package(&project_extensions.join("nemo-relay"));
     let empty_home = temp.path().join("home");
     std::fs::create_dir_all(&empty_home).unwrap();
 
     let _env = scoped(None, Some(empty_home.as_os_str()));
-    let sites = extension_sites(temp.path());
+    let sites = relay_extension_sites(temp.path());
 
     // This is the whole point of the check: pi drops this extension with a bare
     // conditional in every non-interactive mode, never reports it, and the
@@ -50,7 +68,7 @@ fn an_empty_project_directory_is_not_reported() {
     // A `.pi/extensions` directory that pi created and nothing was ever put in
     // is not a finding; warning about it would train users to ignore the check.
     assert!(
-        extension_sites(temp.path()).is_empty(),
+        relay_extension_sites(temp.path()).is_empty(),
         "an empty project extensions directory must not be reported"
     );
 }
@@ -64,7 +82,7 @@ fn the_explicit_path_is_reported_as_ungated() {
     std::fs::create_dir_all(&empty_home).unwrap();
 
     let _env = scoped(Some(entry.as_os_str()), Some(empty_home.as_os_str()));
-    let sites = extension_sites(temp.path());
+    let sites = relay_extension_sites(temp.path());
 
     // `-e` loads first in pi's precedence order and survives `--no-extensions`,
     // so an extension reached this way is never subject to project trust --
@@ -80,10 +98,10 @@ fn a_user_scope_install_is_reported_as_ungated() {
     let agent_dir = temp.path().join("agent");
     let user_extensions = agent_dir.join("extensions");
     std::fs::create_dir_all(&user_extensions).unwrap();
-    std::fs::write(user_extensions.join("nemo-relay.ts"), "export default 1").unwrap();
+    write_relay_package(&user_extensions.join("nemo-relay"));
 
     let _env = scoped(None, Some(agent_dir.as_os_str()));
-    let sites = extension_sites(temp.path());
+    let sites = relay_extension_sites(temp.path());
 
     assert_eq!(sites.len(), 1, "{sites:?}");
     assert_eq!(sites[0].scope, ExtensionScope::User);
@@ -100,7 +118,7 @@ fn an_explicit_path_that_does_not_exist_is_not_reported() {
 
     // A stale environment variable is worse than none: it would report an
     // ungated load path for a file pi cannot read.
-    assert!(extension_sites(temp.path()).is_empty());
+    assert!(relay_extension_sites(temp.path()).is_empty());
     assert!(!extension_configured());
 }
 
@@ -113,14 +131,15 @@ fn a_pi_install_at_user_scope_is_found_in_settings_not_in_a_directory() {
     let temp = tempfile::tempdir().unwrap();
     let agent_dir = temp.path().join("agent");
     std::fs::create_dir_all(&agent_dir).unwrap();
+    write_relay_package(&temp.path().join("checkout"));
     std::fs::write(
         agent_dir.join("settings.json"),
-        r#"{"packages": ["../../../NeMo-Relay/integrations/pi"]}"#,
+        r#"{"packages": ["../checkout"]}"#,
     )
     .unwrap();
 
     let _env = scoped(None, Some(agent_dir.as_os_str()));
-    let sites = extension_sites(temp.path());
+    let sites = relay_extension_sites(temp.path());
 
     assert_eq!(sites.len(), 1, "{sites:?}");
     assert_eq!(sites[0].scope, ExtensionScope::User);
@@ -133,16 +152,17 @@ fn a_pi_install_at_user_scope_is_found_in_settings_not_in_a_directory() {
 fn a_local_pi_install_is_reported_as_project_scoped() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(temp.path().join(".pi")).unwrap();
+    write_relay_package(&temp.path().join("checkout"));
     std::fs::write(
         temp.path().join(".pi").join("settings.json"),
-        r#"{"packages": ["../extensions/nemo-relay"]}"#,
+        r#"{"packages": ["../checkout"]}"#,
     )
     .unwrap();
     let empty_home = temp.path().join("home");
     std::fs::create_dir_all(&empty_home).unwrap();
 
     let _env = scoped(None, Some(empty_home.as_os_str()));
-    let sites = extension_sites(temp.path());
+    let sites = relay_extension_sites(temp.path());
 
     assert!(
         sites
@@ -169,7 +189,7 @@ fn settings_without_packages_are_not_a_finding() {
     ] {
         std::fs::write(agent_dir.join("settings.json"), body).unwrap();
         assert!(
-            extension_sites(temp.path()).is_empty(),
+            relay_extension_sites(temp.path()).is_empty(),
             "settings body {body} must not be reported as an install"
         );
     }
@@ -226,4 +246,50 @@ fn the_environment_variable_wins_over_a_configured_bind() {
         gateway_url(Some("127.0.0.1:4040".parse().unwrap())),
         "http://elsewhere:1234"
     );
+}
+
+// The check is about *this* extension, not about pi having extensions. Before it
+// matched on the package name, an unrelated install produced a Relay Pass -- and a
+// project-scoped one produced a Relay trust warning about a file that has nothing
+// to do with Relay.
+#[test]
+fn somebody_elses_pi_extension_is_not_reported_as_ours() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    write_other_package(&agent_dir.join("extensions").join("other"));
+    write_other_package(&temp.path().join(".pi").join("extensions").join("other"));
+    std::fs::create_dir_all(temp.path().join(".pi")).unwrap();
+    write_other_package(&temp.path().join("elsewhere"));
+    std::fs::write(
+        temp.path().join(".pi").join("settings.json"),
+        r#"{"packages": ["../elsewhere"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    assert!(
+        relay_extension_sites(temp.path()).is_empty(),
+        "an unrelated pi package must not be reported as the Relay extension"
+    );
+    assert!(!extension_configured());
+}
+
+// The headline status and the load-path check must agree: they now answer from the
+// same resolution, so one `doctor` run cannot say "not located" beside a Pass.
+#[test]
+fn the_headline_status_agrees_with_the_load_path_check() {
+    let temp = tempfile::tempdir().unwrap();
+    let entry = temp.path().join("index.ts");
+    std::fs::write(&entry, "export default 1").unwrap();
+    let empty_home = temp.path().join("home");
+    std::fs::create_dir_all(&empty_home).unwrap();
+
+    let _found = scoped(Some(entry.as_os_str()), Some(empty_home.as_os_str()));
+    assert!(extension_configured());
+    assert!(hook_status().unwrap().contains("resolved at"));
+    drop(_found);
+
+    let _missing = scoped(None, Some(empty_home.as_os_str()));
+    assert!(!extension_configured());
+    assert!(hook_status().unwrap().contains("not located"));
 }
