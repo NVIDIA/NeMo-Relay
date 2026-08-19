@@ -90,6 +90,9 @@ example, an exporter can report delivery failures without changing tool or LLM
 execution semantics. Keep those component-specific failure rules in the
 component guide rather than redefining them in the plugin concept.
 
+The following diagram shows how a plugin configuration flows through validation
+and the component lifecycle into installed runtime behavior:
+
 <MermaidStyles />
 
 ```mermaid
@@ -288,8 +291,17 @@ The operator lifecycle is explicit:
 These commands manage future host activation. Teardown of an already running
 host remains part of that host's owned plugin cleanup.
 
-Plugins are most useful when runtime behavior is reusable across
-applications or integrations. Validate configuration before initialization,
-and keep field-by-field settings in the guide for the component that owns
-them. The [plugin authoring overview](/build-plugins/about) explains when a
-language-binding, native, or worker plugin is the right delivery model.
+## Practical Guidance
+
+- Reach for a plugin when runtime behavior is reusable across applications or
+  integrations, so hosts install it from configuration instead of registering
+  the same middleware and subscribers by hand.
+- Validate configuration before initialization, and inspect the activation
+  report to confirm what activated.
+- Keep field-by-field settings in the guide for the component that owns them
+  rather than restating them here.
+- Clear plugin configuration during graceful shutdown and test teardown so
+  plugin-owned registrations, managed workers, and native activations are
+  released.
+- The [plugin authoring overview](/build-plugins/about) explains when a
+  language-binding, native, or worker plugin is the right delivery model.
