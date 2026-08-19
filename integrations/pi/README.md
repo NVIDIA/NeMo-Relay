@@ -43,15 +43,30 @@ NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
 
 ### Where to install it
 
-**User scope only.** Copy the extension into `~/.pi/agent/extensions/`, or
-install it with `pi install <source>` *without* `--local`.
+**User scope only**, by either of two routes:
+
+```bash
+# 1 · file drop
+cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
+
+# 2 · pi install, from a local path or a git URL -- never with --local
+pi install /path/to/NeMo-Relay/integrations/pi
+```
 
 | Path | Install here? | Trust-gated? |
 |---|---|---|
 | `~/.pi/agent/extensions/` | Yes | No |
-| `pi install` (user scope) | Yes | No |
+| `pi install <path or git URL>` | Yes | No |
 | `-e <path>` | Per-invocation; what the launcher uses | No |
 | `.pi/extensions/` or `pi install --local` | **No** | **Yes** |
+
+**This package is deliberately not published to npm.** `pi install` resolves a
+local path or a git URL as readily as an `npm:` specifier, so publishing would
+buy one more spelling of a route that already works, at the cost of an npm
+namespace, a build step (the sources are TypeScript that nothing compiles today)
+and release wiring. It is `private: true` for that reason, not by oversight —
+though it is in the repository's version bump anyway, so the version cannot
+already be stale if that ever changes.
 
 ⚠️ **A project-scoped install is silently skipped, and nothing tells you.** pi
 adds project extensions to its candidate set only when the project is trusted,

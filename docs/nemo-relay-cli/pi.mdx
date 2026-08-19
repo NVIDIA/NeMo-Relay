@@ -62,10 +62,22 @@ doing anything.
 
 ### Install At User Scope
 
-Copy the extension into `~/.pi/agent/extensions/`, or install it with
-`pi install <source>` without `--local`. `nemo-relay run --agent pi` does not
-need either — it passes the extension with `-e`, which loads first and is never
-trust-gated.
+Two routes, both untrusted-project-proof:
+
+```bash
+# 1 · file drop
+cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
+
+# 2 · pi install, from a local path or a git URL -- never with --local
+pi install /path/to/NeMo-Relay/integrations/pi
+```
+
+`nemo-relay run --agent pi` needs neither — it passes the extension with `-e`,
+which loads first and is never trust-gated.
+
+The extension is **not published to npm**, deliberately. `pi install` accepts a
+local path or a git URL as readily as an `npm:` specifier, so publishing would
+add a spelling of a route that already works rather than a capability.
 
 <Warning>
 **Do not install into `.pi/extensions/` or with `pi install --local`.** pi adds
