@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
+from uuid import UUID
 
 from nemo_relay.integrations.deepagents._events import emit_mark, event_base_name
 from nemo_relay.integrations.langgraph.callbacks import NemoRelayCallbackHandler as LangGraphNemoRelayCallbackHandler
@@ -15,11 +16,69 @@ _GraphEventKey = tuple[str | None, str | None, tuple[str, ...]]
 
 
 class NemoRelayDeepAgentsCallbackHandler(LangGraphNemoRelayCallbackHandler):
-    """Bridge Deep Agents LangGraph lifecycle events to NeMo Relay marks."""
+    """Bridge semantic Deep Agents runs and LangGraph lifecycle events to NeMo Relay."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._hitl_interrupts: set[_GraphEventKey] = set()
+
+    def on_chain_start(
+        self,
+        serialized: dict[str, Any],
+        inputs: dict[str, Any],
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Push scopes for Deep Agents orchestrators and subagents, not graph nodes."""
+        agent_name = self._semantic_agent_name(kwargs.get("name"), metadata)
+        if agent_name is None:
+            return None
+
+        scope_metadata = dict(metadata or {})
+        scope_metadata.update(
+            {
+                "integration": "deepagents",
+                "deepagents_agent_name": agent_name,
+                "deepagents_agent_role": "orchestrator" if parent_run_id is None else "subagent",
+            }
+        )
+        scope_kwargs = dict(kwargs)
+        scope_kwargs["name"] = agent_name
+        return super().on_chain_start(
+            serialized,
+            inputs,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=scope_metadata,
+            **scope_kwargs,
+        )
+
+    @staticmethod
+    def _semantic_agent_name(name: Any, metadata: Mapping[str, Any] | None) -> str | None:
+        if metadata is None:
+            return None
+
+        versions = metadata.get("lc_versions")
+        if not isinstance(versions, Mapping) or "deepagents" not in versions:
+            return None
+
+        langgraph_node = metadata.get("langgraph_node")
+        if langgraph_node is not None and langgraph_node == name:
+            return None
+
+        configured_name = metadata.get("lc_agent_name")
+        if isinstance(configured_name, str) and configured_name and name == configured_name:
+            return configured_name
+
+        if metadata.get("ls_integration") == "deepagents":
+            return "DeepAgent"
+
+        return None
 
     def _emit_graph_mark(self, name: str, data: dict[str, Any]) -> None:
         key = self._graph_event_key(data)
