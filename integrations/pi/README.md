@@ -112,6 +112,7 @@ Run it first whenever Relay does not seem to be doing anything.
 | `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without checking the upstream; `off` disables redirection |
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |
 | `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM` | unset | What the gateway forwards Anthropic traffic to. Set by the launcher |
+| `NEMO_RELAY_PROXY_CREDENTIAL` | unset | This invocation's proxy credential, set by `nemo-relay run` for every agent it starts. Sent as `x-nemo-relay-proxy-token` on a redirected provider only — a gateway the launcher started rejects a provider call without it. A standalone `nemo-relay --bind` daemon sets none and needs none |
 
 ## How Tool Gating Works
 

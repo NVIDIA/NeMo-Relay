@@ -64,6 +64,20 @@ export type RedirectConfig = {
    * disables redirection entirely.
    */
   mode: 'match' | 'force' | 'off';
+  /**
+   * This invocation's transparent-proxy credential, when the launcher set one.
+   *
+   * A gateway started by `nemo-relay run` authenticates its own client before a
+   * request intercept can rewrite the route, and rejects a provider call that
+   * does not present it (`crates/cli/src/provider_auth.rs`). Hook posts are not
+   * covered by that check -- only provider passthrough is -- so without this the
+   * redirect succeeds and then every model call comes back 401, which is the one
+   * outcome the redirect exists to produce spans for.
+   *
+   * Absent for a standalone `nemo-relay --bind` daemon, which requires no
+   * credential, so the key is omitted rather than sent empty.
+   */
+  proxyToken?: string;
 };
 
 /** A model, narrowed to the fields redirection depends on. */
@@ -278,10 +292,16 @@ export function redirectConfigFromEnv(gatewayUrl: string): RedirectConfig {
   // the same as an absent key.
   const openaiUpstream = process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM;
   const anthropicUpstream = process.env.NEMO_RELAY_PI_ANTHROPIC_UPSTREAM;
+  // Not a `NEMO_RELAY_PI_*` name, deliberately: the launcher exports this one for
+  // every agent it starts, and Codex reads the same variable through its
+  // `env_http_headers` provider configuration. A pi-specific alias would be a
+  // second name for one value, and the two could drift.
+  const proxyToken = process.env.NEMO_RELAY_PROXY_CREDENTIAL;
   return {
     gatewayUrl,
     mode,
     ...(openaiUpstream ? { openaiUpstream } : {}),
     ...(anthropicUpstream ? { anthropicUpstream } : {}),
+    ...(proxyToken ? { proxyToken } : {}),
   };
 }

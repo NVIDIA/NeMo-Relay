@@ -126,6 +126,13 @@ A **project-scoped** install is deliberately never used. `-e` is not trust-gated
 so passing one would load repository code pi itself declined to trust. Launch
 fails instead, and names the install routes that are not gated.
 
+The launcher also passes this invocation's proxy credential through
+`NEMO_RELAY_PROXY_CREDENTIAL`, and the extension sends it as
+`x-nemo-relay-proxy-token` on a redirected provider. A gateway started by `run`
+authenticates its own client before any intercept can rewrite the route, so
+without it a redirect would succeed and every model call would come back `401`. A
+standalone `nemo-relay --bind` daemon sets no credential and requires none.
+
 Inspect what would be launched without starting pi:
 
 ```bash

@@ -614,6 +614,7 @@ describe('the session join key on redirected providers', () => {
 
   beforeEach(() => {
     ctx.posts.length = 0;
+    delete process.env.NEMO_RELAY_PROXY_CREDENTIAL;
   });
 
   const model = {
@@ -677,6 +678,47 @@ describe('the session join key on redirected providers', () => {
 
     assert.equal(registrations.length, 2, 'a replacement must re-register, not reuse');
     assert.equal(registrations[1].config.headers['x-nemo-relay-session-id'], 'sess-two');
+  });
+
+  // A gateway started by `nemo-relay run` authenticates its own client before any
+  // intercept can rewrite the route, so a redirected call without this credential is
+  // rejected 401 -- the redirect succeeds and every model call then fails, which is
+  // the one outcome redirection exists to avoid.
+  it('carries the launcher proxy credential on a redirected provider', async () => {
+    process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
+    const { fire, registrations } = loadRecording('sess-one');
+    await fire('session_start', { reason: 'startup' });
+
+    assert.equal(registrations.length, 1);
+    assert.equal(registrations[0].config.headers['x-nemo-relay-proxy-token'], 'nrp_testtoken');
+  });
+
+  // A standalone `nemo-relay --bind` daemon requires no credential, so the launcher
+  // sets nothing. Sending the header empty would be a credential claim we cannot back.
+  it('omits the proxy credential header when the launcher set none', async () => {
+    const { fire, registrations } = loadRecording('sess-one');
+    await fire('session_start', { reason: 'startup' });
+
+    assert.equal(registrations.length, 1);
+    assert.ok(
+      !('x-nemo-relay-proxy-token' in registrations[0].config.headers),
+      'an absent credential must not become an empty header',
+    );
+  });
+
+  // Same structural scope as the session id, and it matters more here: the credential
+  // authenticates *this* invocation, so a provider the gateway does not front must
+  // never see it. `registerProvider` runs only on a redirect, which is what enforces it.
+  it('never reaches a provider that was not redirected', async () => {
+    process.env.NEMO_RELAY_PROXY_CREDENTIAL = 'nrp_testtoken';
+    process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://elsewhere.example/v1';
+    try {
+      const { fire, registrations } = loadRecording('sess-one');
+      await fire('session_start', { reason: 'startup' });
+      assert.equal(registrations.length, 0, 'a mismatched upstream must not register');
+    } finally {
+      process.env.NEMO_RELAY_PI_OPENAI_UPSTREAM = 'https://api.openai.com/v1';
+    }
   });
 
   it('does not re-register when the session id has not moved', async () => {

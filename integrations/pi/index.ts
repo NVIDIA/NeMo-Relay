@@ -266,20 +266,29 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     );
     if (decision.kind === 'redirect') {
       // `baseUrl` rewrites the URL of every existing model for this provider and
-      // keeps their API and costs. `headers` is the session join key.
+      // keeps their API and costs. `headers` carries two things the gateway needs
+      // from a redirected call: the session join key, and -- when the launcher
+      // started this gateway -- its transparent-proxy credential.
       //
-      // It goes here rather than in a `before_provider_headers` handler because
+      // Both go here rather than in a `before_provider_headers` handler because
       // that hook is **global and carries no request identity**: its event has
       // only the headers, and its context is freshly built, so `ctx.model` is
       // whatever is selected *now*, not what this request is for. Scoping on it
       // gets both directions wrong -- omitting the key from a redirected call
       // whose model was captured before a switch, and leaking an internal session
-      // id to a third-party provider we deliberately did not redirect. Attaching
-      // it to the registration makes the scope structural: only providers we
-      // actually pointed at the gateway ever send it.
+      // id, or the credential, to a third-party provider we deliberately did not
+      // redirect. Attaching them to the registration makes the scope structural:
+      // only providers we actually pointed at the gateway ever send either.
+      //
+      // Without the credential the redirect succeeds and every model call then
+      // comes back 401 -- a gateway started by `nemo-relay run` authenticates its
+      // own client before any intercept can rewrite the route.
       pi.registerProvider(decision.provider, {
         baseUrl: redirect.gatewayUrl,
-        headers: { 'x-nemo-relay-session-id': sessionKey },
+        headers: {
+          'x-nemo-relay-session-id': sessionKey,
+          ...(redirect.proxyToken ? { 'x-nemo-relay-proxy-token': redirect.proxyToken } : {}),
+        },
       });
       redirectedProviders.add(decision.provider);
     }
