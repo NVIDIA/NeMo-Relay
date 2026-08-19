@@ -143,7 +143,7 @@ class LangChainCodec(LlmCodec):
         role = _LC_TO_RELAY_MESSAGE_ROLE.get(message.type, message.type)
 
         messages = []
-        for msg in content:
+        for content_index, msg in enumerate(content):
             relay_message: dict[str, Any] = {"role": role}
             if isinstance(msg, str):
                 relay_message["content"] = msg
@@ -159,7 +159,7 @@ class LangChainCodec(LlmCodec):
 
             # Using getattr as we are inferring subclasses of BaseMessage based upon the role
             if role == "assistant":
-                tool_calls = getattr(message, "tool_calls", [])
+                tool_calls = getattr(message, "tool_calls", []) if content_index == 0 else []
                 relay_message["tool_calls"] = cls._langchain_tool_calls_to_annotated(tool_calls)
             elif role == "tool":
                 relay_message["tool_call_id"] = getattr(message, "tool_call_id", "")
@@ -207,9 +207,9 @@ class LangChainCodec(LlmCodec):
                 if isinstance(candidate, list):
                     raw_tool_calls = candidate
             if raw_tool_calls is not None:
-                provider_tool_calls.extend(
-                    (annotated, raw_tool_calls) for annotated in cls._langchain_message_to_annotated(message)
-                )
+                annotated_messages = cls._langchain_message_to_annotated(message)
+                if annotated_messages:
+                    provider_tool_calls.append((annotated_messages[0], raw_tool_calls))
         return provider_tool_calls
 
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
@@ -265,6 +265,8 @@ class LangChainCodec(LlmCodec):
                     else:
                         provider_tool_calls = self._annotated_tool_calls_to_provider(message.get("tool_calls"))
                     break
+            if message.get("role") == "assistant" and provider_tool_calls is None:
+                provider_tool_calls = self._annotated_tool_calls_to_provider(message.get("tool_calls"))
             encoded_messages.append(self._annotated_message_to_langchain(message, provider_tool_calls))
         payload["messages"] = messages_to_dict(encoded_messages)
         if annotated.model is not None:
