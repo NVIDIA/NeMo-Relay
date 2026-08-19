@@ -3,7 +3,7 @@
 
 //! Optional observability integrations for NeMo Relay Core.
 
-use crate::api::event::EventNormalizationExt;
+use crate::api::event::{EventNormalizationExt, is_valid_event_metadata_attribute_key};
 use crate::codec::response::{AnnotatedLlmResponse, ApiSpecificResponse, Usage};
 use serde::{Deserialize, Serialize};
 
@@ -371,12 +371,7 @@ pub fn validate_metadata_promotion_prefixes(
 
 fn is_valid_metadata_promotion_prefix(prefix: &str) -> bool {
     let key = prefix.strip_suffix('.').unwrap_or(prefix);
-    key.split('.').all(|segment| {
-        !segment.is_empty()
-            && segment.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
-            })
-    })
+    is_valid_event_metadata_attribute_key(key)
 }
 
 fn is_blank_attribute_mapping_name(value: &str) -> bool {
@@ -649,7 +644,7 @@ fn metadata_array_to_otel(
     use opentelemetry::{Array, Value};
 
     let Some(first) = values.first() else {
-        return Err("empty arrays do not declare an OTLP element type");
+        return Ok(Value::Array(Array::String(Vec::new())));
     };
     match first {
         crate::json::Json::String(_) => values

@@ -327,15 +327,44 @@ fn rejects_metadata_keys_owned_by_relay_and_otel_projections() {
 }
 
 #[test]
-fn reports_unsupported_metadata_array_shapes() {
+fn promotes_empty_metadata_arrays() {
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("empty-metadata-array")
+            .metadata(serde_json::json!({"nv.empty": []}))
+            .build(),
+        None,
+        None,
+    ));
+    let mut attributes = Vec::new();
+
+    let issues = promote_event_metadata_attributes(
+        &mut attributes,
+        &event,
+        &["nv.".to_string()],
+        &HashSet::new(),
+    );
+
+    assert!(issues.is_empty());
+    assert_eq!(
+        attributes,
+        vec![opentelemetry::KeyValue::new(
+            "nv.empty",
+            opentelemetry::Value::Array(opentelemetry::Array::String(Vec::new())),
+        )]
+    );
+}
+
+#[test]
+fn reports_unsupported_metadata_values() {
     let event = Event::Mark(MarkEvent::new(
         BaseEvent::builder()
             .name("metadata-array-rejections")
             .metadata(serde_json::json!({
-                "nv.empty": [],
                 "nv.mixed": [1, "two"],
                 "nv.nested": [[1]],
                 "nv.nulls": [null],
+                "nv.oversized_scalar": 18446744073709551615u64,
                 "nv.oversized": [18446744073709551615u64]
             }))
             .build(),
@@ -358,10 +387,6 @@ fn reports_unsupported_metadata_array_shapes() {
         .collect::<std::collections::HashMap<_, _>>();
     assert_eq!(issues.len(), 5);
     assert_eq!(
-        issues.get("nv.empty"),
-        Some(&"empty arrays do not declare an OTLP element type")
-    );
-    assert_eq!(
         issues.get("nv.mixed"),
         Some(&"array values must have one primitive type")
     );
@@ -372,6 +397,10 @@ fn reports_unsupported_metadata_array_shapes() {
     assert_eq!(
         issues.get("nv.nulls"),
         Some(&"arrays of null are not OTLP attributes")
+    );
+    assert_eq!(
+        issues.get("nv.oversized_scalar"),
+        Some(&"unsigned integer is larger than OTLP i64")
     );
     assert_eq!(
         issues.get("nv.oversized"),
