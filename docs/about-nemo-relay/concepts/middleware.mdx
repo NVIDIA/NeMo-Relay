@@ -110,7 +110,7 @@ everything in application code.
 
 ## Middleware Families
 
-NeMo Relay has three major middleware families with four distinct purposes:
+NeMo Relay provides four middleware purposes:
 
 - **Intercepts** change the real request or callback execution path.
 - **Conditional-execution guardrails** decide whether the real work runs.
@@ -150,9 +150,10 @@ execution intercept cannot undo work from a `next` continuation that it already
 invoked. This fail-closed contract is the same whether the callback completes
 directly or asynchronously.
 
-Event metadata injectors fail open. If an injector fails, panics, or returns an
-invalid attribute set, Relay logs the failure, omits all metadata from that
-injector for the current Event, and continues with the original Event.
+Event metadata injectors fail open. If an injector fails, panics, or returns
+invalid attributes, Relay logs the failure, ignores only that injector's output
+for the current Event, and continues with later injectors using the Event as it
+stood before the failed injector.
 
 ## Intercepts
 
@@ -194,13 +195,14 @@ Event metadata injectors add OTel-compatible values to the existing Event
 Event as immutable context, so a callback can inspect the Event kind and name
 before deciding what to return.
 
-The v1 contract accepts keys made of ASCII letter, number, underscore, or
-hyphen segments separated by optional single dots. Empty keys, whitespace,
-unsupported punctuation, leading or trailing dots, and repeated dots are
-invalid. Relay stores accepted keys literally; dots do not create nested
-objects. Values may be strings, numbers, booleans, or homogeneous lists of
-those primitive types. Nested objects, `null`, and mixed-type lists are rejected
-as one atomic callback result.
+The v1 contract accepts keys made of non-empty segments containing only ASCII
+letters, digits, underscores, or hyphens. Segments may be separated by single
+dots, so keys such as `region.zone.name` are valid. Leading dots, trailing
+dots, consecutive dots, whitespace, and unsupported punctuation are invalid.
+Relay stores accepted keys literally; dots do not create nested objects. Values
+may be strings, numbers, booleans, or homogeneous lists of those primitive
+types. Nested objects, `null`, and mixed-type lists are rejected as one atomic
+callback result.
 
 Injection is insert-only. Existing Event metadata is never overwritten.
 Injectors run in ascending numeric priority and then by registration name, so
