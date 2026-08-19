@@ -257,7 +257,7 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 	rc := NewResponseCacheConfig()
 	rc.Namespace = "tool-cache-go-test"
 	tools := NewResponseCacheToolsConfig()
-	if tools.Priority == nil || *tools.Priority != 150 {
+	if tools.Priority == nil || *tools.Priority != 100 {
 		t.Fatalf("constructor tools priority default mismatch: %#v", tools.Priority)
 	}
 	if tools.CacheErrors {

@@ -238,7 +238,7 @@ class TestDynamicConfigContract:
         assert serialized == {
             "enabled": True,
             "cache_errors": True,
-            "priority": 150,
+            "priority": 100,
             "default": {"cacheable": False, "arg_skip": [], "members": []},
             "classes": {
                 "read_only": {

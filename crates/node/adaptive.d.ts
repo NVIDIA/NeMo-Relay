@@ -107,8 +107,7 @@ export interface ToolOverride {
 export interface ToolCacheConfig {
   enabled?: boolean;
   /**
-   * Tool execution-intercept priority; omit for Rust's default (150), which
-   * keeps standard priority-100 guardrails outside cache hits.
+   * Tool execution-intercept priority; omit for Rust's default (100).
    */
   priority?: number;
   /** Whether error-shaped tool results may be cached; defaults to false. */

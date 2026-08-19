@@ -335,8 +335,7 @@ class ToolCacheConfig:
 
     Args:
         enabled: Master switch for the tool surface. Off by default.
-        priority: Tool execution-intercept priority. Defaults to 150 so
-            standard priority-100 guardrails wrap cache hits; lower runs
+        priority: Tool execution-intercept priority. Defaults to 100; lower runs
             first/outermost.
         cache_errors: Whether error-shaped tool results may be cached. Off by
             default.
@@ -349,7 +348,7 @@ class ToolCacheConfig:
     """
 
     enabled: bool = False
-    priority: int = 150
+    priority: int = 100
     cache_errors: bool = False
     default: ToolClass = field(default_factory=ToolClass)
     classes: dict[str, ToolClass] = field(default_factory=dict)

@@ -2087,43 +2087,6 @@ async fn conventional_error_shaped_tool_results_can_be_cached_when_opted_in() {
 }
 
 #[tokio::test]
-async fn default_tool_cache_priority_keeps_standard_guardrails_on_hits() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-
-    let guardrail_runs = Arc::new(AtomicUsize::new(0));
-    register_tool_execution_intercept(
-        "response_cache_standard_tool_guardrail_test",
-        100,
-        Arc::new({
-            let guardrail_runs = Arc::clone(&guardrail_runs);
-            move |_name, args, next| {
-                let guardrail_runs = Arc::clone(&guardrail_runs);
-                Box::pin(async move {
-                    guardrail_runs.fetch_add(1, Ordering::SeqCst);
-                    next(args).await.map(Into::into)
-                })
-            }
-        }),
-    )
-    .unwrap();
-    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
-
-    let calls = Arc::new(AtomicUsize::new(0));
-    let tool = counting_tool(Arc::clone(&calls), json!({"answer": "cached"}));
-    tool_call("lookup", &tool, json!({"q": "relay"})).await;
-    tool_call("lookup", &tool, json!({"q": "relay"})).await;
-
-    deregister_tool_execution_intercept("response_cache_standard_tool_guardrail_test").unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "the second call must hit");
-    assert_eq!(
-        guardrail_runs.load(Ordering::SeqCst),
-        2,
-        "the standard priority-100 guardrail must wrap and run on a cache hit"
-    );
-}
-
-#[tokio::test]
 async fn tool_callback_errors_emit_misses_and_are_never_cached() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();

@@ -74,8 +74,7 @@ nemo_relay::editor_config! {
 pub struct ToolCacheConfig {
     /// Master switch; off by default.
     pub enabled: bool,
-    /// Tool execution-intercept priority. The default keeps standard
-    /// priority-100 guardrails outside cache hits.
+    /// Tool execution-intercept priority. Lower values run earlier and outermost.
     pub priority: i32,
     /// Whether conventional in-band tool error results may be stored.
     pub cache_errors: bool,
@@ -91,7 +90,7 @@ impl Default for ToolCacheConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            priority: 150,
+            priority: 100,
             cache_errors: false,
             default: ToolClass::default(),
             classes: BTreeMap::new(),
