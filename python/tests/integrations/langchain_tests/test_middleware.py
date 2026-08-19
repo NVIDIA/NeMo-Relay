@@ -294,7 +294,7 @@ def test_langchain_request_codec_preserves_provider_tool_calls():
     assert rebuilt.additional_kwargs["tool_calls"] == provider_tool_calls
 
 
-def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload():
+def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload_after_prepending_message():
     from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
 
     from nemo_relay.integrations.langchain._serialization import LangChainCodec
@@ -330,8 +330,10 @@ def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload():
     )
 
     codec = LangChainCodec()
-    encoded = codec.encode(codec.decode(request), request)
-    rebuilt = messages_from_dict(cast(list[dict[str, Any]], encoded.content["messages"]))[0]
+    annotated = codec.decode(request)
+    annotated.messages = [{"role": "user", "content": "Prepended by an interceptor"}, *annotated.messages]
+    encoded = codec.encode(annotated, request)
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], encoded.content["messages"]))[1]
 
     assert convert_message_to_dict(rebuilt) == {
         "role": "assistant",
