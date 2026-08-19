@@ -18276,7 +18276,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-## h2 - 0.4.13
+## h2 - 0.4.16
 **Repository URL**: https://github.com/hyperium/h2
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
