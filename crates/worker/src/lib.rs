@@ -19,7 +19,7 @@
 //! arbitrary blocking work started by the callback has stopped.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::net::{SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
@@ -182,6 +182,8 @@ pub trait WorkerPlugin: Send + Sync + 'static {
 type SubscriberFn = Arc<dyn Fn(&Event) + Send + Sync>;
 type EventSanitizeFn =
     Arc<dyn Fn(&Event, EventSanitizeFields) -> BoxFutureResult<EventSanitizeFields> + Send + Sync>;
+type EventMetadataInjectorFn =
+    Arc<dyn Fn(Arc<Event>) -> BoxFutureResult<BTreeMap<String, Json>> + Send + Sync>;
 type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> BoxFutureResult<Json> + Send + Sync>;
 type ToolConditionalFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Option<String>> + Send + Sync>;
 type ToolRequestFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Json> + Send + Sync>;
@@ -306,6 +308,7 @@ type LlmStreamExecutionFn =
 struct WorkerHandlers {
     registrations: Vec<Registration>,
     subscribers: HashMap<String, SubscriberFn>,
+    event_metadata_injectors: HashMap<String, EventMetadataInjectorFn>,
     mark_sanitizers: HashMap<String, EventSanitizeFn>,
     scope_start_sanitizers: HashMap<String, EventSanitizeFn>,
     scope_end_sanitizers: HashMap<String, EventSanitizeFn>,
@@ -359,6 +362,28 @@ impl PluginContext {
         self.handlers
             .subscribers
             .insert(name.into(), Arc::new(callback));
+    }
+
+    /// Registers an Event metadata injector.
+    pub fn register_event_metadata_injector<F, Fut>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) where
+        F: Fn(Arc<Event>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<BTreeMap<String, Json>>> + Send + 'static,
+    {
+        self.push_registration(
+            name,
+            RegistrationSurface::EventMetadataInjector,
+            priority,
+            false,
+        );
+        self.handlers.event_metadata_injectors.insert(
+            name.into(),
+            Arc::new(move |event| Box::pin(callback(event))),
+        );
     }
 
     fn register_event_sanitizer<F, Fut>(
@@ -1790,6 +1815,10 @@ impl WorkerService {
             .map_err(|_| WorkerSdkError::InvalidInput("unknown registration surface".into()))?;
         match surface {
             RegistrationSurface::Subscriber => self.invoke_subscriber_response(request, &scope),
+            RegistrationSurface::EventMetadataInjector => {
+                self.invoke_event_metadata_injector_response(request, &scope)
+                    .await
+            }
             RegistrationSurface::MarkSanitizeGuardrail
             | RegistrationSurface::ScopeSanitizeStartGuardrail
             | RegistrationSurface::ScopeSanitizeEndGuardrail => {
@@ -1827,6 +1856,19 @@ impl WorkerService {
         let handler = self.subscriber(&request.registration_name)?;
         with_thread_scope(scope, || handler(&event));
         Ok(empty_response())
+    }
+
+    async fn invoke_event_metadata_injector_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let event = event_payload(request.payload)?;
+        let handler = self.event_metadata_injector(&request.registration_name)?;
+        let future = with_thread_scope(scope, || handler(Arc::new(event)));
+        Ok(json_response(serde_json::to_value(future.await?).map_err(
+            |err| WorkerSdkError::Callback(format!("serialize Event metadata additions: {err}")),
+        )?))
     }
 
     async fn invoke_event_sanitize_response(
@@ -2057,6 +2099,20 @@ impl WorkerService {
             .cloned()
             .ok_or_else(|| {
                 WorkerSdkError::InvalidInput(format!("subscriber '{name}' not registered"))
+            })
+    }
+
+    fn event_metadata_injector(&self, name: &str) -> Result<EventMetadataInjectorFn> {
+        self.handlers
+            .lock()
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
+            .event_metadata_injectors
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!(
+                    "Event metadata injector '{name}' not registered"
+                ))
             })
     }
 
@@ -2686,6 +2742,7 @@ fn proto_scope_type(scope_type: ScopeType) -> i32 {
 fn all_surfaces() -> Vec<RegistrationSurface> {
     vec![
         RegistrationSurface::Subscriber,
+        RegistrationSurface::EventMetadataInjector,
         RegistrationSurface::ToolSanitizeRequestGuardrail,
         RegistrationSurface::ToolSanitizeResponseGuardrail,
         RegistrationSurface::ToolConditionalExecutionGuardrail,

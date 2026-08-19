@@ -40,6 +40,7 @@ Public authoring types:
 
 Public callback aliases used in registration annotations:
     SubscriberCallback: Event subscriber callback.
+    EventMetadataInjectorCallback: Event metadata injector callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
     ToolRequestCallback: Tool request intercept callback.
@@ -935,6 +936,7 @@ class _SupportsWorkerPlugin(Protocol):
 
 
 SubscriberCallback: TypeAlias = Callable[[Event], None | Awaitable[None]]
+EventMetadataInjectorCallback: TypeAlias = Callable[[Event], dict[str, Json] | Awaitable[dict[str, Json]]]
 EventSanitizeCallback: TypeAlias = Callable[
     [Event, EventSanitizeFields],
     EventSanitizeFields | Awaitable[EventSanitizeFields],
@@ -968,6 +970,7 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
 class _Handlers:
     registrations: list[Any]
     subscribers: dict[str, SubscriberCallback]
+    event_metadata_injectors: dict[str, EventMetadataInjectorCallback]
     mark_sanitizers: dict[str, EventSanitizeCallback]
     scope_start_sanitizers: dict[str, EventSanitizeCallback]
     scope_end_sanitizers: dict[str, EventSanitizeCallback]
@@ -988,6 +991,7 @@ class _Handlers:
         return cls(
             registrations=[],
             subscribers={},
+            event_metadata_injectors={},
             mark_sanitizers={},
             scope_start_sanitizers={},
             scope_end_sanitizers={},
@@ -1069,6 +1073,29 @@ class PluginContext:
         """
         self._push_registration(name, pb.SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
+
+    def register_event_metadata_injector(
+        self,
+        name: str,
+        callback: EventMetadataInjectorCallback,
+        *,
+        priority: int = 0,
+    ) -> None:
+        """Register a callback that proposes additions to Event metadata.
+
+        Args:
+            name: Component-local registration name.
+            callback: Function receiving a detached :data:`Event` snapshot and
+                returning a flat metadata dictionary, directly or through an
+                awaitable. Mutating the snapshot does not modify Relay's Event.
+            priority: Execution order. Lower values run first.
+
+        Callback errors:
+            An exception becomes a structured worker invocation error. Relay
+            omits this callback's additions and continues processing the Event.
+        """
+        self._push_registration(name, pb.EVENT_METADATA_INJECTOR, priority, False)
+        self._handlers.event_metadata_injectors[name] = callback
 
     def _register_event_sanitizer(
         self,
@@ -2194,6 +2221,15 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 await _maybe_await(self._handler(self._handlers.subscribers, request.registration_name)(event))
                 return pb.InvokeResponse(empty=pb.EmptyResult())
+            if request.surface == pb.EVENT_METADATA_INJECTOR:
+                event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
+                result = await _maybe_await(
+                    self._handler(
+                        self._handlers.event_metadata_injectors,
+                        request.registration_name,
+                    )(event)
+                )
+                return _json_response(result)
             if request.surface in PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES:
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 fields: EventSanitizeFields = {
@@ -2377,6 +2413,7 @@ def _plugin_id(plugin: _SupportsWorkerPlugin) -> str:
 def _all_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
+        pb.EVENT_METADATA_INJECTOR,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

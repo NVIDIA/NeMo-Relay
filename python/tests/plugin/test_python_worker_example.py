@@ -126,6 +126,14 @@ async def test_example_register_propagates_configured_tag(example: Any):
     plugin = example.ExamplePythonWorker()
     plugin.register(context, {"tag": "demo"})
 
+    context.register_event_metadata_injector.assert_called_once()
+    injector_name, injector = context.register_event_metadata_injector.call_args.args
+    assert injector_name == "example_event_metadata_injector"
+    assert await injector({"name": "external-plugin-event-metadata-injection-mark"}) == {
+        "external.injector.transport": "python_grpc_worker"
+    }
+    assert await injector({"name": "unrelated"}) == {}
+
     context.register_tool_request_intercept.assert_called_once()
     name, callback = context.register_tool_request_intercept.call_args.args
     assert name == "tag_tool_request"

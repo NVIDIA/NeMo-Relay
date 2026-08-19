@@ -161,6 +161,175 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
 }
 
 #[tokio::test]
+async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_clear() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, report) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("event_metadata_injector_only".into(), json!(true))]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+    assert!(!report.has_errors());
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "rust_worker_event_metadata_injector_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-before-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("injected mark should flush");
+    let injected = find_event(
+        &events.lock().unwrap(),
+        "external-plugin-event-metadata-injection-worker-before-clear",
+        None,
+    )
+    .clone();
+    assert_eq!(injected.metadata().unwrap()["existing"], true);
+    assert_eq!(
+        injected.metadata().unwrap()["external.injector.transport"],
+        "rust_grpc_worker"
+    );
+
+    activation.clear().expect("worker plugin host should clear");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-after-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("post-clear mark should emit");
+    flush_subscribers().expect("post-clear mark should flush");
+    let events = events.lock().unwrap();
+    let after_clear = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-worker-after-clear",
+        None,
+    );
+    assert_eq!(after_clear.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+}
+
+#[tokio::test]
+async fn rust_worker_event_metadata_injector_error_preserves_event_delivery() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([
+                ("event_metadata_injector_only".into(), json!(true)),
+                ("event_metadata_injector_error".into(), json!(true)),
+            ]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "rust_worker_event_metadata_injector_error_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-error")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("failed injector must not block delivery");
+    let events = events.lock().unwrap();
+    let delivered = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-worker-error",
+        None,
+    );
+    assert_eq!(delivered.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+    activation.clear().expect("worker plugin host should clear");
+}
+
+#[tokio::test]
+async fn rust_worker_event_metadata_injector_process_exit_preserves_event_delivery() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([
+                ("event_metadata_injector_only".into(), json!(true)),
+                ("exit_in_event_metadata_injector".into(), json!(true)),
+            ]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "rust_worker_event_metadata_injector_process_exit_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-process-exit")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("terminated worker must not block delivery");
+    let events = events.lock().unwrap();
+    let delivered = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-worker-process-exit",
+        None,
+    );
+    assert_eq!(delivered.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+    activation
+        .clear()
+        .expect_err("terminated worker should report shutdown failure");
+}
+
+#[tokio::test]
 async fn plugin_host_clear_surfaces_worker_shutdown_failure_and_releases_safe_owner() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let fixture = build_fixture_worker();
@@ -1307,6 +1476,26 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     )
     .expect("test subscriber should register");
     cleanup.subscriber_name = Some(subscriber_name);
+
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-python-round-trip")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("Python injector mark should emit");
+    flush_subscribers().expect("Python injector mark should flush");
+    let injected = find_event(
+        &events.lock().unwrap(),
+        "external-plugin-event-metadata-injection-python-round-trip",
+        None,
+    )
+    .clone();
+    assert_eq!(injected.metadata().unwrap()["existing"], true);
+    assert_eq!(
+        injected.metadata().unwrap()["external.injector.transport"],
+        "python_grpc_worker"
+    );
 
     let rewritten = tool_request_intercepts("lookup", json!({ "query": "relay" }))
         .await

@@ -3,6 +3,7 @@
 
 //! Future-based typed middleware adapters for native ABI v4.
 
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -825,6 +826,11 @@ struct EventInvocation {
     fields: EventSanitizeFields,
 }
 
+#[derive(Deserialize)]
+struct EventMetadataInvocation {
+    event: Event,
+}
+
 type StreamFuture = Pin<Box<dyn Future<Output = Result<LlmJsonAsyncStream>> + Send>>;
 type StreamAdapter = dyn Fn(Json, LlmStreamNext) -> StreamFuture + Send + Sync;
 
@@ -1123,6 +1129,37 @@ impl PluginContext<'_> {
                         callback(Arc::new(invocation.event), invocation.fields).await?,
                     )
                     .map_err(|error| error.to_string())
+                })
+            }),
+        )
+    }
+
+    /// Registers an asynchronous Event metadata injector.
+    pub fn register_event_metadata_injector<F, Fut>(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: Fn(Arc<Event>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<BTreeMap<String, Json>>> + Send + 'static,
+    {
+        let callback = Arc::new(callback);
+        self.register_unary_adapter(
+            NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector,
+            name,
+            priority,
+            false,
+            Box::new(move |value, _, _| {
+                let callback = Arc::clone(&callback);
+                Box::pin(async move {
+                    let invocation: EventMetadataInvocation = serde_json::from_value(value)
+                        .map_err(|error| {
+                            format!("invalid Event metadata injector invocation: {error}")
+                        })?;
+                    serde_json::to_value(callback(Arc::new(invocation.event)).await?)
+                        .map_err(|error| error.to_string())
                 })
             }),
         )
@@ -1571,6 +1608,7 @@ fn registration_operation(kind: NemoRelayNativeAsyncMiddlewareKind) -> &'static 
         NemoRelayNativeAsyncMiddlewareKind::MarkSanitize => "mark sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart => "scope start sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd => "scope end sanitizer",
+        NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector => "Event metadata injector",
     }
 }
 

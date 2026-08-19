@@ -66,6 +66,13 @@ class ExamplePythonWorker(WorkerPlugin):
         if not isinstance(tag, str):
             raise TypeError("tag must be a string")
 
+        async def inject_event_metadata(event: Any) -> dict[str, Json]:
+            if config.get("event_metadata_injector_error") is True:
+                raise RuntimeError("Python Event metadata injector error requested")
+            if str(event.get("name", "")).startswith("external-plugin-event-metadata-injection"):
+                return {"external.injector.transport": "python_grpc_worker"}
+            return {}
+
         async def tag_tool_request(tool_name: str, args: Json) -> Json:
             tagged_args = _tag_json(args, tag)
             await ctx.runtime.emit_mark(
@@ -94,6 +101,9 @@ class ExamplePythonWorker(WorkerPlugin):
                 ],
             )
 
+        ctx.register_event_metadata_injector("example_event_metadata_injector", inject_event_metadata)
+        if config.get("event_metadata_injector_only") is True:
+            return
         ctx.register_tool_request_intercept("tag_tool_request", tag_tool_request)
         ctx.register_tool_execution_intercept("tag_tool_execution", tag_tool_execution)
 

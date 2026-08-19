@@ -165,6 +165,34 @@ registers a tool request intercept that updates the request JSON and emits a
 mark through `PluginContext.runtime`. The `main` entrypoint blocks until Relay
 requests shutdown.
 
+## Inject Event Metadata
+
+Register a global callback from `WorkerPlugin.register`. Relay sends each
+Event to the Python worker over `grpc-v1`, and the callback returns flat
+key/value additions for `Event.metadata`:
+
+```python
+from nemo_relay_plugin import Event, Json
+
+
+def add_plugin_context(event: Event) -> dict[str, Json]:
+    del event
+    return {"app.source": "plugin"}
+
+
+ctx.register_event_metadata_injector(
+    "plugin-context",
+    add_plugin_context,
+    priority=0,
+)
+```
+
+The callback receives a detached Event snapshot. Changing that Python
+dictionary does not modify Relay's Event; only the returned additions are
+considered. Relay validates and merges accepted additions before Event
+sanitizers run. An exception omits that callback's additions without dropping
+the Event. Stopping the worker component removes the registration.
+
 ## Read Host Runtime Diagnostics
 
 Use the runtime handle inside an asynchronous callback to inspect the active

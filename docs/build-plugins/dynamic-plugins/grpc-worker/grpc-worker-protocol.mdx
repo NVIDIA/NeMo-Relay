@@ -72,6 +72,7 @@ name, surface, priority, and `break_chain` value. A failed registration can
 return `WorkerError` without registrations. The supported surfaces are:
 
 - `SUBSCRIBER`
+- `EVENT_METADATA_INJECTOR`
 - `TOOL_SANITIZE_REQUEST_GUARDRAIL`, `TOOL_SANITIZE_RESPONSE_GUARDRAIL`,
   `TOOL_CONDITIONAL_EXECUTION_GUARDRAIL`, `TOOL_REQUEST_INTERCEPT`, and
   `TOOL_EXECUTION_INTERCEPT`
@@ -84,6 +85,13 @@ continuation, and scope context. Its payload is one of an event, tool
 invocation, or LLM invocation. `InvokeResponse` returns an empty result, JSON
 result, guardrail result, LLM request-intercept result, tool-execution result,
 or `WorkerError`. `InvokeStream` emits JSON chunks or `WorkerError` chunks.
+
+For `EVENT_METADATA_INJECTOR`, Relay sets `InvokeRequest.event` to the
+immutable Event snapshot. The worker returns an `InvokeResponse.json` object
+whose entries are proposed additions to `Event.metadata`. The surface uses the
+existing unary `Invoke` RPC; it does not add another service method. Relay
+validates and merges accepted additions before Event sanitizers run. A
+`WorkerError` omits that callback's additions without dropping the Event.
 
 Every LLM sanitizer invocation includes a directional context with tagged codec
 identity: `none`, `builtin(id)`, `runtime(id)`, or `opaque`. Worker SDKs expose
