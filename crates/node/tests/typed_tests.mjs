@@ -399,6 +399,35 @@ describe('typedToolExecute', () => {
     });
   });
 
+  it('records toolCallId from typed options on managed lifecycle events', async () => {
+    const events = [];
+    registerSubscriber('typed_node_tool_call_id_sub', (event) => events.push(event));
+    try {
+      const passthrough = new JsonPassthrough();
+      const result = await typedToolExecute(
+        'typed_tool_call_id',
+        { value: 1 },
+        (args) => ({ result: args }),
+        passthrough,
+        passthrough,
+        { toolCallId: 'typed-node-call-123' },
+      );
+      assert.deepEqual(result, { result: { value: 1 } });
+
+      await flushSubscribers();
+      const lifecycle = events.filter(
+        (event) => event.kind === 'scope' && event.category === 'tool' && event.name === 'typed_tool_call_id',
+      );
+      assert.deepEqual(
+        lifecycle.map((event) => event.scope_category),
+        ['start', 'end'],
+      );
+      assert.ok(lifecycle.every((event) => event.category_profile.tool_call_id === 'typed-node-call-123'));
+    } finally {
+      deregisterSubscriber('typed_node_tool_call_id_sub');
+    }
+  });
+
   it('preserves falsy metadata/model options and uses non-null request data', async () => {
     const events = [];
     registerSubscriber('typed_node_falsy_opts', (event) => events.push(event));

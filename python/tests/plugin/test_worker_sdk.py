@@ -25,15 +25,19 @@ grpc = pytest.importorskip("grpc")
 
 from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
+    DataSchema,
     DiagnosticLevel,
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
     LlmSanitizeRequestContext,
     LlmSanitizeResponseContext,
+    LogSeverity,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
+    RuntimeDiagnostic,
+    RuntimeDiagnostics,
     ScopeType,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
@@ -182,6 +186,8 @@ def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks():
             "category_profile": {"subtype": "checkpoint", "nested": {"ok": True}},
             "data": False,
             "metadata": 0,
+            "data_schema": None,
+            "severity": None,
         }
     ]
 
@@ -202,6 +208,8 @@ def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fi
             "category_profile": None,
             "data": None,
             "metadata": None,
+            "data_schema": None,
+            "severity": None,
         }
     ]
 
@@ -272,6 +280,31 @@ def test_optimization_contribution_omitted_applied_defaults_consistently():
     assert decoded.applied is False
     assert direct.to_json()["applied"] is False
     assert decoded.to_json()["applied"] is False
+
+
+def test_pending_mark_spec_serializes_telemetry_fields():
+    mark = PendingMarkSpec(
+        "worker.telemetry",
+        data={"measurements": []},
+        data_schema={"name": "nemo.relay.metric_measurements", "version": "1"},
+        severity="warning",
+    )
+
+    assert mark.to_json() == {
+        "name": "worker.telemetry",
+        "category": None,
+        "category_profile": None,
+        "data": {"measurements": []},
+        "data_schema": {
+            "name": "nemo.relay.metric_measurements",
+            "version": "1",
+        },
+        "metadata": None,
+        "severity": "warn",
+    }
+
+    with pytest.raises(ValueError, match="invalid log severity"):
+        PendingMarkSpec("worker.invalid", severity="fatal").to_json()
 
 
 def test_optimization_contribution_preserves_future_quality_strings():
@@ -351,6 +384,15 @@ class RecordingHostStub:
     async def EmitMark(self, request: Any) -> Any:
         self.requests.append(request)
         return self._host_ack("EmitMark")
+
+    async def GetRuntimeDiagnostics(self, request: Any) -> Any:
+        self.requests.append(request)
+        return pb.GetRuntimeDiagnosticsResponse(
+            entries=[
+                pb.RuntimeDiagnostic(code="alpha", message="first", count=1),
+                pb.RuntimeDiagnostic(code="zeta", message="latest", count=3),
+            ]
+        )
 
     async def CreateScopeStack(self, request: Any) -> Any:
         self.requests.append(request)
@@ -490,6 +532,9 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def subscriber(event: Json) -> None:
             await ctx.runtime.emit_mark("tests.subscriber", event)
 
+        async def event_metadata(event: Json) -> dict[str, Json]:
+            return {"worker.event_name": event["name"]}
+
         async def mark_sanitize(event: Json, fields: Json) -> Json:
             return {**fields, "data": {"sanitized": f"mark:{event['name']}"}, "metadata": None}
 
@@ -547,6 +592,7 @@ class AllSurfacesPlugin(WorkerPlugin):
                 yield _tag(chunk, "llm_stream_execution")
 
         ctx.register_subscriber("subscriber", subscriber)
+        ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
         ctx.register_scope_sanitize_end_guardrail("scope_end_sanitize", scope_end_sanitize, priority=3)
@@ -590,6 +636,7 @@ def test_generated_proto_matches_worker_contract():
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["activation_id"].number == 1
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
     assert pb.SUBSCRIBER == 1
+    assert pb.EVENT_METADATA_INJECTOR == 2
     assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
@@ -598,6 +645,9 @@ def test_generated_proto_matches_worker_contract():
     assert pb.CUSTOM == 10
 
     host_runtime = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"]
+    diagnostics = host_runtime.methods_by_name["GetRuntimeDiagnostics"]
+    assert diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
+    assert diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
     tool_next = host_runtime.methods_by_name["ToolNext"]
     assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
     tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
@@ -650,6 +700,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     ]
     assert registrations == [
         ("subscriber", pb.SUBSCRIBER, 0, False),
+        ("event_metadata", pb.EVENT_METADATA_INJECTOR, 1, False),
         ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
         ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
         ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
@@ -1401,6 +1452,18 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
 
             ctx.register_tool_request_intercept("fail", fail)
 
+    class FailingEventMetadataPlugin(WorkerPlugin):
+        plugin_id = "tests.failing_event_metadata"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def fail(event: Json) -> dict[str, Json]:
+                del event
+                raise RuntimeError("event metadata boom")
+
+            ctx.register_event_metadata_injector("fail", fail)
+
     validate_service = _service(FailingValidatePlugin(), RecordingHostStub())
     validate = await validate_service.Validate(
         _validate_request(plugin_id="tests.failing_validate"),
@@ -1422,6 +1485,19 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
     response = await invoke_service.Invoke(_tool_request("fail", pb.TOOL_REQUEST_INTERCEPT, {}), AbortContext())
     assert response.WhichOneof("result") == "error"
     assert "invoke boom" in response.error.message
+
+    event_service = _service(FailingEventMetadataPlugin(), RecordingHostStub())
+    await _register(event_service, plugin_id="tests.failing_event_metadata")
+    event_response = await event_service.Invoke(
+        _invoke_request(
+            "fail",
+            pb.EVENT_METADATA_INJECTOR,
+            event=_json_envelope(EVENT_SCHEMA, {"name": "event"}),
+        ),
+        AbortContext(),
+    )
+    assert event_response.WhichOneof("result") == "error"
+    assert "event metadata boom" in event_response.error.message
 
 
 async def test_register_is_idempotent_and_rejects_changed_component_config():
@@ -1551,6 +1627,17 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert mark_request.scope.scope_stack_id == "invoke-stack"
     assert mark_request.scope.parent_scope_id == "parent-scope"
 
+    event_metadata = await service.Invoke(
+        _invoke_request(
+            "event_metadata",
+            pb.EVENT_METADATA_INJECTOR,
+            event=_json_envelope(EVENT_SCHEMA, {"name": "metadata-event"}),
+        ),
+        AbortContext(),
+    )
+    assert event_metadata.WhichOneof("result") == "json"
+    assert _envelope_value(event_metadata.json.value) == {"worker.event_name": "metadata-event"}
+
     tool_sanitize_request = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL)
     assert tool_sanitize_request["tag"] == "sanitize_lookup"
     tool_sanitize_response = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL)
@@ -1617,7 +1704,9 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
             "category": None,
             "category_profile": None,
             "data": {"source": "python"},
+            "data_schema": None,
             "metadata": None,
+            "severity": None,
         }
     ]
 
@@ -2077,6 +2166,15 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     assert runtime.current_scope_stack_id() is None
     assert runtime.current_parent_scope_id() is None
 
+    diagnostics = await runtime.runtime_diagnostics()
+    assert isinstance(diagnostics, RuntimeDiagnostics)
+    assert diagnostics.entries == (
+        RuntimeDiagnostic(code="alpha", message="first", count=1),
+        RuntimeDiagnostic(code="zeta", message="latest", count=3),
+    )
+    assert diagnostics.get("zeta") == RuntimeDiagnostic(code="zeta", message="latest", count=3)
+    assert diagnostics.get("missing") is None
+
     stack_id = await runtime.create_scope_stack()
     assert stack_id == "stack-1"
     with runtime.bind_scope_stack(stack_id, parent_scope_id="parent-1"):
@@ -2099,6 +2197,23 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     assert llm_next["next_llm"]["content"]["prompt"] == "hello"
     assert stream_next[0]["next_stream"]["content"]["prompt"] == "hello"
 
+    await runtime.emit_mark(
+        "telemetry-options",
+        {"measurements": []},
+        data_schema=DataSchema("nemo.relay.metric_measurements", "1"),
+        severity=LogSeverity.WARNING,
+    )
+    await runtime.emit_metric(
+        "telemetry-metric",
+        [
+            {
+                "name": "example.tokens.saved",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 42,
+            }
+        ],
+    )
     await runtime.emit_mark("explicit", scope_stack_id="explicit-stack", parent_scope_id="explicit-parent")
     await runtime.drop_scope_stack(stack_id)
     mark_request = _last_request(host_stub, pb.EmitMarkRequest)
@@ -2107,6 +2222,28 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     push_request = _last_request(host_stub, pb.PushScopeRequest)
     assert push_request.scope.scope_stack_id == "stack-1"
     assert push_request.scope.parent_scope_id == "parent-1"
+
+    telemetry_mark = next(
+        request
+        for request in host_stub.requests
+        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-options"
+    )
+    assert telemetry_mark.data_schema.schema == "nemo.relay.DataSchema@1"
+    assert json.loads(telemetry_mark.data_schema.json) == {
+        "name": "nemo.relay.metric_measurements",
+        "version": "1",
+    }
+    assert telemetry_mark.severity == "warn"
+    metric_mark = next(
+        request
+        for request in host_stub.requests
+        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-metric"
+    )
+    assert json.loads(metric_mark.data.json)["measurements"][0]["value"] == 42
+    assert json.loads(metric_mark.data_schema.json) == {
+        "name": "nemo.relay.metric_measurements",
+        "version": "1",
+    }
 
     override_mark = next(
         request
@@ -2131,6 +2268,12 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("empty-stack", scope_stack_id="")
     with pytest.raises(WorkerSdkError, match="parent_scope_id must not be empty"):
         await runtime.emit_mark("empty-parent", scope_stack_id="stack", parent_scope_id="")
+    with pytest.raises(ValueError, match="invalid log severity"):
+        await runtime.emit_mark("invalid-severity", severity="fatal")
+    with pytest.raises(ValueError, match="exactly name and version"):
+        await runtime.emit_mark("invalid-schema", data_schema={"name": "schema"})
+    with pytest.raises(TypeError, match="measurements must contain mappings"):
+        await runtime.emit_metric("invalid-metric", cast(Any, [42]))
 
 
 async def test_invocation_scope_context_is_isolated_across_concurrent_requests(host_stub: RecordingHostStub):
@@ -2208,6 +2351,24 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
     host_stub.failures["EmitMark"] = "empty"
     with pytest.raises(WorkerSdkError, match="host call failed"):
         await runtime.emit_mark("mark")
+
+    class UnimplementedRuntimeDiagnosticsError(Exception):
+        def code(self) -> grpc.StatusCode:
+            return grpc.StatusCode.UNIMPLEMENTED
+
+    class OldHostStub:
+        async def GetRuntimeDiagnostics(self, request: Any) -> Any:
+            del request
+            raise UnimplementedRuntimeDiagnosticsError()
+
+    with mock.patch.object(grpc.aio, "AioRpcError", UnimplementedRuntimeDiagnosticsError):
+        old_host_runtime = PluginRuntime(
+            activation_id=ACTIVATION_ID,
+            auth_token=AUTH_TOKEN,
+            host_stub=OldHostStub(),
+        )
+        with pytest.raises(WorkerSdkError, match="grpc-v1 diagnostics extension"):
+            await old_host_runtime.runtime_diagnostics()
 
     host_stub.failures["CreateScopeStack"] = "error"
     with pytest.raises(WorkerSdkError, match="CreateScopeStack failed"):
@@ -3043,6 +3204,7 @@ def _llm_stream_next(runtime: PluginRuntime, request: Json) -> AsyncIterator[Jso
 def _all_expected_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
+        pb.EVENT_METADATA_INJECTOR,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

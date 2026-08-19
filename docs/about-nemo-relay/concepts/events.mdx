@@ -68,8 +68,10 @@ Every event carries a shared envelope:
 
 Scope events add `scope_category`, `category`, `attributes`, and optional
 `category_profile`. Mark events can optionally carry `category` and
-`category_profile`, though the current public mark helpers emit generic marks
-without those optional category fields.
+`category_profile`. Generic mark helpers also accept an optional `data_schema`
+and log `severity`. Relay stores typed severity in sanitizer-visible metadata
+under `nemo_relay.log.severity`; that Relay convention does not add a field to
+the ATOF `0.1` envelope.
 
 Runtime helpers assign timestamps automatically by default. Manual lifecycle
 helpers for scopes, marks, tool calls, and LLM calls also accept an explicit
@@ -325,7 +327,12 @@ Exporters handle the mark as follows:
 - ATIF omits marks because it models trajectory steps rather than independent
   point-in-time events.
 - The `full` and `openinference` OpenTelemetry projections use their fixed
-  native mark handling. The `gen_ai` projection omits marks.
+  native handling for non-metric marks. The `gen_ai` projection omits marks.
+- The independent OTLP log pipeline exports sanitized non-metric marks. The
+  independent metric pipeline exclusively consumes valid marks with the
+  Relay-owned `nemo.relay.metric_measurements` schema. Invalid reserved metric
+  marks reach no OTLP signal and produce an operational diagnostic. This
+  routing does not define an ATOF-wide metric semantic.
 
 ## How Events Are Produced
 
@@ -336,5 +343,5 @@ the runtime record important state transitions even when there is no full nested
 callback to wrap. Subscriber delivery is downstream from event construction and
 does not block the emitting call on native bindings.
 
-ATOF export writes the raw ATOF event stream. ATIF and the typed
-OpenTelemetry formats are downstream projections over the same events.
+ATOF export writes the raw ATOF event stream. ATIF and OpenTelemetry traces,
+logs, and metrics are downstream projections over the same events.

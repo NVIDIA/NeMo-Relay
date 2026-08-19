@@ -1917,6 +1917,8 @@ describe('LLM intercepts', () => {
             name: 'request.first',
             categoryProfile: { subtype: 'optimizer.saved_tokens' },
             data: { order: 1 },
+            dataSchema: { name: 'example.pending', version: '1' },
+            severity: 'info',
           },
           { name: 'request.second', metadata: { source: 'node' } },
         ],
@@ -1933,14 +1935,18 @@ describe('LLM intercepts', () => {
         category: null,
         categoryProfile: { subtype: 'optimizer.saved_tokens' },
         data: { order: 1 },
+        dataSchema: { name: 'example.pending', version: '1' },
         metadata: null,
+        severity: 'info',
       },
       {
         name: 'request.second',
         category: null,
         categoryProfile: null,
         data: null,
+        dataSchema: null,
         metadata: { source: 'node' },
+        severity: null,
       },
     ]);
     assert.deepEqual(result.optimizationContributions, [contributionFixture]);

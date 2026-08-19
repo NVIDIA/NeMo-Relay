@@ -121,6 +121,10 @@ fn async_sdk_status_helpers_keep_operation_labels_stable() {
             NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd,
             "scope end sanitizer",
         ),
+        (
+            NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector,
+            "Event metadata injector",
+        ),
     ];
     for (kind, expected) in labels {
         assert_eq!(registration_operation(kind), expected);

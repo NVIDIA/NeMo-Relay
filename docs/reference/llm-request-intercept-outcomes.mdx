@@ -22,8 +22,9 @@ A canonical outcome serialization looks like this:
 `request` is required. `annotated_request` defaults to `null` when omitted on
 input, and `pending_marks` defaults to an empty list. Canonical serialization
 includes all three fields. A pending mark only contains `name`, optional
-`category` and `category_profile`, and optional `data` and `metadata`. Relay
-owns event UUIDs, parent UUIDs, and timestamps.
+`category` and `category_profile`, and optional `data`, `data_schema`,
+`metadata`, and typed log `severity`. Relay owns event UUIDs, parent UUIDs, and
+timestamps.
 
 ## Request Authority
 

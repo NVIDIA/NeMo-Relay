@@ -4,8 +4,8 @@
 use pyo3::prelude::*;
 
 use super::{
-    MarkEvent, PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyAny, PyResult, Python, ScopeEvent,
-    json_to_py, opt_json_to_py,
+    MarkEvent, PyAnnotatedLLMRequest, PyAnnotatedLLMResponse, PyAny, PyLogSeverity, PyResult,
+    Python, ScopeEvent, json_to_py, opt_json_to_py,
 };
 
 #[pyclass(name = "ScopeEvent", skip_from_py_object)]
@@ -196,6 +196,19 @@ impl PyMarkEvent {
     #[getter]
     pub(crate) fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         opt_json_to_py(py, &self.inner.base.metadata)
+    }
+
+    #[getter]
+    pub(crate) fn severity(&self) -> Option<PyLogSeverity> {
+        self.inner
+            .base
+            .metadata
+            .as_ref()?
+            .get(nemo_relay::api::event::LOG_SEVERITY_METADATA_KEY)?
+            .as_str()?
+            .parse::<nemo_relay::api::event::LogSeverity>()
+            .ok()
+            .map(Into::into)
     }
 
     /// Return this event as the canonical subscriber JSON dictionary.

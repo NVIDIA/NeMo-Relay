@@ -12,7 +12,10 @@ use super::{
     ScopeAttributes, ScopeHandle, ScopeStackHandle, ToolAttributes, ToolHandle, json_to_py,
     opt_json_to_py, py_to_json,
 };
-use nemo_relay::api::event::{CategoryProfile, EventCategory, PendingMarkSpec};
+use nemo_relay::api::event::{
+    CategoryProfile, DataSchema, EventCategory, LogSeverity, MetricKind, MetricMeasurement,
+    MetricValueType, PendingMarkSpec,
+};
 use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 use nemo_relay::api::runtime::{
@@ -798,6 +801,194 @@ impl PyLLMRequest {
     }
 }
 
+/// Severity attached to a mark projected as an OpenTelemetry log.
+#[pyclass(name = "LogSeverity", eq, eq_int, from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub enum PyLogSeverity {
+    Trace = 0,
+    Debug = 1,
+    Info = 2,
+    Warn = 3,
+    Error = 4,
+}
+
+impl From<PyLogSeverity> for LogSeverity {
+    fn from(value: PyLogSeverity) -> Self {
+        match value {
+            PyLogSeverity::Trace => Self::Trace,
+            PyLogSeverity::Debug => Self::Debug,
+            PyLogSeverity::Info => Self::Info,
+            PyLogSeverity::Warn => Self::Warn,
+            PyLogSeverity::Error => Self::Error,
+        }
+    }
+}
+
+impl From<LogSeverity> for PyLogSeverity {
+    fn from(value: LogSeverity) -> Self {
+        match value {
+            LogSeverity::Trace => Self::Trace,
+            LogSeverity::Debug => Self::Debug,
+            LogSeverity::Info => Self::Info,
+            LogSeverity::Warn => Self::Warn,
+            LogSeverity::Error => Self::Error,
+        }
+    }
+}
+
+/// OpenTelemetry instrument kind recorded by a metric mark.
+#[pyclass(name = "MetricKind", eq, eq_int, from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub enum PyMetricKind {
+    Counter = 0,
+    UpDownCounter = 1,
+    Gauge = 2,
+    Histogram = 3,
+}
+
+impl From<PyMetricKind> for MetricKind {
+    fn from(value: PyMetricKind) -> Self {
+        match value {
+            PyMetricKind::Counter => Self::Counter,
+            PyMetricKind::UpDownCounter => Self::UpDownCounter,
+            PyMetricKind::Gauge => Self::Gauge,
+            PyMetricKind::Histogram => Self::Histogram,
+        }
+    }
+}
+
+impl From<MetricKind> for PyMetricKind {
+    fn from(value: MetricKind) -> Self {
+        match value {
+            MetricKind::Counter => Self::Counter,
+            MetricKind::UpDownCounter => Self::UpDownCounter,
+            MetricKind::Gauge => Self::Gauge,
+            MetricKind::Histogram => Self::Histogram,
+        }
+    }
+}
+
+/// Numeric representation used by a metric measurement.
+#[pyclass(name = "MetricValueType", eq, eq_int, from_py_object)]
+#[derive(Clone, Copy, PartialEq)]
+pub enum PyMetricValueType {
+    U64 = 0,
+    I64 = 1,
+    F64 = 2,
+}
+
+impl From<PyMetricValueType> for MetricValueType {
+    fn from(value: PyMetricValueType) -> Self {
+        match value {
+            PyMetricValueType::U64 => Self::U64,
+            PyMetricValueType::I64 => Self::I64,
+            PyMetricValueType::F64 => Self::F64,
+        }
+    }
+}
+
+impl From<MetricValueType> for PyMetricValueType {
+    fn from(value: MetricValueType) -> Self {
+        match value {
+            MetricValueType::U64 => Self::U64,
+            MetricValueType::I64 => Self::I64,
+            MetricValueType::F64 => Self::F64,
+        }
+    }
+}
+
+/// One typed recording operation emitted by ``scope.metric``.
+#[pyclass(name = "MetricMeasurement", from_py_object)]
+#[derive(Clone)]
+pub struct PyMetricMeasurement {
+    pub(crate) inner: MetricMeasurement,
+}
+
+#[pymethods]
+impl PyMetricMeasurement {
+    #[new]
+    #[pyo3(signature = (name, kind, value_type, value, unit=None, description=None, attributes=None, boundaries=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        name: String,
+        kind: PyMetricKind,
+        value_type: PyMetricValueType,
+        value: &Bound<'_, PyAny>,
+        unit: Option<String>,
+        description: Option<String>,
+        attributes: Option<&Bound<'_, PyAny>>,
+        boundaries: Option<Vec<f64>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: MetricMeasurement {
+                name,
+                kind: kind.into(),
+                value_type: value_type.into(),
+                value: py_to_json(value)?,
+                unit,
+                description,
+                attributes: attributes.map(py_to_json).transpose()?,
+                boundaries,
+            },
+        })
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    #[getter]
+    fn kind(&self) -> PyMetricKind {
+        self.inner.kind.into()
+    }
+
+    #[getter]
+    fn value_type(&self) -> PyMetricValueType {
+        self.inner.value_type.into()
+    }
+
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_py(py, &self.inner.value)
+    }
+
+    #[getter]
+    fn unit(&self) -> Option<&str> {
+        self.inner.unit.as_deref()
+    }
+
+    #[getter]
+    fn description(&self) -> Option<&str> {
+        self.inner.description.as_deref()
+    }
+
+    #[getter]
+    fn attributes(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        opt_json_to_py(py, &self.inner.attributes)
+    }
+
+    #[getter]
+    fn boundaries(&self) -> Option<Vec<f64>> {
+        self.inner.boundaries.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<MetricMeasurement name={:?} kind={} value_type={}>",
+            self.inner.name, self.inner.kind, self.inner.value_type
+        )
+    }
+}
+
+fn parse_data_schema(value: &Bound<'_, PyAny>) -> PyResult<DataSchema> {
+    serde_json::from_value(py_to_json(value)?).map_err(|error| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "data_schema must contain string name and version fields: {error}"
+        ))
+    })
+}
+
 /// A mark to emit immediately after the managed LLM start event.
 #[pyclass(name = "PendingMarkSpec", from_py_object)]
 #[derive(Clone)]
@@ -808,13 +999,16 @@ pub struct PyPendingMarkSpec {
 #[pymethods]
 impl PyPendingMarkSpec {
     #[new]
-    #[pyo3(signature = (name, category=None, category_profile=None, data=None, metadata=None))]
+    #[pyo3(signature = (name, category=None, category_profile=None, data=None, metadata=None, data_schema=None, severity=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         name: String,
         category: Option<String>,
         category_profile: Option<&Bound<'_, PyAny>>,
         data: Option<&Bound<'_, PyAny>>,
         metadata: Option<&Bound<'_, PyAny>>,
+        data_schema: Option<&Bound<'_, PyAny>>,
+        severity: Option<PyLogSeverity>,
     ) -> PyResult<Self> {
         let category = category
             .map(|value| serde_json::from_value::<EventCategory>(serde_json::Value::String(value)))
@@ -832,9 +1026,9 @@ impl PyPendingMarkSpec {
                 category,
                 category_profile,
                 data: data.map(py_to_json).transpose()?,
-                data_schema: None,
+                data_schema: data_schema.map(parse_data_schema).transpose()?,
                 metadata: metadata.map(py_to_json).transpose()?,
-                severity: None,
+                severity: severity.map(Into::into),
             },
         })
     }
@@ -873,8 +1067,25 @@ impl PyPendingMarkSpec {
     }
 
     #[getter]
+    fn data_schema(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let value = self
+            .inner
+            .data_schema
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+        opt_json_to_py(py, &value)
+    }
+
+    #[getter]
     fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         opt_json_to_py(py, &self.inner.metadata)
+    }
+
+    #[getter]
+    fn severity(&self) -> Option<PyLogSeverity> {
+        self.inner.severity.map(Into::into)
     }
 }
 

@@ -293,6 +293,20 @@ async fn sdk_cdylib_registers_tool_request_intercept() {
             .unwrap()["native_plugin_mark"],
         true
     );
+    let metric = find_event(&first_events, "fixture.native.metric", None);
+    assert_eq!(
+        metric.data_schema().expect("native metric schema").name,
+        "nemo.relay.metric_measurements"
+    );
+    assert_eq!(
+        metric.data_schema().expect("native metric schema").version,
+        "1"
+    );
+    let measurement = &metric.data().unwrap()["measurements"][0];
+    assert_eq!(measurement["name"], "fixture.native.count");
+    assert_eq!(measurement["kind"], "counter");
+    assert_eq!(measurement["value_type"], "u64");
+    assert_eq!(measurement["value"], 1);
     assert_parent(
         &first_events,
         "fixture.native.scope",
@@ -1132,6 +1146,48 @@ fn native_loader_resolves_manifest_directory_and_relative_library_paths() {
 }
 
 #[test]
+fn native_loader_falls_back_to_abi_v3_plugins() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest_text(ManifestOptions {
+        manifest_dir: fixture.manifest_dir.path(),
+        plugin_id: "fixture_native_v3",
+        relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+        library: &fixture.library_path.to_string_lossy(),
+        symbol: "nemo_relay_fixture_native_plugin_v3",
+        integrity: None,
+    });
+
+    let activation = load_native_plugins([load_spec("fixture_native_v3", &manifest_ref)])
+        .expect("ABI-v3 fixture should load through compatibility fallback");
+    activation.clear();
+}
+
+#[test]
+fn native_loader_supports_current_v4_and_legacy_v2_plugins() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
+    let fixture = build_fixture_plugin();
+
+    for (plugin_id, symbol) in [
+        ("fixture_native_v4", "nemo_relay_fixture_native_plugin_v4"),
+        ("fixture_native_v2", "nemo_relay_fixture_native_plugin_v2"),
+    ] {
+        let manifest_ref = write_manifest_text(ManifestOptions {
+            manifest_dir: fixture.manifest_dir.path(),
+            plugin_id,
+            relay: &format!("={}", env!("CARGO_PKG_VERSION")),
+            library: &fixture.library_path.to_string_lossy(),
+            symbol,
+            integrity: None,
+        });
+
+        let activation = load_native_plugins([load_spec(plugin_id, &manifest_ref)])
+            .unwrap_or_else(|error| panic!("ABI compatibility fixture should load: {error}"));
+        activation.clear();
+    }
+}
+
+#[test]
 fn native_loader_rolls_back_partially_loaded_plugins() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_plugin();
@@ -1461,6 +1517,110 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
         .await
         .expect("cleared intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
+}
+
+#[tokio::test]
+async fn native_event_metadata_injector_enriches_events_and_is_removed_on_clear() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let mut spec = host_spec("fixture_native", &manifest_ref);
+    spec.config = Map::from_iter([("event_metadata_injector_only".into(), json!(true))]);
+    let (activation, report) = PluginHostActivation::activate(PluginConfig::default(), [spec])
+        .await
+        .expect("native plugin host should activate");
+    assert!(!report.has_errors());
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "native_event_metadata_injector_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-native-before-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("injected mark should flush");
+    let injected = find_event(
+        &events.lock().unwrap(),
+        "external-plugin-event-metadata-injection-native-before-clear",
+        None,
+    )
+    .clone();
+    assert_eq!(injected.metadata().unwrap()["existing"], true);
+    assert_eq!(
+        injected.metadata().unwrap()["external.injector.transport"],
+        "native_dynamic_rust"
+    );
+
+    activation.clear().expect("native plugin host should clear");
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-native-after-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("post-clear mark should emit");
+    flush_subscribers().expect("post-clear mark should flush");
+    let events = events.lock().unwrap();
+    let after_clear = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-native-after-clear",
+        None,
+    );
+    assert_eq!(after_clear.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+}
+
+#[tokio::test]
+async fn native_event_metadata_injector_error_preserves_event_delivery() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let mut spec = host_spec("fixture_native", &manifest_ref);
+    spec.config = Map::from_iter([
+        ("event_metadata_injector_only".into(), json!(true)),
+        ("event_metadata_injector_error".into(), json!(true)),
+    ]);
+    let (activation, _) = PluginHostActivation::activate(PluginConfig::default(), [spec])
+        .await
+        .expect("native plugin host should activate");
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "native_event_metadata_injector_error_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-native-error")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("failed injector must not block delivery");
+    let events = events.lock().unwrap();
+    let delivered = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-native-error",
+        None,
+    );
+    assert_eq!(delivered.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+    activation.clear().expect("native plugin host should clear");
 }
 
 #[tokio::test]

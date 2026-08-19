@@ -325,6 +325,11 @@ fn assert_trace_endpoint_editor_schema(otlp: &EditorSchema) {
             .kind,
         EditorFieldKind::StringMap
     );
+    let promote_metadata_prefixes = otlp_endpoint_schema
+        .field("promote_metadata_prefixes")
+        .expect("OTLP endpoint promote_metadata_prefixes");
+    assert_eq!(promote_metadata_prefixes.kind, EditorFieldKind::List);
+    assert!(promote_metadata_prefixes.optional);
     for field in [
         "max_queue_size",
         "max_export_batch_size",
@@ -770,6 +775,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
+            promote_metadata_prefixes: Vec::new(),
         }],
         logs: None,
         metrics: None,
@@ -956,6 +962,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             mark_projection: MarkProjection::default(),
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
+            promote_metadata_prefixes: Vec::new(),
         },
     )
     .unwrap();
@@ -983,6 +990,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         mark_projection: MarkProjection::default(),
         mark_exclude_names: default_mark_exclude_names(),
         attribute_mappings: Vec::new(),
+        promote_metadata_prefixes: Vec::new(),
     }
 }
 
@@ -1343,6 +1351,7 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
                 "mark_projection": "tool",
                 "mark_exclude_names": ["notification"],
                 "attribute_mappings": [{"key": "nemo_relay.model_name", "alias": "model.alias"}],
+                "promote_metadata_prefixes": ["nv."],
                 "max_queue_size": 4096,
                 "max_export_batch_size": 256,
                 "scheduled_delay_millis": 750,
@@ -1371,6 +1380,7 @@ fn opentelemetry_endpoint_accepts_legacy_projection_controls_and_rejects_unknown
             Some("endpoints[0].mark_projection")
                 | Some("endpoints[0].mark_exclude_names")
                 | Some("endpoints[0].attribute_mappings")
+                | Some("endpoints[0].promote_metadata_prefixes")
                 | Some("endpoints[0].max_queue_size")
                 | Some("endpoints[0].max_export_batch_size")
                 | Some("endpoints[0].scheduled_delay_millis")
@@ -1448,6 +1458,27 @@ fn opentelemetry_endpoint_accepts_valid_attribute_mappings() {
         "valid attribute mapping produced diagnostics: {:?}",
         report.diagnostics
     );
+}
+
+#[test]
+fn opentelemetry_endpoint_rejects_glob_metadata_promotion_prefix() {
+    let report = validate_plugin_config(&plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://localhost:4318/v1/traces",
+                "promote_metadata_prefixes": ["nv.*"]
+            }]
+        }
+    })));
+
+    assert!(report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "observability.unsupported_value"
+            && diagnostic.field.as_deref() == Some("endpoints[0].promote_metadata_prefixes")
+            && diagnostic.message.contains("literal prefix, not a glob")
+    }));
 }
 
 #[test]

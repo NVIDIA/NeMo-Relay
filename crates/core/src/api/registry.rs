@@ -5,9 +5,9 @@
 //! intercepts, and subscribers.
 
 use crate::api::runtime::{
-    EventSanitizeFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
-    LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
-    ToolInterceptFn, ToolSanitizeFn,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmConditionalFn, LlmExecutionFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
@@ -73,6 +73,9 @@ impl<F> RequestIntercept<F> {
 
 /// A priority-ordered guardrail registration record.
 pub(crate) type Guardrail<F> = RegistryRecord<F>;
+
+/// A priority-ordered Event metadata injector registration record.
+pub(crate) type EventMetadataInjector = RegistryRecord<EventMetadataInjectorFn>;
 
 /// A priority-ordered request intercept registration record.
 pub(crate) type Intercept<F> = RegistryRecord<RequestIntercept<F>>;
@@ -476,6 +479,36 @@ global_guardrail_registry_api!(
     EventSanitizeFn
 );
 
+/// Register a global Event metadata injector.
+///
+/// Injectors run in ascending priority order on every Event before Event
+/// sanitizers. Returned metadata is insert-only.
+pub fn register_event_metadata_injector(
+    name: &str,
+    priority: i32,
+    injector: EventMetadataInjectorFn,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let mut state = context
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    state
+        .event_metadata_injectors
+        .register(EventMetadataInjector::new(name, priority, injector))
+        .map_err(FlowError::AlreadyExists)
+}
+
+/// Deregister a global Event metadata injector.
+pub fn deregister_event_metadata_injector(name: &str) -> Result<bool> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let mut state = context
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    Ok(state.event_metadata_injectors.deregister(name))
+}
+
 global_guardrail_registry_api!(
     /// Register a global scope-start event sanitizer.
     register_scope_sanitize_start_guardrail,
@@ -614,6 +647,39 @@ scope_guardrail_registry_api!(
     mark_sanitize_guardrails,
     EventSanitizeFn
 );
+
+/// Register an Event metadata injector owned by an active scope.
+pub fn scope_register_event_metadata_injector(
+    scope_uuid: &uuid::Uuid,
+    name: &str,
+    priority: i32,
+    injector: EventMetadataInjectorFn,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
+    let registries = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
+    registries
+        .event_metadata_injectors
+        .register(EventMetadataInjector::new(name, priority, injector))
+        .map_err(FlowError::AlreadyExists)
+}
+
+/// Deregister an Event metadata injector owned by an active scope.
+pub fn scope_deregister_event_metadata_injector(
+    scope_uuid: &uuid::Uuid,
+    name: &str,
+) -> Result<bool> {
+    ensure_runtime_owner()?;
+    let scope_stack = current_scope_stack();
+    let mut guard = scope_stack.write().expect("scope stack lock poisoned");
+    let registries = guard
+        .local_registries_mut(scope_uuid)
+        .ok_or_else(|| FlowError::NotFound(format!("scope {scope_uuid} not found")))?;
+    Ok(registries.event_metadata_injectors.deregister(name))
+}
 scope_guardrail_registry_api!(
     /// Register a scope-local scope-start event sanitizer.
     scope_register_scope_sanitize_start_guardrail,

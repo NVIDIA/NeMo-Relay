@@ -229,6 +229,27 @@ class TestToolsAsync:
         )
         assert result.result["key"] == "value"
 
+    async def test_execute_propagates_tool_call_id_to_lifecycle(self, subscribed_events: list[Event]):
+        result = await tools.execute(
+            "managed_tool_call_id",
+            {"value": 1},
+            lambda args: ToolExecutionResult(args),
+            tool_call_id="managed-call-123",
+        )
+        assert result.result == {"value": 1}
+
+        await subscribers.flush_async()
+        lifecycle = [
+            event
+            for event in subscribed_events
+            if isinstance(event, ScopeEvent) and event.name == "managed_tool_call_id"
+        ]
+        assert [event.scope_category for event in lifecycle] == ["start", "end"]
+        assert all(
+            event.category_profile is not None and event.category_profile.get("tool_call_id") == "managed-call-123"
+            for event in lifecycle
+        )
+
     async def test_execute_failure_emits_end_event(self):
         events = []
         subscribers.register("py_tool_exec_failure_sub", lambda e: events.append(e))
@@ -237,7 +258,12 @@ class TestToolsAsync:
             raise ValueError("boom")
 
         with pytest.raises(RuntimeError, match="boom"):
-            await tools.execute("failing_tool", {"x": 1}, failing)
+            await tools.execute(
+                "failing_tool",
+                {"x": 1},
+                failing,
+                tool_call_id="managed-failure-123",
+            )
 
         try:
             await subscribers.flush_async()
@@ -248,6 +274,10 @@ class TestToolsAsync:
         assert all(isinstance(event, ScopeEvent) for event in events)
         assert [e.scope_category for e in events] == ["start", "end"]
         assert all(e.category == "tool" for e in events)
+        assert all(
+            event.category_profile is not None and event.category_profile.get("tool_call_id") == "managed-failure-123"
+            for event in events
+        )
         assert events[0].uuid == events[1].uuid
         assert events[1].data is None
         assert events[1].metadata["error.type"] == "internal_error"
@@ -593,7 +623,14 @@ class TestToolInterceptsAsync:
         intercepts.register_tool_execution("py_tool_cancel_intercept", 1, middleware)
         subscribers.register("py_tool_cancel_events", events.append)
         try:
-            execution = asyncio.ensure_future(tools.execute("cancel_tool", {"ok": True}, provider))
+            execution = asyncio.ensure_future(
+                tools.execute(
+                    "cancel_tool",
+                    {"ok": True},
+                    provider,
+                    tool_call_id="managed-cancel-123",
+                )
+            )
             await asyncio.wait_for(started.wait(), timeout=1)
             execution.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -606,10 +643,12 @@ class TestToolInterceptsAsync:
             subscribers.deregister("py_tool_cancel_events")
 
         assert provider_calls == []
-        lifecycle = [
-            event.scope_category for event in events if isinstance(event, ScopeEvent) and event.name == "cancel_tool"
-        ]
-        assert lifecycle == ["start", "end"]
+        lifecycle = [event for event in events if isinstance(event, ScopeEvent) and event.name == "cancel_tool"]
+        assert [event.scope_category for event in lifecycle] == ["start", "end"]
+        assert all(
+            event.category_profile is not None and event.category_profile.get("tool_call_id") == "managed-cancel-123"
+            for event in lifecycle
+        )
 
     async def test_sync_middleware_preserves_async_caller_context(self):
         request_id = contextvars.ContextVar("tool_middleware_request_id", default="registration")

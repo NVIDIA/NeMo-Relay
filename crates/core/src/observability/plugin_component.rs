@@ -70,7 +70,7 @@ use crate::observability::otel_signal::{
 };
 use crate::observability::{
     MarkProjection, OpenTelemetryType, OtlpAttributeMapping, default_mark_exclude_names,
-    validate_attribute_mappings,
+    validate_attribute_mappings, validate_metadata_promotion_prefixes,
 };
 use crate::plugin::{
     ATIF_RUNTIME_DELIVERY_FAILURE_MARKER, ConfigDiagnostic, ConfigPolicy, DiagnosticLevel,
@@ -323,6 +323,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Projected attributes copied to aliases.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attribute_mappings: Vec<OtlpAttributeMapping>,
+    /// Literal Event metadata prefixes copied to top-level OTLP attributes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub promote_metadata_prefixes: Vec<String>,
     /// OTLP transport: `http_binary` or `grpc`.
     #[serde(default = "default_otlp_transport")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "otlp_transport_schema"))]
@@ -731,6 +734,12 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                 ),
                 otel_editor_field("mark_exclude_names", EditorFieldKind::Json, &[], false),
                 otel_editor_field("attribute_mappings", EditorFieldKind::List, &[], false),
+                otel_editor_field(
+                    "promote_metadata_prefixes",
+                    EditorFieldKind::List,
+                    &[],
+                    true,
+                ),
                 otel_editor_field(
                     "transport",
                     EditorFieldKind::Enum,
@@ -2954,7 +2963,8 @@ fn build_otel_config(
         .with_instrumentation_scope(section.instrumentation_scope)
         .with_mark_projection(section.mark_projection)
         .with_mark_exclude_names(section.mark_exclude_names)
-        .with_attribute_mappings(section.attribute_mappings);
+        .with_attribute_mappings(section.attribute_mappings)
+        .with_promote_metadata_prefixes(section.promote_metadata_prefixes);
     if let Some(max_queue_size) = section.max_queue_size {
         config = config.with_max_queue_size(max_queue_size);
     }
@@ -3189,6 +3199,7 @@ fn validate_observability_section_fields(
             "mark_projection",
             "mark_exclude_names",
             "attribute_mappings",
+            "promote_metadata_prefixes",
             "transport",
             "endpoint",
             "headers",
@@ -3208,6 +3219,7 @@ fn validate_observability_section_fields(
             "mark_projection",
             "mark_exclude_names",
             "attribute_mappings",
+            "promote_metadata_prefixes",
             "transport",
             "endpoint",
             "headers",
@@ -3319,6 +3331,7 @@ fn validate_opentelemetry_endpoint_fields(
         "mark_projection",
         "mark_exclude_names",
         "attribute_mappings",
+        "promote_metadata_prefixes",
         "transport",
         "headers",
         "header_env",
@@ -3536,6 +3549,18 @@ fn validate_opentelemetry_section(
                 "observability.unsupported_value",
                 Some("opentelemetry".to_string()),
                 Some(format!("endpoints[{index}].attribute_mappings")),
+                error,
+            );
+        }
+        if let Err(error) =
+            validate_metadata_promotion_prefixes(&endpoint.promote_metadata_prefixes)
+        {
+            push_policy_diag(
+                diagnostics,
+                policy.unsupported_value,
+                "observability.unsupported_value",
+                Some("opentelemetry".to_string()),
+                Some(format!("endpoints[{index}].promote_metadata_prefixes")),
                 error,
             );
         }

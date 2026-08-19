@@ -127,6 +127,7 @@ export interface TypedToolExecuteOptions {
   attributes?: number | null;
   data?: JsonValue;
   metadata?: JsonValue;
+  toolCallId?: string | null;
 }
 
 /** Options for `typedLlmExecute`. */
@@ -152,7 +153,7 @@ export interface TypedLlmExecuteOptions {
  * @param func - The tool implementation.
  * @param argsCodec - Codec for args serialization/deserialization.
  * @param resultCodec - Codec for result serialization/deserialization.
- * @param options - Optional scope handle, attributes, data, metadata.
+ * @param options - Optional scope handle, attributes, data, metadata, and toolCallId.
  * @returns A promise resolving to the decoded typed result and opaque annotation.
  * @remarks The wrapper accepts both synchronous and promise-returning tool
  * implementations; codec failures and native execution errors propagate to the

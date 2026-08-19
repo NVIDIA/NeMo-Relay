@@ -34,8 +34,9 @@ canonical outcome:
 `result` and `annotation` form the application-visible result passed to the
 remaining middleware. `pending_marks` defaults to an empty list and remains
 Relay-owned lifecycle data. Each pending mark contains `name`, optional
-`category` and `category_profile`, and optional `data` and `metadata`. Relay
-assigns event UUIDs, parent UUIDs, and timestamps.
+`category` and `category_profile`, and optional `data`, `data_schema`,
+`metadata`, and typed log `severity`. Relay assigns event UUIDs, parent UUIDs,
+and timestamps.
 
 ## Continuation Semantics
 

@@ -69,6 +69,58 @@ identity from `WorkerPlugin::plugin_id()`; custom launchers can use
 credentials and runs until Relay requests shutdown. Do not start the worker
 directly for normal operation.
 
+## Inject Event Metadata
+
+Register a global callback from `WorkerPlugin::register`. Relay sends each
+Event to the worker over `grpc-v1`, and the callback returns flat key/value
+additions for `Event.metadata`:
+
+```rust
+use std::collections::BTreeMap;
+
+use nemo_relay_worker::Json;
+
+context.register_event_metadata_injector(
+    "plugin-context",
+    0,
+    |_event| async move {
+        let additions: BTreeMap<String, Json> = BTreeMap::from([(
+            "app.source".into(),
+            Json::String("plugin".into()),
+        )]);
+        Ok(additions)
+    },
+);
+```
+
+The callback receives an immutable Event snapshot. Relay validates and merges
+accepted additions before Event sanitizers run. A callback error omits that
+callback's additions without dropping the Event. Stopping the worker component
+removes the registration.
+
+## Read Host Runtime Diagnostics
+
+Use the runtime handle inside an asynchronous callback to read the active
+host-level diagnostic snapshot:
+
+```rust
+let diagnostics = context
+    .runtime()
+    .expect("Relay provides a runtime handle")
+    .runtime_diagnostics()
+    .await?;
+
+if let Some(diagnostic) = diagnostics.get("otel.metric_mark_invalid") {
+    eprintln!("{} occurred {} times", diagnostic.message, diagnostic.count);
+}
+```
+
+`entries()` is stable in code order. The snapshot aggregates by code, retains
+the latest message, saturates counts, and has at most 32 entries. It is a
+host-level view and has no per-plugin attribution. An older Relay host returns
+`UNIMPLEMENTED`; the SDK reports that as an unsupported-runtime-diagnostics
+error.
+
 ## Package the Worker
 
 Create `relay-plugin.toml` with the following content. The artifact digest must

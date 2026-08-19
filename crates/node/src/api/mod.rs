@@ -88,7 +88,8 @@ use crate::promise_call::PromiseAwareFn;
 use crate::promise_call::with_publication_callback_context;
 use crate::stream::LlmStream;
 use crate::types::{
-    LlmHandle, ScopeHandle, ScopeStack, ScopeType, ToolExecutionResult, ToolHandle,
+    DataSchema, LlmHandle, LogSeverity, MetricMeasurement, MetricTemporality, ScopeHandle,
+    ScopeStack, ScopeType, ToolExecutionResult, ToolHandle,
 };
 
 static NODE_ENVIRONMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -297,8 +298,122 @@ fn build_otel_config(
                 .mark_exclude_names
                 .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
         )
-        .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
+        .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
+        .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default());
     Ok(config)
+}
+
+fn build_otel_log_config(
+    options: OpenTelemetryLogConfig,
+) -> napi::Result<nemo_relay::observability::otel_logs::OpenTelemetryLogConfig> {
+    let endpoint = options.endpoint.trim().to_string();
+    if endpoint.is_empty() {
+        return Err(napi::Error::from_reason(
+            "endpoint must be a nonblank string",
+        ));
+    }
+    let mut config = nemo_relay::observability::otel_logs::OpenTelemetryLogConfig::new(endpoint)
+        .with_transport(parse_otel_transport(options.transport)?)
+        .with_service_name(
+            options
+                .service_name
+                .unwrap_or_else(|| "unknown_service".to_string()),
+        )
+        .with_instrumentation_scope(
+            options
+                .instrumentation_scope
+                .unwrap_or_else(|| "opentelemetry".to_string()),
+        )
+        .with_timeout(std::time::Duration::from_millis(
+            options.timeout_millis.unwrap_or(3_000).into(),
+        ))
+        .with_max_queue_size(options.max_queue_size.unwrap_or(2_048) as usize)
+        .with_max_export_batch_size(options.max_export_batch_size.unwrap_or(512) as usize)
+        .with_scheduled_delay(std::time::Duration::from_millis(
+            options.scheduled_delay_millis.unwrap_or(1_000).into(),
+        ));
+    if let Some(severity) = options.minimum_severity {
+        config = config.with_minimum_severity(severity.into());
+    }
+    if let Some(namespace) = options.service_namespace {
+        config = config.with_service_namespace(namespace);
+    }
+    if let Some(version) = options.service_version {
+        config = config.with_service_version(version);
+    }
+    for (key, value) in parse_string_map(options.headers, "headers")? {
+        config = config.with_header(key, value);
+    }
+    for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
+        config = config.with_resource_attribute(key, value);
+    }
+    Ok(config)
+}
+
+fn build_otel_metric_config(
+    options: OpenTelemetryMetricConfig,
+) -> napi::Result<nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig> {
+    let endpoint = options.endpoint.trim().to_string();
+    if endpoint.is_empty() {
+        return Err(napi::Error::from_reason(
+            "endpoint must be a nonblank string",
+        ));
+    }
+    let mut config =
+        nemo_relay::observability::otel_metrics::OpenTelemetryMetricConfig::new(endpoint)
+            .with_transport(parse_otel_transport(options.transport)?)
+            .with_service_name(
+                options
+                    .service_name
+                    .unwrap_or_else(|| "unknown_service".to_string()),
+            )
+            .with_instrumentation_scope(
+                options
+                    .instrumentation_scope
+                    .unwrap_or_else(|| "opentelemetry".to_string()),
+            )
+            .with_timeout(std::time::Duration::from_millis(
+                options.timeout_millis.unwrap_or(3_000).into(),
+            ))
+            .with_export_interval(std::time::Duration::from_millis(
+                options.export_interval_millis.unwrap_or(60_000).into(),
+            ))
+            .with_max_instruments(options.max_instruments.unwrap_or(256) as usize)
+            .with_cardinality_limit(options.cardinality_limit.unwrap_or(2_000) as usize);
+    if let Some(temporality) = options.temporality {
+        config = config.with_temporality(temporality.into());
+    }
+    if let Some(namespace) = options.service_namespace {
+        config = config.with_service_namespace(namespace);
+    }
+    if let Some(version) = options.service_version {
+        config = config.with_service_version(version);
+    }
+    for (key, value) in parse_string_map(options.headers, "headers")? {
+        config = config.with_header(key, value);
+    }
+    for (key, value) in parse_string_map(options.resource_attributes, "resourceAttributes")? {
+        config = config.with_resource_attribute(key, value);
+    }
+    Ok(config)
+}
+
+fn otel_runtime_diagnostics_json(
+    diagnostics: nemo_relay::observability::OpenTelemetryRuntimeDiagnostics,
+) -> Json {
+    Json::Array(
+        diagnostics
+            .entries()
+            .iter()
+            .map(|diagnostic| {
+                serde_json::json!({
+                    "code": diagnostic.code,
+                    "message": diagnostic.message,
+                    "count": diagnostic.count,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn build_atof_config(
@@ -2227,7 +2342,10 @@ pub fn with_scope(
 /// the event is associated with that scope; otherwise it uses the current top scope.
 /// Optional `timestamp` is a Unix timestamp in microseconds recorded on the mark event.
 /// It must be a safe integer number; omit it to use the current runtime time.
+/// Optional `dataSchema` identifies the shape of `data`; `severity` supplies the
+/// typed severity used by OpenTelemetry log exporters.
 #[napi]
+#[allow(clippy::too_many_arguments)]
 pub fn event(
     env: Env,
     name: String,
@@ -2235,6 +2353,8 @@ pub fn event(
     data: Option<Json>,
     metadata: Option<Json>,
     timestamp: Option<f64>,
+    data_schema: Option<DataSchema>,
+    severity: Option<LogSeverity>,
 ) -> Result<()> {
     let timestamp = parse_timestamp_micros(timestamp)?;
     with_effective_scope_stack(&env, || {
@@ -2243,6 +2363,37 @@ pub fn event(
                 .name(&name)
                 .parent_opt(handle.map(|h| &h.inner))
                 .data_opt(opt_json(data))
+                .data_schema_opt(data_schema.map(Into::into))
+                .metadata_opt(opt_json(metadata))
+                .severity_opt(severity.map(Into::into))
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })?
+    .map_err(to_napi_err)
+}
+
+/// Emit an atomic, validated group of OpenTelemetry metric recording operations.
+///
+/// `name` is the metric mark name. Every measurement is validated before any
+/// event is published. Optional `handle`, `metadata`, and microsecond `timestamp`
+/// have the same behavior as the corresponding `event` parameters.
+#[napi]
+pub fn metric(
+    env: Env,
+    name: String,
+    measurements: Vec<MetricMeasurement>,
+    handle: Option<&ScopeHandle>,
+    metadata: Option<Json>,
+    timestamp: Option<f64>,
+) -> Result<()> {
+    let timestamp = parse_timestamp_micros(timestamp)?;
+    with_effective_scope_stack(&env, || {
+        core_scope_api::metric(
+            core_scope_api::EmitMetricEventParams::builder()
+                .name(&name)
+                .measurements(measurements.into_iter().map(Into::into).collect())
+                .parent_opt(handle.map(|handle| &handle.inner))
                 .metadata_opt(opt_json(metadata))
                 .timestamp_opt(timestamp)
                 .build(),
@@ -2339,6 +2490,7 @@ pub fn tool_call_end(
 /// `End` event payload. On rejection, only a standalone Mark event is emitted
 /// (no Start/End pair) and `GuardrailRejected` is returned. Returns the final
 /// execution result; sanitize guardrails do not rewrite the caller-visible value.
+/// An optional trailing `toolCallId` is recorded in both lifecycle events.
 #[allow(clippy::too_many_arguments)]
 #[napi(ts_return_type = "Promise<ToolExecutionResult>")]
 pub fn tool_call_execute(
@@ -2350,6 +2502,7 @@ pub fn tool_call_execute(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    tool_call_id: Option<String>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
@@ -2378,6 +2531,7 @@ pub fn tool_call_execute(
                                     .attributes(attrs)
                                     .data_opt(opt_json(data))
                                     .metadata_opt(opt_json(metadata))
+                                    .tool_call_id_opt(tool_call_id)
                                     .build(),
                             )
                             .await
@@ -2398,6 +2552,7 @@ pub fn tool_call_execute(
 /// Same lifecycle as `toolCallExecute` (guardrails → intercepts → func → response processing),
 /// but transparently handles JS callbacks that return Promises. Uses `napi_is_promise` to detect
 /// Promise return values and resolves them before continuing the pipeline.
+/// An optional trailing `toolCallId` is recorded in both lifecycle events.
 ///
 /// Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a
 /// promise-aware wrapper with access to `Env`.
@@ -2415,6 +2570,7 @@ pub fn tool_call_execute_async(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    tool_call_id: Option<String>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
@@ -2459,6 +2615,7 @@ pub fn tool_call_execute_async(
                                     .attributes(attrs)
                                     .data_opt(opt_json(data))
                                     .metadata_opt(opt_json(metadata))
+                                    .tool_call_id_opt(tool_call_id)
                                     .build(),
                             )
                             .await
@@ -3152,7 +3309,7 @@ pub fn register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -3731,7 +3888,7 @@ pub fn scope_register_tool_execution_intercept(
     name: String,
     priority: i32,
     #[napi(
-        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }> }>"
+        ts_arg_type = "(args: Json, next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>) => { result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> } | Promise<{ result: Json; annotation?: Json; pendingMarks?: Array<import('./plugin').PendingMarkSpec> }>"
     )]
     callable: JsFunction,
 ) -> Result<()> {
@@ -4141,7 +4298,7 @@ pub fn tool_conditional_execution(env: Env, name: String, args: Json) -> Result<
 /// The `request` should be a JSON object with `headers` and `content` fields matching
 /// the `LlmRequest` schema. Returns the transformed request as JSON.
 #[napi(
-    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<{ name: string; category?: string | null; categoryProfile?: Json; data?: Json; metadata?: Json }>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>"
+    ts_return_type = "Promise<{ request: Json; annotated: Json | null; pendingMarks: Array<import('./plugin').PendingMarkSpec>; optimizationContributions: Array<{ id?: string; sequence?: number; producer: string; kind: 'input_compression' | 'model_routing' | (string & {}); applied: boolean; model_transition?: { baseline?: { model: string; provider?: string }; effective?: { model: string; provider?: string } }; token_impact?: { baseline?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; effective?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; saved?: { prompt_tokens?: number; completion_tokens?: number; cache_read_tokens?: number; cache_write_tokens?: number; total_tokens?: number }; quality?: 'observed' | 'estimated'; estimation_method?: string }; payload_schema?: { name: string; version: string }; payload?: Json; [key: string]: Json | undefined }> }>"
 )]
 pub fn llm_request_intercepts(env: Env, name: String, request: Json) -> Result<JsObject> {
     let llm_request: LlmRequest = serde_json::from_value(request)
@@ -4404,6 +4561,8 @@ pub struct OpenTelemetryConfig {
     pub mark_exclude_names: Option<Vec<String>>,
     /// Attribute aliases for full and OpenInference projections.
     pub attribute_mappings: Option<Json>,
+    /// Literal Event metadata prefixes copied to top-level OTLP attributes.
+    pub promote_metadata_prefixes: Option<Vec<String>>,
 }
 
 /// OpenTelemetry-backed event subscriber.
@@ -4454,6 +4613,190 @@ impl OpenTelemetrySubscriber {
         self.inner
             .shutdown()
             .map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
+
+/// Configuration object for `OpenTelemetryLogSubscriber`.
+#[napi(object)]
+#[derive(Default)]
+pub struct OpenTelemetryLogConfig {
+    /// OTLP endpoint. Bare HTTP origins append `/v1/logs`.
+    pub endpoint: String,
+    /// `"http_binary"` (default) or `"grpc"`.
+    #[napi(ts_type = "\"http_binary\" | \"grpc\"")]
+    pub transport: Option<String>,
+    /// Extra exporter headers/metadata as string key/value pairs.
+    #[napi(ts_type = "Record<string, string>")]
+    pub headers: Option<Json>,
+    /// Extra OpenTelemetry resource attributes as string key/value pairs.
+    #[napi(ts_type = "Record<string, string>")]
+    pub resource_attributes: Option<Json>,
+    /// `service.name` resource attribute. Defaults to `"unknown_service"`.
+    pub service_name: Option<String>,
+    /// Optional `service.namespace` resource attribute.
+    pub service_namespace: Option<String>,
+    /// Optional `service.version` resource attribute.
+    pub service_version: Option<String>,
+    /// Instrumentation scope name. Defaults to `"opentelemetry"`.
+    pub instrumentation_scope: Option<String>,
+    /// Export timeout in milliseconds. Defaults to `3000`.
+    pub timeout_millis: Option<u32>,
+    /// Minimum severity exported. Defaults to `LogSeverity.Info`.
+    pub minimum_severity: Option<LogSeverity>,
+    /// Maximum queued log records. Defaults to `2048`.
+    pub max_queue_size: Option<u32>,
+    /// Maximum records per export batch. Defaults to `512`.
+    pub max_export_batch_size: Option<u32>,
+    /// Maximum delay before a partial batch is exported. Defaults to `1000`.
+    pub scheduled_delay_millis: Option<u32>,
+}
+
+/// Subscriber that exports severity-tagged marks through OTLP logs.
+#[napi]
+pub struct OpenTelemetryLogSubscriber {
+    inner: nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber,
+}
+
+#[napi]
+impl OpenTelemetryLogSubscriber {
+    /// Create a log subscriber from a config object.
+    #[napi(constructor)]
+    pub fn new(config: OpenTelemetryLogConfig) -> napi::Result<Self> {
+        let inner = nemo_relay::observability::otel_logs::OpenTelemetryLogSubscriber::new(
+            build_otel_log_config(config)?,
+        )
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Register this subscriber globally with the given name.
+    #[napi]
+    pub fn register(&self, name: String) -> napi::Result<()> {
+        self.inner
+            .register(&name)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Deregister a subscriber by name.
+    #[napi]
+    pub fn deregister(&self, name: String) -> napi::Result<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Flush queued Relay events and the OTLP log processor.
+    #[napi]
+    pub fn force_flush(&self) -> napi::Result<()> {
+        self.inner
+            .force_flush()
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Return bounded runtime diagnostics recorded by this subscriber.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+    }
+
+    /// Shut down the underlying logger provider.
+    #[napi]
+    pub fn shutdown(&self) -> napi::Result<()> {
+        self.inner
+            .shutdown()
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+}
+
+/// Configuration object for `OpenTelemetryMetricSubscriber`.
+#[napi(object)]
+#[derive(Default)]
+pub struct OpenTelemetryMetricConfig {
+    /// OTLP endpoint. Bare HTTP origins append `/v1/metrics`.
+    pub endpoint: String,
+    /// `"http_binary"` (default) or `"grpc"`.
+    #[napi(ts_type = "\"http_binary\" | \"grpc\"")]
+    pub transport: Option<String>,
+    /// Extra exporter headers/metadata as string key/value pairs.
+    #[napi(ts_type = "Record<string, string>")]
+    pub headers: Option<Json>,
+    /// Extra OpenTelemetry resource attributes as string key/value pairs.
+    #[napi(ts_type = "Record<string, string>")]
+    pub resource_attributes: Option<Json>,
+    /// `service.name` resource attribute. Defaults to `"unknown_service"`.
+    pub service_name: Option<String>,
+    /// Optional `service.namespace` resource attribute.
+    pub service_namespace: Option<String>,
+    /// Optional `service.version` resource attribute.
+    pub service_version: Option<String>,
+    /// Instrumentation scope name. Defaults to `"opentelemetry"`.
+    pub instrumentation_scope: Option<String>,
+    /// Export timeout in milliseconds. Defaults to `3000`.
+    pub timeout_millis: Option<u32>,
+    /// Collection interval in milliseconds. Defaults to `60000`.
+    pub export_interval_millis: Option<u32>,
+    /// Preferred aggregation temporality. Defaults to cumulative.
+    pub temporality: Option<MetricTemporality>,
+    /// Maximum number of retained instrument descriptors. Defaults to `256`.
+    pub max_instruments: Option<u32>,
+    /// Maximum series cardinality per instrument. Defaults to `2000`.
+    pub cardinality_limit: Option<u32>,
+}
+
+/// Subscriber that records metric marks and exports them through OTLP metrics.
+#[napi]
+pub struct OpenTelemetryMetricSubscriber {
+    inner: nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber,
+}
+
+#[napi]
+impl OpenTelemetryMetricSubscriber {
+    /// Create a metric subscriber from a config object.
+    #[napi(constructor)]
+    pub fn new(config: OpenTelemetryMetricConfig) -> napi::Result<Self> {
+        let inner = nemo_relay::observability::otel_metrics::OpenTelemetryMetricSubscriber::new(
+            build_otel_metric_config(config)?,
+        )
+        .map_err(|error| napi::Error::from_reason(error.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Register this subscriber globally with the given name.
+    #[napi]
+    pub fn register(&self, name: String) -> napi::Result<()> {
+        self.inner
+            .register(&name)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Deregister a subscriber by name.
+    #[napi]
+    pub fn deregister(&self, name: String) -> napi::Result<bool> {
+        self.inner
+            .deregister(&name)
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Collect and export current metric aggregates immediately.
+    #[napi]
+    pub fn force_flush(&self) -> napi::Result<()> {
+        self.inner
+            .force_flush()
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
+    }
+
+    /// Return bounded runtime diagnostics recorded by this subscriber.
+    #[napi(ts_return_type = "Array<{ code: string; message: string; count: number }>")]
+    pub fn runtime_diagnostics(&self) -> Json {
+        otel_runtime_diagnostics_json(self.inner.runtime_diagnostics())
+    }
+
+    /// Shut down the underlying meter provider.
+    #[napi]
+    pub fn shutdown(&self) -> napi::Result<()> {
+        self.inner
+            .shutdown()
+            .map_err(|error| napi::Error::from_reason(error.to_string()))
     }
 }
 

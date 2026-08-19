@@ -368,6 +368,7 @@ Built-in codecs normalize provider field names as follows:
 | `total_tokens` | `total_tokens` | `total_tokens` | computed | `totalTokens` | `totalTokenCount` (or computed as prompt + candidates + thinking) |
 | `cache_read_tokens` | `prompt_tokens_details.cached_tokens` | `input_tokens_details.cached_tokens` | `cache_read_input_tokens` | `promptTokensDetails.cachedTokens` | `cachedContentTokenCount` |
 | `cache_write_tokens` | — | — | `cache_creation_input_tokens` | — | — |
+| `cost` | `cost_usd`, structured `cost`, or scalar `cost` (OpenRouter; USD provider-reported total) | `cost_usd` or structured `cost` | `cost_usd` or structured `cost` | — | — |
 
 Gemini `generateContent` thinking tokens (`thoughtsTokenCount`) are stored in `api_specific.thoughts_tokens` rather than `completion_tokens`, because Google bills them as output tokens but reports them separately. The cost estimate folds them into the effective output-token count so that the pricing table reflects the real billing cost.
 

@@ -1067,6 +1067,18 @@ check-python-worker-proto:
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
     assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
+    runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
+    assert runtime_diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
+    assert runtime_diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
+    runtime_diagnostic = pb.RuntimeDiagnostic.DESCRIPTOR.fields_by_name
+    assert runtime_diagnostic["code"].number == 1
+    assert runtime_diagnostic["message"].number == 2
+    assert runtime_diagnostic["count"].number == 3
+    runtime_diagnostics_response = pb.GetRuntimeDiagnosticsResponse.DESCRIPTOR.fields_by_name
+    assert runtime_diagnostics_response["entries"].number == 1
+    emit_mark = pb.EmitMarkRequest.DESCRIPTOR.fields_by_name
+    assert emit_mark["data_schema"].number == 7
+    assert emit_mark["severity"].number == 8
     tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
     assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
     assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
@@ -1430,7 +1442,7 @@ test-python-langchain:
     {{ bash_helpers }}
     pytest_cmd=(pytest)
     cd "$NEMO_RELAY_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents
     activate_project_venv
     export_uv_python_runtime
     python_executable="$(project_python_executable)"
