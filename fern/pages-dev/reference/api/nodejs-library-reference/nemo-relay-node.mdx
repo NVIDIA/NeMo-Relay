@@ -87,6 +87,8 @@ export interface OpenTelemetryConfig {
   markExcludeNames?: Array<string>
   /** Attribute aliases for full and OpenInference projections. */
   attributeMappings?: Json
+  /** Literal Event metadata prefixes copied to top-level OTLP attributes. */
+  promoteMetadataPrefixes?: Array<string>
 }
 ```
 

@@ -105,6 +105,12 @@ Adds a projected OpenTelemetry attribute alias.
 
 Replaces projected OpenTelemetry attribute aliases.
 
+#### `with_promote_metadata_prefixes`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_promote_metadata_prefixes&lt;I, S&gt;(self, prefixes: I) -&gt; Selfwhere\n    I: <a href=\"https://doc.rust-lang.org/1.96.1/core/iter/traits/collect/trait.IntoIterator.html\">IntoIterator</a>&lt;Item = S&gt;,\n    S: <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,"}} /></pre>
+
+Selects literal Event metadata prefixes copied to OTLP attributes.
+
 ## Trait Implementations
 
 ### `impl Clone for OpenTelemetryConfig`
