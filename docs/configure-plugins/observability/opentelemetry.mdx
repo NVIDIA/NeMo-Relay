@@ -150,8 +150,18 @@ to the other exporters.
 
 Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
 the final sanitized Event metadata into that endpoint's OpenTelemetry output.
-Prefixes use the Event metadata key syntax: ASCII letters, numbers, underscores,
-and hyphens in segments separated by single dots. A trailing dot is optional.
+The injection and promotion stages use the following contract:
+
+| Behavior | Contract |
+|---|---|
+| Exact metadata keys | ASCII letters, numbers, underscores, and hyphens in nonempty segments separated by single dots. |
+| Promotion prefixes | The same key syntax with an optional trailing dot. Matching is literal and case-sensitive. |
+| Values | Strings, booleans, signed 64-bit integers, floating-point numbers, empty arrays, and homogeneous arrays containing one supported primitive type. |
+| Rejected values | Nulls, objects, nested arrays, mixed-type arrays, and unsigned integers larger than `i64::MAX`. |
+| Injector conflicts | Existing Event metadata wins. Otherwise, Relay orders injectors by ascending priority and registration name, and the first successful insertion wins. |
+| Scope lifecycle | Relay applies injector precedence independently to Scope-start and Scope-end Events. A Scope-end key is authoritative when Relay constructs the final span; when Scope-end omits the key, the Scope-start value remains. |
+| OpenTelemetry collisions | Projection-owned attributes and configured attribute-mapping aliases win over promoted metadata. |
+
 For example, `"nv."`, `"nv_"`, and `"nv-"` are valid literal prefixes.
 Leading or repeated dots, whitespace, other punctuation, and glob expressions
 such as `"nv.*"` are rejected.
@@ -162,17 +172,17 @@ Relay does not infer a dot or metadata-key segment boundary. For example,
 with `nv_`, and `"user"` selects keys such as `username` and `user_api_key`.
 Configure the narrowest prefix that selects the metadata you intend to export.
 
-Scope metadata is promoted when the scope-end Event completes the span, so each
-promoted key has one final value. Mark metadata is promoted to the attributes
-of the projected span event or tool span. The `gen_ai` projection continues to
-omit Marks.
+Scope-start and Scope-end are separate Event records, and Relay runs the
+ordered injector chain independently for each record. When Scope-end completes
+the span, a metadata key present on that Event replaces the corresponding
+promoted Scope-start value. Mark metadata is promoted to the attributes of the
+projected span event or tool span. The `gen_ai` projection continues to omit
+Marks.
 
 Promotion supports strings, booleans, signed 64-bit integers, floating-point
-numbers, and homogeneous arrays of those primitive types. Nulls, empty arrays,
-nested arrays, mixed-type arrays, objects, and unsigned integers larger than
-the signed 64-bit range are omitted. Relay records a bounded runtime diagnostic
-containing the key and reason, but it does not record the rejected value or stop
-trace export.
+numbers, empty arrays, and homogeneous arrays of those primitive types. Relay
+omits rejected values and records a bounded runtime diagnostic containing the
+key and reason, but it does not record the rejected value or stop trace export.
 
 Projection-owned attributes and configured attribute-mapping aliases take
 precedence over promoted metadata with the same key. Relay also omits selected
