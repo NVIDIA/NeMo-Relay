@@ -44,11 +44,15 @@ load from and whether pi will trust it, and whether the gateway is answering at
 the URL the extension posts to. Run it first whenever Relay does not seem to be
 doing anything.
 
-There is no persistent plugin install. pi has no plugin marketplace — no
-manifest, no `pi plugin` verb, and no MCP client for a plugin-owned server to
-serve — so `nemo-relay install pi` is unsupported. Install the extension with
-`pi install <source>` or place it in an auto-discovered directory
-(`~/.pi/agent/extensions/`, `.pi/extensions/`).
+**Relay-managed installation is unavailable**: `nemo-relay install pi` is
+unsupported, because pi has no plugin marketplace — no manifest, no `pi plugin`
+verb, and no MCP client for a plugin-owned server to serve — so there is nothing
+for Relay to install into.
+
+Install the extension yourself instead, once. `pi install <source>` and a copy
+into an auto-discovered directory are both **persistent**: pi loads the
+extension on every later run, and `nemo-relay run --agent pi` finds it without
+any variable being set.
 
 ### Install At User Scope
 
@@ -89,10 +93,14 @@ path — so pi does not treat it as a failure and never reports it, and the
 extension cannot report it either, because it is not running. The only symptom
 is that Relay appears to do nothing. `nemo-relay doctor pi` warns about it.
 </Warning>
+
 ## Transparent Run
 
-Use the wrapper for no-install local observability. pi has no `nemo-relay pi`
-shortcut of its own, unlike Claude Code and Codex; run it through `run`:
+Use the wrapper for local observability that leaves your pi configuration
+untouched. It is **not install-free**: the extension has to be present already,
+because a hook can only originate inside it, so run the install above first. On a
+clean machine this command fails, and names the routes that fix it. There is no
+`nemo-relay pi` shortcut, so use `run`:
 
 ```bash
 nemo-relay run --agent pi
@@ -127,6 +135,7 @@ Inspect what would be launched without starting pi:
 ```bash
 nemo-relay run --dry-run --print --agent pi
 ```
+
 ## Standalone Gateway
 
 Run a long-lived gateway and point pi at it by hand:
@@ -151,6 +160,7 @@ Run headless pi with `< /dev/null`. pi drains piped standard input before the
 session starts and returns early only for a TTY, so under an automated harness
 it can block indefinitely before any hook fires.
 </Warning>
+
 ## Captured Events
 
 The extension posts 15 event types, covering session, turn, tool and
@@ -191,6 +201,7 @@ A blocked call still produces a well-formed tool span. The guardrail rejects
 before the span opens, but pi fires `tool_execution_end` for blocked calls too,
 and the gateway synthesizes the missing pair, tagged
 `tool_correlation_status: "agent_fallback"`.
+
 ## Tool Gating
 
 For model-invoked tools, `tool_call` is the only pre-execution decision point
@@ -223,6 +234,7 @@ places: nothing answered, nothing answered in time (the gateway may be up and
 slow), the gateway answered without a decision (a rejected payload, an unreadable
 body, a 403 with no guardrail marker), or the gate itself failed before the
 gateway was asked.
+
 ## Argument Transforms
 
 A Relay request intercept can rewrite a tool call's arguments. The gateway never
@@ -267,6 +279,7 @@ The shipped `examples/rust-native-plugin` demonstrates the mechanism rather than
 a policy: its tool request intercept tags arguments with `native_plugin_tag` and
 `native_tool_request_intercept`, which adds keys and so blocks every pi tool
 call. Enable it to see the refusal, not as a template to copy.
+
 ## Inline Shell Gating
 
 pi's bang prefix runs a command outside the tool registry: `!git status` runs it
@@ -305,6 +318,7 @@ command — pi reports no completion for inline shell, so the span closes as soo
 as the verdict arrives and measures the policy round trip. And the hook fires
 only in the interactive TUI and in RPC mode; headless `-p` has no input loop to
 type a bang prefix into.
+
 ## Model Redirection
 
 pi has no base-URL flag and no generic environment override — it resolves a base
@@ -369,6 +383,7 @@ Point pi at the gateway **root**, not the root plus `/v1`. The Anthropic SDK
 appends `/v1/messages` itself, while the OpenAI SDK appends `/chat/completions`;
 the gateway serves both shapes from the root.
 </Warning>
+
 ## Agent-Run Attribution
 
 One pi prompt can re-enter the agent run several times — provider retry,
@@ -398,6 +413,7 @@ strictly within a session.
 Subagents are not represented. pi has no nested-agent hook of its own, and a
 child pi process running this extension posts under its own session id, so it
 appears as an unrelated session rather than as a subagent.
+
 ## Smoke Test
 
 Check hook forwarding directly. A 200 is an allow; a 403 with the guardrail
@@ -409,6 +425,7 @@ curl -s -w '\nHTTP:%{http_code}\n' -X POST http://127.0.0.1:4040/hooks/pi \
   -H 'content-type: application/json' \
   -d '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}'
 ```
+
 ## Verify Export
 
 Complete a pi turn, then confirm the exporter output. With an ATOF file sink
@@ -419,6 +436,7 @@ under it.
 If turn scopes are missing entirely, the extension is not loading. pi collects
 extension load errors rather than aborting, so a failure is silent — run pi with
 `-e` pointing at the entry point directly to isolate it.
+
 ## Troubleshoot LLM Lifecycle
 
 Look for the `model_redirect` mark on the session scope: it names the outcome and
@@ -447,6 +465,7 @@ pi exposes no ordering API and no post-chain hook, so this cannot be prevented
 from inside an extension. In a mixed extension stack, the tool gate is
 authoritative over **the model**, not over **the other extensions**.
 </Warning>
+
 ### Tool-Result Policy Is Not Available
 
 Relay's only tool middleware that can change what a tool *returned* is the
@@ -463,6 +482,7 @@ through the hook path instead. Conditional-execution guardrails and request
 intercepts do run there, since both have standalone runners the gateway invokes
 directly; there is no response-phase equivalent to invoke.
 </Warning>
+
 ### Interrupted Sessions
 
 pi registers **no SIGINT handler in any mode**. All three modes install handlers
@@ -483,6 +503,7 @@ scope is left open rather than the trace being lost.
 | `SIGTERM`, `SIGHUP` | Yes |
 | `SIGINT` (Ctrl+C in a headless mode) | **No** |
 | `SIGKILL`, uncaught exception | **No** |
+
 ### Gateway Round Trips
 
 pi awaits extension handlers on its critical path, so a blocking hook is
