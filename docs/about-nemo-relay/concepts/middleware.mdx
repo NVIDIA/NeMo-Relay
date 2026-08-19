@@ -219,12 +219,12 @@ use nemo_relay::api::registry::register_event_metadata_injector;
 use serde_json::json;
 
 register_event_metadata_injector(
-    "machine-profile",
+    "tool-category",
     10,
     Arc::new(|event| {
         Box::pin(async move {
             let attributes = if event.name().starts_with("tool") {
-                BTreeMap::from([("nv.machine.profile".into(), json!("dgx"))])
+                BTreeMap::from([("example.tool.category".into(), json!("catalog"))])
             } else {
                 BTreeMap::new()
             };
