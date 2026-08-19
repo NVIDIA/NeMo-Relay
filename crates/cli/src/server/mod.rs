@@ -840,7 +840,7 @@ enum ServerPluginActivation {
     Dynamic(PluginActivation),
 }
 
-const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay 0.8; remove this `[[components]]` entry and follow the NeMo Relay Switchyard migration guide for the Switchyard-owned dynamic plugin: https://docs.nvidia.com/nemo/relay/configure-plugins/switchyard/about";
+const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and follow the NeMo Relay Switchyard migration guide for the Switchyard-owned dynamic plugin: https://docs.nvidia.com/nemo/relay/reference/migration-guides#remove-the-built-in-switchyard-integration";
 
 impl ServerPluginActivation {
     fn clear(self) -> Result<(), CliError> {

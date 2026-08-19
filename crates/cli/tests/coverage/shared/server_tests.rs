@@ -1861,7 +1861,11 @@ fn plugin_component_setup_errors_render_every_diagnostic_variant() {
     let switchyard = PluginComponentSetupError::RemovedSwitchyard;
     assert_eq!(switchyard.check_name(), "Switchyard migration");
     assert_eq!(switchyard.diagnostic_details(), switchyard.to_string());
-    assert!(switchyard.to_string().contains("removed in NeMo Relay 0.8"));
+    assert!(
+        switchyard
+            .to_string()
+            .contains("removed in NeMo Relay >=0.8.0")
+    );
     assert!(switchyard.to_string().contains("migration guide"));
 }
 
