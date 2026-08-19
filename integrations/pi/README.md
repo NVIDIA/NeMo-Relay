@@ -38,9 +38,37 @@ NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
 ```
 
 `pi -e` is trust-ungated, loads before discovery, and survives
-`--no-extensions`, which makes it the reliable way to load this. For everyday
-use, install it with `pi install <source>` or place it in an auto-discovered
-directory (`~/.pi/agent/extensions/`, `.pi/extensions/`).
+`--no-extensions`, which makes it the reliable way to load this. It is also what
+`nemo-relay run --agent pi` uses.
+
+### Where to install it
+
+**User scope only.** Copy the extension into `~/.pi/agent/extensions/`, or
+install it with `pi install <source>` *without* `--local`.
+
+| Path | Install here? | Trust-gated? |
+|---|---|---|
+| `~/.pi/agent/extensions/` | Yes | No |
+| `pi install` (user scope) | Yes | No |
+| `-e <path>` | Per-invocation; what the launcher uses | No |
+| `.pi/extensions/` or `pi install --local` | **No** | **Yes** |
+
+⚠️ **A project-scoped install is silently skipped, and nothing tells you.** pi
+adds project extensions to its candidate set only when the project is trusted,
+and `-p`, `--mode json` and `--mode rpc` never prompt for trust — so under the
+default policy the extension is dropped by a bare conditional. It is not an
+error path, so pi does not treat it as a failure and never reports it, and the
+extension cannot report it either: by construction it is not running. The
+symptom is simply that NeMo Relay appears to do nothing.
+
+**`nemo-relay doctor pi` is the check for that.** It reports where the extension
+sits, whether that path is trust-gated, and whether the gateway is answering:
+
+```bash
+nemo-relay doctor pi
+```
+
+Run it first whenever Relay does not seem to be doing anything.
 
 ### Environment
 
@@ -298,6 +326,33 @@ empty for pi and every tool span parents to the turn. The multi-process case is
 worth stating separately: a child pi process running this extension resolves its
 *own* session id and posts under it, so it does not appear as a subagent of the
 parent. It appears as an unrelated session.
+
+**Tool-result policy, on either side.** Relay's only middleware that can change
+what a tool *returned* is the execution intercept, which wraps the callback and
+therefore owns execution. pi never hands the callback over — it runs the tool in
+its own process and reports the outcome — and neither does the gateway, which
+builds spans from hook posts rather than executing anything.
+
+⚠️ Worth stating in full, because it is not pi-specific and it surprises people:
+**a tool execution intercept registered by any plugin never runs under the CLI
+gateway.** The registry has exactly one consumer, `tool_call_execute`, and the
+gateway does not call it — it uses `tool_call` / `tool_call_end`. Guardrails and
+request intercepts do run, because those have standalone runners the gateway
+calls directly. There is no response-phase equivalent.
+
+**Anything still queued when the process is interrupted.** pi registers **no
+SIGINT handler in any mode** — all three build `["SIGTERM"]` plus SIGHUP off
+Windows — and raw mode is set only by the TUI, so under `-p`, `--mode json` and
+`--mode rpc` a user's Ctrl+C is a real SIGINT that terminates with teardown
+never running. `session_shutdown` never fires, so the queue is never drained.
+
+The loss is bounded, and the bound is what makes this liveable: **every awaited
+hook has already reached the gateway.** Both gates (`tool_call`, `user_bash`) and
+both turn boundaries block on their round trip, so an interrupt can only drop
+observability marks queued since the last awaited one. The gateway keeps
+everything already delivered — an interrupted session is left *open*, not lost.
+SIGTERM, SIGHUP and `/quit` all run teardown normally; SIGINT, SIGKILL and an
+uncaught exception do not.
 
 **LLM spans, when redirection is skipped.** They are present whenever the
 gateway fronts the endpoint the active model would otherwise have called, and

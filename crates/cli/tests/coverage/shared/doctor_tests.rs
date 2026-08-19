@@ -194,6 +194,7 @@ fn exit_code_fails_when_agent_readiness_fails() {
         path: None,
         version: None,
         annotation: "configured command not found on $PATH".into(),
+        checks: Vec::new(),
     });
     assert_eq!(exit_code(&report), 1);
 }
@@ -335,6 +336,7 @@ fn format_human_uses_symbols_for_agent_statuses() {
             path: Some(PathBuf::from("/bin/claude")),
             version: Some("1.0.0".into()),
             annotation: "hooks: injected during run".into(),
+            checks: Vec::new(),
         },
         AgentInfo {
             name: "codex",
@@ -344,6 +346,7 @@ fn format_human_uses_symbols_for_agent_statuses() {
             path: None,
             version: None,
             annotation: "not configured".into(),
+            checks: Vec::new(),
         },
     ];
 
@@ -778,7 +781,12 @@ async fn collect_agents_filters_target_and_records_version() {
 
     let mut resolved = ResolvedConfig::default();
     resolved.agents.codex.command = Some(codex.to_string_lossy().into_owned());
-    let agents = collect_agents(Some(CodingAgent::Codex), &resolved).await;
+    let agents = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &resolved,
+    )
+    .await;
 
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].name, "codex");
@@ -803,7 +811,12 @@ async fn collect_agents_preserves_wrapper_argv_for_version_validation() {
 
     let mut resolved = ResolvedConfig::default();
     resolved.agents.codex.command = Some(format!("{} codex", wrapper.display()));
-    let agents = collect_agents(Some(CodingAgent::Codex), &resolved).await;
+    let agents = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &resolved,
+    )
+    .await;
 
     assert_eq!(agents[0].status, Status::Pass);
     assert_eq!(agents[0].path.as_deref(), Some(wrapper.as_path()));
@@ -822,12 +835,18 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
 
     let mut configured = ResolvedConfig::default();
     configured.agents.codex.command = Some(codex.display().to_string());
-    let required = collect_agents(Some(CodingAgent::Codex), &configured).await;
+    let required = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &configured,
+    )
+    .await;
     assert_eq!(required[0].status, Status::Fail);
     assert!(required[0].annotation.contains("is unsupported"));
 
     let _environment = EnvScope::set(&[("PATH", Some(temp.path().as_os_str()))]);
-    let discovered = collect_agents(None, &ResolvedConfig::default()).await;
+    let discovered =
+        collect_agents(None, DoctorProbeMode::Offline, &ResolvedConfig::default()).await;
     let optional = discovered
         .iter()
         .find(|agent| agent.name == "codex")
@@ -837,7 +856,12 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
 
     std::fs::write(&codex, "#!/bin/sh\nexit 0\n").unwrap();
     make_executable(&codex);
-    let required = collect_agents(Some(CodingAgent::Codex), &configured).await;
+    let required = collect_agents(
+        Some(CodingAgent::Codex),
+        DoctorProbeMode::Offline,
+        &configured,
+    )
+    .await;
     assert_eq!(required[0].status, Status::Fail);
     assert!(
         required[0]
@@ -845,7 +869,8 @@ async fn collect_agents_distinguishes_required_and_optional_version_failures() {
             .contains("could not determine version")
     );
 
-    let discovered = collect_agents(None, &ResolvedConfig::default()).await;
+    let discovered =
+        collect_agents(None, DoctorProbeMode::Offline, &ResolvedConfig::default()).await;
     let optional = discovered
         .iter()
         .find(|agent| agent.name == "codex")
@@ -2353,6 +2378,7 @@ fn format_agents_human_lists_supported_and_separates_detected() {
             path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
             version: Some("2.1.4".into()),
             annotation: "hooks: injected during run".into(),
+            checks: Vec::new(),
         },
         AgentInfo {
             name: "codex",
@@ -2362,6 +2388,7 @@ fn format_agents_human_lists_supported_and_separates_detected() {
             path: None,
             version: None,
             annotation: "not configured".into(),
+            checks: Vec::new(),
         },
     ];
     let rendered = format_agents_human(&agents);
@@ -2386,6 +2413,7 @@ fn format_agents_json_matches_doctor_agents_shape() {
         path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
         version: Some("2.1.4".into()),
         annotation: "hooks: injected during run".into(),
+        checks: Vec::new(),
     }];
     let json = format_agents_json(&agents).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();

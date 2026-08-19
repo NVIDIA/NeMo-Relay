@@ -55,6 +55,28 @@ Install pi 0.84.0 or newer, and confirm the NeMo Relay extension is reachable:
 nemo-relay doctor pi
 ```
 
+That command reports two things nothing else can: which path the extension will
+load from and whether pi will trust it, and whether the gateway is answering at
+the URL the extension posts to. Run it first whenever Relay does not seem to be
+doing anything.
+
+### Install At User Scope
+
+Copy the extension into `~/.pi/agent/extensions/`, or install it with
+`pi install <source>` without `--local`. `nemo-relay run --agent pi` does not
+need either — it passes the extension with `-e`, which loads first and is never
+trust-gated.
+
+<Warning>
+**Do not install into `.pi/extensions/` or with `pi install --local`.** pi adds
+project-scoped extensions to its candidate set only when the project is trusted,
+and `-p`, `--mode json` and `--mode rpc` never prompt for trust. Under the
+default policy the extension is dropped by a bare conditional — not an error
+path — so pi does not treat it as a failure and never reports it, and the
+extension cannot report it either, because it is not running. The only symptom
+is that Relay appears to do nothing. `nemo-relay doctor pi` warns about it.
+</Warning>
+
 ## Transparent Run
 
 Use the wrapper for no-install local observability. pi has no `nemo-relay pi`
@@ -232,6 +254,44 @@ A blocked call still produces a well-formed tool span. The guardrail rejects
 before the span opens, but pi fires `tool_execution_end` for blocked calls too,
 and the gateway synthesizes the missing pair, tagged
 `tool_correlation_status: "agent_fallback"`.
+
+## Tool-Result Policy Is Not Available
+
+Relay's only tool middleware that can change what a tool *returned* is the
+execution intercept, which wraps the callback and so owns execution. pi runs its
+tools in its own process and reports the outcome, and the gateway builds spans
+from hook posts rather than executing anything, so neither side ever holds that
+callback.
+
+<Warning>
+This is broader than pi. **A tool execution intercept registered by any plugin
+does not run under the CLI gateway at all** — the registry's only consumer is
+`tool_call_execute`, which the gateway never calls, because it applies policy
+through the hook path instead. Conditional-execution guardrails and request
+intercepts do run there, since both have standalone runners the gateway invokes
+directly; there is no response-phase equivalent to invoke.
+</Warning>
+
+## Interrupted Sessions
+
+pi registers **no SIGINT handler in any mode**. All three modes install handlers
+for `SIGTERM`, plus `SIGHUP` off Windows, and raw mode is set only by the
+interactive TUI — so under `-p`, `--mode json` and `--mode rpc`, Ctrl+C is a real
+SIGINT that terminates the process with teardown never running. pi's
+`session_shutdown` never fires, and the extension never drains its queue.
+
+The loss is bounded. Every hook the extension *awaits* has already reached the
+gateway: both gates and both turn boundaries block on their round trip. An
+interrupt can therefore drop only observability marks queued since the last
+awaited hook, and the gateway keeps everything already delivered — the session
+scope is left open rather than the trace being lost.
+
+| Exit | Teardown runs? |
+| --- | --- |
+| `/quit`, normal completion | Yes |
+| `SIGTERM`, `SIGHUP` | Yes |
+| `SIGINT` (Ctrl+C in a headless mode) | **No** |
+| `SIGKILL`, uncaught exception | **No** |
 
 ## Model Redirection
 

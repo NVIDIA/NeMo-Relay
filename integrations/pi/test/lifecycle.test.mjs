@@ -13,54 +13,14 @@
  * Run: node --test integrations/pi/test/*.test.mjs
  */
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { after, before, beforeEach, describe, it } from 'node:test';
+
+import { listen, load as loadExtension, named, stubGateway } from './harness.mjs';
 
 const extension = (await import('../index.ts')).default;
 
-/** Collects every payload posted to /hooks/pi. */
-function stubGateway() {
-  const posts = [];
-  const server = createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => {
-      body += c;
-    });
-    req.on('end', () => {
-      posts.push(JSON.parse(body || '{}'));
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end('{}');
-    });
-  });
-  return { server, posts };
-}
-
-/** Registers the extension and returns a driver that fires hooks in order. */
-function load() {
-  const handlers = new Map();
-  const pi = {
-    on(name, handler) {
-      if (!handlers.has(name)) handlers.set(name, []);
-      handlers.get(name).push(handler);
-    },
-  };
-  extension(pi);
-  const ctx = {
-    cwd: '/work',
-    mode: 'print',
-    hasUI: false,
-    sessionManager: { getSessionId: () => 'sess-under-test' },
-  };
-  return async (name, event = {}) => {
-    let result;
-    for (const handler of handlers.get(name) ?? []) {
-      result = await handler({ type: name, ...event }, ctx);
-    }
-    return result;
-  };
-}
-
-const named = (posts, name) => posts.filter((p) => p.hook_event_name === name);
+// Headless: pi's print mode has no UI, and none of these hooks depend on one.
+const load = () => loadExtension(extension, { ctx: { mode: 'print', hasUI: false } });
 
 describe('lifecycle identity the gateway cannot infer', () => {
   let ctx;
@@ -68,8 +28,7 @@ describe('lifecycle identity the gateway cannot infer', () => {
 
   before(async () => {
     ctx = stubGateway();
-    await new Promise((r) => ctx.server.listen(0, '127.0.0.1', r));
-    url = `http://127.0.0.1:${ctx.server.address().port}`;
+    url = await listen(ctx.server);
     process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
   });
 
@@ -180,8 +139,7 @@ describe('session_shutdown reason', () => {
 
   before(async () => {
     ctx = stubGateway();
-    await new Promise((r) => ctx.server.listen(0, '127.0.0.1', r));
-    process.env.NEMO_RELAY_PI_GATEWAY_URL = `http://127.0.0.1:${ctx.server.address().port}`;
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
   });
 
   after(() => {
@@ -226,8 +184,7 @@ describe('attribution on every hook that has one', () => {
 
   before(async () => {
     ctx = stubGateway();
-    await new Promise((r) => ctx.server.listen(0, '127.0.0.1', r));
-    process.env.NEMO_RELAY_PI_GATEWAY_URL = `http://127.0.0.1:${ctx.server.address().port}`;
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
   });
 
   after(() => {
@@ -314,8 +271,7 @@ describe('compaction', () => {
 
   before(async () => {
     ctx = stubGateway();
-    await new Promise((r) => ctx.server.listen(0, '127.0.0.1', r));
-    process.env.NEMO_RELAY_PI_GATEWAY_URL = `http://127.0.0.1:${ctx.server.address().port}`;
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
   });
 
   after(() => {
@@ -383,5 +339,260 @@ describe('compaction', () => {
     await fire('session_before_compact', { reason: 'overflow', willRetry: true });
     await fire('session_shutdown', { reason: 'quit' });
     assert.equal(named(ctx.posts, 'session_before_compact')[0].will_retry, true);
+  });
+});
+
+describe('concurrent tools in one turn', () => {
+  let ctx;
+
+  before(async () => {
+    ctx = stubGateway();
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
+  });
+
+  after(() => {
+    ctx.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+  });
+
+  beforeEach(() => {
+    ctx.posts.length = 0;
+  });
+
+  // pi preflights sibling calls sequentially and then executes them concurrently, so
+  // `tool_execution_end` arrives in an order that has nothing to do with submission.
+  // `toolCallId` is the only correlator pi gives, and every piece of per-call state is
+  // keyed by it -- a regression that keyed on anything else would pass every other test
+  // here, because no other test uses more than one call id.
+  it('keeps two calls distinct when their ends arrive out of submission order', async () => {
+    const fire = load();
+    await fire('session_start', { reason: 'startup' });
+    await fire('agent_start');
+    await fire('turn_start', { turnIndex: 0, timestamp: 1 });
+
+    await fire('tool_execution_start', { toolCallId: 'a', toolName: 'read', args: {} });
+    await fire('tool_execution_start', { toolCallId: 'b', toolName: 'bash', args: {} });
+    // Both gates in flight at once, which is what the serial queue has to survive.
+    await Promise.all([
+      fire('tool_call', { toolCallId: 'a', toolName: 'read', input: { path: 'a.txt' } }),
+      fire('tool_call', { toolCallId: 'b', toolName: 'bash', input: { command: 'ls' } }),
+    ]);
+    // Closing in the reverse order, which is the case that motivates the id keying.
+    await fire('tool_execution_end', { toolCallId: 'b', toolName: '', result: 'ok', isError: false });
+    await fire('tool_execution_end', { toolCallId: 'a', toolName: '', result: 'ok', isError: false });
+    await fire('turn_end', { turnIndex: 0 });
+    await fire('session_shutdown', { reason: 'quit' });
+
+    const ends = named(ctx.posts, 'tool_execution_end');
+    assert.equal(ends.length, 2);
+    // `toolName` was empty on both ends, so each had to be recovered from the start that
+    // named it -- and recovered from the *right* one.
+    const byId = Object.fromEntries(ends.map((post) => [post.tool_call_id, post.tool_name]));
+    assert.deepEqual(byId, { a: 'read', b: 'bash' });
+    assert.ok(
+      ends.every((post) => post.turn_seq === 0),
+      'both calls ran in the same turn, so both must carry that turn',
+    );
+  });
+
+  it('serializes posts even when gating hooks run concurrently', async () => {
+    const fire = load();
+    await fire('session_start', { reason: 'startup' });
+    await fire('turn_start', { turnIndex: 0, timestamp: 1 });
+    await Promise.all([
+      fire('tool_call', { toolCallId: 'a', toolName: 'read', input: {} }),
+      fire('tool_call', { toolCallId: 'b', toolName: 'read', input: {} }),
+    ]);
+    await fire('session_shutdown', { reason: 'quit' });
+
+    // The gateway derives boundaries from arrival order, so two concurrent gates must
+    // still reach it after the turn that owns them.
+    const order = ctx.posts.map((post) => post.hook_event_name);
+    assert.ok(
+      order.indexOf('turn_start') < order.indexOf('tool_call'),
+      `a tool span must not open before its turn: ${order.join(', ')}`,
+    );
+    assert.equal(named(ctx.posts, 'tool_call').length, 2);
+  });
+});
+
+describe('unpaired tool boundaries', () => {
+  let ctx;
+
+  before(async () => {
+    ctx = stubGateway();
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
+  });
+
+  after(() => {
+    ctx.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+  });
+
+  beforeEach(() => {
+    ctx.posts.length = 0;
+  });
+
+  // Deliberate asymmetry, and one a future contributor would otherwise "fix":
+  // `tool_execution_start` fires before validation and for calls pi then discards, so
+  // forwarding it as a tool start would open gateway spans for calls that never ran.
+  it('never forwards tool_execution_start, which fires for calls that never execute', async () => {
+    const fire = load();
+    await fire('session_start', { reason: 'startup' });
+    await fire('tool_execution_start', { toolCallId: 'ghost', toolName: 'read', args: {} });
+    await fire('session_shutdown', { reason: 'quit' });
+
+    assert.equal(named(ctx.posts, 'tool_execution_start').length, 0);
+    assert.equal(named(ctx.posts, 'tool_call').length, 0);
+  });
+
+  // The reason this hook closes the span rather than `tool_result`: a blocked call takes
+  // pi's immediate path and never reaches `afterToolCall`, so `tool_result` never fires --
+  // but `tool_execution_end` always does, with `isError: true`.
+  it('closes a blocked call, which never reaches tool_result', async () => {
+    const fire = load();
+    await fire('session_start', { reason: 'startup' });
+    await fire('tool_execution_start', { toolCallId: 'blocked', toolName: 'read', args: {} });
+    await fire('tool_execution_end', {
+      toolCallId: 'blocked',
+      toolName: '',
+      result: 'Tool failed.',
+      isError: true,
+    });
+    await fire('session_shutdown', { reason: 'quit' });
+
+    const [end] = named(ctx.posts, 'tool_execution_end');
+    assert.ok(end, 'a blocked call must still close');
+    assert.equal(end.status, 'error');
+    assert.equal(end.tool_name, 'read', 'the name comes from the start, which did fire');
+  });
+
+  it('falls back to a placeholder when no start ever named the tool', async () => {
+    const fire = load();
+    await fire('session_start', { reason: 'startup' });
+    await fire('tool_execution_end', { toolCallId: 'orphan', toolName: '', result: null, isError: false });
+    await fire('session_shutdown', { reason: 'quit' });
+
+    // Dropping the post would lose the span entirely; the gateway synthesizes the missing
+    // start, and a named-but-unknown tool is more useful than nothing.
+    const [end] = named(ctx.posts, 'tool_execution_end');
+    assert.equal(end.tool_name, 'unknown');
+  });
+});
+
+describe('compaction-driven re-entry', () => {
+  let ctx;
+
+  before(async () => {
+    ctx = stubGateway();
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
+  });
+
+  after(() => {
+    ctx.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+  });
+
+  beforeEach(() => {
+    ctx.posts.length = 0;
+  });
+
+  // The individual fields are pinned elsewhere; this pins the *sequence*, which is the
+  // one path where `willRetry` is genuine advance notice that the run is about to
+  // re-enter, and where pi's turn_index restarts at 0 for the second time.
+  it('keeps counting turns across a compaction, where pi restarts its own index', async () => {
+    const fire = load();
+    await fire('session_start', { reason: 'startup' });
+    await fire('agent_start');
+    await fire('turn_start', { turnIndex: 0, timestamp: 1 });
+    await fire('turn_end', { turnIndex: 0 });
+    await fire('session_before_compact', {
+      reason: 'overflow',
+      willRetry: true,
+      preparation: { tokensBefore: 120_000, isSplitTurn: false },
+    });
+    await fire('agent_end', { messages: [] });
+    await fire('session_compact', { reason: 'overflow', willRetry: true, fromExtension: false });
+    await fire('agent_start');
+    await fire('turn_start', { turnIndex: 0, timestamp: 2 });
+    await fire('turn_end', { turnIndex: 0 });
+    await fire('agent_end', { messages: [] });
+    await fire('agent_settled');
+    await fire('session_shutdown', { reason: 'quit' });
+
+    const starts = named(ctx.posts, 'turn_start');
+    // pi says turn 0 both times; only turn_seq can tell them apart.
+    assert.deepEqual(starts.map((post) => post.turn_index), [0, 0]);
+    assert.deepEqual(starts.map((post) => post.turn_seq), [0, 1]);
+    assert.deepEqual(starts.map((post) => post.attempt_index), [0, 1]);
+
+    const [announced] = named(ctx.posts, 'session_before_compact');
+    assert.equal(announced.will_retry, true);
+    assert.equal(announced.tokens_before, 120_000);
+    assert.equal(announced.attempt_index, 0, 'announced during the first attempt');
+
+    const [settled] = named(ctx.posts, 'agent_settled');
+    assert.equal(settled.attempts, 2, 'the compaction re-entry is a second attempt');
+  });
+});
+
+describe('what an interrupted session loses', () => {
+  let ctx;
+
+  before(async () => {
+    ctx = stubGateway();
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = await listen(ctx.server);
+  });
+
+  after(() => {
+    ctx.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+  });
+
+  beforeEach(() => {
+    ctx.posts.length = 0;
+  });
+
+  // pi registers no SIGINT handler in any mode -- all three build `["SIGTERM"]` plus
+  // SIGHUP off-Windows -- and raw mode is set only by the TUI, so under `-p`,
+  // `--mode json` and `--mode rpc` a user's Ctrl+C is a real SIGINT that terminates
+  // with teardown never running. `session_shutdown` never fires, the drain never
+  // happens, and whatever is still queued is lost.
+  //
+  // This pins the *bound* on that loss: every awaited hook has already reached the
+  // gateway by the time pi continues, so an interrupt can only drop observability
+  // marks queued since the last awaited one. Both gates and both turn boundaries
+  // await; nothing else does.
+  it('has already delivered every awaited hook, so only queued marks can be lost', async () => {
+    const fire = load();
+    await fire('session_start', { reason: 'startup' });
+    await fire('agent_start');
+
+    // Awaited: a turn boundary defines what later spans parent to.
+    await fire('turn_start', { turnIndex: 0, timestamp: 1 });
+    assert.equal(
+      named(ctx.posts, 'turn_start').length,
+      1,
+      'turn_start must be delivered before pi continues, not queued',
+    );
+
+    // Awaited: the gate cannot decide without a verdict.
+    await fire('tool_call', { toolCallId: 'c1', toolName: 'read', input: { path: 'a.txt' } });
+    assert.equal(named(ctx.posts, 'tool_call').length, 1, 'the gate is a round trip, by design');
+
+    await fire('turn_end', { turnIndex: 0 });
+    assert.equal(named(ctx.posts, 'turn_end').length, 1);
+
+    // The interrupt: no session_shutdown, so no drain. What is already delivered stays
+    // delivered -- the gateway holds it -- so the trace is left open, not lost.
+    const atInterrupt = ctx.posts.map((post) => post.hook_event_name);
+    assert.ok(atInterrupt.includes('session_start'));
+    assert.ok(atInterrupt.includes('turn_start'));
+    assert.ok(atInterrupt.includes('tool_call'));
+    assert.ok(atInterrupt.includes('turn_end'));
+    assert.ok(
+      !atInterrupt.includes('session_shutdown'),
+      'the whole point: an interrupted session never closes',
+    );
   });
 });

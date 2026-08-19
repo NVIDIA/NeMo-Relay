@@ -580,6 +580,10 @@ set_node_package_versions() {
     set_npm_package_version crates/node/package.json package-lock.json "$version" crates/node
     set_npm_package_version integrations/openclaw/package.json package-lock.json "$version" integrations/openclaw
     set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$version"
+    # `nemo-relay-pi` is private and not published, so this bump changes nothing today. It is here
+    # so the version cannot already be stale on the day that changes: a workspace member absent
+    # from this list drifts silently, with no lockfile mismatch and no CI failure to catch it.
+    set_npm_package_version integrations/pi/package.json package-lock.json "$version" integrations/pi
 }
 
 set_node_package_version() {

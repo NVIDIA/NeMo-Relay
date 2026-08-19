@@ -17,95 +17,22 @@
  * Run: node --test integrations/pi/test/*.test.mjs
  */
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { after, before, beforeEach, describe, it } from 'node:test';
+
+import { drain, listen, load as loadExtension, named, rejection, stubGateway } from './harness.mjs';
 
 const extension = (await import('../index.ts')).default;
 const { REFUSED_EXIT_CODE, refusalResult } = await import('../src/user-bash.ts');
 
-/** A stub gateway whose reply for the next request is set per test. */
-function stubGateway() {
-  const posts = [];
-  let reply = { status: 200, payload: {} };
-  const server = createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => {
-      body += c;
-    });
-    req.on('end', () => {
-      const parsed = JSON.parse(body || '{}');
-      posts.push(parsed);
-      // Only the gate itself is answered specially; the synthesized close and
-      // every observability post are plain allows.
-      const isGate = parsed.hook_event_name === 'user_bash';
-      const { status, payload } = isGate ? reply : { status: 200, payload: {} };
-      res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(payload));
-    });
-  });
-  return {
-    server,
-    posts,
-    replyWith(next) {
-      reply = next;
-    },
-  };
-}
-
-/** Registers the extension and returns a driver that fires hooks in order. */
-function load() {
-  const handlers = new Map();
-  const pi = {
-    on(name, handler) {
-      if (!handlers.has(name)) handlers.set(name, []);
-      handlers.get(name).push(handler);
-    },
-    registerProvider() {},
-  };
-  extension(pi);
-  const ctx = {
-    cwd: '/work',
-    mode: 'interactive',
-    hasUI: true,
-    sessionManager: { getSessionId: () => 'inline-shell-session' },
-  };
-  return async (name, event = {}) => {
-    let result;
-    for (const handler of handlers.get(name) ?? []) {
-      result = await handler({ type: name, ...event }, ctx);
-    }
-    return result;
-  };
-}
-
-/**
- * Drain the extension's serial post queue.
- *
- * The gate awaits its own verdict, but the close is enqueued and not awaited --
- * the same treatment every observability post gets. `session_shutdown` awaits
- * the chain, which is how the extension itself guarantees nothing is lost on
- * exit, so it doubles as the drain here.
- */
-const drain = (fire) => fire('session_shutdown', { reason: 'quit' });
-
-const named = (posts, name) => posts.filter((p) => p.hook_event_name === name);
-
-/** The guardrail rejection shape `CliError::into_response` produces, byte for byte. */
-const rejection = (reason) => ({
-  status: 403,
-  payload: {
-    error: { message: `guardrail rejected: ${reason}`, type: 'nemo_relay_guardrail_rejected', reason },
-  },
-});
+const load = () => loadExtension(extension);
 
 describe('inline shell gate', () => {
   let gateway;
   let url;
 
   before(async () => {
-    gateway = stubGateway();
-    await new Promise((r) => gateway.server.listen(0, '127.0.0.1', r));
-    url = `http://127.0.0.1:${gateway.server.address().port}`;
+    gateway = stubGateway('user_bash');
+    url = await listen(gateway.server);
     process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
   });
 
@@ -116,8 +43,8 @@ describe('inline shell gate', () => {
   });
 
   beforeEach(() => {
-    gateway.posts.length = 0;
-    gateway.replyWith({ status: 200, payload: {} });
+    gateway.reset();
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
     delete process.env.NEMO_RELAY_PI_FAIL;
   });
 
@@ -137,7 +64,9 @@ describe('inline shell gate', () => {
       cwd: '/work',
       exclude_from_context: false,
     });
-    assert.equal(gate.session_id, 'inline-shell-session');
+    // The gateway strips inbound routing-identity headers, so the session id in
+    // the payload is the only correlator that survives.
+    assert.equal(gate.session_id, 'sess-under-test');
     assert.equal(typeof gate.tool_call_id, 'string');
   });
 
@@ -257,7 +186,11 @@ describe('inline shell gate', () => {
       ['malformed rejection body', { status: 403, payload: 'not-an-object' }, url],
       ['unparseable success body', { status: 200, payload: undefined }, url],
       ['unreachable gateway', { status: 200, payload: {} }, 'http://127.0.0.1:1'],
+      // pi builds its terminal component only after this handler resolves, so a gateway
+      // that never answers shows the user nothing at all until the timeout fires.
+      ['slow gateway', { status: 200, payload: {}, delayMs: 400 }, url],
     ];
+    process.env.NEMO_RELAY_PI_TIMEOUT_MS = '50';
     for (const [label, reply, target] of conditions) {
       gateway.replyWith(reply);
       process.env.NEMO_RELAY_PI_GATEWAY_URL = target;
@@ -277,6 +210,7 @@ describe('inline shell gate', () => {
       );
     }
     process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
+    delete process.env.NEMO_RELAY_PI_TIMEOUT_MS;
   });
 });
 
