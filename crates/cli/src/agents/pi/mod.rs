@@ -28,6 +28,11 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // channel, so this floor is the version the integration was verified
     // against rather than a lower bound that is expected to keep holding.
     minimum_version: (0, 84, 0),
+    // Which is why the floor alone was a lie by omission: it accepted 0.85.0 as
+    // "supported" for a host that can move a hook shape in a minor. Below the floor
+    // is an error, above this is a warning -- untested, not broken, and blocking a
+    // launch over it would make the user downgrade pi to use Relay at all.
+    verified_through: Some((0, 84)),
     // The hooks the extension actually posts to `/hooks/pi`, which is narrower than the set it
     // registers with pi. `tool_execution_start` is registered but never forwarded -- it fires
     // before validation and for calls that never execute, so it is used only to remember a tool

@@ -53,7 +53,11 @@ Three consequences follow from that shape:
 
 ## Requirements
 
-Install pi 0.84.0 or newer, and confirm the NeMo Relay extension is reachable:
+Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
+below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
+**unverified**, by both `doctor` and the launcher, because pi can change a hook
+shape in a minor release and the symptom is missing spans rather than an error:
+
 
 ```bash
 nemo-relay doctor pi

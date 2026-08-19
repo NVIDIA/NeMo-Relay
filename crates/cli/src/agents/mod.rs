@@ -28,6 +28,14 @@ pub(super) struct AgentDescriptor {
     hook_path: &'static str,
     version_product: &'static str,
     minimum_version: (u64, u64, u64),
+    /// The last `major.minor` this integration was actually verified against, for a
+    /// host whose minor releases can break the hook contract.
+    ///
+    /// `None` means the floor behaves like a floor: newer minors are additive and
+    /// nothing above it needs reporting. `Some` means the opposite -- above it, the
+    /// integration is untested rather than known-good, and saying so is the whole
+    /// point, because the failure it guards against is silent.
+    verified_through: Option<(u64, u64)>,
     hook_events: &'static [&'static str],
 }
 
@@ -126,6 +134,27 @@ impl CodingAgent {
             ));
         }
         Ok(version)
+    }
+
+    /// Why a version passes the floor and is still not one we have run against.
+    ///
+    /// Deliberately not folded into `validate_version_output`: that returns an error,
+    /// and an error blocks the launch (`process::launcher::validate_agent_version`).
+    /// Refusing to start on a version that probably works would be worse than the
+    /// silence it replaces -- the user would have to downgrade the agent to use
+    /// Relay at all. This reports; it does not gate.
+    pub(crate) fn unverified_version(self, version: &Version) -> Option<String> {
+        let (major, minor) = self.descriptor().verified_through?;
+        if (version.major, version.minor) <= (major, minor) {
+            return None;
+        }
+        Some(format!(
+            "{product} {version} is newer than the {product} {major}.{minor}.x this integration \
+             was verified against; {product} can change hook shapes in a minor release, and the \
+             symptom is missing spans rather than an error. Re-verify, or pin {product} {major}.\
+             {minor}.x",
+            product = self.descriptor().version_product,
+        ))
     }
 
     fn parse_version(self, raw: &str) -> Option<Version> {

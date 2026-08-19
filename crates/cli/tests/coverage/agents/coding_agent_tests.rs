@@ -55,6 +55,46 @@ fn centralized_minimum_versions_accept_stable_boundaries() {
     }
 }
 
+// The floor alone said "supported" for any stable version above it, which is right for a host
+// whose minors are additive and wrong for one that can move a hook shape in a minor. pi is the
+// second kind: above 0.84.x it is untested, and the symptom of a broken hook shape is missing
+// spans rather than an error, so silence is the worst possible report.
+#[test]
+fn a_minor_above_the_verified_band_is_reported_as_unverified_without_being_rejected() {
+    let newer = CodingAgent::Pi.validate_version_output("0.85.0").unwrap();
+    let note = CodingAgent::Pi
+        .unverified_version(&newer)
+        .expect("a newer pi minor must be reported");
+    assert!(
+        note.contains("0.84"),
+        "the note should name the verified band: {note}"
+    );
+
+    // Still accepted: refusing would make a user downgrade pi to use Relay at all.
+    assert!(CodingAgent::Pi.validate_version_output("0.85.0").is_ok());
+    assert!(CodingAgent::Pi.validate_version_output("1.0.0").is_ok());
+
+    // Inside the band, nothing to say -- including a patch above the floor.
+    for inside in ["0.84.0", "0.84.7"] {
+        let version = CodingAgent::Pi.validate_version_output(inside).unwrap();
+        assert_eq!(
+            CodingAgent::Pi.unverified_version(&version),
+            None,
+            "{inside}"
+        );
+    }
+
+    // Claude Code and Codex declare no verified band, because their minors are additive.
+    // Without this, adding a band to the descriptor would silently start warning for them.
+    for (agent, newer) in [
+        (CodingAgent::ClaudeCode, "99.0.0 (Claude Code)"),
+        (CodingAgent::Codex, "codex-cli 99.0.0"),
+    ] {
+        let version = agent.validate_version_output(newer).unwrap();
+        assert_eq!(agent.unverified_version(&version), None, "{agent:?}");
+    }
+}
+
 #[test]
 fn centralized_minimum_versions_reject_old_prerelease_and_malformed_output() {
     let cases = [

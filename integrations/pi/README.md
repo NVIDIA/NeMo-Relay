@@ -18,7 +18,9 @@ all policy and all span construction happen in the gateway.
 
 Proof of concept. Verified against pi `v0.84.0`. pi ships breaking changes
 through *minor* releases and has no major-release channel, so re-verify hook
-signatures before relying on them.
+signatures before relying on them — `nemo-relay doctor pi` and the launcher both
+report a minor above 0.84.x as unverified rather than supported, and accept it
+anyway, because untested is not the same as broken.
 
 **Model traffic is redirected conditionally.** pi has no base-URL flag and no
 generic environment override — it resolves `baseUrl` per model from a generated

@@ -753,14 +753,30 @@ fn apply_agent_version_status(
     status: &mut Status,
     details: &mut Vec<String>,
 ) {
+    // Three outcomes, not two. A host whose minor releases can move a hook shape has a
+    // band above the floor that is untested rather than supported, and reporting it as a
+    // plain pass is what let a newer pi look verified.
+    let mut unverified = None;
     let problem = match version {
-        Some(version) => agent.validate_version_output(version).err(),
+        Some(version) => match agent.validate_version_output(version) {
+            Ok(parsed) => {
+                unverified = agent.unverified_version(&parsed);
+                None
+            }
+            Err(problem) => Some(problem),
+        },
         None if executable_found => Some(format!(
             "could not determine version; NeMo Relay requires {}",
             agent.version_requirement()
         )),
         None => None,
     };
+    if let Some(unverified) = unverified {
+        // Warn even when the agent is not the requested target: an untested host is a
+        // property of the machine, not of what the user asked about.
+        *status = combine_status(*status, Status::Warn, true);
+        details.push(unverified);
+    }
     if let Some(problem) = problem {
         *status = combine_status(
             *status,
