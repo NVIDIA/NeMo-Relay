@@ -67,7 +67,8 @@ class NemoRelayDeepAgentsCallbackHandler(LangGraphNemoRelayCallbackHandler):
         if not isinstance(versions, Mapping) or "deepagents" not in versions:
             return None
 
-        if metadata.get("langgraph_node") == name:
+        langgraph_node = metadata.get("langgraph_node")
+        if langgraph_node is not None and langgraph_node == name:
             return None
 
         configured_name = metadata.get("lc_agent_name")

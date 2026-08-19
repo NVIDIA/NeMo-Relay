@@ -541,6 +541,35 @@ def test_callback_handler_creates_only_semantic_agent_scopes(
     assert starts["reviewer"].parent_uuid == starts["main-agent"].uuid
 
 
+def test_callback_handler_uses_fallback_for_unnamed_agent(
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
+):
+    run_id = uuid4()
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["hello"]},
+            run_id=run_id,
+            name=None,
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_versions": {"deepagents": "0.7.4"},
+            },
+        )
+        callback_handler.on_chain_end({"messages": ["done"]}, run_id=run_id)
+
+    nemo_relay.subscribers.flush()
+    scope_events = [event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent)]
+    assert [(event.scope_category, event.name) for event in scope_events] == [
+        ("start", "request"),
+        ("start", "DeepAgent"),
+        ("end", "DeepAgent"),
+        ("end", "request"),
+    ]
+
+
 def test_callback_handler_closes_semantic_agent_scope_on_error(
     subscribed_events: list[nemo_relay.Event],
     callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
