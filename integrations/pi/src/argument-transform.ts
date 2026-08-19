@@ -112,12 +112,17 @@ export function decideTransform(
   const envelope = body?.tool_call;
   if (!envelope || envelope.input === undefined) return { kind: 'none' };
 
-  // A body for a different call means the gateway and the extension disagree about what is in
-  // flight. Applying it would rewrite one tool call with another's arguments.
-  if (typeof envelope.tool_call_id === 'string' && envelope.tool_call_id !== toolCallId) {
+  // The echoed id is what proves the transform belongs to the call we just posted, so it has to be
+  // present and exact. Accepting a missing or non-string id would let a truncated or malformed body
+  // rewrite the wrong call's arguments -- the failure the echo exists to prevent.
+  if (typeof envelope.tool_call_id !== 'string' || envelope.tool_call_id !== toolCallId) {
+    const named =
+      typeof envelope.tool_call_id === 'string'
+        ? envelope.tool_call_id
+        : JSON.stringify(envelope.tool_call_id) ?? 'nothing';
     return {
       kind: 'refuse',
-      reason: `the transform names tool call ${envelope.tool_call_id}, not ${toolCallId}`,
+      reason: `the transform names tool call ${named}, not ${toolCallId}`,
     };
   }
 

@@ -84,10 +84,16 @@ export async function postHook(
     });
 
     if (response.ok) {
-      // An allow body is `{}` unless a request intercept rewrote the arguments, so parsing is
-      // best effort: a body we cannot read is still an allow, just one with nothing to apply.
+      // An allow body is `{}` unless a request intercept rewrote the arguments -- so a body we
+      // cannot read is NOT a plain allow. It may have carried a transform, and treating it as an
+      // empty allow would run the original arguments while silently discarding a policy decision:
+      // exactly the failure a refused transform blocks the call to prevent. An unreadable success
+      // is an infrastructure fault, resolved by `NEMO_RELAY_PI_FAIL` like any other.
       const body = await safeJson(response);
-      return body && typeof body === 'object' ? { kind: 'allow', body } : { kind: 'allow' };
+      if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        return { kind: 'fault', detail: 'gateway returned a success body that is not a JSON object' };
+      }
+      return { kind: 'allow', body };
     }
 
     if (response.status === 403) {

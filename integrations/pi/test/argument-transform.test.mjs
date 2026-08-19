@@ -84,6 +84,26 @@ describe('transform decision', () => {
     assert.match(outcome.reason, /call-2, not call-1/);
   });
 
+  // The echoed id is the only thing proving the transform belongs to the call we
+  // posted. A missing or non-string one used to skip the check entirely, so a
+  // truncated body could rewrite the wrong call's arguments.
+  it('refuses a transform whose call id is missing or not a string', () => {
+    // Built by hand rather than through `envelope`, whose default parameter would
+    // substitute a valid id for the absent case and quietly test nothing.
+    const bodies = [
+      ['absent', { tool_call: { input: { path: 'b.txt' } } }],
+      ['null', { tool_call: { tool_call_id: null, input: { path: 'b.txt' } } }],
+      ['number', { tool_call: { tool_call_id: 42, input: { path: 'b.txt' } } }],
+      ['object', { tool_call: { tool_call_id: { id: CALL }, input: { path: 'b.txt' } } }],
+      ['array', { tool_call: { tool_call_id: [CALL], input: { path: 'b.txt' } } }],
+    ];
+    for (const [label, body] of bodies) {
+      const outcome = decideTransform(body, CALL, { path: 'a.txt' });
+      assert.equal(outcome.kind, 'refuse', `a ${label} call id must be refused`);
+      assert.match(outcome.reason, /not call-1/);
+    }
+  });
+
   it('refuses a non-object transform', () => {
     const outcome = decideTransform(envelope('rm -rf /'), CALL, { path: 'a.txt' });
     assert.equal(outcome.kind, 'refuse');

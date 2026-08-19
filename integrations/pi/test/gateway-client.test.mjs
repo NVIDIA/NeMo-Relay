@@ -29,10 +29,11 @@ function serve(handler) {
     });
     req.on('end', () => {
       received.push({ url: req.url, headers: req.headers, body: JSON.parse(body || '{}') });
-      const { status, payload, delayMs } = handler(received.at(-1));
+      const { status, payload, raw, delayMs } = handler(received.at(-1));
       const send = () => {
         res.writeHead(status, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(payload ?? {}));
+        // `raw` lets a case emit a body JSON.parse cannot read.
+        res.end(raw ?? JSON.stringify(payload ?? {}));
       };
       if (delayMs) setTimeout(send, delayMs);
       else send();
@@ -62,6 +63,9 @@ describe('gateway client wire contract', () => {
     ctx = serve((request) => {
       const name = request.body.hook_event_name;
       if (name === 'slow') return { status: 200, payload: {}, delayMs: 500 };
+      if (name === 'bad-json') return { status: 200, raw: '{ truncated' };
+      if (name === 'array-body') return { status: 200, payload: [] };
+      if (name === 'string-body') return { status: 200, payload: 'ok' };
       if (name === 'boom') return { status: 500, payload: { error: { message: 'kaboom' } } };
       if (name === 'naked-403') return { status: 403, payload: { error: { message: 'nope' } } };
       if (request.body.tool_name === 'read' && request.body.input?.path?.endsWith('.env')) {
@@ -83,6 +87,17 @@ describe('gateway client wire contract', () => {
   });
 
   after(() => ctx.server.close());
+
+  // A 2xx body may carry a required argument transform, so an unreadable one is not
+  // an empty allow -- treating it as one runs the original arguments and silently
+  // discards a policy decision, which is the failure a refused transform blocks for.
+  it('treats an unreadable or non-object 2xx body as a fault, not a bare allow', async () => {
+    for (const name of ['bad-json', 'array-body', 'string-body']) {
+      const outcome = await postHook(baseConfig(url), { hook_event_name: name });
+      assert.equal(outcome.kind, 'fault', `${name} must not be a plain allow`);
+      assert.match(outcome.detail, /not a JSON object/);
+    }
+  });
 
   it('treats 2xx as allow', async () => {
     const outcome = await postHook(baseConfig(url), {

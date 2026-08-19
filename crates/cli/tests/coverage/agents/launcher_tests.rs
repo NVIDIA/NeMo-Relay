@@ -98,6 +98,30 @@ fn infers_agent_from_command_or_uses_override() {
     assert_eq!(agent, CodingAgent::ClaudeCode);
 }
 
+// pi was added to `CodingAgent` without being added here, so `nemo-relay run -- pi`
+// failed while the identical Claude and Codex forms worked -- and the error named
+// only those two, so nothing pointed at the cause.
+#[test]
+fn infers_pi_from_a_bare_name_a_path_or_a_windows_suffix() {
+    for command in [
+        "pi",
+        "/usr/local/bin/pi",
+        "PI",
+        "pi.exe",
+        r"C:\tools\pi.cmd",
+    ] {
+        assert_eq!(
+            CodingAgent::infer(command),
+            Some(CodingAgent::Pi),
+            "should infer pi from {command}"
+        );
+    }
+    // Not a false positive magnet: only the exact basename counts.
+    for command in ["pip", "pipx", "mypi", "pi-sbx"] {
+        assert_eq!(CodingAgent::infer(command), None, "{command} is not pi");
+    }
+}
+
 #[test]
 fn uses_configured_command_when_no_argv_is_supplied() {
     let agents = AgentConfigs {

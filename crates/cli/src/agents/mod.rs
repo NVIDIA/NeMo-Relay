@@ -154,6 +154,7 @@ impl CodingAgent {
         match name {
             "claude" | "claude-code" => Some(Self::ClaudeCode),
             "codex" => Some(Self::Codex),
+            "pi" => Some(Self::Pi),
             _ => None,
         }
     }

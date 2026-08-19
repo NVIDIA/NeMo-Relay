@@ -197,7 +197,10 @@ fn ask_agents(
     detected: &[CodingAgent],
     configured: &[CodingAgent],
 ) -> Result<Vec<CodingAgent>, CliError> {
-    let all_supported = [CodingAgent::ClaudeCode, CodingAgent::Codex];
+    // Every supported agent, not a hand-written pair. Saving an unscoped result replaces
+    // the whole `[agents]` table, so an agent missing from this list is removed from the
+    // user's config by a wizard that never offered it.
+    let all_supported = CodingAgent::ALL;
     let labels: Vec<String> = all_supported
         .iter()
         .map(|a| {
