@@ -708,6 +708,7 @@ class TestOpenTelemetryTypes:
         assert config.mark_projection == "inherit"
         assert config.mark_exclude_names == ["llm.chunk"]
         assert config.attribute_mappings == []
+        assert config.promote_metadata_prefixes == []
 
         config.service_name = "py-agent"
         config.service_namespace = "agents"
@@ -719,12 +720,14 @@ class TestOpenTelemetryTypes:
         config.mark_projection = "tool"
         config.mark_exclude_names = ["custom.mark"]
         config.attribute_mappings = [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
+        config.promote_metadata_prefixes = ["nv."]
 
         assert config.headers == {"authorization": "Bearer token"}
         assert config.resource_attributes == {"deployment.environment": "test"}
         assert config.mark_projection == "tool"
         assert config.mark_exclude_names == ["custom.mark"]
         assert config.attribute_mappings == [{"key": "nemo_relay.model_name", "alias": "model.alias"}]
+        assert config.promote_metadata_prefixes == ["nv."]
         assert "OpenTelemetryConfig" in repr(config)
 
     def test_config_rejects_invalid_map_values(self):
@@ -738,6 +741,11 @@ class TestOpenTelemetryTypes:
 
         with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
             config.attribute_mappings = [{"key": "", "alias": "x"}]
+
+        config.attribute_mappings = []
+        config.promote_metadata_prefixes = ["nv.*"]
+        with pytest.raises(ValueError, match="literal prefix, not a glob"):
+            OpenTelemetrySubscriber(config)
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
@@ -781,13 +789,19 @@ class TestOpenTelemetryTypes:
             source = "python-é" * 20
             config = OpenTelemetryConfig("full", collector.endpoint)
             config.service_name = "py-agent"
+            config.promote_metadata_prefixes = ["nv."]
 
             subscriber = OpenTelemetrySubscriber(config)
             subscriber_name = f"py_otel_e2e_{uuid4().hex}"
             subscriber.register(subscriber_name)
 
             try:
-                handle = scope.push("otel_scope", ScopeType.Agent, data={"scope": True})
+                handle = scope.push(
+                    "otel_scope",
+                    ScopeType.Agent,
+                    data={"scope": True},
+                    metadata={"nv.binding": "python"},
+                )
                 try:
                     scope.event(
                         "otel_mark",
@@ -796,7 +810,7 @@ class TestOpenTelemetryTypes:
                         metadata={"source": source},
                     )
                 finally:
-                    scope.pop(handle)
+                    scope.pop(handle, metadata={"nv.binding": "python"})
 
                 subscriber.force_flush()
                 request = collector.wait_for_request()
@@ -804,6 +818,7 @@ class TestOpenTelemetryTypes:
                 assert request["headers"]["content-type"] == "application/x-protobuf"
                 assert request["body"]
                 assert b"nemo_relay.mark.metadata.source" in request["body"]
+                assert _otlp_string_attribute("nv.binding", "python") in request["body"]
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()

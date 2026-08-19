@@ -1526,6 +1526,67 @@ fn test_ffi_otel_projection_options_accept_and_validate_legacy_controls() {
 }
 
 #[test]
+fn test_ffi_otel_projection_options_v2_accepts_and_validates_metadata_prefixes() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let endpoint = c"http://localhost:4318/v1/traces";
+        let valid_prefixes = c"[\"nv.\",\"host_\"]";
+        let mut subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_subscriber_create_with_projection_options_v2(
+                c"full".as_ptr(),
+                ptr::null(),
+                endpoint.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                c"inherit".as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                valid_prefixes.as_ptr(),
+                &mut subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_otel_subscriber_free(subscriber);
+
+        for (prefixes, expected_status) in [
+            (c"[\"nv.*\"]".as_ptr(), NemoRelayStatus::InvalidArg),
+            (c"{".as_ptr(), NemoRelayStatus::InvalidJson),
+        ] {
+            let mut invalid_subscriber: *mut FfiOpenTelemetrySubscriber = ptr::null_mut();
+            assert_status!(
+                nemo_relay_otel_subscriber_create_with_projection_options_v2(
+                    c"full".as_ptr(),
+                    ptr::null(),
+                    endpoint.as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    ptr::null(),
+                    0,
+                    c"inherit".as_ptr(),
+                    ptr::null(),
+                    ptr::null(),
+                    prefixes,
+                    &mut invalid_subscriber,
+                ),
+                expected_status
+            );
+            assert!(invalid_subscriber.is_null());
+        }
+    }
+}
+
+#[test]
 fn test_ffi_specialized_constructor_invalid_utf8_and_malformed_json_sweep() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     reset_globals();

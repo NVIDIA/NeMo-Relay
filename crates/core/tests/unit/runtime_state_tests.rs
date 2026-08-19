@@ -33,6 +33,10 @@ async fn event_metadata_injection_accepts_flat_otel_values_and_empty_output() {
                 ("experiment.variant".into(), json!("value")),
                 ("nv.test.boolean".into(), json!(true)),
                 ("nv.test.number".into(), json!(42)),
+                (
+                    "nv.test.max_unsigned_integer".into(),
+                    json!(i64::MAX as u64),
+                ),
                 ("nv.test.strings".into(), json!(["a", "b"])),
                 ("nv.test.booleans".into(), json!([true, false])),
                 ("nv.test.numbers".into(), json!([1, 2])),
@@ -58,6 +62,10 @@ async fn event_metadata_injection_accepts_flat_otel_values_and_empty_output() {
     assert_eq!(metadata["experiment.variant"], json!("value"));
     assert_eq!(metadata["nv.test.boolean"], json!(true));
     assert_eq!(metadata["nv.test.number"], json!(42));
+    assert_eq!(
+        metadata["nv.test.max_unsigned_integer"],
+        json!(i64::MAX as u64)
+    );
     assert_eq!(metadata["nv.test.strings"], json!(["a", "b"]));
     assert_eq!(metadata["nv.test.booleans"], json!([true, false]));
     assert_eq!(metadata["nv.test.numbers"], json!([1, 2]));
@@ -84,6 +92,8 @@ async fn event_metadata_injection_rejects_invalid_output_atomically() {
         BTreeMap::from([("nv.test.object".into(), json!({"nested": true}))]),
         BTreeMap::from([("nv.test.nested_list".into(), json!([[1]]))]),
         BTreeMap::from([("nv.test.mixed_list".into(), json!([1, "two"]))]),
+        BTreeMap::from([("nv.test.oversized_number".into(), json!(u64::MAX))]),
+        BTreeMap::from([("nv.test.oversized_list".into(), json!([u64::MAX]))]),
     ];
 
     for invalid_output in invalid_outputs {

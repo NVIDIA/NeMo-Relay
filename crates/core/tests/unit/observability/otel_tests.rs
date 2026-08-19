@@ -492,6 +492,274 @@ fn rootless_propagation_starts_a_new_otel_trace() {
     assert!(!span.parent_span_is_remote);
 }
 
+#[test]
+fn promotes_final_scope_and_mark_metadata_without_duplicate_span_keys() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "metadata-promotion-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string(), "nemo_relay.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-scope",
+            json!({
+                "nv.source": "start",
+                "nemo_relay.scope_type": "attempted-overwrite"
+            }),
+        ));
+        processor.process(&make_mark_event_with_metadata(
+            Some(uuid),
+            json!({"nv.source": "mark"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-scope",
+            ScopeType::Agent,
+            json!({
+                "nv.source": "end",
+                "nv.completed": true,
+                "nemo_relay.scope_type": "attempted-overwrite"
+            }),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        let span = &spans[0];
+        assert_eq!(
+            span.attributes
+                .iter()
+                .filter(|attribute| attribute.key.as_str() == "nv.source")
+                .count(),
+            1
+        );
+        let attributes = attr_map(&span.attributes);
+        assert_eq!(attributes.get("nv.source"), Some(&"end".to_string()));
+        assert_eq!(attributes.get("nv.completed"), Some(&"true".to_string()));
+        assert_eq!(
+            attributes.get("nemo_relay.scope_type"),
+            Some(&"agent".to_string())
+        );
+        let mark_attributes = attr_map(&span.events.events[0].attributes);
+        assert_eq!(mark_attributes.get("nv.source"), Some(&"mark".to_string()));
+    }
+}
+
+#[test]
+fn promotes_orphan_and_tool_projection_mark_metadata() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "metadata-promotion-mark-test".into(),
+                otel_type,
+                MarkProjection::Tool,
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let parent_uuid = Uuid::now_v7();
+        processor.process(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("metadata.orphan")
+                .metadata(json!({"nv.source": "orphan"}))
+                .build(),
+            None,
+            None,
+        )));
+        processor.process(&make_start_event(
+            parent_uuid,
+            None,
+            "metadata-promotion-parent",
+            ScopeType::Agent,
+            None,
+        ));
+        processor.process(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name("metadata.projected")
+                .metadata(json!({"nv.source": "projected"}))
+                .build(),
+            None,
+            None,
+        )));
+        processor.process(&make_end_event(
+            parent_uuid,
+            None,
+            "metadata-promotion-parent",
+            ScopeType::Agent,
+            None,
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 3);
+        let parent = finished_span_named(&spans, "metadata-promotion-parent");
+        let orphan = finished_span_named(&spans, "mark:metadata.orphan");
+        let projected = finished_span_named(&spans, "mark:metadata.projected");
+        assert!(!attr_map(&parent.attributes).contains_key("nv.source"));
+        assert_eq!(
+            attr_map(&orphan.attributes).get("nv.source"),
+            Some(&"orphan".to_string())
+        );
+        assert_eq!(
+            attr_map(&projected.attributes).get("nv.source"),
+            Some(&"projected".to_string())
+        );
+        assert_eq!(projected.parent_span_id, parent.span_context.span_id());
+    }
+}
+
+#[test]
+fn promotes_final_scope_metadata_across_trace_projections() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "metadata-promotion-projection-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-projection-scope",
+            json!({"nv.source": "start"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-projection-scope",
+            ScopeType::Agent,
+            json!({"nv.source": "end"}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            attr_map(&spans[0].attributes).get("nv.source"),
+            Some(&"end".to_string())
+        );
+    }
+}
+
+#[test]
+fn omits_scope_metadata_when_final_value_is_unsupported_across_trace_projections() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "unsupported-final-metadata-promotion-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                runtime_diagnostics.clone(),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "unsupported-final-metadata-promotion-scope",
+            json!({"nv.source": "start"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "unsupported-final-metadata-promotion-scope",
+            ScopeType::Agent,
+            json!({"nv.source": {"unsupported": true}}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert!(!attr_map(&spans[0].attributes).contains_key("nv.source"));
+
+        let diagnostics = runtime_diagnostics.snapshot();
+        let diagnostic = diagnostics
+            .get("otel.metadata_promotion_value_unsupported")
+            .expect("unsupported final metadata diagnostic");
+        assert_eq!(diagnostic.count, 1);
+        assert!(diagnostic.message.contains("nv.source"));
+    }
+}
+
+#[test]
+fn promotes_start_only_scope_metadata_across_trace_projections() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "start-metadata-promotion-projection-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "start-metadata-promotion-projection-scope",
+            json!({"nv.start_only": "configured"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "start-metadata-promotion-projection-scope",
+            ScopeType::Agent,
+            json!({}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            attr_map(&spans[0].attributes).get("nv.start_only"),
+            Some(&"configured".to_string())
+        );
+    }
+}
+
 fn make_start_event_with_metadata(
     uuid: Uuid,
     parent_uuid: Option<Uuid>,
@@ -936,6 +1204,7 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
                 ),
                 crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
             ],
+            promote_metadata_prefixes: Vec::new(),
         },
     )
     .unwrap();

@@ -4,7 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
+import { assertOtlpStringAttribute, startCollector } from '../../../scripts/test-support/otel_test_utils.mjs';
 
 const require = createRequire(import.meta.url);
 const {
@@ -49,6 +49,7 @@ describe('OpenTelemetrySubscriber', () => {
       markProjection: 'tool',
       markExcludeNames: ['custom.mark'],
       attributeMappings: [{ key: 'nemo_relay.model_name', alias: 'model.alias' }],
+      promoteMetadataPrefixes: ['nv.'],
     });
 
     const name = uniqueId('node_otel');
@@ -100,6 +101,15 @@ describe('OpenTelemetrySubscriber', () => {
         }),
       /attribute mapping key must not be blank/i,
     );
+    assert.throws(
+      () =>
+        new OpenTelemetrySubscriber({
+          type: 'full',
+          endpoint: 'http://localhost:4318/v1/traces',
+          promoteMetadataPrefixes: ['nv.*'],
+        }),
+      /literal prefix, not a glob/i,
+    );
     assert.throws(() => new OpenTelemetrySubscriber({ endpoint: 'http://localhost:4318' }), /missing field `type`/i);
     assert.throws(() => new OpenTelemetrySubscriber({ type: 'full' }), /missing field `endpoint`/i);
     assert.throws(
@@ -122,12 +132,15 @@ describe('OpenTelemetrySubscriber', () => {
       type: 'full',
       endpoint: collector.endpoint,
       serviceName: 'node-agent',
+      promoteMetadataPrefixes: ['nv.'],
     });
 
     const name = uniqueId('node_otel_e2e');
     subscriber.register(name);
     try {
-      const scope = pushScope('otel_scope', ScopeType.Agent, null, null, null, null);
+      const scope = pushScope('otel_scope', ScopeType.Agent, null, null, null, {
+        'nv.binding': 'node',
+      });
       event(
         'otel_mark',
         scope,
@@ -138,7 +151,9 @@ describe('OpenTelemetrySubscriber', () => {
           source: 'node',
         },
       );
-      popScope(scope);
+      popScope(scope, null, null, {
+        'nv.binding': 'node',
+      });
 
       subscriber.forceFlush();
       const request = await collector.nextRequest();
@@ -146,6 +161,7 @@ describe('OpenTelemetrySubscriber', () => {
       assert.equal(request.headers['content-type'], 'application/x-protobuf');
       assert.ok(request.body.length > 0);
       assertBodyContains(request.body, 'nemo_relay.mark.metadata.source');
+      assertOtlpStringAttribute(request.body, 'nv.binding', 'node');
     } finally {
       subscriber.deregister(name);
       subscriber.shutdown();
