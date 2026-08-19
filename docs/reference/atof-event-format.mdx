@@ -324,11 +324,16 @@ The `category` `enum` is closed but `"custom"` + `category_profile.subtype` prov
 
 <Indent>
   <ParamField path="category_profile.model_name" type="string | null">
-    LLM model identifier when `category == "llm"`. It can be `null` when the model is unknown.
+    LLM model identifier when `category == "llm"`. Relay omits this key when
+    the model is unknown; consumers should also accept an explicit `null` from
+    other producers.
   </ParamField>
 
   <ParamField path="category_profile.tool_call_id" type="string | null">
-    LLM-provider correlation ID when `category == "tool"`. It can be `null` when the tool was not invoked through an LLM tool-use flow.
+    Provider-, harness-, or transport-supplied correlation ID when `category ==
+    "tool"`. Relay omits this key when the producer does not supply an external
+    tool-call ID; consumers should also accept an explicit `null` from other
+    producers.
   </ParamField>
 
   <ParamField path="category_profile.tool_result_annotation" type="JSON value | null">
@@ -388,7 +393,7 @@ Each scope span receives a unique UUID at creation time. The `uuid` is stable ac
 Two distinct identifier namespaces appear in an ATOF stream:
 
 - **`uuid` / `parent_uuid`** — runtime identifiers attached to every event. Form the scope graph.
-- **`category_profile.tool_call_id`** (on `scope` or `mark` events when `category == "tool"`) — an LLM-provider identifier that bridges an LLM's tool-call response with the resulting tool execution. Null when the tool was not invoked via an LLM tool-use flow.
+- **`category_profile.tool_call_id`** (on `scope` or `mark` events when `category == "tool"`) — an external invocation identifier supplied by a provider, harness, or transport. Managed execution places the same supplied value on its tool start and end events before event sanitization; an event sanitizer can redact or remove it. Relay omits this key when the producer did not supply an external tool-call ID; consumers should also accept an explicit `null` from other producers.
 
 ### 5.6 ATOF Version and Negotiation
 

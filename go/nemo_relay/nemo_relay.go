@@ -67,6 +67,12 @@ extern int32_t nemo_relay_tool_call_execute(
 	const FfiScopeHandle* parent, uint32_t attributes,
 	const char* data_json, const char* metadata_json,
 	char** out);
+extern int32_t nemo_relay_tool_call_execute_v2(
+	const char* name, const char* args_json,
+	NemoRelayToolExecFn func_cb, void* func_user_data, NemoRelayFreeFn func_free,
+	const FfiScopeHandle* parent, uint32_t attributes,
+	const char* data_json, const char* metadata_json,
+	const char* tool_call_id, char** out);
 
 // LLM lifecycle
 typedef void (*NemoRelayCollectorCb)(const char* chunk_json);
@@ -862,9 +868,10 @@ type toolCallOptions struct {
 // ToolCallOption is a functional option that configures optional parameters for
 // tool call functions ([ToolCall], [ToolCallEnd], [ToolCallExecute]). Available
 // options include [WithToolParent], [WithToolAttributes], [WithToolData],
-// [WithToolMetadata], [WithToolCallID], and [WithToolTimestamp]. Timestamp and
-// tool-call ID options affect manual [ToolCall] and [ToolCallEnd] spans only;
-// managed [ToolCallExecute] spans use runtime-generated timestamps.
+// [WithToolMetadata], [WithToolCallID], and [WithToolTimestamp]. Tool-call IDs
+// apply to both manual and managed spans. Explicit timestamps apply only to
+// manual [ToolCall] and [ToolCallEnd] spans; managed [ToolCallExecute] spans use
+// runtime-generated timestamps.
 type ToolCallOption func(*toolCallOptions)
 
 // WithToolParent sets the parent scope handle for a tool call. If not provided,
@@ -905,8 +912,9 @@ func WithToolMetadata(metadata json.RawMessage) ToolCallOption {
 
 // WithToolCallID sets an optional tool call ID for the tool call. This ID is
 // typically assigned by the LLM to correlate the tool invocation with the
-// original tool_call request in the conversation. Pass an empty string or omit
-// this option to leave the tool call ID unset.
+// original tool_call request in the conversation. It is recorded on both Start
+// and End events for manual and managed tool calls. Omit this option to leave
+// the tool call ID unset.
 func WithToolCallID(id string) ToolCallOption {
 	return func(o *toolCallOptions) {
 		o.toolCallID = C.CString(id)
@@ -1001,7 +1009,8 @@ func ToolCallEnd(handle *ToolHandle, result ToolExecutionResult, opts ...ToolCal
 // On rejection, only a standalone Mark event is emitted (no Start/End pair)
 // and GuardrailRejected is returned. This is the recommended high-level API
 // for tool invocations. Sanitize guardrails do not rewrite the value passed
-// into fn or the value returned to the caller.
+// into fn or the value returned to the caller. Use [WithToolCallID] to preserve
+// a provider-assigned correlation ID on both managed lifecycle events.
 func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, opts ...ToolCallOption) (ToolExecutionResult, error) {
 	o := &toolCallOptions{}
 	for _, opt := range opts {
@@ -1017,14 +1026,14 @@ func ToolCallExecute(name string, args json.RawMessage, fn ToolExecutionFunc, op
 	defer C.free(unsafe.Pointer(cArgs))
 
 	var out *C.char
-	status := C.nemo_relay_tool_call_execute(
+	status := C.nemo_relay_tool_call_execute_v2(
 		cName, cArgs,
 		C.NemoRelayToolExecFn(C.goToolExecTrampoline),
 		id,
 		C.NemoRelayFreeFn(C.goFreeTrampoline),
 		o.parent, C.uint32_t(o.attributes),
 		o.data, o.metadata,
-		&out,
+		o.toolCallID, &out,
 	)
 	if err := checkStatus(status); err != nil {
 		return ToolExecutionResult{}, err

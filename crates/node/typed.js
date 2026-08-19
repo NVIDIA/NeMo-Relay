@@ -102,6 +102,7 @@ function decodeResponseWithCodec(codec, response) {
  * @param {Codec<TArgs>} argsCodec - Codec used to serialize and deserialize tool args.
  * @param {Codec<TResult>} resultCodec - Codec used to serialize and deserialize tool results.
  * @param {object} [options] - Optional execution-scoping metadata.
+ * @param {string} [options.toolCallId] - Provider-specific tool call correlation ID.
  * @returns {Promise<{ result: TResult, annotation?: * }>} A promise resolving to the decoded typed tool result.
  * @remarks The wrapper accepts both synchronous and promise-returning tool
  * implementations; codec failures and native execution errors propagate to the
@@ -128,6 +129,7 @@ async function typedToolExecute(name, args, func, argsCodec, resultCodec, option
     opts.attributes ?? null,
     opts.data ?? null,
     opts.metadata ?? null,
+    opts.toolCallId ?? null,
   );
 
   return {

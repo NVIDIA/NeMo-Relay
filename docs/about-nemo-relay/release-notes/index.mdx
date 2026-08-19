@@ -62,6 +62,9 @@ The following updates expand native Rust plugin capabilities:
 - ATOF, ATIF, and the `full` and `openinference` OpenTelemetry projections
   preserve sanitized tool result annotations without flattening their
   application-defined schemas.
+- Managed tool execution accepts an optional provider- or harness-supplied
+  tool-call ID and preserves it on the matching start and end events across
+  success, error, and cancellation paths.
 
 ### OpenTelemetry Logs and Metrics
 

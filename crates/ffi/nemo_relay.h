@@ -2911,6 +2911,10 @@ NemoRelayStatus nemo_relay_tool_call_end(const struct FfiToolHandle *handle,
  * Start/End pair) and `GuardrailRejected` is returned. Blocks the calling
  * thread until completion.
  *
+ * This legacy entry point does not accept an external tool call ID. Use
+ * `nemo_relay_tool_call_execute_v2` to record one on the managed Start and End
+ * events.
+ *
  * # Parameters
  * - `name`: Null-terminated tool name.
  * - `args_json`: Tool arguments as a JSON C string.
@@ -2937,6 +2941,47 @@ NemoRelayStatus nemo_relay_tool_call_execute(const char *name,
                                              const char *data_json,
                                              const char *metadata_json,
                                              char **out);
+
+/**
+ * Execute a tool call end-to-end with an optional external tool call ID.
+ *
+ * This runs conditional-execution guardrails (on raw args), then request
+ * intercepts, sanitize-request guardrails, execution intercepts, the callback,
+ * and sanitize-response guardrails. On rejection, only a standalone Mark event
+ * is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks
+ * the calling thread until completion.
+ *
+ * # Parameters
+ * - `name`: Null-terminated tool name.
+ * - `args_json`: Tool arguments as a JSON C string.
+ * - `func`: C callback that performs the actual tool execution.
+ * - `func_user_data`: Opaque pointer passed to `func`.
+ * - `func_free`: Optional destructor for `func_user_data`.
+ * - `parent`: Optional parent scope handle, or null.
+ * - `attributes`: Bitfield of tool attributes.
+ * - `data_json`: Optional JSON data, or null.
+ * - `metadata_json`: Optional JSON metadata, or null.
+ * - `tool_call_id`: Optional null-terminated external correlation ID recorded
+ *   on both managed lifecycle events, or null.
+ * - `out`: On success, receives the result as a JSON C string. Caller must free
+ *   with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `name`, `args_json`, and `out` must be valid, non-null pointers. Optional
+ * pointer arguments may be null; when non-null, they must be valid for reads
+ * for the duration of the call.
+ */
+NemoRelayStatus nemo_relay_tool_call_execute_v2(const char *name,
+                                                const char *args_json,
+                                                NemoRelayToolExecCb func,
+                                                void *func_user_data,
+                                                NemoRelayFreeFn func_free,
+                                                const struct FfiScopeHandle *parent,
+                                                uint32_t attributes,
+                                                const char *data_json,
+                                                const char *metadata_json,
+                                                const char *tool_call_id,
+                                                char **out);
 
 /**
  * Register a tool conditional execution guardrail. The callback decides whether

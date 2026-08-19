@@ -2489,6 +2489,7 @@ pub fn tool_call_end(
 /// `End` event payload. On rejection, only a standalone Mark event is emitted
 /// (no Start/End pair) and `GuardrailRejected` is returned. Returns the final
 /// execution result; sanitize guardrails do not rewrite the caller-visible value.
+/// An optional trailing `toolCallId` is recorded in both lifecycle events.
 #[allow(clippy::too_many_arguments)]
 #[napi(ts_return_type = "Promise<ToolExecutionResult>")]
 pub fn tool_call_execute(
@@ -2500,6 +2501,7 @@ pub fn tool_call_execute(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    tool_call_id: Option<String>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
@@ -2528,6 +2530,7 @@ pub fn tool_call_execute(
                                     .attributes(attrs)
                                     .data_opt(opt_json(data))
                                     .metadata_opt(opt_json(metadata))
+                                    .tool_call_id_opt(tool_call_id)
                                     .build(),
                             )
                             .await
@@ -2548,6 +2551,7 @@ pub fn tool_call_execute(
 /// Same lifecycle as `toolCallExecute` (guardrails → intercepts → func → response processing),
 /// but transparently handles JS callbacks that return Promises. Uses `napi_is_promise` to detect
 /// Promise return values and resolves them before continuing the pipeline.
+/// An optional trailing `toolCallId` is recorded in both lifecycle events.
 ///
 /// Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a
 /// promise-aware wrapper with access to `Env`.
@@ -2565,6 +2569,7 @@ pub fn tool_call_execute_async(
     attributes: Option<u32>,
     data: Option<Json>,
     metadata: Option<Json>,
+    tool_call_id: Option<String>,
 ) -> Result<JsObject> {
     let attrs = ToolAttributes::from_bits_truncate(attributes.unwrap_or(0));
     let publication_context_id = callback_factory::event_sanitizer_callback_context_id(&env)?;
@@ -2609,6 +2614,7 @@ pub fn tool_call_execute_async(
                                     .attributes(attrs)
                                     .data_opt(opt_json(data))
                                     .metadata_opt(opt_json(metadata))
+                                    .tool_call_id_opt(tool_call_id)
                                     .build(),
                             )
                             .await
