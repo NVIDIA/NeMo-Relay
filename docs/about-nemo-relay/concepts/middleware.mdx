@@ -51,7 +51,7 @@ sanitization and publication rather than awaiting it. Manual lifecycle APIs
 synchronous and create or close their handle immediately.
 
 <Warning>
-Event metadata injectors, Event sanitizers, conditional-execution guardrails,
+Event metadata injectors, event sanitizers, conditional-execution guardrails,
 request intercepts, execution intercepts, and subscribers are not re-entrant.
 These callbacks must not invoke another NeMo Relay API that runs middleware,
 flushes subscriber delivery, waits on an exporter, or clears plugins. Scope
