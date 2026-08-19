@@ -13,9 +13,9 @@ calls, injects Event metadata, and sanitizes emitted mark and scope events.
 
 ## What Middleware Is
 
-Middleware controls or transforms tool and LLM execution and enriches or
-sanitizes emitted events. NeMo Relay applies each middleware type at a specific
-lifecycle point.
+Middleware can control or transform tool and LLM execution. It can also enrich
+or sanitize emitted Events. NeMo Relay applies each middleware type at a
+specific lifecycle point.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
@@ -28,9 +28,9 @@ registrations accept callbacks that return a value or an awaitable when invoked
 through an asynchronous Relay API or queued event publication. Worker and
 native-plugin middleware can also complete asynchronously. Within each
 middleware chain, Relay awaits entries sequentially in priority order so later
-callbacks observe earlier middleware output. Payload sanitizers, Event metadata
-injectors, and Event sanitizer chains run on the queued publication path and do
-not delay managed execution.
+callbacks observe earlier middleware output. Event payload transformations,
+Event metadata injectors, and Event sanitizer chains run on the queued
+publication path and do not delay managed execution.
 
 The experimental raw C FFI and Go binding retain synchronous middleware
 callbacks. Relay invokes each callback on a native thread and waits for it to
@@ -190,49 +190,24 @@ object.
 
 ## Event Metadata Injection
 
-Event metadata injectors add OTel-compatible values to the existing Event
-`metadata` object. They run on every delivered Event and receive the current
-Event as immutable context, so a callback can inspect the Event kind and name
-before deciding what to return.
+Event metadata injectors add values to the existing Event `metadata` object.
+They run on every delivered Event and receive the current Event as immutable
+context, so a callback can inspect the Event kind and name before deciding what
+to return.
 
-The v1 contract accepts keys made of non-empty segments containing only ASCII
+Event metadata keys contain one or more non-empty segments made of ASCII
 letters, digits, underscores, or hyphens. Segments may be separated by single
-dots, so keys such as `region.zone.name` are valid. Leading dots, trailing
-dots, consecutive dots, whitespace, and unsupported punctuation are invalid.
-Relay stores accepted keys literally; dots do not create nested objects. Values
-may be strings, numbers, booleans, or homogeneous lists of those primitive
-types. Nested objects, `null`, and mixed-type lists are rejected as one atomic
-callback result.
+dots, so keys such as `region.zone.name` are valid. Leading dots, trailing dots,
+consecutive dots, whitespace, and unsupported punctuation are invalid. Relay
+stores accepted keys literally; dots do not create nested objects. Values may
+be strings, numbers, booleans, or homogeneous lists of those primitive types.
+Nested objects, `null`, and mixed-type lists are rejected as one atomic callback
+result.
 
 Injection is insert-only. Existing Event metadata is never overwritten.
 Injectors run in ascending numeric priority and then by registration name, so
 the first injector to insert a missing key wins. A later injector that returns
 the same key cannot replace it.
-
-The following Rust registration adds one string to matching Events:
-
-```rust
-use std::collections::BTreeMap;
-use std::sync::Arc;
-
-use nemo_relay::api::registry::register_event_metadata_injector;
-use serde_json::json;
-
-register_event_metadata_injector(
-    "tool-category",
-    10,
-    Arc::new(|event| {
-        Box::pin(async move {
-            let attributes = if event.name().starts_with("tool") {
-                BTreeMap::from([("example.tool.category".into(), json!("catalog"))])
-            } else {
-                BTreeMap::new()
-            };
-            Ok(attributes)
-        })
-    }),
-)?;
-```
 
 Register injectors globally, on an owning scope, or through a plugin
 registration context. Injectors execute on the queued serial publication path,
@@ -294,9 +269,9 @@ arguments passed to the callback or the real value returned to the caller.
 Scope operations, marks, and manual or managed tool/LLM lifecycle calls do not
 await observability middleware. At emission time Relay snapshots the event-only
 payload, visible Event metadata injectors, sanitizer chains, and subscribers,
-then places the work on a serial dispatcher. The dispatcher awaits specialized
-tool or LLM payload sanitizers, applies Event metadata injectors, runs Event
-sanitizers, and publishes the Event later in FIFO order.
+then places the work on a serial dispatcher. The dispatcher completes the
+internal tool or LLM Event payload transformation, applies Event metadata
+injectors, runs Event sanitizers, and publishes the Event later in FIFO order.
 
 Subscriber and exporter delivery is therefore delayed, while start/end/mark
 order is preserved. Closing a scope or deregistering middleware after emission
@@ -336,18 +311,20 @@ flowchart LR
     Callback --> QueueEnd
 
     subgraph PublicationPath[Serial Publication Path]
-        RequestSanitizers[Request Sanitizers]
+        RequestTransform[Request Event Payload Transform]
         StartInjection[Event Metadata Injectors]
-        StartEvent[Scope-Start Sanitizers and Deliver Start]
-        ResponseSanitizers[Response Sanitizers]
+        StartSanitizers[Scope-Start Event Sanitizers]
+        DeliverStart[Deliver Start Event]
+        ResponseTransform[Response Event Payload Transform]
         EndInjection[Event Metadata Injectors]
-        EndEvent[Scope-End Sanitizers and Deliver End]
-        RequestSanitizers --> StartInjection --> StartEvent
-        StartEvent --> ResponseSanitizers --> EndInjection --> EndEvent
+        EndSanitizers[Scope-End Event Sanitizers]
+        DeliverEnd[Deliver End Event]
+        RequestTransform --> StartInjection --> StartSanitizers --> DeliverStart
+        DeliverStart --> ResponseTransform --> EndInjection --> EndSanitizers --> DeliverEnd
     end
 
-    QueueStart -.-> RequestSanitizers
-    QueueEnd -.-> ResponseSanitizers
+    QueueStart -.-> RequestTransform
+    QueueEnd -.-> ResponseTransform
 ```
 
 The phases run as follows:
@@ -358,9 +335,10 @@ The phases run as follows:
 2. **Execution phase:** Execution intercepts wrap or replace the real callback.
 3. **Response phase:** Relay snapshots and enqueues the end event's
    observability copy, then returns the real result.
-4. **Publication path:** The serial dispatcher runs request or response
-   sanitizers, applies Event metadata injectors, runs the matching scope-event
-   sanitizers, and finally delivers the Event to subscribers and exporters.
+4. **Publication path:** The serial dispatcher completes the internal request or
+   response Event payload transformation, applies Event metadata injectors, runs
+   the matching scope-Event sanitizers, and finally delivers the Event to
+   subscribers and exporters.
 
 The start event is submitted before execution begins, but its sanitizers run
 later on the publication path and may overlap application execution. The serial
