@@ -3153,7 +3153,9 @@ pub fn register_event_metadata_injector(
     env: Env,
     name: String,
     priority: i32,
-    #[napi(ts_arg_type = "(event: Json) => Record<string, Json> | Promise<Record<string, Json>>")]
+    #[napi(
+        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
+    )]
     injector: JsFunction,
 ) -> Result<()> {
     core_registry_api::register_event_metadata_injector(
@@ -3722,7 +3724,9 @@ pub fn scope_register_event_metadata_injector(
     scope_uuid: String,
     name: String,
     priority: i32,
-    #[napi(ts_arg_type = "(event: Json) => Record<string, Json> | Promise<Record<string, Json>>")]
+    #[napi(
+        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
+    )]
     injector: JsFunction,
 ) -> Result<()> {
     let uuid = uuid::Uuid::parse_str(&scope_uuid)
