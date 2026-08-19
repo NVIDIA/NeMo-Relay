@@ -268,8 +268,10 @@ type a bang prefix into.
 The extension posts 15 event types, covering session, turn, tool and
 inline-shell activity. Twelve carry a pi hook's own name. The other three —
 `model_redirect`, `tool_arguments_transformed` and `user_bash_end` — are
-synthesized by the extension, and the table below shows what each is derived
-from rather than a hook pi emits.
+synthesized by the extension. The table below names the source of each:
+`model_redirect` is posted from `session_start` and again from every
+`model_select`, `tool_arguments_transformed` after a rewrite is applied, and
+`user_bash_end` after an inline-shell command is decided.
 
 pi reports both ends of a turn, so Relay opens the turn scope at pi's own
 `turn_start` instead of inferring one, and a mark that arrives between turns is
@@ -282,8 +284,8 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `turn_start` / `turn_end` | Turn scope open and close |
 | `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
 | `session_compact` | Canonical `compaction` mark |
-| `model_select` | `model_redirect` mark recording whether redirection applied |
-| *(after a rewrite)* | `tool_arguments_transformed` mark, so the trace records that the arguments the tool ran were not the ones proposed |
+| `session_start`, then every `model_select` | `model_redirect` mark recording whether redirection applied. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
+| *(after a rewrite)* | `tool_arguments_transformed` mark. Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
 | `tool_call` | Tool span start, and the gate |
 | `tool_execution_end` | Tool span end, for every outcome including blocked |
 | `user_bash` | Tool span start named `user_bash`, and the inline shell gate |

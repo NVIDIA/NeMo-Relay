@@ -345,7 +345,7 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 | `agent_settled` | run-level mark | Fires exactly once, from a `finally`. Carries `attempts` (the count) and `attempt_index` (the last one) |
 | `turn_start` | turn scope **open** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, so the turn exists before pi's model call arrives |
 | `turn_end` | turn scope **close** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, for the same reason |
-| `model_select` | `model_redirect` mark | Re-evaluates redirection for the newly selected model |
+| `session_start`, then every `model_select` | `model_redirect` mark | Synthesized. Re-evaluates redirection for the newly selected model, so a switch away from a provider the gateway fronts stops redirecting |
 | *(after a rewrite)* | `tool_arguments_transformed` mark | Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
 | `session_before_compact` | mark | Announced, not done, and cancellable by a later extension. Carries `reason`, `will_retry`, `tokens_before` |
 | `session_compact` | compaction | The completed compaction, which the runtime treats as proof the context was rebuilt |
