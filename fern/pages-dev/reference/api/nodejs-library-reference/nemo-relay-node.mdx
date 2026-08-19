@@ -939,22 +939,22 @@ export declare function toolCallEnd(handle: ToolHandle, result: ToolExecutionRes
 
 Execute a tool call end-to-end with full lifecycle management.
 
-Runs conditional-execution guardrails (on raw args) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Returns the final execution result; sanitize guardrails do not rewrite the caller-visible value.
+Runs conditional-execution guardrails (on raw args) -> request intercepts -> sanitize-request guardrails for the emitted `Start` event payload -> execution intercepts -> `func` -> sanitize-response guardrails for the emitted `End` event payload. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Returns the final execution result; sanitize guardrails do not rewrite the caller-visible value. An optional trailing `toolCallId` is recorded in both lifecycle events.
 
 ```ts
-export declare function toolCallExecute(name: string, args: Json, func: (arg: Json) => ToolExecutionResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecute(name: string, args: Json, func: (arg: Json) => ToolExecutionResult, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `toolCallExecuteAsync`
 
 Execute a tool call end-to-end, supporting both sync and async (Promise-returning) callbacks.
 
-Same lifecycle as `toolCallExecute` (guardrails -> intercepts -> func -> response processing), but transparently handles JS callbacks that return Promises. Uses `napi_is_promise` to detect Promise return values and resolves them before continuing the pipeline.
+Same lifecycle as `toolCallExecute` (guardrails -> intercepts -> func -> response processing), but transparently handles JS callbacks that return Promises. Uses `napi_is_promise` to detect Promise return values and resolves them before continuing the pipeline. An optional trailing `toolCallId` is recorded in both lifecycle events.
 
 Accepts a raw `JsFunction` instead of `ThreadsafeFunction` so it can create a promise-aware wrapper with access to `Env`.
 
 ```ts
-export declare function toolCallExecuteAsync(name: string, args: Json, func: (arg: Json, signal: AbortSignal) => ToolExecutionResult | Promise<ToolExecutionResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null): Promise<ToolExecutionResult>
+export declare function toolCallExecuteAsync(name: string, args: Json, func: (arg: Json, signal: AbortSignal) => ToolExecutionResult | Promise<ToolExecutionResult>, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, toolCallId?: string | undefined | null): Promise<ToolExecutionResult>
 ```
 
 ### `llmCall`

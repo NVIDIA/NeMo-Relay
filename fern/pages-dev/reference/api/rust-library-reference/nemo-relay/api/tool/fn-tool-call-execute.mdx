@@ -24,6 +24,7 @@ This runs conditional-execution guardrails, request intercepts, sanitize-request
 - `attributes`: Tool attribute bitflags applied to the managed span.
 - `data`: Optional application payload stored on the managed tool handle. It may be used on failure end events that have no output payload.
 - `metadata`: Optional JSON metadata recorded on emitted events.
+- `tool_call_id`: Optional provider-specific correlation identifier recorded on both managed lifecycle events.
 
 ## Returns
 

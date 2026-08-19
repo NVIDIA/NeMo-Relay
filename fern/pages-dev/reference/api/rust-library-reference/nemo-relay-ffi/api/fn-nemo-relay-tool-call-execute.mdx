@@ -13,6 +13,8 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Execute a tool call end-to-end: run conditional-execution guardrails (on raw args), then request intercepts, sanitize-request guardrails, execution intercepts, the callback, and sanitize-response guardrails. On rejection, only a standalone Mark event is emitted (no Start/End pair) and `GuardrailRejected` is returned. Blocks the calling thread until completion.
 
+This legacy entry point does not accept an external tool call ID. Use `nemo_relay_tool_call_execute_v2` to record one on the managed Start and End events.
+
 ## Parameters
 
 - `name`: Null-terminated tool name.

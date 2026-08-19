@@ -128,6 +128,7 @@ export interface TypedToolExecuteOptions {
   attributes?: number | null;
   data?: JsonValue;
   metadata?: JsonValue;
+  toolCallId?: string | null;
 }
 ```
 
@@ -191,7 +192,7 @@ Converts `args` to JSON, runs the native tool execution lifecycle, and decodes o
 - `func`: The tool implementation.
 - `argsCodec`: Codec for args serialization/deserialization.
 - `resultCodec`: Codec for result serialization/deserialization.
-- `options`: Optional scope handle, attributes, data, metadata.
+- `options`: Optional scope handle, attributes, data, metadata, and toolCallId.
 
 **Returns**
 
