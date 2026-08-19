@@ -307,15 +307,16 @@ initialize_plugins(config).await?;
 </Tabs>
 
 Initialize model pricing once during process or harness startup, before the
-managed LLM calls whose responses should be cost-annotated. In tests or
-reusable harnesses, clear plugin configuration during teardown if later cases
-need a different resolver.
+managed LLM calls or manual lifecycle end events whose responses should be
+cost-annotated. In tests or reusable harnesses, clear plugin configuration
+during teardown if later cases need a different resolver.
 
 Built-in response codecs attach estimated cost directly to
 `AnnotatedLlmResponse.usage.cost` when model pricing is known. Managed LLM
-wrappers also enrich decoded custom response-codec output when the custom codec
-returns `model` and `usage` but omits `usage.cost`. Existing cost values are
-preserved, so provider-reported cost remains authoritative in the annotation.
+wrappers and manual lifecycle endings also enrich decoded or supplied response
+annotations when they contain `model` and `usage` but omit `usage.cost`.
+Existing cost values are preserved, so provider-reported cost remains
+authoritative in the annotation.
 
 Observability exporters prefer codec-normalized usage and cost, then fall back to
 raw payload fields and model-pricing estimates, subject to each exporter's

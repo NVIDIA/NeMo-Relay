@@ -1074,6 +1074,8 @@ async fn build_llm_end_payload(
 /// Sanitize-response guardrails affect only the emitted end-event payload, not
 /// the caller-owned `response` value. If a sanitizer errors or panics, Relay
 /// omits the payload and response annotation and does not run remaining sanitizers.
+/// When model pricing is configured, Relay estimates missing cost on a supplied
+/// or decoded response annotation that contains matching model and usage data.
 pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = params.handle.captured_scope_stack().clone();
@@ -1132,7 +1134,7 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
                     response_codec,
                     &entries,
                     LlmCallEndBehavior {
-                        attach_estimated_cost: false,
+                        attach_estimated_cost: true,
                     },
                 )
                 .await;
@@ -1286,7 +1288,11 @@ fn resolve_llm_end_annotation(
     provider_name: &str,
 ) -> (Option<AnnotatedLlmResponse>, Option<FlowError>) {
     if let Some(annotated_response) = annotated_response {
-        return (Some((*annotated_response).clone()), None);
+        let mut annotated_response = (*annotated_response).clone();
+        if behavior.attach_estimated_cost {
+            attach_estimated_cost_for_provider(&mut annotated_response, Some(provider_name));
+        }
+        return (Some(annotated_response), None);
     }
     let (Some(codec), Some(response)) = (response_codec, data) else {
         return (None, None);
