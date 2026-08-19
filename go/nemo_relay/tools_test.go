@@ -1064,6 +1064,66 @@ func TestToolCallWithToolCallID(t *testing.T) {
 	}
 }
 
+func TestToolCallExecutePropagatesToolCallIDToLifecycleEvents(t *testing.T) {
+	type lifecycleIDs struct {
+		start string
+		end   string
+	}
+
+	const (
+		managedTool = "managed_id_tool"
+		defaultTool = "managed_default_id_tool"
+		expectedID  = "call_go_managed_123"
+	)
+	captured := map[string]*lifecycleIDs{
+		managedTool: {},
+		defaultTool: {},
+	}
+	var mu sync.Mutex
+
+	RegisterSubscriber("go_tool_execute_id_sub", func(event Event) {
+		ids, tracked := captured[event.Name()]
+		if !tracked || event.Kind() != "scope" || event.Category() != "tool" {
+			return
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		switch event.ScopeCategory() {
+		case "start":
+			ids.start = event.ToolCallID()
+		case "end":
+			ids.end = event.ToolCallID()
+		}
+	})
+	defer func() { _ = DeregisterSubscriber("go_tool_execute_id_sub") }()
+
+	execute := func(name string, opts ...ToolCallOption) {
+		t.Helper()
+		_, err := ToolCallExecute(name, json.RawMessage(`{"value":1}`),
+			func(args json.RawMessage) (ToolExecutionResult, error) { return ToolExecutionResult{Result: args}, nil },
+			opts...,
+		)
+		if err != nil {
+			t.Fatalf(toolCallExecuteFailed, err)
+		}
+	}
+	execute(managedTool, WithToolCallID(expectedID))
+	execute(defaultTool)
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(toolFlushSubscribersFailed, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if *captured[managedTool] != (lifecycleIDs{start: expectedID, end: expectedID}) {
+		t.Fatalf("managed lifecycle tool call IDs = %+v, want %q on Start and End", *captured[managedTool], expectedID)
+	}
+	if *captured[defaultTool] != (lifecycleIDs{}) {
+		t.Fatalf("default managed lifecycle tool call IDs = %+v, want both unset", *captured[defaultTool])
+	}
+}
+
 func TestToolEventInputOutput(t *testing.T) {
 	var capturedInput, capturedOutput json.RawMessage
 	var mu sync.Mutex

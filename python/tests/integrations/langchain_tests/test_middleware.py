@@ -435,6 +435,7 @@ def test_wrap_tool_call_routes_through_tool_execute(
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
+    assert kwargs["tool_call_id"] == "call-1"
     assert isinstance(kwargs["args_codec"], nemo_relay.typed.BestEffortAnyCodec)
     assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
 
@@ -462,6 +463,7 @@ def test_awrap_tool_call_routes_through_tool_execute(
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
+    assert kwargs["tool_call_id"] == "call-1"
     assert isinstance(kwargs["args_codec"], nemo_relay.typed.BestEffortAnyCodec)
     assert isinstance(kwargs["result_codec"], nemo_relay.typed.BestEffortAnyCodec)
 

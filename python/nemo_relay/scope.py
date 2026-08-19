@@ -19,11 +19,13 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Iterator
+from typing import Iterator, Sequence
 
-from nemo_relay import Json
+from nemo_relay import DataSchema, Json
 from nemo_relay._context import ensure_scope_stack as _ensure_scope_stack
 from nemo_relay._native import (
+    LogSeverity,
+    MetricMeasurement,
     ScopeAttributes,
     ScopeHandle,
     ScopeType,
@@ -34,6 +36,7 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     get_handle as _native_get_handle,
 )
+from nemo_relay._native import metric as _native_metric
 from nemo_relay._native import (
     pop_scope as _native_pop_scope,
 )
@@ -150,7 +153,9 @@ def event(
     *,
     handle: ScopeHandle | None = None,
     data: Json | None = None,
+    data_schema: DataSchema | None = None,
     metadata: Json | None = None,
+    severity: LogSeverity | None = None,
     timestamp: datetime | None = None,
 ) -> None:
     """Emit a ``Mark`` event under the current or provided scope.
@@ -160,7 +165,9 @@ def event(
         handle: Optional scope handle that should own the event. When omitted,
             the current top-of-stack scope is used.
         data: Optional JSON payload attached to the event.
+        data_schema: Optional name and version identifying the ``data`` schema.
         metadata: Optional JSON metadata attached to the event.
+        severity: Optional typed severity used when the mark is exported as a log.
         timestamp: Optional timezone-aware ``datetime`` recorded on the mark
             event. When omitted, the current runtime time is used.
 
@@ -174,7 +181,42 @@ def event(
         timezone-aware ``datetime``; strings and naive datetimes are rejected.
     """
     _ensure_scope_stack()
-    _native_event(name, handle=handle, data=data, metadata=metadata, timestamp=timestamp)
+    _native_event(
+        name,
+        handle=handle,
+        data=data,
+        data_schema=data_schema,
+        metadata=metadata,
+        severity=severity,
+        timestamp=timestamp,
+    )
+
+
+def metric(
+    name: str,
+    measurements: Sequence[MetricMeasurement],
+    *,
+    handle: ScopeHandle | None = None,
+    metadata: Json | None = None,
+    timestamp: datetime | None = None,
+) -> None:
+    """Emit a validated group of OpenTelemetry metric recording operations.
+
+    Args:
+        name: Mark name that groups the measurements atomically.
+        measurements: Typed measurements to record.
+        handle: Optional parent scope. The current scope is used when omitted.
+        metadata: Optional JSON metadata attached to the metric mark.
+        timestamp: Optional timezone-aware timestamp for the metric mark.
+
+    Returns:
+        None: This function returns after the metric mark has been queued.
+
+    Raises:
+        ValueError: If any measurement is invalid; the complete group is rejected.
+    """
+    _ensure_scope_stack()
+    _native_metric(name, list(measurements), handle=handle, metadata=metadata, timestamp=timestamp)
 
 
 @contextmanager
@@ -266,4 +308,4 @@ def scope(
             pop(pushed_handle, metadata=metadata, timestamp=end_timestamp)
 
 
-__all__ = ["event", "get_handle", "pop", "push", "scope"]
+__all__ = ["event", "get_handle", "metric", "pop", "push", "scope"]

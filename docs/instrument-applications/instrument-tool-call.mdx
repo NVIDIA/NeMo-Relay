@@ -225,6 +225,8 @@ Use this checklist before running the pattern in production traffic.
 - Keep tool arguments, results, and annotations JSON-compatible.
 - Register temporary debugging subscribers only in development or test environments.
 - Pass the parent scope handle when the tool is part of a larger agent, request, or workflow.
+- Pass the provider or harness tool-call ID when the application already has a
+  stable identifier for the invocation.
 - Use middleware names that describe ownership, such as `search.redact_args` or `retrieval.timeout`.
 
 ## Common Issues

@@ -19,8 +19,18 @@ from nemo_relay import (
     JsonObject,
     LLMAttributes,
     LLMRequest,
+    LogSeverity,
     MarkEvent,
+    MetricKind,
+    MetricMeasurement,
+    MetricTemporality,
+    MetricValueType,
     OpenTelemetryConfig,
+    OpenTelemetryLogConfig,
+    OpenTelemetryLogSubscriber,
+    OpenTelemetryMetricConfig,
+    OpenTelemetryMetricSubscriber,
+    OpenTelemetryRuntimeDiagnostics,
     OpenTelemetrySubscriber,
     ScopeAttributes,
     ScopeEvent,
@@ -570,6 +580,121 @@ class TestAtofExporterType:
 
 
 class TestOpenTelemetryTypes:
+    @pytest.mark.parametrize("signal", ["traces", "logs", "metrics"])
+    def test_signal_subscribers_expose_runtime_diagnostics(self, signal):
+        if signal == "traces":
+            subscriber = OpenTelemetrySubscriber(OpenTelemetryConfig("full", "http://127.0.0.1:4318"))
+        elif signal == "logs":
+            subscriber = OpenTelemetryLogSubscriber(OpenTelemetryLogConfig("http://127.0.0.1:4318"))
+        else:
+            subscriber = OpenTelemetryMetricSubscriber(OpenTelemetryMetricConfig("http://127.0.0.1:4318"))
+
+        subscriber_name = f"py_otel_{signal}_diagnostics_{uuid4().hex}"
+        subscriber.register(subscriber_name)
+        try:
+            for _ in range(3):
+                scope.event(
+                    "invalid_metric",
+                    data={"measurements": []},
+                    data_schema={"name": "nemo.relay.metric_measurements", "version": "999"},
+                )
+            subscribers.flush()
+
+            diagnostics = subscriber.runtime_diagnostics()
+            assert isinstance(diagnostics, OpenTelemetryRuntimeDiagnostics)
+            diagnostic = diagnostics.get("otel.metric_mark_invalid")
+            assert diagnostic is not None
+            assert diagnostic.count == 3
+            assert "unsupported metric schema version" in diagnostic.message
+            assert [entry.code for entry in diagnostics.entries] == ["otel.metric_mark_invalid"]
+        finally:
+            subscriber.deregister(subscriber_name)
+            subscriber.shutdown()
+
+    def test_signal_config_defaults_and_lifecycle(self):
+        log_config = OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
+        assert log_config.minimum_severity == LogSeverity.Info
+        assert log_config.max_queue_size == 2048
+        assert log_config.max_export_batch_size == 512
+        assert log_config.scheduled_delay_millis == 1000
+        log_config.minimum_severity = LogSeverity.Warn
+        log_config.headers = {"authorization": "Bearer token"}
+        log_config.resource_attributes = {"deployment.environment": "test"}
+
+        log_subscriber = OpenTelemetryLogSubscriber(log_config)
+        log_name = f"py_otel_log_{uuid4().hex}"
+        log_subscriber.register(log_name)
+        try:
+            assert log_subscriber.deregister(log_name)
+            log_subscriber.force_flush()
+        finally:
+            subscribers.deregister(log_name)
+            log_subscriber.shutdown()
+
+        metric_config = OpenTelemetryMetricConfig("http://localhost:4318/v1/metrics")
+        assert metric_config.export_interval_millis == 60000
+        assert metric_config.temporality == MetricTemporality.Cumulative
+        assert metric_config.max_instruments == 256
+        assert metric_config.cardinality_limit == 2000
+        metric_config.temporality = MetricTemporality.Delta
+        metric_config.headers = {"authorization": "Bearer token"}
+        metric_config.resource_attributes = {"deployment.environment": "test"}
+
+        metric_subscriber = OpenTelemetryMetricSubscriber(metric_config)
+        metric_name = f"py_otel_metric_{uuid4().hex}"
+        metric_subscriber.register(metric_name)
+        try:
+            assert metric_subscriber.deregister(metric_name)
+            metric_subscriber.force_flush()
+        finally:
+            subscribers.deregister(metric_name)
+            metric_subscriber.shutdown()
+
+    def test_signal_subscribers_validate_limits(self):
+        log_config = OpenTelemetryLogConfig("http://localhost:4318/v1/logs")
+        log_config.max_queue_size = 0
+        with pytest.raises(RuntimeError, match="max_queue_size must be greater than 0"):
+            OpenTelemetryLogSubscriber(log_config)
+
+        metric_config = OpenTelemetryMetricConfig("http://localhost:4318/v1/metrics")
+        metric_config.cardinality_limit = 0
+        with pytest.raises(RuntimeError, match="cardinality_limit must be greater than 0"):
+            OpenTelemetryMetricSubscriber(metric_config)
+
+    def test_signal_subscribers_export_to_signal_relative_paths(self):
+        with _OtelCollector() as collector:
+            log_subscriber = OpenTelemetryLogSubscriber(OpenTelemetryLogConfig(collector.endpoint))
+            log_name = f"py_otel_log_e2e_{uuid4().hex}"
+            log_subscriber.register(log_name)
+            try:
+                scope.event("log_mark", severity=LogSeverity.Info, data={"message": "ready"})
+                log_subscriber.force_flush()
+                request = collector.wait_for_request()
+                assert request["path"] == "/v1/logs"
+                assert request["body"]
+            finally:
+                log_subscriber.deregister(log_name)
+                log_subscriber.shutdown()
+
+        with _OtelCollector() as collector:
+            metric_config = OpenTelemetryMetricConfig(collector.endpoint)
+            metric_config.export_interval_millis = 100
+            metric_subscriber = OpenTelemetryMetricSubscriber(metric_config)
+            metric_name = f"py_otel_metric_e2e_{uuid4().hex}"
+            metric_subscriber.register(metric_name)
+            try:
+                scope.metric(
+                    "metric_mark",
+                    [MetricMeasurement("relay.tokens", MetricKind.Counter, MetricValueType.U64, 3)],
+                )
+                metric_subscriber.force_flush()
+                request = collector.wait_for_request()
+                assert request["path"] == "/v1/metrics"
+                assert request["body"]
+            finally:
+                metric_subscriber.deregister(metric_name)
+                metric_subscriber.shutdown()
+
     def test_config_defaults_mutation_and_repr(self):
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")
 
@@ -612,7 +737,7 @@ class TestOpenTelemetryTypes:
             config.resource_attributes = cast(dict[str, str], {"env": 1})
 
         with pytest.raises(ValueError, match="attribute mapping key must not be blank"):
-            config.attribute_mappings = cast(list[dict[str, str]], [{"key": "", "alias": "x"}])
+            config.attribute_mappings = [{"key": "", "alias": "x"}]
 
     def test_subscriber_lifecycle_and_invalid_transport(self):
         config = OpenTelemetryConfig("full", "http://localhost:4318/v1/traces")

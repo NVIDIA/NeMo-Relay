@@ -191,6 +191,9 @@ pub struct ToolCallExecuteParams {
     /// Optional JSON metadata recorded on emitted events.
     #[builder(default)]
     pub metadata: Option<Json>,
+    /// Optional provider-specific correlation identifier.
+    #[builder(default, setter(into))]
+    pub tool_call_id: Option<String>,
 }
 
 /// Builder parameters for [`tool_call_end`].
@@ -721,6 +724,8 @@ impl Drop for ManagedToolCompletion {
 /// - `data`: Optional application payload stored on the managed tool handle.
 ///   It may be used on failure end events that have no output payload.
 /// - `metadata`: Optional JSON metadata recorded on emitted events.
+/// - `tool_call_id`: Optional provider-specific correlation identifier recorded
+///   on both managed lifecycle events.
 ///
 /// # Returns
 /// A [`Result`] containing the application result and optional opaque
@@ -743,6 +748,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         attributes,
         data,
         metadata,
+        tool_call_id,
     } = params;
     ensure_runtime_owner()?;
     {
@@ -819,6 +825,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
             .attributes(attributes)
             .data_opt(data.clone())
             .metadata_opt(metadata.clone())
+            .tool_call_id_opt(tool_call_id)
             .build(),
     )
     .await?;

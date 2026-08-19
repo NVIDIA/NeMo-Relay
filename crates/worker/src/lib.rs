@@ -34,7 +34,11 @@ use futures_util::{Stream, StreamExt};
 #[cfg(unix)]
 use hyper_util::rt::TokioIo;
 pub use nemo_relay_types::Json;
-pub use nemo_relay_types::api::event::{DataSchema, Event, EventSanitizeFields, PendingMarkSpec};
+pub use nemo_relay_types::api::event::{
+    DataSchema, Event, EventSanitizeFields, LogSeverity, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MetricEnvelope, MetricKind, MetricMeasurement, MetricValueType,
+    PendingMarkSpec,
+};
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 pub use nemo_relay_types::api::scope::ScopeType;
 pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
@@ -52,12 +56,12 @@ use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWork
 use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, DropScopeStackRequest, EmitMarkRequest,
-    EmptyResult, GuardrailResult, HandshakeRequest, HandshakeResponse, HealthRequest,
-    HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
-    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind, LlmNextRequest,
-    LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest,
-    RegisterRequest, RegisterResponse, Registration, RegistrationSurface, ScopeContext,
-    ShutdownRequest, StreamChunk,
+    EmptyResult, GetRuntimeDiagnosticsRequest, GuardrailResult, HandshakeRequest,
+    HandshakeResponse, HealthRequest, HealthResponse, InvokeRequest, InvokeResponse, JsonEnvelope,
+    JsonResult, LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecKind,
+    LlmNextRequest, LlmRequestInterceptResult, LlmStreamNextRequest, PopScopeRequest,
+    PushScopeRequest, RegisterRequest, RegisterResponse, Registration, RegistrationSurface,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionInterceptResult, ToolExecutionResult as ProtoToolExecutionResult,
     ToolExecutionResultResponse, ToolNextRequest, ValidateRequest, ValidateResponse, WorkerAck,
@@ -81,6 +85,37 @@ use tower::service_fn;
 /// SDK result type.
 pub type Result<T> = std::result::Result<T, WorkerSdkError>;
 
+/// One bounded runtime diagnostic reported by the Relay host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeDiagnostic {
+    /// Stable identifier for the diagnostic condition.
+    pub code: String,
+    /// Most recently recorded message for this condition.
+    pub message: String,
+    /// Total number of occurrences recorded for this condition.
+    pub count: u64,
+}
+
+/// Bounded snapshot of active host runtime diagnostics.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeDiagnostics {
+    entries: Vec<RuntimeDiagnostic>,
+}
+
+impl RuntimeDiagnostics {
+    /// Return diagnostics in stable code order.
+    pub fn entries(&self) -> &[RuntimeDiagnostic] {
+        &self.entries
+    }
+
+    /// Return a diagnostic by its stable code.
+    pub fn get(&self, code: &str) -> Option<&RuntimeDiagnostic> {
+        self.entries
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+    }
+}
+
 /// Boxed future returned by async worker callbacks.
 pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 
@@ -88,6 +123,7 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
+const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 
 tokio::task_local! {
@@ -113,6 +149,15 @@ pub enum WorkerSdkError {
     /// JSON serialization failed.
     #[error("serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
+}
+
+/// Optional fields supported by the additive `grpc-v1` mark-emission request.
+#[derive(Debug, Clone, Default)]
+pub struct EmitMarkOptions {
+    /// Schema identifier for the mark's opaque data payload.
+    pub data_schema: Option<DataSchema>,
+    /// Telemetry severity for OTLP log projection.
+    pub severity: Option<LogSeverity>,
 }
 
 /// Trait implemented by Rust out-of-process worker plugins.
@@ -762,6 +807,18 @@ impl PluginRuntime {
         data: Option<Json>,
         metadata: Option<Json>,
     ) -> Result<()> {
+        self.emit_mark_with_options(name, data, metadata, EmitMarkOptions::default())
+            .await
+    }
+
+    /// Emits a mark event through the host runtime with optional schema and severity fields.
+    pub async fn emit_mark_with_options(
+        &self,
+        name: &str,
+        data: Option<Json>,
+        metadata: Option<Json>,
+        options: EmitMarkOptions,
+    ) -> Result<()> {
         let scope = self.current_scope_context();
         let mut client = self.host_client().await?;
         let response = client
@@ -772,11 +829,82 @@ impl PluginRuntime {
                 name: name.into(),
                 data: optional_json_envelope(data)?,
                 metadata: optional_json_envelope(metadata)?,
+                data_schema: optional_typed_json_envelope(
+                    DATA_SCHEMA_SCHEMA,
+                    options.data_schema.as_ref(),
+                )?,
+                severity: options
+                    .severity
+                    .as_ref()
+                    .map(severity_wire_value)
+                    .transpose()?
+                    .unwrap_or_default(),
             }))
             .await
             .map_err(|err| WorkerSdkError::Transport(err.to_string()))?
             .into_inner();
         ack_to_result(response.ok, response.error)
+    }
+
+    /// Return a bounded snapshot of active host runtime diagnostics.
+    pub async fn runtime_diagnostics(&self) -> Result<RuntimeDiagnostics> {
+        let mut client = self.host_client().await?;
+        let response = client
+            .get_runtime_diagnostics(Request::new(GetRuntimeDiagnosticsRequest {
+                activation_id: self.activation_id.clone(),
+                auth_token: self.auth_token.clone(),
+            }))
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    WorkerSdkError::Callback(
+                        "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension"
+                            .into(),
+                    )
+                } else {
+                    WorkerSdkError::Transport(error.to_string())
+                }
+            })?
+            .into_inner();
+        Ok(RuntimeDiagnostics {
+            entries: response
+                .entries
+                .into_iter()
+                .map(|diagnostic: ProtoRuntimeDiagnostic| RuntimeDiagnostic {
+                    code: diagnostic.code,
+                    message: diagnostic.message,
+                    count: diagnostic.count,
+                })
+                .collect(),
+        })
+    }
+
+    /// Emits a validated Relay metric-measurement mark through the host runtime.
+    pub async fn emit_metric(
+        &self,
+        name: &str,
+        measurements: Vec<MetricMeasurement>,
+        metadata: Option<Json>,
+    ) -> Result<()> {
+        let envelope = MetricEnvelope { measurements };
+        envelope
+            .validate()
+            .map_err(|err| WorkerSdkError::InvalidInput(err.to_string()))?;
+        self.emit_mark_with_options(
+            name,
+            Some(serde_json::to_value(envelope)?),
+            metadata,
+            EmitMarkOptions {
+                data_schema: Some(
+                    DataSchema::builder()
+                        .name(METRIC_DATA_SCHEMA_NAME)
+                        .version(METRIC_DATA_SCHEMA_VERSION)
+                        .build(),
+                ),
+                severity: None,
+            },
+        )
+        .await
     }
 
     /// Creates an isolated host-owned scope stack.
@@ -2349,6 +2477,24 @@ fn optional_json_envelope(value: Option<Json>) -> Result<Option<JsonEnvelope>> {
         .as_ref()
         .map(|value| json_envelope(JSON_SCHEMA, value).map_err(WorkerSdkError::from))
         .transpose()
+}
+
+fn optional_typed_json_envelope<T: serde::Serialize>(
+    schema: &str,
+    value: Option<&T>,
+) -> Result<Option<JsonEnvelope>> {
+    value
+        .map(|value| json_envelope(schema, value).map_err(WorkerSdkError::from))
+        .transpose()
+}
+
+fn severity_wire_value(value: &LogSeverity) -> Result<String> {
+    serde_json::to_value(value)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            WorkerSdkError::InvalidInput("LogSeverity did not serialize as a string".into())
+        })
 }
 
 fn infallible_json_envelope<T: serde::Serialize>(schema: &str, value: &T) -> JsonEnvelope {

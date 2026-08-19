@@ -327,6 +327,7 @@ def test_tool_call_routes_through_langchain_execution_middleware(
     assert kwargs["name"] == "lookup"
     assert kwargs["args"] == {"query": "original"}
     assert kwargs["handle"] is parent_handle
+    assert kwargs["tool_call_id"] == "call-1"
 
 
 def test_skill_load_mark_survives_deepagents_middleware(

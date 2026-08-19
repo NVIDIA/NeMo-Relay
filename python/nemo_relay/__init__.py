@@ -107,8 +107,19 @@ from nemo_relay._native import (
     LlmSanitizeRequestContext,
     LlmSanitizeResponseCodec,
     LlmSanitizeResponseContext,
+    LogSeverity,
     MarkEvent,
+    MetricKind,
+    MetricMeasurement,
+    MetricTemporality,
+    MetricValueType,
     OpenTelemetryConfig,
+    OpenTelemetryLogConfig,
+    OpenTelemetryLogSubscriber,
+    OpenTelemetryMetricConfig,
+    OpenTelemetryMetricSubscriber,
+    OpenTelemetryRuntimeDiagnostic,
+    OpenTelemetryRuntimeDiagnostics,
     OpenTelemetrySubscriber,
     PendingMarkSpec,
     PropagationContext,
@@ -160,6 +171,13 @@ Json: TypeAlias = JsonValue
 #: encountered. Callers pass these string literals in plugin and adaptive
 #: configuration dataclasses.
 UnsupportedBehavior: TypeAlias = Literal["ignore", "warn", "error"]
+
+
+class DataSchema(TypedDict):
+    """Schema identifier attached to an event's opaque data payload."""
+
+    name: str
+    version: str
 
 
 class EventSanitizeFields(TypedDict):
@@ -611,6 +629,12 @@ __all__ = [
     "ScopeAttributes",
     "ToolAttributes",
     "LLMAttributes",
+    "LogSeverity",
+    "MetricKind",
+    "MetricValueType",
+    "MetricMeasurement",
+    "MetricTemporality",
+    "DataSchema",
     "ScopeType",
     "ScopeEvent",
     "MarkEvent",
@@ -632,6 +656,12 @@ __all__ = [
     "AtofExporter",
     "OpenTelemetryConfig",
     "OpenTelemetrySubscriber",
+    "OpenTelemetryRuntimeDiagnostic",
+    "OpenTelemetryRuntimeDiagnostics",
+    "OpenTelemetryLogConfig",
+    "OpenTelemetryLogSubscriber",
+    "OpenTelemetryMetricConfig",
+    "OpenTelemetryMetricSubscriber",
     "JsonPrimitive",
     "JsonValue",
     "JsonObject",

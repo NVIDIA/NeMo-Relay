@@ -8,6 +8,7 @@
 //! so the runtime can compose tool and LLM middleware consistently across
 //! bindings.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -33,6 +34,17 @@ pub type EventSanitizeFn = Arc<
             Arc<Event>,
             EventSanitizeFields,
         ) -> Pin<Box<dyn Future<Output = Result<EventSanitizeFields>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Add flat metadata attributes to a fully constructed event.
+///
+/// The callback receives immutable event context and returns dotted metadata
+/// keys to insert. Relay validates the returned keys and values before merging
+/// them, and never overwrites metadata that is already present.
+pub type EventMetadataInjectorFn = Arc<
+    dyn Fn(Arc<Event>) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Json>>> + Send>>
         + Send
         + Sync,
 >;

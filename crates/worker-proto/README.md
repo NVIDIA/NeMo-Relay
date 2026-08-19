@@ -71,6 +71,13 @@ JSON values use `JsonValue`, whose bytes contain exactly one JSON value; this
 preserves JSON integers and other application data without the numeric coercion
 of `google.protobuf.Value`. Hosts and SDKs reject a missing required `result`
 or invalid JSON bytes. JSON null annotations normalize to absence.
+- **Additive mark options**: `EmitMarkRequest.data_schema` carries a
+  `nemo.relay.DataSchema@1` envelope and `severity` carries the canonical log
+  severity string. Omitting both is wire-compatible with legacy workers.
+- **Runtime diagnostics**: Authenticated `GetRuntimeDiagnostics` returns the
+  bounded active-host `{ code, message, count }` snapshot. Older hosts return
+  gRPC `UNIMPLEMENTED`; current SDKs surface that as an explicit unsupported
+  runtime-diagnostics error.
 
 ## Installation
 

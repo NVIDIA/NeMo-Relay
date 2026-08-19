@@ -86,9 +86,42 @@ export interface OpenTelemetryEndpointConfig {
   scheduled_delay_millis?: number;
 }
 
+export interface OpenTelemetrySignalEndpointConfig {
+  endpoint: string;
+  transport?: 'http_binary' | 'grpc';
+  headers?: Record<string, string>;
+  header_env?: Record<string, string>;
+  resource_attributes?: Record<string, string>;
+  service_name?: string;
+  service_namespace?: string;
+  service_version?: string;
+  instrumentation_scope?: string;
+  timeout_millis?: number;
+}
+
+export interface OpenTelemetryLogSectionConfig {
+  enabled?: boolean;
+  endpoints?: OpenTelemetrySignalEndpointConfig[];
+  minimum_severity?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error';
+  max_queue_size?: number;
+  max_export_batch_size?: number;
+  scheduled_delay_millis?: number;
+}
+
+export interface OpenTelemetryMetricSectionConfig {
+  enabled?: boolean;
+  endpoints?: OpenTelemetrySignalEndpointConfig[];
+  export_interval_millis?: number;
+  temporality?: 'cumulative' | 'delta' | 'low_memory';
+  max_instruments?: number;
+  cardinality_limit?: number;
+}
+
 export interface OpenTelemetrySectionConfig {
   enabled?: boolean;
   endpoints?: OpenTelemetryEndpointConfig[];
+  logs?: OpenTelemetryLogSectionConfig;
+  metrics?: OpenTelemetryMetricSectionConfig;
 }
 
 export interface Config {
@@ -117,6 +150,16 @@ export declare function atofConfig(config?: AtofConfig): AtofConfig;
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
 /** Create one typed OpenTelemetry endpoint. */
 export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfig): OpenTelemetryEndpointConfig;
+/** Create one signal-specific OpenTelemetry endpoint for logs or metrics. */
+export declare function openTelemetrySignalEndpoint(
+  config: OpenTelemetrySignalEndpointConfig,
+): OpenTelemetrySignalEndpointConfig;
+/** Create OTLP log pipeline settings with defaults applied. */
+export declare function openTelemetryLogConfig(config?: OpenTelemetryLogSectionConfig): OpenTelemetryLogSectionConfig;
+/** Create OTLP metric pipeline settings with defaults applied. */
+export declare function openTelemetryMetricConfig(
+  config?: OpenTelemetryMetricSectionConfig,
+): OpenTelemetryMetricSectionConfig;
 /** Create multi-endpoint OpenTelemetry settings. */
 export declare function openTelemetryConfig(config?: OpenTelemetrySectionConfig): OpenTelemetrySectionConfig;
 /** Wrap observability config as a top-level plugin component. */

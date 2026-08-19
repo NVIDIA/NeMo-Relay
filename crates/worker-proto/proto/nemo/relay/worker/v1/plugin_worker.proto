@@ -18,6 +18,7 @@ service PluginWorker {
 
 service RelayHostRuntime {
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest) returns (GetRuntimeDiagnosticsResponse);
   rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
   rpc PopScope(PopScopeRequest) returns (HostAck);
   rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
@@ -282,6 +283,21 @@ message HostAck {
   WorkerError error = 2;
 }
 
+message GetRuntimeDiagnosticsRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+}
+
+message RuntimeDiagnostic {
+  string code = 1;
+  string message = 2;
+  uint64 count = 3;
+}
+
+message GetRuntimeDiagnosticsResponse {
+  repeated RuntimeDiagnostic entries = 1;
+}
+
 message WorkerError {
   string code = 1;
   string message = 2;
@@ -300,6 +316,8 @@ message EmitMarkRequest {
   string name = 4;
   JsonEnvelope data = 5;
   JsonEnvelope metadata = 6;
+  JsonEnvelope data_schema = 7;
+  string severity = 8;
 }
 
 message PushScopeRequest {

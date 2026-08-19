@@ -137,7 +137,7 @@ def call_end(handle, result, *, data=None, metadata=None, timestamp: datetime | 
     return _native_tool_call_end(handle, result, data=data, metadata=metadata, timestamp=timestamp)
 
 
-def execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None):
+def execute(name, args, func, *, handle=None, attributes=None, data=None, metadata=None, tool_call_id=None):
     """Run a tool through the managed middleware pipeline.
 
     Pipeline order:
@@ -159,6 +159,8 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
         attributes: Optional native tool attributes attached to the start event.
         data: Optional JSON application payload stored on the managed tool handle.
         metadata: Optional JSON metadata recorded on the emitted start event.
+        tool_call_id: Optional provider-specific tool call identifier recorded
+            on the emitted start and end events.
 
     Returns:
         ToolExecutionResult: The canonical result returned by ``func`` or an
@@ -196,6 +198,7 @@ def execute(name, args, func, *, handle=None, attributes=None, data=None, metada
         attributes=attributes,
         data=data,
         metadata=metadata,
+        tool_call_id=tool_call_id,
     )
 
 

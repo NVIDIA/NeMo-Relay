@@ -259,15 +259,107 @@ class OpenTelemetryEndpointConfig:
 
 
 @dataclass(slots=True)
+class OpenTelemetrySignalEndpointConfig:
+    """One signal-specific OTLP destination for logs or metrics."""
+
+    endpoint: str
+    transport: Literal["http_binary", "grpc"] = "http_binary"
+    headers: dict[str, str] = field(default_factory=dict)
+    header_env: dict[str, str] = field(default_factory=dict)
+    resource_attributes: dict[str, str] = field(default_factory=dict)
+    service_name: str = "unknown_service"
+    service_namespace: str | None = None
+    service_version: str | None = None
+    instrumentation_scope: str = "opentelemetry"
+    timeout_millis: int = 3000
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this signal endpoint to the canonical plugin shape."""
+        return _normalize_object(
+            {
+                "endpoint": self.endpoint,
+                "transport": self.transport,
+                "headers": self.headers,
+                "header_env": self.header_env,
+                "resource_attributes": self.resource_attributes,
+                "service_name": self.service_name,
+                "service_namespace": self.service_namespace,
+                "service_version": self.service_version,
+                "instrumentation_scope": self.instrumentation_scope,
+                "timeout_millis": self.timeout_millis,
+            }
+        )
+
+
+@dataclass(slots=True)
+class OpenTelemetryLogSectionConfig:
+    """OTLP log pipeline settings sourced from non-metric marks."""
+
+    enabled: bool = False
+    endpoints: list[OpenTelemetrySignalEndpointConfig] | None = None
+    minimum_severity: Literal["trace", "debug", "info", "warn", "warning", "error"] = "info"
+    max_queue_size: int = 2048
+    max_export_batch_size: int = 512
+    scheduled_delay_millis: int = 1000
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this log section to the canonical plugin shape."""
+        return _normalize_object(
+            {
+                "enabled": self.enabled,
+                "endpoints": self.endpoints,
+                "minimum_severity": self.minimum_severity,
+                "max_queue_size": self.max_queue_size,
+                "max_export_batch_size": self.max_export_batch_size,
+                "scheduled_delay_millis": self.scheduled_delay_millis,
+            }
+        )
+
+
+@dataclass(slots=True)
+class OpenTelemetryMetricSectionConfig:
+    """OTLP metric pipeline settings sourced from metric marks."""
+
+    enabled: bool = False
+    endpoints: list[OpenTelemetrySignalEndpointConfig] | None = None
+    export_interval_millis: int = 60_000
+    temporality: Literal["cumulative", "delta", "low_memory"] = "cumulative"
+    max_instruments: int = 256
+    cardinality_limit: int = 2000
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this metric section to the canonical plugin shape."""
+        return _normalize_object(
+            {
+                "enabled": self.enabled,
+                "endpoints": self.endpoints,
+                "export_interval_millis": self.export_interval_millis,
+                "temporality": self.temporality,
+                "max_instruments": self.max_instruments,
+                "cardinality_limit": self.cardinality_limit,
+            }
+        )
+
+
+@dataclass(slots=True)
 class OpenTelemetrySectionConfig:
     """Multi-endpoint OpenTelemetry plugin settings."""
 
     enabled: bool = False
     endpoints: list[OpenTelemetryEndpointConfig] = field(default_factory=list)
+    logs: OpenTelemetryLogSectionConfig | None = None
+    metrics: OpenTelemetryMetricSectionConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this section to the canonical plugin shape."""
-        return _normalize_object({"enabled": self.enabled, "endpoints": self.endpoints})
+        return _normalize_object(
+            {
+                "enabled": self.enabled,
+                "endpoints": self.endpoints,
+                "logs": self.logs,
+                "metrics": self.metrics,
+            }
+        )
 
 
 @dataclass(slots=True)
@@ -278,7 +370,7 @@ class ObservabilityConfig:
     LLM start event.
     """
 
-    version: int = 3
+    version: int = 4
     atof: AtofConfig | None = None
     atif: AtifConfig | None = None
     opentelemetry: OpenTelemetrySectionConfig | None = None
@@ -328,6 +420,9 @@ __all__ = [
     "HttpStorageConfig",
     "S3StorageConfig",
     "OpenTelemetryEndpointConfig",
+    "OpenTelemetrySignalEndpointConfig",
+    "OpenTelemetryLogSectionConfig",
+    "OpenTelemetryMetricSectionConfig",
     "OpenTelemetrySectionConfig",
     "ObservabilityConfig",
     "OBSERVABILITY_PLUGIN_KIND",

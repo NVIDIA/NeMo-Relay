@@ -9,7 +9,10 @@ import type { LlmCodec, LlmResponseCodec } from './typed';
 /** Codec identity available while a managed LLM event is sanitized. */
 export type LlmCodecIdentity =
   | { kind: 'none' }
-  | { kind: 'builtin'; id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'oci_genai' | 'gemini_generate_content' }
+  | {
+      kind: 'builtin';
+      id: 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'oci_genai' | 'gemini_generate_content';
+    }
   | { kind: 'runtime'; id: string }
   | { kind: 'opaque' };
 
@@ -113,7 +116,9 @@ export interface PendingMarkSpec {
   category?: string | null;
   categoryProfile?: Json;
   data?: Json;
+  dataSchema?: { name: string; version: string } | null;
   metadata?: Json;
+  severity?: 'trace' | 'debug' | 'info' | 'warn' | 'warning' | 'error' | null;
 }
 
 /** Schema tag attached to an opaque optimization contribution payload. */

@@ -46,8 +46,13 @@ binding consumes it through CGo.
   isolation.
 - **Typed OpenTelemetry export**:
   `nemo_relay_otel_subscriber_create` constructs one `full`, `gen_ai`, or
-  `openinference` endpoint subscriber. The endpoint and projection type are
-  required.
+  `openinference` trace subscriber. Independently managed log and metric
+  subscribers use `nemo_relay_otel_log_subscriber_create` and
+  `nemo_relay_otel_metric_subscriber_create`.
+- **Structured marks and metrics**: `nemo_relay_event_v2` adds optional data
+  schema JSON and `NemoRelayLogSeverity` to the compatible mark API.
+  `nemo_relay_metric_json` and `nemo_relay_metric` emit atomically validated
+  Relay metric measurements.
 - **Generated header**: A committed `nemo_relay.h` file for C-compatible
   consumers.
 - **Native library outputs**: Shared and static libraries for platform
@@ -62,6 +67,112 @@ callback on a native thread and waits for it to return. Blocking I/O and other
 long-running callback work therefore occupy that thread and can reduce
 middleware throughput. The FFI does not expose completion-based middleware
 registration.
+
+## OTLP Logs and Metrics
+
+The raw C ABI remains experimental and source-first. Configure plugin-managed
+export with the same version-4 JSON document used by every binding. Leaving
+the log and metric endpoint lists absent derives their destinations from the
+trace endpoint:
+
+```c
+const char *config_json =
+    "{\"version\":1,\"components\":[{\"kind\":\"observability\",\"config\":{"
+    "\"version\":4,\"opentelemetry\":{\"enabled\":true,\"endpoints\":[{"
+    "\"type\":\"gen_ai\",\"endpoint\":\"http://localhost:4318/v1/traces\"}],"
+    "\"logs\":{\"enabled\":true},\"metrics\":{\"enabled\":true}}}}]}";
+char *report_json = NULL;
+if (nemo_relay_initialize_plugins(config_json, &report_json) != NEMO_RELAY_STATUS_OK) {
+    /* inspect nemo_relay_last_error() */
+}
+nemo_relay_string_free(report_json);
+/* Call nemo_relay_clear_plugin_configuration() during process teardown. */
+```
+
+Use `nemo_relay_event_v2` for a schema-tagged log mark and
+`nemo_relay_metric_json` for an atomically validated metric group. The legacy
+`nemo_relay_event` function remains valid for untyped marks:
+
+```c
+NemoRelayLogSeverity severity = NEMO_RELAY_LOG_SEVERITY_WARN;
+nemo_relay_event_v2(
+    "cache-nearly-full", NULL, "{\"entries\":900}",
+    "{\"name\":\"example.cache\",\"version\":\"1\"}", NULL, &severity, NULL
+);
+nemo_relay_metric_json(
+    "cache-entries", NULL,
+    "[{\"name\":\"example.cache.entries\",\"kind\":\"gauge\","
+    "\"value_type\":\"u64\",\"value\":900}]",
+    NULL, NULL
+);
+```
+
+Create direct log and metric subscribers independently. Register each before
+emitting marks, then deregister, force-flush, shut down, and free it during
+graceful teardown. Runtime diagnostics are a caller-owned, bounded JSON array
+of `{"code":"...","message":"...","count":N}` entries; release the result
+with `nemo_relay_string_free` after parsing it. Check every returned status
+before continuing. On failure, read `nemo_relay_last_error()` immediately,
+before another FFI call clears the thread-local message:
+
+```c
+#include <stdbool.h>
+#include <stdio.h>
+
+static bool relay_ok(NemoRelayStatus status) {
+    if (status == NEMO_RELAY_STATUS_OK) {
+        return true;
+    }
+    const char *message = nemo_relay_last_error();
+    fprintf(stderr, "nemo-relay: %s\n", message != NULL ? message : "unknown error");
+    return false;
+}
+
+struct FfiOpenTelemetryLogSubscriber *logs = NULL;
+struct FfiOpenTelemetryMetricSubscriber *metrics = NULL;
+bool logs_registered = false;
+bool metrics_registered = false;
+
+/* Equivalent explicit OTLP/HTTP paths are /v1/logs and /v1/metrics, respectively. */
+if (!relay_ok(nemo_relay_otel_log_subscriber_create(
+    "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
+    0, "info", 0, 0, 0, &logs
+))) goto cleanup;
+if (!relay_ok(nemo_relay_otel_metric_subscriber_create(
+    "http_binary", "http://localhost:4318", NULL, NULL, NULL, NULL, NULL, NULL,
+    0, 0, "cumulative", 0, 0, &metrics
+))) goto cleanup;
+if (!relay_ok(nemo_relay_otel_log_subscriber_register(logs, "otlp-logs"))) goto cleanup;
+logs_registered = true;
+if (!relay_ok(nemo_relay_otel_metric_subscriber_register(metrics, "otlp-metrics"))) goto cleanup;
+metrics_registered = true;
+
+char *diagnostics_json = NULL;
+if (relay_ok(nemo_relay_otel_log_subscriber_runtime_diagnostics_json(
+    logs, &diagnostics_json
+))) {
+    /* Parse diagnostics_json, then release it. */
+    nemo_relay_string_free(diagnostics_json);
+}
+
+cleanup:
+if (metrics_registered) {
+    (void)relay_ok(nemo_relay_otel_metric_subscriber_deregister("otlp-metrics"));
+}
+if (metrics != NULL) {
+    (void)relay_ok(nemo_relay_otel_metric_subscriber_force_flush(metrics));
+    (void)relay_ok(nemo_relay_otel_metric_subscriber_shutdown(metrics));
+    nemo_relay_otel_metric_subscriber_free(metrics);
+}
+if (logs_registered) {
+    (void)relay_ok(nemo_relay_otel_log_subscriber_deregister("otlp-logs"));
+}
+if (logs != NULL) {
+    (void)relay_ok(nemo_relay_otel_log_subscriber_force_flush(logs));
+    (void)relay_ok(nemo_relay_otel_log_subscriber_shutdown(logs));
+    nemo_relay_otel_log_subscriber_free(logs);
+}
+```
 
 ## Installation
 

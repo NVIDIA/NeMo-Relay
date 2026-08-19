@@ -23,6 +23,44 @@ type ObservabilityConfig struct {
 type ObservabilityOpenTelemetryConfig struct {
 	Enabled   bool                                       `json:"enabled,omitempty"`
 	Endpoints []ObservabilityOpenTelemetryEndpointConfig `json:"endpoints,omitempty"`
+	Logs      *ObservabilityOpenTelemetryLogConfig       `json:"logs,omitempty"`
+	Metrics   *ObservabilityOpenTelemetryMetricConfig    `json:"metrics,omitempty"`
+}
+
+// ObservabilityOpenTelemetrySignalEndpointConfig configures one log or metric OTLP destination.
+type ObservabilityOpenTelemetrySignalEndpointConfig struct {
+	Endpoint             string            `json:"endpoint"`
+	Transport            string            `json:"transport,omitempty"`
+	Headers              map[string]string `json:"headers,omitempty"`
+	HeaderEnv            map[string]string `json:"header_env,omitempty"`
+	ResourceAttributes   map[string]string `json:"resource_attributes,omitempty"`
+	ServiceName          string            `json:"service_name,omitempty"`
+	ServiceNamespace     string            `json:"service_namespace,omitempty"`
+	ServiceVersion       string            `json:"service_version,omitempty"`
+	InstrumentationScope string            `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
+}
+
+// ObservabilityOpenTelemetryLogConfig configures the plugin's OTLP log pipeline.
+// A nil Endpoints pointer derives log destinations from the trace endpoint list.
+type ObservabilityOpenTelemetryLogConfig struct {
+	Enabled              bool                                              `json:"enabled,omitempty"`
+	Endpoints            *[]ObservabilityOpenTelemetrySignalEndpointConfig `json:"endpoints,omitempty"`
+	MinimumSeverity      LogSeverity                                       `json:"minimum_severity,omitempty"`
+	MaxQueueSize         uint64                                            `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize   uint64                                            `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis uint64                                            `json:"scheduled_delay_millis,omitempty"`
+}
+
+// ObservabilityOpenTelemetryMetricConfig configures the plugin's OTLP metric pipeline.
+// A nil Endpoints pointer derives metric destinations from the trace endpoint list.
+type ObservabilityOpenTelemetryMetricConfig struct {
+	Enabled              bool                                              `json:"enabled,omitempty"`
+	Endpoints            *[]ObservabilityOpenTelemetrySignalEndpointConfig `json:"endpoints,omitempty"`
+	ExportIntervalMillis uint64                                            `json:"export_interval_millis,omitempty"`
+	Temporality          OpenTelemetryMetricTemporality                    `json:"temporality,omitempty"`
+	MaxInstruments       uint64                                            `json:"max_instruments,omitempty"`
+	CardinalityLimit     uint64                                            `json:"cardinality_limit,omitempty"`
 }
 
 // ObservabilityOpenTelemetryEndpointConfig configures one typed OTLP destination.
@@ -201,9 +239,9 @@ type ObservabilityComponentSpec struct {
 	Config  ObservabilityConfig `json:"config"`
 }
 
-// NewObservabilityConfig returns a default observability config with version 3.
+// NewObservabilityConfig returns a default observability config with version 4.
 func NewObservabilityConfig() ObservabilityConfig {
-	return ObservabilityConfig{Version: 3}
+	return ObservabilityConfig{Version: 4}
 }
 
 // NewObservabilityAtofConfig returns disabled ATOF JSONL settings with native defaults.
@@ -243,6 +281,49 @@ func NewObservabilityHttpStorageConfig(endpoint string) ObservabilityHttpStorage
 // NewObservabilityOpenTelemetryConfig returns disabled multi-endpoint settings.
 func NewObservabilityOpenTelemetryConfig() ObservabilityOpenTelemetryConfig {
 	return ObservabilityOpenTelemetryConfig{}
+}
+
+// NewObservabilityOpenTelemetrySignalEndpointConfig returns a signal endpoint with native defaults.
+func NewObservabilityOpenTelemetrySignalEndpointConfig(endpoint string) ObservabilityOpenTelemetrySignalEndpointConfig {
+	return ObservabilityOpenTelemetrySignalEndpointConfig{
+		Endpoint:             endpoint,
+		Transport:            "http_binary",
+		Headers:              map[string]string{},
+		HeaderEnv:            map[string]string{},
+		ResourceAttributes:   map[string]string{},
+		ServiceName:          "unknown_service",
+		InstrumentationScope: "opentelemetry",
+		TimeoutMillis:        3000,
+	}
+}
+
+// ObservabilityOpenTelemetrySignalEndpoints returns an explicit signal endpoint list.
+// Passing no endpoints intentionally serializes an empty list, which the core
+// validator distinguishes from omitted endpoints used for trace derivation.
+func ObservabilityOpenTelemetrySignalEndpoints(endpoints ...ObservabilityOpenTelemetrySignalEndpointConfig) *[]ObservabilityOpenTelemetrySignalEndpointConfig {
+	copyOfEndpoints := make([]ObservabilityOpenTelemetrySignalEndpointConfig, len(endpoints))
+	copy(copyOfEndpoints, endpoints)
+	return &copyOfEndpoints
+}
+
+// NewObservabilityOpenTelemetryLogConfig returns disabled log settings with native defaults.
+func NewObservabilityOpenTelemetryLogConfig() ObservabilityOpenTelemetryLogConfig {
+	return ObservabilityOpenTelemetryLogConfig{
+		MinimumSeverity:      LogSeverityInfo,
+		MaxQueueSize:         2048,
+		MaxExportBatchSize:   512,
+		ScheduledDelayMillis: 1000,
+	}
+}
+
+// NewObservabilityOpenTelemetryMetricConfig returns disabled metric settings with native defaults.
+func NewObservabilityOpenTelemetryMetricConfig() ObservabilityOpenTelemetryMetricConfig {
+	return ObservabilityOpenTelemetryMetricConfig{
+		ExportIntervalMillis: 60000,
+		Temporality:          OpenTelemetryMetricTemporalityCumulative,
+		MaxInstruments:       256,
+		CardinalityLimit:     2000,
+	}
 }
 
 // NewObservabilityOpenTelemetryEndpointConfig returns one typed endpoint with defaults.

@@ -11,22 +11,24 @@
 
 mod test_support;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nemo_relay::api::event::{Event, ScopeCategory};
 use nemo_relay::api::registry::{
-    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_event_metadata_injector, deregister_tool_request_intercept,
+    deregister_tool_sanitize_request_guardrail, register_event_metadata_injector,
     register_tool_request_intercept, register_tool_sanitize_request_guardrail,
-    scope_register_tool_conditional_execution_guardrail, scope_register_tool_request_intercept,
-    scope_register_tool_sanitize_request_guardrail,
+    scope_register_event_metadata_injector, scope_register_tool_conditional_execution_guardrail,
+    scope_register_tool_request_intercept, scope_register_tool_sanitize_request_guardrail,
 };
 use nemo_relay::api::runtime::NemoRelayContextState;
 use nemo_relay::api::runtime::ToolExecutionNextFn;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::{EmitMarkEventParams, event, pop_scope, push_scope};
 use nemo_relay::api::scope::{ScopeHandle, ScopeType};
-use nemo_relay::api::scope::{pop_scope, push_scope};
 use nemo_relay::api::subscriber::{
     deregister_subscriber, flush_subscribers, register_subscriber, scope_register_subscriber,
 };
@@ -61,6 +63,87 @@ fn setup_isolated_scope(name: &str) -> ScopeHandle {
 fn captured_snapshot<T: Clone>(items: &Arc<Mutex<Vec<T>>>) -> Vec<T> {
     flush_subscribers().unwrap();
     items.lock().unwrap().clone()
+}
+
+#[test]
+fn scope_local_event_metadata_injectors_apply_to_owned_events_and_cleanup() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    let stack = create_scope_stack();
+    set_thread_scope_stack(stack);
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    register_subscriber(
+        "scope-local-metadata-injector",
+        Arc::new(move |event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+    register_event_metadata_injector(
+        "global-metadata",
+        10,
+        Arc::new(|_| test_support::ready(BTreeMap::from([("nv.test.global".into(), json!(true))]))),
+    )
+    .unwrap();
+
+    let scope = push_scope(
+        nemo_relay::api::scope::PushScopeParams::builder()
+            .name("metadata-owner")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    scope_register_event_metadata_injector(
+        &scope.uuid,
+        "local-metadata",
+        20,
+        Arc::new(|_| test_support::ready(BTreeMap::from([("nv.test.local".into(), json!(true))]))),
+    )
+    .unwrap();
+    event(EmitMarkEventParams::builder().name("inside-owner").build()).unwrap();
+    pop_scope(
+        nemo_relay::api::scope::PopScopeParams::builder()
+            .handle_uuid(&scope.uuid)
+            .build(),
+    )
+    .unwrap();
+    event(EmitMarkEventParams::builder().name("after-owner").build()).unwrap();
+
+    let captured = captured_snapshot(&events);
+    let start = captured
+        .iter()
+        .find(|event| {
+            event.name() == "metadata-owner" && event.scope_category() == Some(ScopeCategory::Start)
+        })
+        .unwrap();
+    assert_eq!(start.metadata().unwrap()["nv.test.global"], json!(true));
+    assert!(start.metadata().unwrap().get("nv.test.local").is_none());
+
+    let inside = captured
+        .iter()
+        .find(|event| event.name() == "inside-owner")
+        .unwrap();
+    assert_eq!(inside.metadata().unwrap()["nv.test.global"], json!(true));
+    assert_eq!(inside.metadata().unwrap()["nv.test.local"], json!(true));
+
+    let end = captured
+        .iter()
+        .find(|event| {
+            event.name() == "metadata-owner" && event.scope_category() == Some(ScopeCategory::End)
+        })
+        .unwrap();
+    assert_eq!(end.metadata().unwrap()["nv.test.global"], json!(true));
+    assert_eq!(end.metadata().unwrap()["nv.test.local"], json!(true));
+
+    let after = captured
+        .iter()
+        .find(|event| event.name() == "after-owner")
+        .unwrap();
+    assert_eq!(after.metadata().unwrap()["nv.test.global"], json!(true));
+    assert!(after.metadata().unwrap().get("nv.test.local").is_none());
+
+    assert!(deregister_event_metadata_injector("global-metadata").unwrap());
+    assert!(deregister_subscriber("scope-local-metadata-injector").unwrap());
 }
 
 // -----------------------------------------------------------------------

@@ -39,7 +39,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 3
+version = 4
 
 [components.config.atof]
 enabled = true
@@ -99,7 +99,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 3
+version = 4
 
 [components.config.atof]
 enabled = true
@@ -336,7 +336,7 @@ configuration enables one ATOF file sink:
 kind = "observability"
 
 [components.config]
-version = 3
+version = 4
 
 [components.config.atof]
 enabled = true
@@ -379,7 +379,8 @@ configuration.
 
 This behavior applies to list fields declared at the top level of a component's
 `config`. It also applies to the observability destination lists
-`atof.sinks`, `opentelemetry.endpoints`, and `atif.storage`. For example,
+`atof.sinks`, `opentelemetry.endpoints`, `opentelemetry.logs.endpoints`,
+`opentelemetry.metrics.endpoints`, and `atif.storage`. For example,
 `pricing.sources` and PII redaction `profiles` are top-level component config
 lists and concatenate across layers.
 Higher-precedence pricing sources can therefore override one model while still
@@ -411,7 +412,14 @@ follows:
 Programmatic lists participate in the same concatenation rules. For example, a
 programmatic `config.opentelemetry.endpoints` list appears before endpoints
 inherited from system and explicit-or-user files; it does not remove
-those file entries.
+those file entries. The same higher-precedence-first order applies to
+`config.opentelemetry.logs.endpoints` and
+`config.opentelemetry.metrics.endpoints`.
+
+For a log or metric signal, an explicitly empty higher-precedence `endpoints`
+list clears inherited explicit signal endpoints. An enabled signal then fails
+validation because its explicit list is empty. Omit the `endpoints` field to
+derive destinations from trace endpoints instead.
 
 When library initialization discovers `plugins.toml` files, Relay emits one
 `plugin.configuration_inherited` warning per file. Each warning is written to

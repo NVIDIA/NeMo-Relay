@@ -9,7 +9,7 @@
 //! the resolved callback chains that the higher-level API layer executes.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -26,7 +26,7 @@ use crate::api::event::{
 };
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
-use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
+use crate::api::registry::{EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
@@ -49,7 +49,8 @@ use crate::api::tool::{
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::response::AnnotatedLlmResponse;
 use crate::context::registries::{
-    merge_execution_intercept_callables, merge_guardrail_entries, merge_intercept_entries,
+    merge_event_metadata_injector_entries, merge_execution_intercept_callables,
+    merge_guardrail_entries, merge_intercept_entries,
 };
 use crate::error::FlowError;
 use crate::json::{Json, merge_json};
@@ -212,6 +213,8 @@ impl Drop for GuardrailScopeCompletion<'_> {
 /// process. It contains global middleware registries, lifecycle subscribers,
 /// and arbitrary extension slots used by bindings or integrations.
 pub struct NemoRelayContextState {
+    /// Global Event metadata injectors applied before Event sanitizers.
+    pub(crate) event_metadata_injectors: SortedRegistry<EventMetadataInjector>,
     /// Global mark event field sanitizers.
     pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Global scope-start event field sanitizers.
@@ -257,6 +260,7 @@ impl NemoRelayContextState {
     /// extensions.
     pub fn new() -> Self {
         Self {
+            event_metadata_injectors: SortedRegistry::new(),
             mark_sanitize_guardrails: SortedRegistry::new(),
             scope_sanitize_start_guardrails: SortedRegistry::new(),
             scope_sanitize_end_guardrails: SortedRegistry::new(),
@@ -799,6 +803,94 @@ impl NemoRelayContextState {
             .collect()
     }
 
+    /// Snapshot Event metadata injector entries in deterministic priority order.
+    pub(crate) fn event_metadata_injector_entries(
+        global: &SortedRegistry<EventMetadataInjector>,
+        scope_locals: &[&SortedRegistry<EventMetadataInjector>],
+    ) -> Vec<EventMetadataInjector> {
+        merge_event_metadata_injector_entries(global, scope_locals)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Apply insert-only metadata additions from an injector snapshot.
+    pub(crate) async fn event_metadata_injection_snapshot_chain(
+        mut event: Event,
+        entries: &[EventMetadataInjector],
+    ) -> Event {
+        for entry in entries {
+            let callback = Arc::clone(&entry.payload);
+            let context = Arc::new(event);
+            let callback_context = Arc::clone(&context);
+            let outcome = AssertUnwindSafe(async move { callback(callback_context).await })
+                .catch_unwind()
+                .await;
+            event = Arc::try_unwrap(context).unwrap_or_else(|context| (*context).clone());
+
+            let attributes = match outcome {
+                Ok(Ok(attributes)) => attributes,
+                Ok(Err(error)) => {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_metadata_injector_failed",
+                        injector = entry.name.as_str(),
+                        event_name = event.name();
+                        "Event metadata injector failed; omitting its attributes: {error}"
+                    );
+                    continue;
+                }
+                Err(_) => {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_metadata_injector_panicked",
+                        injector = entry.name.as_str(),
+                        event_name = event.name();
+                        "Event metadata injector panicked; omitting its attributes"
+                    );
+                    continue;
+                }
+            };
+
+            if let Err(error) = validate_event_metadata_attributes(&attributes) {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_metadata_injector_invalid_output",
+                    injector = entry.name.as_str(),
+                    event_name = event.name();
+                    "Event metadata injector returned invalid attributes; omitting them: {error}"
+                );
+                continue;
+            }
+
+            if attributes.is_empty() {
+                continue;
+            }
+
+            let mut fields = event.sanitize_fields();
+            let mut metadata = match fields.metadata.take() {
+                None => serde_json::Map::new(),
+                Some(Json::Object(metadata)) => metadata,
+                Some(metadata) => {
+                    fields.metadata = Some(metadata);
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_metadata_injector_non_object_metadata",
+                        injector = entry.name.as_str(),
+                        event_name = event.name();
+                        "Event metadata is not an object; omitting injected attributes"
+                    );
+                    continue;
+                }
+            };
+            for (key, value) in attributes {
+                metadata.entry(key).or_insert(value);
+            }
+            fields.metadata = Some(Json::Object(metadata));
+            event.apply_sanitize_fields(fields);
+        }
+        event
+    }
     /// Apply an event sanitizer snapshot to the mutable observability fields.
     pub(crate) async fn event_sanitize_snapshot_chain(
         mut event: Event,
@@ -1674,6 +1766,53 @@ impl NemoRelayContextState {
             });
         }
         next
+    }
+}
+
+fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Result<(), String> {
+    for (key, value) in attributes {
+        if !is_valid_event_metadata_attribute_key(key) {
+            return Err(format!(
+                "attribute key `{key}` must contain letter, number, underscore, or hyphen segments separated by single dots"
+            ));
+        }
+        if !is_otel_compatible_attribute_value(value) {
+            return Err(format!(
+                "attribute `{key}` must be a primitive or homogeneous primitive list"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_valid_event_metadata_attribute_key(key: &str) -> bool {
+    key.split('.').all(|segment| {
+        !segment.is_empty()
+            && segment.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+    })
+}
+
+fn is_otel_compatible_attribute_value(value: &Json) -> bool {
+    fn primitive_kind(value: &Json) -> Option<u8> {
+        match value {
+            Json::Bool(_) => Some(0),
+            Json::Number(_) => Some(1),
+            Json::String(_) => Some(2),
+            _ => None,
+        }
+    }
+
+    match value {
+        Json::Bool(_) | Json::Number(_) | Json::String(_) => true,
+        Json::Array(values) => match values.first().and_then(primitive_kind) {
+            None => values.is_empty(),
+            Some(kind) => values
+                .iter()
+                .all(|value| primitive_kind(value) == Some(kind)),
+        },
+        Json::Null | Json::Object(_) => false,
     }
 }
 
