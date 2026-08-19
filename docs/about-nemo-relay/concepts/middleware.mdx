@@ -9,13 +9,13 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 SPDX-License-Identifier: Apache-2.0 */}
 
 This page explains the runtime behavior that runs around managed tool and LLM
-calls, injects Event metadata, and sanitizes emitted mark and scope events.
+calls, injects `Event` metadata, and sanitizes emitted mark and scope events.
 
 ## What Middleware Is
 
 Middleware can control or transform tool and LLM execution. It can also enrich
-or sanitize emitted Events. NeMo Relay applies each middleware type at a
-specific lifecycle point.
+or sanitize emitted `Event` objects. NeMo Relay applies each middleware type at
+a specific lifecycle point.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
@@ -126,7 +126,7 @@ Choose the middleware type that matches the behavior you need:
   rejected.
 - Use a **request intercept** when the real request must change before the call.
 - Use an **execution intercept** when code must run before or after the callback.
-- Use an **Event metadata injector** when every emitted Event should receive
+- Use an **Event metadata injector** when every emitted `Event` should receive
   additional flat metadata before sanitization.
 - Use a **sanitize guardrail** when only subscribers and exporters should see
   rewritten data.
@@ -152,8 +152,8 @@ directly or asynchronously.
 
 Event metadata injectors fail open. If an injector fails, panics, or returns
 invalid attributes, Relay logs the failure, ignores only that injector's output
-for the current Event, and continues with later injectors using the Event as it
-stood before the failed injector.
+for the current `Event`, and continues with later injectors using the `Event` as
+it stood before the failed injector.
 
 ## Intercepts
 
@@ -285,6 +285,8 @@ Tool calls and buffered LLM calls follow one normal path grouped into request,
 execution, and response phases.
 
 <MermaidStyles />
+
+The following diagram shows the managed execution and serial publication paths.
 
 ```mermaid
 flowchart LR
