@@ -129,6 +129,27 @@ jobs:
         with:
           python-version: ${{ steps.ci-config.outputs.default_python_version }}
 
+      - name: Configure Python linker library
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import sysconfig
+          from pathlib import Path
+
+          library_dir = Path(sysconfig.get_config_var("LIBDIR"))
+          library = library_dir / sysconfig.get_config_var("INSTSONAME")
+          linker_name = sysconfig.get_config_var("LDLIBRARY")
+          if not library.is_file():
+              raise SystemExit(f"Python shared library not found: {library}")
+          linker_dir = Path(os.environ["RUNNER_TEMP"]) / "python-linker-library"
+          linker_dir.mkdir(exist_ok=True)
+          (linker_dir / linker_name).symlink_to(library)
+          with Path(os.environ["GITHUB_ENV"]).open("a") as env_file:
+              env_file.write(f"LIBRARY_PATH={linker_dir}\n")
+          PY
+
       - uses: taiki-e/install-action@c070f87102a1c75b3183910f391c1cb887fe13c8 # v2.77.6
         with:
           tool: cargo-llvm-cov@${{ steps.ci-config.outputs.cargo_llvm_cov_version }},cargo-nextest@${{ steps.ci-config.outputs.cargo_nextest_version }},just@${{ steps.ci-config.outputs.just_version }}
@@ -347,7 +368,7 @@ jobs:
           version="$NEMO_RELAY_CLI_PACKAGE_VERSION"
           rm -rf "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
           mkdir -p "${NEMO_RELAY_CI_WORKSPACE_TMP}/cli-packages"
-          python scripts/package-cli-bin.py \
+          python3 scripts/package-cli-bin.py \
             --binary "$source" \
             --target "$target" \
             --version "$version" \
