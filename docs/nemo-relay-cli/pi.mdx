@@ -68,16 +68,25 @@ Two routes, both untrusted-project-proof:
 # 1 · file drop
 cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
 
-# 2 · pi install, from a local path or a git URL -- never with --local
+# 2 · pi install, from a LOCAL PATH -- never with --local
 pi install /path/to/NeMo-Relay/integrations/pi
 ```
 
 `nemo-relay run --agent pi` needs neither — it passes the extension with `-e`,
 which loads first and is never trust-gated.
 
-The extension is **not published to npm**, deliberately. `pi install` accepts a
-local path or a git URL as readily as an `npm:` specifier, so publishing would
-add a spelling of a route that already works rather than a capability.
+<Warning>
+**Do not install from a git URL.** pi has no subdirectory syntax for a git
+source: it clones the repository root and looks there for a `pi` manifest key or
+a top-level `extensions/` directory. This extension lives at `integrations/pi`,
+so the install reports success and loads nothing — while the clone's root
+`skills/` directory *is* picked up, giving you NeMo Relay's skills in pi and none
+of the gating.
+</Warning>
+
+The extension is **not published to npm**, deliberately: the file drop and the
+local-path install already cover user scope, and publishing would add a namespace,
+a build step and release wiring for a third spelling of the same thing.
 
 <Warning>
 **Do not install into `.pi/extensions/` or with `pi install --local`.** pi adds
@@ -266,6 +275,20 @@ A blocked call still produces a well-formed tool span. The guardrail rejects
 before the span opens, but pi fires `tool_execution_end` for blocked calls too,
 and the gateway synthesizes the missing pair, tagged
 `tool_correlation_status: "agent_fallback"`.
+
+## What The Gate Is Authoritative Over
+
+pi runs every `tool_call` handler unless one returns `block`, and all of them
+share the same mutable `input` object with no re-validation before execution.
+Loading with `-e` puts this gate first, which prevents an *earlier* extension
+pre-empting it — but an extension loaded after it can rewrite arguments Relay has
+already authorized, and those execute unreviewed.
+
+<Warning>
+pi exposes no ordering API and no post-chain hook, so this cannot be prevented
+from inside an extension. In a mixed extension stack, the tool gate is
+authoritative over **the model**, not over **the other extensions**.
+</Warning>
 
 ## Tool-Result Policy Is Not Available
 

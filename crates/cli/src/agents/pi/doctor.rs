@@ -31,6 +31,9 @@ const PI_AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
 /// pi's configuration directory name, from its `piConfig.configDir`.
 const PI_CONFIG_DIR: &str = ".pi";
 
+/// Where pi records installed packages, in both scopes.
+const PI_SETTINGS_FILE: &str = "settings.json";
+
 /// Gateway URL the extension falls back to when nothing else resolves one.
 /// Kept in step with `configFromEnv` in `integrations/pi/src/gateway-client.ts`.
 const DEFAULT_GATEWAY_URL: &str = "http://127.0.0.1:4040";
@@ -109,11 +112,19 @@ pub(crate) fn gateway_url(bind: Option<std::net::SocketAddr>) -> String {
 
 /// Every place pi could load an extension from, that currently holds one.
 ///
-/// Deliberately reports *any* auto-discovered entry rather than trying to
-/// recognize the NeMo Relay extension by filename: `pi install` renames and
-/// nests what it writes, so a filename match would miss the installed layout
-/// and quietly report nothing -- which is the failure mode being guarded
-/// against. The trust question is a property of the directory, not of the file.
+/// **Two unrelated routes, and missing either one makes this check lie.**
+///
+/// *Auto-discovery* reads `<agent dir>/extensions` and `<cwd>/.pi/extensions`.
+/// Any entry counts; the trust question is a property of the directory, not of
+/// the file, so there is nothing to recognize by name.
+///
+/// *`pi install`* does not touch those directories at all. It appends the source
+/// to a `packages` array in `settings.json` -- `<agent dir>/settings.json` for
+/// user scope, `<cwd>/.pi/settings.json` for `--local` -- and for a local path
+/// copies nothing whatsoever. Scanning only the extension directories therefore
+/// reported "no pi extension found" to a user who had just run the install
+/// command the docs recommend, and could not see a trust-gated `--local` entry
+/// at all, which is the case this whole module exists to catch.
 pub(crate) fn extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
     let mut sites = Vec::new();
     if let Some(path) = extension_location() {
@@ -130,6 +141,14 @@ pub(crate) fn extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
             scope: ExtensionScope::User,
         });
     }
+    if let Some(path) = user_settings_path()
+        && settings_declare_packages(&path)
+    {
+        sites.push(ExtensionSite {
+            path,
+            scope: ExtensionScope::User,
+        });
+    }
     let project_dir = cwd.join(PI_CONFIG_DIR).join("extensions");
     if directory_has_entries(&project_dir) {
         sites.push(ExtensionSite {
@@ -137,19 +156,56 @@ pub(crate) fn extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
             scope: ExtensionScope::Project,
         });
     }
+    let project_settings = cwd.join(PI_CONFIG_DIR).join(PI_SETTINGS_FILE);
+    if settings_declare_packages(&project_settings) {
+        sites.push(ExtensionSite {
+            path: project_settings,
+            scope: ExtensionScope::Project,
+        });
+    }
     sites
 }
 
-/// `~/.pi/agent/extensions`, honoring pi's own directory override.
+/// `<agent dir>/settings.json`, where `pi install` records a user-scope package.
+fn user_settings_path() -> Option<PathBuf> {
+    Some(pi_agent_dir()?.join(PI_SETTINGS_FILE))
+}
+
+/// Whether a pi settings file declares at least one installed package.
+///
+/// Deliberately tolerant: an unreadable or malformed settings file is reported as
+/// "no packages" rather than as an error. This check exists to find something the
+/// user installed, and a parse failure here is pi's problem to report, not a
+/// reason for `doctor` to fail.
+fn settings_declare_packages(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .and_then(|settings| {
+            settings
+                .get("packages")
+                .and_then(serde_json::Value::as_array)
+                .map(|packages| !packages.is_empty())
+        })
+        .unwrap_or(false)
+}
+
+/// `~/.pi/agent`, honoring pi's own directory override.
+fn pi_agent_dir() -> Option<PathBuf> {
+    match std::env::var_os(PI_AGENT_DIR_ENV) {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => Some(
+            crate::agents::shared::host::home_dir()
+                .ok()?
+                .join(PI_CONFIG_DIR)
+                .join("agent"),
+        ),
+    }
+}
+
+/// `~/.pi/agent/extensions`, the auto-discovery directory.
 fn user_extensions_dir() -> Option<PathBuf> {
-    let agent_dir = match std::env::var_os(PI_AGENT_DIR_ENV) {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => crate::agents::shared::host::home_dir()
-            .ok()?
-            .join(PI_CONFIG_DIR)
-            .join("agent"),
-    };
-    Some(agent_dir.join("extensions"))
+    Some(pi_agent_dir()?.join("extensions"))
 }
 
 fn directory_has_entries(path: &Path) -> bool {

@@ -84,7 +84,9 @@ describe('inline shell gate', () => {
     await drain(fire);
     const [close] = named(gateway.posts, 'user_bash_end');
     assert.ok(close, 'the gate span must close even when the command is allowed');
-    assert.equal(close.status, 'ok');
+    // Not `ok`: pi has not run it yet and never reports how it went, so the span
+    // records the decision rather than claiming an outcome it cannot know.
+    assert.equal(close.status, 'policy-allowed');
   });
 
   it('refuses a blocked command with a failed result carrying the reason verbatim', async () => {

@@ -49,24 +49,34 @@ NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
 # 1 · file drop
 cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
 
-# 2 · pi install, from a local path or a git URL -- never with --local
+# 2 · pi install, from a LOCAL PATH -- never with --local
 pi install /path/to/NeMo-Relay/integrations/pi
 ```
 
 | Path | Install here? | Trust-gated? |
 |---|---|---|
 | `~/.pi/agent/extensions/` | Yes | No |
-| `pi install <path or git URL>` | Yes | No |
+| `pi install <local path>` | Yes | No |
 | `-e <path>` | Per-invocation; what the launcher uses | No |
 | `.pi/extensions/` or `pi install --local` | **No** | **Yes** |
+| `pi install <git URL>` | **No** — see below | — |
 
-**This package is deliberately not published to npm.** `pi install` resolves a
-local path or a git URL as readily as an `npm:` specifier, so publishing would
-buy one more spelling of a route that already works, at the cost of an npm
-namespace, a build step (the sources are TypeScript that nothing compiles today)
-and release wiring. It is `private: true` for that reason, not by oversight —
-though it is in the repository's version bump anyway, so the version cannot
-already be stale if that ever changes.
+⚠️ **A git URL does not work, and fails silently.** pi has no
+subdirectory syntax for a git source: it clones the repository *root*, then looks
+there for a `pi` key in `package.json` or a top-level `extensions/` directory.
+This extension lives at `integrations/pi`, and the repository root has neither —
+so `pi install https://github.com/NVIDIA/NeMo-Relay` reports success, prints an
+install path, and loads no extension. Worse than nothing: the clone's root
+`skills/` *is* picked up, so you get NeMo Relay's Codex and Claude skills in pi
+and none of the gating.
+
+**This package is deliberately not published to npm.** The file drop and the
+local-path install both work and cover user scope; publishing would add an npm
+namespace, a build step (the sources are TypeScript that nothing compiles today),
+a `files` allowlist and release wiring for a third spelling. It is
+`private: true` for that reason, not by oversight — and it carries a
+`pi.extensions` manifest key so both working routes resolve explicitly rather
+than relying on pi's directory fallback.
 
 ⚠️ **A project-scoped install is silently skipped, and nothing tells you.** pi
 adds project extensions to its candidate set only when the project is trusted,
@@ -344,6 +354,19 @@ empty for pi and every tool span parents to the turn. The multi-process case is
 worth stating separately: a child pi process running this extension resolves its
 *own* session id and posts under it, so it does not appear as a subagent of the
 parent. It appears as an unrelated session.
+
+**An authoritative boundary against *later* extensions.** pi runs every
+`tool_call` handler unless one returns `block`, and they all share the same
+mutable `input` object with no re-validation afterwards. Loaded with `-e` this
+gate runs **first**, which is what stops an earlier extension pre-empting it —
+but it also means an extension loaded *after* it can rewrite the arguments once
+Relay has authorized them, and those arguments execute unreviewed.
+
+pi offers no ordering API and no post-chain hook, so this cannot be prevented
+from inside the extension. **In a mixed extension stack, treat the tool gate as
+authoritative over the model, not over the other extensions.** It is sound when
+this is the only extension mutating tool arguments, which is the deployment
+`nemo-relay run --agent pi` produces.
 
 **Tool-result policy, on either side.** Relay's only middleware that can change
 what a tool *returned* is the execution intercept, which wraps the callback and

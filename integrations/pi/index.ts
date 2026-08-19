@@ -82,6 +82,7 @@ import {
 } from './src/user-bash.ts';
 import type {
   AgentEndEvent,
+  BeforeProviderHeadersEvent,
   AgentSettledEvent,
   AgentStartEvent,
   ExtensionAPI,
@@ -96,6 +97,7 @@ import type {
   ToolExecutionEndEvent,
   ToolExecutionStartEvent,
   TurnEndEvent,
+  PiModel,
   TurnStartEvent,
   UserBashEvent,
   UserBashEventResult,
@@ -212,6 +214,24 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   /** Providers already pointed at the gateway, so the redirect is idempotent. */
   const redirectedProviders = new Set<string>();
   let redirect: RedirectConfig | null = null;
+  /**
+   * Each provider's catalog as it was *before* we touched it.
+   *
+   * Snapshotted on first sight and never refreshed, because that is the whole
+   * point: once `registerProvider` has run, every model of that provider reports
+   * the gateway's URL, so re-reading the registry would compare the gateway
+   * against itself and call any provider safe.
+   */
+  const pristineCatalog = new Map<string, PiModel[]>();
+
+  const siblingsOf = (ctx: ExtensionContext, provider: string): PiModel[] => {
+    const cached = pristineCatalog.get(provider);
+    if (cached) return cached;
+    const all = ctx.modelRegistry?.getAll?.() ?? [];
+    const models = all.filter((candidate) => candidate.provider === provider);
+    pristineCatalog.set(provider, models);
+    return models;
+  };
 
   /**
    * Point the active model's provider at the gateway, when that is safe.
@@ -225,7 +245,12 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   const applyRedirect = (ctx: ExtensionContext, source: string): void => {
     const active = ensureConfig(ctx);
     redirect ??= redirectConfigFromEnv(active.url);
-    const decision = decideRedirect(ctx.model, redirect, redirectedProviders);
+    const decision = decideRedirect(
+      ctx.model,
+      redirect,
+      redirectedProviders,
+      ctx.model ? siblingsOf(ctx, ctx.model.provider) : [],
+    );
     if (decision.kind === 'redirect') {
       // Only baseUrl: pi rewrites the URL of every existing model for this
       // provider and keeps their API, headers and costs.
@@ -240,6 +265,9 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       hook_event_name: 'model_redirect',
       source,
       outcome: decision.kind,
+      // The stable identifier, alongside the prose. Docs tell operators to interpret
+      // these codes, so a consumer must not have to pattern-match a human sentence.
+      ...(decision.kind === 'skip' ? { code: decision.code } : {}),
       reason: decision.reason,
       ...(decision.provider ? { provider: decision.provider } : {}),
       ...(decision.api ? { model_api: decision.api } : {}),
@@ -260,6 +288,29 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   pi.on('session_start', async (event: SessionStartEvent, ctx: ExtensionContext) => {
     emit(ctx, { hook_event_name: 'session_start', reason: event.reason, cwd: ctx.cwd });
     applyRedirect(ctx, 'session_start');
+  });
+
+  /**
+   * Put the session id on redirected model requests.
+   *
+   * Hook posts carry `x-nemo-relay-session-id`; a redirected provider request is
+   * the extension's other stream and carried nothing, so with two pi sessions
+   * against one gateway an unkeyed model call is deliberately given an isolated
+   * root -- separating its LLM spans from the session and turn they belong to.
+   *
+   * Gated on `redirectedProviders`, because the hook is **global**: it fires for
+   * every provider request, including models we deliberately did not redirect.
+   * Sending an internal session id to a third-party provider is not acceptable
+   * just to simplify the handler.
+   *
+   * The id is read live rather than from the cached config, which is pinned for
+   * the runtime's life and would go stale across a session replacement. Headers
+   * are mutated in place; a returned value is ignored.
+   */
+  pi.on('before_provider_headers', async (event: BeforeProviderHeadersEvent, ctx) => {
+    const provider = ctx.model?.provider;
+    if (!provider || !redirectedProviders.has(provider)) return;
+    event.headers['x-nemo-relay-session-id'] = safeSessionId(ctx);
   });
 
   /**
@@ -501,7 +552,9 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   const endUserBash = (
     ctx: ExtensionContext,
     callId: string,
-    status: 'ok' | 'error',
+    // `policy-allowed` rather than `ok`: pi reports no completion for inline shell,
+    // so the gate knows what it decided and never what happened.
+    status: 'policy-allowed' | 'error',
     content: string,
   ): void => {
     emit(ctx, {
@@ -592,7 +645,11 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
           return { result: refusalResult(reason) };
         }
 
-        endUserBash(ctx, callId, 'ok', 'Allowed by policy; pi executed the command.');
+        // Deliberately not `ok`: pi has not run the command yet, and has no completion
+        // hook to tell us how it went. It can still fail, and a later `user_bash`
+        // handler can replace execution entirely -- so claiming success here would put
+        // a false outcome in the trace. What we know is what we decided.
+        endUserBash(ctx, callId, 'policy-allowed', 'Allowed by policy; pi has not reported the outcome.');
         // `undefined` is the only correct allow value: any object at all is a
         // result or an operations override, and either would stop pi running
         // the command as the user typed it.

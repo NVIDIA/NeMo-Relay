@@ -125,7 +125,15 @@ export type ToolCallEvent = {
   input: Record<string, unknown>;
 };
 
-/** Returning `{block: true}` short-circuits the remaining `tool_call` handlers. */
+/**
+ * Returning `{block: true}` short-circuits the remaining `tool_call` handlers.
+ *
+ * ⚠️ Nothing else does. A truthy result without `block` is *retained* but does not
+ * stop iteration, so a handler that runs after this one still sees -- and can
+ * still mutate -- the same `input` object, with no re-validation before it
+ * executes. Loading first protects against being pre-empted; it does not make the
+ * verdict final.
+ */
 export type ToolCallEventResult = {
   block?: boolean;
   reason?: string;
@@ -177,6 +185,18 @@ export type PiModel = {
   baseUrl: string;
 };
 
+/**
+ * Fired before a provider request goes out, to let an extension add headers.
+ *
+ * `headers` is mutated in place; a returned object is ignored. The event carries
+ * no model or provider, so a handler that must scope itself reads `ctx.model` --
+ * which is the *currently selected* model and can drift from the request's.
+ */
+export type BeforeProviderHeadersEvent = {
+  type: 'before_provider_headers';
+  headers: Record<string, string>;
+};
+
 /** Fired when a model is selected, including the initial selection. */
 export type ModelSelectEvent = {
   type: 'model_select';
@@ -193,6 +213,15 @@ export type ExtensionContext = {
   sessionManager: { getSessionId(): string };
   /** The active model. Undefined before one is resolved. */
   model?: PiModel;
+  /**
+   * The catalog, used to see a provider's *other* models before redirecting it.
+   *
+   * `registerProvider(name, {baseUrl})` rewrites every model of the provider, so
+   * a decision taken from the active model alone silently moves its siblings.
+   * Optional because a caller may not supply one; without it the check degrades
+   * to per-model, which is unsound for a provider that mixes API families.
+   */
+  modelRegistry?: { getAll(): PiModel[] };
 };
 
 export type ExtensionHandler<TEvent, TResult = void> = (
@@ -216,6 +245,10 @@ export type ExtensionAPI = {
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
   on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<ModelSelectEvent>): void;
+  on(
+    event: 'before_provider_headers',
+    handler: ExtensionHandler<BeforeProviderHeadersEvent>,
+  ): void;
 
   /**
    * Register or override a model provider.

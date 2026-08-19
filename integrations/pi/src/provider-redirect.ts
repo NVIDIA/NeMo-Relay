@@ -77,11 +77,27 @@ export type RedirectSkipCode =
   | 'already-redirected'
   | 'unserviceable-api'
   | 'unknown-upstream'
-  | 'upstream-mismatch';
+  | 'upstream-mismatch'
+  | 'provider-mixed-endpoints';
 
 export type RedirectDecision =
   | { kind: 'redirect'; provider: string; api: string; upstream: string; reason: string }
   | { kind: 'skip'; code: RedirectSkipCode; provider?: string; api?: string; reason: string };
+
+/**
+ * Whether one model could be pointed at the gateway without breaking it.
+ *
+ * The same two conditions the selected model must satisfy: the gateway serves its
+ * API family, and it already targets the endpoint the gateway forwards that family
+ * to. Applied to every sibling because the registration is provider-wide.
+ */
+function isSafeToRedirect(model: RedirectModel, config: RedirectConfig): boolean {
+  const family = SERVICEABLE_APIS[model.api];
+  if (!family) return false;
+  const upstream = family === 'openai' ? config.openaiUpstream : config.anthropicUpstream;
+  if (!upstream) return false;
+  return normalizeBaseUrl(upstream) === normalizeBaseUrl(model.baseUrl);
+}
 
 /** Whether this outcome explains something a trace reader would otherwise have to guess. */
 export function isNotable(decision: RedirectDecision): boolean {
@@ -121,6 +137,12 @@ export function decideRedirect(
   model: RedirectModel | undefined,
   config: RedirectConfig,
   redirected: ReadonlySet<string>,
+  /**
+   * Every model of `model.provider`, as the catalog had them **before** any
+   * redirect. Optional only so an older caller still type-checks; omitting it
+   * restores the per-model check, which is unsound for a mixed provider.
+   */
+  siblings: readonly RedirectModel[] = [],
 ): RedirectDecision {
   if (config.mode === 'off') {
     return {
@@ -185,6 +207,28 @@ export function decideRedirect(
       reason:
         `the gateway's ${family} upstream is unknown, so a redirect cannot be verified as safe; ` +
         `launch through \`nemo-relay run --agent pi\`, or set NEMO_RELAY_PI_REDIRECT=force`,
+    };
+  }
+
+  // `registerProvider(name, {baseUrl})` rewrites the URL of EVERY model of that
+  // provider, so a decision made from the selected model alone is a decision made
+  // on behalf of its siblings. Several pi 0.84 providers mix API families at
+  // different paths -- Fireworks serves anthropic-messages at `/inference` and
+  // openai-completions at `/inference/v1`; opencode adds Google models the gateway
+  // cannot route at all -- so redirecting on the strength of one model points the
+  // others somewhere that has never heard of them. That is not "no spans", it is a
+  // broken session, mid-run, after the user changed only the model.
+  const unsafe = siblings.find((sibling) => !isSafeToRedirect(sibling, config));
+  if (unsafe) {
+    return {
+      kind: 'skip',
+      code: 'provider-mixed-endpoints',
+      provider: model.provider,
+      api: model.api,
+      reason:
+        `redirecting ${model.provider} would also move its ${unsafe.api} models, and ` +
+        `${unsafe.id} targets ${unsafe.baseUrl}, which the gateway does not front; ` +
+        `point both upstreams at ${model.provider}, or accept no LLM spans for it`,
     };
   }
 

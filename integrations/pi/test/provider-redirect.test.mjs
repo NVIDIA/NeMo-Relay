@@ -167,3 +167,66 @@ describe('base URL comparison', () => {
     );
   });
 });
+
+// The failure this exists for, built from pi 0.84.0's real Fireworks catalog:
+// 18 anthropic-messages models at `/inference` and 4 openai-completions models at
+// `/inference/v1`, under one provider. `registerProvider(name, {baseUrl})` rewrites
+// every model of a provider, so deciding from the selected model alone moves its
+// siblings to an endpoint that has never heard of them.
+describe('a provider whose models span API families', () => {
+  const ANTHROPIC = {
+    id: 'accounts/fireworks/models/deepseek-v4-flash',
+    api: 'anthropic-messages',
+    provider: 'fireworks',
+    baseUrl: 'https://api.fireworks.ai/inference',
+  };
+  const OPENAI = {
+    id: 'accounts/fireworks/models/glm-5p2',
+    api: 'openai-completions',
+    provider: 'fireworks',
+    baseUrl: 'https://api.fireworks.ai/inference/v1',
+  };
+  const catalog = [ANTHROPIC, OPENAI];
+
+  it('refuses to redirect when a sibling would be sent somewhere the gateway does not front', () => {
+    const config = {
+      gatewayUrl: 'http://127.0.0.1:4040',
+      mode: 'match',
+      anthropicUpstream: 'https://api.fireworks.ai/inference',
+      openaiUpstream: 'https://api.openai.com/v1',
+    };
+    // Judged alone, the selected model looks perfectly safe.
+    assert.equal(decideRedirect(ANTHROPIC, config, new Set()).kind, 'redirect');
+
+    // Judged with its siblings, it is not: the openai-completions models would be
+    // pointed at api.openai.com carrying a Fireworks key and a Fireworks model id.
+    const decision = decideRedirect(ANTHROPIC, config, new Set(), catalog);
+    assert.equal(decision.kind, 'skip');
+    assert.equal(decision.code, 'provider-mixed-endpoints');
+    assert.match(decision.reason, /glm-5p2/, 'the reason must name the sibling that fails');
+    assert.match(decision.reason, /openai-completions/);
+  });
+
+  it('redirects once both upstreams point at that provider', () => {
+    const config = {
+      gatewayUrl: 'http://127.0.0.1:4040',
+      mode: 'match',
+      anthropicUpstream: 'https://api.fireworks.ai/inference',
+      openaiUpstream: 'https://api.fireworks.ai/inference/v1',
+    };
+    for (const model of catalog) {
+      const decision = decideRedirect(model, config, new Set(), catalog);
+      assert.equal(decision.kind, 'redirect', `${model.api} should redirect: ${decision.reason}`);
+    }
+  });
+
+  it('is notable, so the trace explains why there are no LLM spans', () => {
+    const config = {
+      gatewayUrl: 'http://127.0.0.1:4040',
+      mode: 'match',
+      anthropicUpstream: 'https://api.fireworks.ai/inference',
+      openaiUpstream: 'https://api.openai.com/v1',
+    };
+    assert.equal(isNotable(decideRedirect(ANTHROPIC, config, new Set(), catalog)), true);
+  });
+});

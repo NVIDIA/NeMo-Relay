@@ -104,6 +104,77 @@ fn an_explicit_path_that_does_not_exist_is_not_reported() {
     assert!(!extension_configured());
 }
 
+// `pi install` writes nothing into the extension directories -- it appends the
+// source to a `packages` array in settings.json. Scanning only the directories
+// therefore told a user who had just run the *recommended* install command that
+// no extension was found.
+#[test]
+fn a_pi_install_at_user_scope_is_found_in_settings_not_in_a_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"packages": ["../../../NeMo-Relay/integrations/pi"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = extension_sites(temp.path());
+
+    assert_eq!(sites.len(), 1, "{sites:?}");
+    assert_eq!(sites[0].scope, ExtensionScope::User);
+}
+
+// The dangerous half: `pi install --local` records the package in the project's
+// settings, which is trust-gated exactly like `.pi/extensions`. Before this, the
+// check could not see it at all.
+#[test]
+fn a_local_pi_install_is_reported_as_project_scoped() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(temp.path().join(".pi")).unwrap();
+    std::fs::write(
+        temp.path().join(".pi").join("settings.json"),
+        r#"{"packages": ["../extensions/nemo-relay"]}"#,
+    )
+    .unwrap();
+    let empty_home = temp.path().join("home");
+    std::fs::create_dir_all(&empty_home).unwrap();
+
+    let _env = scoped(None, Some(empty_home.as_os_str()));
+    let sites = extension_sites(temp.path());
+
+    assert!(
+        sites
+            .iter()
+            .any(|site| site.scope == ExtensionScope::Project),
+        "a --local install is trust-gated and must be reported: {sites:?}"
+    );
+}
+
+#[test]
+fn settings_without_packages_are_not_a_finding() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+
+    // Every shape pi can leave behind that means "nothing installed", plus a
+    // malformed file: a parse failure is pi's to report, not doctor's to fail on.
+    for body in [
+        r#"{}"#,
+        r#"{"packages": []}"#,
+        r#"{"packages": "not-an-array"}"#,
+        "{ truncated",
+    ] {
+        std::fs::write(agent_dir.join("settings.json"), body).unwrap();
+        assert!(
+            extension_sites(temp.path()).is_empty(),
+            "settings body {body} must not be reported as an install"
+        );
+    }
+}
+
 #[test]
 fn the_gateway_url_matches_what_the_extension_resolves() {
     let _env = EnvScope::set(&[(PI_GATEWAY_URL_ENV, None)]);

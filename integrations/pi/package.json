@@ -10,6 +10,11 @@
     "directory": "integrations/pi"
   },
   "main": "./index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test test/*.test.mjs"
