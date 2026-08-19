@@ -144,9 +144,14 @@ export function decideRedirect(
 
   const family = SERVICEABLE_APIS[model.api];
   if (!family) {
-    // Six of pi's providers speak an API the gateway has no route for
-    // (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI
-    // Codex). Redirecting them would 404 rather than degrade.
+    // Seven of pi's 39 built-in providers speak an API the gateway has no
+    // route for: Bedrock, Azure OpenAI Responses, Google, Google Vertex,
+    // Mistral, OpenAI Codex, and Radius (`pi-messages`). Redirecting them would
+    // 404 rather than degrade.
+    //
+    // Counted from `builtinProviders()`, not from the 38 files in
+    // `providers/data/` -- Radius is a purely dynamic provider with no static
+    // catalog entry, so a file count silently loses it.
     return {
       kind: 'skip',
       code: 'unserviceable-api',

@@ -342,9 +342,15 @@ nemo-relay --bind 127.0.0.1:4040 \
   --openai-base-url https://integrate.api.nvidia.com/v1
 ```
 
-32 of pi's 38 providers speak an API the gateway serves. The six that do not are
-Amazon Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, and
-OpenAI Codex.
+32 of pi's 39 built-in providers speak an API the gateway serves. The seven that
+do not are Amazon Bedrock, Azure OpenAI Responses, Google, Google Vertex,
+Mistral, OpenAI Codex, and Radius.
+
+<Note>
+The denominator is `builtinProviders()`, not the 38 catalog files in
+`providers/data/`. Radius is a purely dynamic provider with no static catalog
+entry, so counting files loses it.
+</Note>
 
 <Warning>
 Point pi at the gateway **root**, not the root plus `/v1`. The Anthropic SDK

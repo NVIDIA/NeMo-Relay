@@ -250,7 +250,7 @@ outcome as a `model_redirect` mark so a trace without LLM spans explains itself.
 |---|---|
 | Gateway upstream equals the model's endpoint | Redirected; LLM spans appear under the turn |
 | Gateway forwards somewhere else | Skipped, `upstream-mismatch` |
-| Model's API has no gateway route (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex) | Skipped, `unserviceable-api` |
+| Model's API has no gateway route (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex, Radius) | Skipped, `unserviceable-api` |
 | Launched outside `nemo-relay run --agent pi`, so the upstream is unknown | Skipped, `unknown-upstream` — set `NEMO_RELAY_PI_REDIRECT=force` to override |
 
 `nemo-relay run --agent pi` sets the two upstream variables for you. Running pi
@@ -259,7 +259,10 @@ by hand against a standalone gateway means setting them yourself, or forcing.
 The decision is re-evaluated on every `model_select`, so switching to a model the
 gateway does not front stops redirecting rather than silently misrouting.
 
-32 of pi's 38 providers speak an API the gateway serves; the six above do not.
+32 of pi's 39 built-in providers speak an API the gateway serves; the seven
+above do not. Count from `builtinProviders()` rather than from the 38 files in
+`providers/data/`: Radius is a purely dynamic provider with no static catalog
+entry, so a file count loses it.
 
 ## Hook mapping
 

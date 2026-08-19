@@ -4,12 +4,20 @@
 /**
  * Shared test harness: a stub gateway, and a driver that fires pi's hooks.
  *
- * ⚠️ **The driver returns the *first* non-`undefined` result, not the last.**
- * That is pi's rule, in both `emitToolCall` and `emitUserBash`, and it is the
- * difference between "our gate decided" and "an extension ahead of us decided
- * and we never ran". A last-wins driver silently inverts the trap this
- * extension documents in two places, and would let a regression that breaks
- * preemption behaviour pass.
+ * ⚠️ **The two gated hooks resolve competing handlers by different rules, and
+ * the driver has to model each one.** A driver that picks either rule for both
+ * misrepresents one of them, and preemption is exactly what these tests exist
+ * to pin.
+ *
+ * | Hook | pi's rule | Catches? |
+ * |---|---|---|
+ * | `tool_call` | Runs **every** handler, keeps the **last** truthy result, and returns early **only** on `{block: true}` | No — an exception propagates |
+ * | `user_bash` | Returns the **first** truthy result and stops | Yes — a throw fails *open* |
+ *
+ * So an earlier extension preempts the tool gate only by *blocking*; a
+ * non-blocking result from one does not stop us, it is simply overwritten by
+ * whichever handler answers last. On the inline-shell path any truthy result at
+ * all preempts, which is why `{}` is dangerous there.
  */
 import { createServer } from 'node:http';
 
@@ -95,14 +103,27 @@ export function load(extension, options = {}) {
     ...options.ctx,
   };
   return async (name, event = {}) => {
+    let last;
     for (const handler of handlers.get(name) ?? []) {
       const result = await handler({ type: name, ...event }, ctx);
-      // First truthy result wins and stops iteration -- pi's rule. Note that
-      // `{}` is truthy: an allow must be `undefined`, or it silently preempts
-      // every extension behind it while deciding nothing.
-      if (result !== undefined) return result;
+      if (!result) continue;
+      if (name === 'user_bash') {
+        // First truthy result wins and stops iteration. `{}` is truthy, so an
+        // allow must be `undefined` or it silently preempts every extension
+        // behind it while deciding nothing.
+        return result;
+      }
+      if (name === 'tool_call') {
+        // Every handler runs; only a block short-circuits. A non-blocking
+        // truthy result does not preempt -- it is overwritten by whoever
+        // answers last, which is why returning one is inert rather than fatal.
+        last = result;
+        if (result.block) return result;
+        continue;
+      }
+      last = result;
     }
-    return undefined;
+    return last;
   };
 }
 

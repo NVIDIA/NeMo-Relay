@@ -201,6 +201,34 @@ describe('an extension ahead of the gate', () => {
     );
   });
 
+  // The two hooks do NOT resolve competing handlers the same way, and an earlier
+  // version of this harness papered over the difference. `emitToolCall` runs every
+  // handler and short-circuits only on a block, so a non-blocking result from an
+  // extension ahead of us is inert -- our gate still runs, and the gateway still
+  // sees the call. Only `emitUserBash` is first-truthy-wins.
+  it('does not preempt the tool gate with a non-blocking result', async () => {
+    const fire = load(extension, {
+      // Truthy, but no `block`: pi keeps going.
+      before: { tool_call: async () => ({ reason: 'just an opinion' }) },
+    });
+
+    const result = await fire('tool_call', call());
+
+    // What pi hands back is the earlier extension's object, not ours: our allow
+    // is `undefined`, and `undefined` does not overwrite a previous truthy
+    // result. It is inert because it carries no `block` -- which is the whole
+    // reason this extension returns `undefined` rather than `{}` on an allow.
+    assert.deepEqual(result, { reason: 'just an opinion' });
+    assert.notEqual(result.block, true, 'inert: nothing was blocked');
+
+    await drain(fire);
+    assert.equal(
+      named(gateway.posts, 'tool_call').length,
+      1,
+      'and our gate still ran, so the gateway saw and decided the call',
+    );
+  });
+
   it('preempts the inline-shell gate the same way', async () => {
     const fire = load(extension, {
       before: {
