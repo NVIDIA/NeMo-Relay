@@ -484,12 +484,12 @@ def test_callback_handler_creates_only_semantic_agent_scopes(
             {"messages": ["hello"]},
             run_id=node_run_id,
             parent_run_id=root_run_id,
-            name="model",
+            name="main-agent",
             metadata={
                 "ls_integration": "deepagents",
                 "lc_agent_name": "main-agent",
                 "lc_versions": {"deepagents": "0.7.4"},
-                "langgraph_node": "model",
+                "langgraph_node": "main-agent",
             },
         )
         callback_handler.on_chain_start(
