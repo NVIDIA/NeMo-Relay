@@ -115,6 +115,11 @@ The example registers the following runtime behavior:
 Native plugins are not sandboxed. They run in the Relay process and must not
 unwind across ABI callbacks.
 
+The tool request intercept **adds** keys to a tool's arguments. That is fine in
+process, but the pi extension accepts only a rewrite that preserves the argument
+shape, so running pi against a gateway with this example enabled blocks every
+tool call. See the argument-transform notes in `docs/nemo-relay-cli/pi.mdx`.
+
 Request intercepts do not own an LLM lifecycle because they run before Relay
 creates the LLM scope. `register_llm_request_intercept` returns one
 `LlmRequestInterceptOutcome`, whose `pending_marks` Relay emits in interceptor

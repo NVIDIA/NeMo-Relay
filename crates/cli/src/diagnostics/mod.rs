@@ -466,9 +466,7 @@ async fn collect_agent(
     );
     let checks =
         agent_preflight_checks(agent, probe_mode, configured || target_requested, resolved).await;
-    for check in &checks {
-        status = combine_status(status, check.status, configured || target_requested);
-    }
+    status = fold_preflight_checks(status, &checks);
     AgentInfo {
         name: agent.as_arg(),
         status,
@@ -781,6 +779,25 @@ fn agent_command_status(path: Option<&Path>, configured: bool, target_requested:
         (false, true, _) | (false, _, true) => Status::Fail,
         (false, false, false) => Status::Info,
     }
+}
+
+/// Fold preflight findings into the agent status, configured or not.
+///
+/// The readiness gate `combine_status` applies elsewhere asks whether the user has
+/// told Relay to use this agent, which is the right question for "the hook config
+/// is missing" -- nobody wants a bare `doctor` complaining about an agent they do
+/// not run. It is the wrong question here, because a preflight finding is
+/// *evidence* rather than readiness: every warning branch already requires the
+/// extension to be installed on this machine, and a machine without one reports
+/// `Info`, which never folds either way.
+///
+/// Gating on `configured` meant `agents --json` reported `status: "pass"` for a pi
+/// whose only install is project-scoped -- the exact silent skip the check exists
+/// to catch -- while its own nested check said `warn`.
+fn fold_preflight_checks(status: Status, checks: &[Check]) -> Status {
+    checks.iter().fold(status, |status, check| {
+        combine_status(status, check.status, true)
+    })
 }
 
 fn combine_status(base: Status, hook: Status, readiness_required: bool) -> Status {

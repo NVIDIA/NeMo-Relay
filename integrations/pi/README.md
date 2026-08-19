@@ -107,7 +107,7 @@ Run it first whenever Relay does not seem to be doing anything.
 |---|---|---|
 | `NEMO_RELAY_PI_EXTENSION` | unset | The first place the launcher looks for this extension. Ignored unless the path exists **and** its `package.json` names `nemo-relay-pi`, in which case resolution falls through to a user-scope install. Set by the launcher from what it resolved |
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
-| `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
+| `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout. Posts are serialized, so a gating hook also waits out everything queued ahead of it — an unresponsive gateway costs this once per queued post, not once |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |
 | `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without checking the upstream; `off` disables redirection |
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |

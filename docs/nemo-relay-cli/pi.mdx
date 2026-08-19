@@ -40,7 +40,11 @@ Three consequences follow from that shape:
 - The extension pays a round trip per gated tool call. pi awaits extension
   handlers on its critical path, so a blocking hook is synchronous by
   construction. Observability-only hooks are queued rather than awaited and
-  drained at shutdown, so they do not charge that path.
+  drained at shutdown, so they do not charge that path — while the gateway
+  answers. Posts go out one at a time in hook order, so a gating hook also waits
+  for whatever is queued ahead of it: against a gateway that holds requests, the
+  first gate of a session pays `NEMO_RELAY_PI_TIMEOUT_MS` once per queued post,
+  not once.
 - Model traffic is redirected by the extension, not by configuration. pi
   resolves `baseUrl` per model from a generated catalog and has no base-URL flag
   or generic environment override, so the extension calls
@@ -232,6 +236,11 @@ refused. Put the decision in the guardrail, not in a transform that outruns it.
 A transform that violates the invariant **blocks the call**, with a reason
 stating that a policy could not be applied rather than that the request was
 refused. Running the original arguments would silently discard the policy.
+
+The shipped `examples/rust-native-plugin` demonstrates the mechanism rather than
+a policy: its tool request intercept tags arguments with `native_plugin_tag` and
+`native_tool_request_intercept`, which adds keys and so blocks every pi tool
+call. Enable it to see the refusal, not as a template to copy.
 
 ## Inline Shell Gating
 

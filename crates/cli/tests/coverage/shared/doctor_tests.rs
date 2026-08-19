@@ -2475,6 +2475,35 @@ fn format_agents_json_matches_doctor_agents_shape() {
     );
 }
 
+// A preflight finding is evidence, not readiness. Gating the fold on `configured` made
+// `agents --json` report `pass` for a pi whose only install is project-scoped -- the exact silent
+// skip the check exists to catch -- while the nested check said `warn`. The `Info` half is what
+// keeps a bare `doctor` quiet on a machine with no pi extension at all.
+#[test]
+fn preflight_findings_fold_into_the_agent_status_whether_or_not_it_is_configured() {
+    let warn = [Check {
+        name: "pi extension load path",
+        status: Status::Warn,
+        details: "project-scoped".into(),
+    }];
+    assert_eq!(fold_preflight_checks(Status::Pass, &warn), Status::Warn);
+
+    let info = [Check {
+        name: "pi extension load path",
+        status: Status::Info,
+        details: "not located".into(),
+    }];
+    assert_eq!(fold_preflight_checks(Status::Pass, &info), Status::Pass);
+
+    let fail = [Check {
+        name: "pi extension load path",
+        status: Status::Fail,
+        details: "unreadable".into(),
+    }];
+    assert_eq!(fold_preflight_checks(Status::Pass, &fail), Status::Fail);
+    assert_eq!(fold_preflight_checks(Status::Pass, &[]), Status::Pass);
+}
+
 #[test]
 fn doctor_agent_status_helpers_cover_readiness_and_version_outcomes() {
     assert_eq!(
