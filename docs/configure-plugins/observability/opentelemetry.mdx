@@ -91,7 +91,7 @@ type = "gen_ai"
 endpoint = "http://localhost:4318/v1/traces"
 transport = "http_binary"
 service_name = "agent-service"
-promote_metadata_prefixes = ["nv."]
+promote_metadata_prefixes = ["app."]
 max_queue_size = 4096
 max_export_batch_size = 512
 scheduled_delay_millis = 1000
@@ -144,36 +144,34 @@ to the other exporters.
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
-| `promote_metadata_prefixes` | `[]` | Literal Event metadata prefixes copied to top-level span attributes. |
+| `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 
 ## Event Metadata Promotion
 
 Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
 the final sanitized Event metadata into that endpoint's OpenTelemetry output.
-The injection and promotion stages use the following contract:
+The setting defaults to an empty list, so Relay does not promote metadata unless
+you configure at least one prefix.
 
 | Behavior | Contract |
 |---|---|
-| Exact metadata keys | ASCII letters, numbers, underscores, and hyphens in nonempty segments separated by single dots. |
-| Promotion prefixes | The same key syntax with an optional trailing dot. Matching is literal and case-sensitive. |
-| Values | Strings, booleans, signed 64-bit integers, floating-point numbers, empty arrays, and homogeneous arrays containing one supported primitive type. |
+| Promotion prefixes | ASCII letters, numbers, underscores, and hyphens in nonempty segments separated by single dots, with an optional trailing dot. Matching is literal and case-sensitive. |
+| Supported values | Strings, booleans, signed 64-bit integers, floating-point numbers, empty arrays, and homogeneous arrays containing one supported primitive type. |
 | Rejected values | Nulls, objects, nested arrays, mixed-type arrays, and unsigned integers larger than `i64::MAX`. |
-| Injector conflicts | Existing Event metadata wins. Otherwise, Relay orders injectors by ascending priority and registration name, and the first successful insertion wins. |
-| Scope lifecycle | Relay applies injector precedence independently to Scope-start and Scope-end Events. A Scope-end key is authoritative when Relay constructs the final span; when Scope-end omits the key, the Scope-start value remains. |
+| Scope lifecycle | A Scope-end key is authoritative when Relay constructs the final span. When Scope-end omits the key, the Scope-start value remains. |
 | OpenTelemetry collisions | Projection-owned attributes and configured attribute-mapping aliases win over promoted metadata. |
 
-For example, `"nv."`, `"nv_"`, and `"nv-"` are valid literal prefixes.
+For example, `"app."`, `"app_"`, and `"app-"` are valid literal prefixes.
 Leading or repeated dots, whitespace, other punctuation, and glob expressions
-such as `"nv.*"` are rejected.
+such as `"app.*"` are rejected.
 
 Matching is case-sensitive and compares the beginning of each key literally.
 Relay does not infer a dot or metadata-key segment boundary. For example,
-`"nv."` selects keys that begin with `nv.`, `"nv_"` selects keys that begin
-with `nv_`, and `"user"` selects keys such as `username` and `user_api_key`.
+`"app."` selects `app.name` and `app.version`, but not `app_name`. The broader
+`"app"` prefix selects all three keys.
 Configure the narrowest prefix that selects the metadata you intend to export.
 
-Scope-start and Scope-end are separate Event records, and Relay runs the
-ordered injector chain independently for each record. When Scope-end completes
+Scope-start and Scope-end are separate Event records. When Scope-end completes
 the span, a metadata key present on that Event replaces the corresponding
 promoted Scope-start value. Mark metadata is promoted to the attributes of the
 projected span event or tool span. The `gen_ai` projection continues to omit
