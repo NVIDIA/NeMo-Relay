@@ -138,7 +138,7 @@ jobs:
           import sysconfig
           from pathlib import Path
 
-          library_dir = Path(sysconfig.get_config_var("LIBDIR"))
+          library_dir = Path(os.environ["Python_ROOT_DIR"]) / "lib"
           library = library_dir / sysconfig.get_config_var("INSTSONAME")
           linker_name = sysconfig.get_config_var("LDLIBRARY")
           if not library.is_file():
