@@ -399,8 +399,10 @@ a failure when the config is invalid or the backend is unreachable.
 | `backend.config.url` | — | Redis connection URL. Required for the `redis` backend. |
 | `backend.config.key_prefix` | `"nemo-relay:llm-cache:"` | Prefix for keys in Redis. |
 
-To derive keys before ACG rewrites requests, set `response_cache.priority`
-lower than `acg.priority`.
+A routing plugin that sets `x-nemo-relay-internal-dispatch-backend` must use a
+priority lower than `response_cache.priority` so backend selection runs before
+cache key derivation. To derive keys before ACG rewrites requests, set
+`response_cache.priority` lower than `acg.priority`.
 
 <Warning>
 Cached responses are stored unredacted. PII sanitize guardrails rewrite emitted
