@@ -4729,16 +4729,20 @@ async fn pi_tool_call_hook_returns_arguments_a_request_intercept_rewrote() {
 #[tokio::test]
 async fn pi_tool_call_hook_evaluates_conditional_guardrails_once_when_an_intercept_rewrites() {
     let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
-    static EVALUATIONS: AtomicUsize = AtomicUsize::new(0);
-    EVALUATIONS.store(0, Ordering::SeqCst);
+    // Recorded rather than asserted inside the closure: the runtime runs guardrail callbacks
+    // under `catch_unwind`, so a panic there becomes `FlowError::Internal` and would surface as
+    // a 500 -- indistinguishable from a guardrail that genuinely errored.
+    let seen: Arc<std::sync::Mutex<Vec<Value>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&seen);
 
     let _ = deregister_tool_conditional_execution_guardrail("cli-pi-transform-counter");
     register_tool_conditional_execution_guardrail(
         "cli-pi-transform-counter",
         1,
-        Arc::new(|_name, _args| {
+        Arc::new(move |_name, args| {
+            let recorder = Arc::clone(&recorder);
             Box::pin(async move {
-                EVALUATIONS.fetch_add(1, Ordering::SeqCst);
+                recorder.lock().unwrap().push(args);
                 Ok(None)
             })
         }),
@@ -4790,9 +4794,12 @@ async fn pi_tool_call_hook_evaluates_conditional_guardrails_once_when_an_interce
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["tool_call"]["input"], json!({ "path": "/work/.env" }));
+    // One evaluation, and on the pre-rewrite arguments. Asserting the whole sequence catches both
+    // failure modes a count alone cannot: a second pass, and a single pass moved after the
+    // intercept, which would record `/work/.env` here and still count one.
     assert_eq!(
-        EVALUATIONS.load(Ordering::SeqCst),
-        1,
+        *seen.lock().unwrap(),
+        vec![json!({ "path": "/work/README.md" })],
         "the conditional chain must decide once, on the arguments pi proposed"
     );
 }

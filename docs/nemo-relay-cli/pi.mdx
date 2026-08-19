@@ -265,10 +265,15 @@ type a bang prefix into.
 
 ## Captured Events
 
-The extension posts 15 hooks. pi reports both ends of a turn, so Relay opens the
-turn scope at pi's own `turn_start` instead of inferring one, and a mark that
-arrives between turns is recorded on the session scope rather than opening an
-empty turn to hold it.
+The extension posts 15 event types, covering session, turn, tool and
+inline-shell activity. Twelve carry a pi hook's own name. The other three —
+`model_redirect`, `tool_arguments_transformed` and `user_bash_end` — are
+synthesized by the extension, and the table below shows what each is derived
+from rather than a hook pi emits.
+
+pi reports both ends of a turn, so Relay opens the turn scope at pi's own
+`turn_start` instead of inferring one, and a mark that arrives between turns is
+recorded on the session scope rather than opening an empty turn to hold it.
 
 | pi hook | Relay lifecycle |
 | --- | --- |
@@ -282,7 +287,7 @@ empty turn to hold it.
 | `tool_call` | Tool span start, and the gate |
 | `tool_execution_end` | Tool span end, for every outcome including blocked |
 | `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
-| `user_bash_end` | Tool span end. Synthesized by the extension, because pi reports no completion for inline shell |
+| *(after `user_bash` completes)* | `user_bash_end`, a tool span end. Synthesized by the extension, because pi reports no completion for inline shell |
 
 pi's `tool_execution_start` is deliberately not forwarded: it fires before
 argument validation and also for calls that never execute. `tool_result` is not
