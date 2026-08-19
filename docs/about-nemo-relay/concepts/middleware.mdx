@@ -29,7 +29,7 @@ through an asynchronous Relay API or queued event publication. Worker and
 native-plugin middleware can also complete asynchronously. Within each
 middleware chain, Relay awaits entries sequentially in priority order so later
 callbacks observe earlier middleware output. Event payload transformations,
-Event metadata injectors, and Event sanitizer chains run on the queued
+event metadata injectors, and event sanitizer chains run on the queued
 publication path and do not delay managed execution.
 
 The experimental raw C FFI and Go binding retain synchronous middleware
