@@ -48,17 +48,18 @@ directory (`~/.pi/agent/extensions/`, `.pi/extensions/`).
 |---|---|---|
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
-| `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls when the gateway is unreachable |
+| `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |
 | `NEMO_RELAY_PI_REDIRECT` | `match` | `force` redirects without checking the upstream; `off` disables redirection |
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |
 | `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM` | unset | What the gateway forwards Anthropic traffic to. Set by the launcher |
 
 ## How tool gating works
 
-`tool_call` is the only pi hook that can block, and for model-invoked tools it
-is the only pre-execution decision point that sees arguments — pi's `--tools`,
-`--exclude-tools`, `--no-tools` and runtime `setActiveTools` are all applied at
-tool-registry construction, never per call.
+For model-invoked tools, `tool_call` is the only pre-execution decision point
+that sees arguments — pi's `--tools`, `--exclude-tools`, `--no-tools` and
+runtime `setActiveTools` are all applied at tool-registry construction, never
+per call. The user's own inline shell takes a different path and is gated
+separately; see [Inline shell](#inline-shell).
 
 The wire contract, pinned from both sides by tests:
 
@@ -111,6 +112,73 @@ arguments instead would silently discard a policy decision, which is the failure
 the transform existed to prevent. This is a different axis from
 `NEMO_RELAY_PI_FAIL`, which governs an unreachable gateway rather than one that
 answered with something unusable.
+
+## Inline shell
+
+pi's bang prefix runs a command without going through the tool registry:
+`!git status` runs it and shows the model the output, `!!git status` runs it and
+keeps the output out of the model's context. Neither fires `tool_call`, so none
+of the gating above sees them. They reach `user_bash` instead, which this
+extension gates the same way — the command is posted to the gateway as a tool
+start and the same conditional-execution guardrail chain decides it.
+
+**The tool name is `user_bash`, not `bash`.** A guardrail receives only the tool
+name and the arguments, so if both arrived as `bash` a policy could not tell a
+command the user typed from one the model proposed — and "the model may not run
+shell commands" is a reasonable rule that should not also stop a human typing
+`!git status`. The cost is that **a policy which wants to cover both has to name
+both**; a rule written only for `bash` does not gate the bang prefix.
+
+| Argument | Value |
+|---|---|
+| `command` | The command text, exactly as typed after the prefix |
+| `cwd` | pi's working directory for the command |
+| `exclude_from_context` | `true` for the `!!` form, whose output the model never sees |
+
+### The refusal shape
+
+pi gives `user_bash` no block-and-reason contract — there is no `{block,
+reason}` here — so a refusal has to be a **synthetic failed command result**,
+which pi records exactly as if the command had run:
+
+| Field | Value | Why |
+|---|---|---|
+| `exitCode` | `126` | The shell convention for "found, but could not be executed". Not `0` (reads as success), not `1` (indistinguishable from the command itself failing), not `127` (sends you hunting for a missing binary) |
+| `output` | `NeMo Relay blocked this command.` then a blank line, then the reason verbatim | The attribution line says what declined it; the reason is the guardrail's own words, and for `!cmd` the model reads them |
+| `cancelled` | `false` | Nothing was started, so nothing was interrupted |
+| `truncated` | `false` | The message is whole |
+
+`NEMO_RELAY_PI_FAIL` governs this path too: a gateway that cannot be reached
+allows the command by default, and refuses it under `closed` with a reason that
+says explicitly that it is an infrastructure fault rather than a judgement.
+
+**A rewritten command is refused, not run.** pi's `user_bash` result can replace
+the *result* or the execution backend, but never the command — both call sites
+pass the original text on, and the terminal component has already been built
+from it. So a request intercept that rewrites an inline command cannot be
+honoured, and the command is refused rather than run unmodified, on the same
+rule the tool path applies to a transform it cannot apply safely.
+
+### Limits worth knowing
+
+- **The gate decides; it does not observe.** pi has no completion hook for
+  inline shell, so on an allow the span closes immediately: it measures the
+  policy round trip, not the command. Taking execution over to fix that would
+  mean handing pi custom `operations`, which drops the user's configured shell
+  path and pi's process-tree cancellation — the extension does not change how pi
+  runs things.
+- **`!!` hides the refusal from the model**, not from the user. The terminal
+  shows it either way; the model's context does not.
+- **The first extension to answer wins**, and there is no priority system. Loaded
+  with `pi -e` this extension answers first; installed with `pi install` it loads
+  last, and an extension ahead of it that answers `user_bash` unconditionally —
+  pi's own `sandbox` and `gondolin` examples do — means the gateway never sees the
+  command.
+- **Where it fires.** The interactive TUI and RPC mode. Headless `-p` has no
+  input loop to type a bang prefix into, so there is nothing to gate there.
+- **The prompt looks frozen while the gate is out.** pi builds the terminal
+  component *after* the hook resolves, so a slow gateway shows nothing at all
+  until `NEMO_RELAY_PI_TIMEOUT_MS` expires. Keep that timeout short.
 
 ## Model redirection
 
@@ -198,11 +266,14 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 | `turn_start` | turn scope **open** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, so the turn exists before pi's model call arrives |
 | `turn_end` | turn scope **close** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, for the same reason |
 | `model_select` | `model_redirect` mark | Re-evaluates redirection for the newly selected model |
+| *(after a rewrite)* | `tool_arguments_transformed` mark | Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
 | `session_before_compact` | mark | Announced, not done, and cancellable by a later extension. Carries `reason`, `will_retry`, `tokens_before` |
 | `session_compact` | compaction | The completed compaction, which the runtime treats as proof the context was rebuilt |
 | `tool_call` | tool start, and the gate | The only blocking hook. Carries `attempt_index`, `turn_seq` |
 | `tool_execution_end` | tool end | For **every** outcome, including blocked. Carries `attempt_index`, `turn_seq` |
 | `tool_execution_start` | *not forwarded* | Registered, but only to remember a tool name for the matching end: it fires before validation and for calls that never execute |
+| `user_bash` | tool start, and the second gate | The bang prefix, which never reaches the tool registry. Gated under the tool name `user_bash` — see [Inline shell](#inline-shell) |
+| *(synthesized)* `user_bash_end` | tool end | pi reports no completion for inline shell, so the extension closes the span itself |
 
 `tool_result` is deliberately unused: it does not fire for blocked calls, and in
 the parallel path it fires *before* `tool_execution_end`.
@@ -228,7 +299,14 @@ worth stating separately: a child pi process running this extension resolves its
 *own* session id and posts under it, so it does not appear as a subagent of the
 parent. It appears as an unrelated session.
 
-**LLM spans**, until model redirection lands. See [Status](#status).
+**LLM spans, when redirection is skipped.** They are present whenever the
+gateway fronts the endpoint the active model would otherwise have called, and
+absent otherwise — the `model_redirect` mark in the trace names which it was and
+why. See [Model redirection](#model-redirection).
+
+**The outcome of an inline shell command.** pi reports no completion for the bang
+prefix, so the gate records the decision, not the command. See
+[Inline shell](#inline-shell).
 
 ## Development
 
@@ -238,8 +316,10 @@ node --test integrations/pi/test/*.test.mjs
 ```
 
 The gateway half of the contract is covered in Rust by
-`pi_tool_call_hook_rejects_when_conditional_guardrail_blocks` and
-`pi_tool_call_hook_allows_when_no_guardrail_objects` in
+`pi_tool_call_hook_rejects_when_conditional_guardrail_blocks`,
+`pi_tool_call_hook_allows_when_no_guardrail_objects`,
+`pi_user_bash_hook_rejects_when_conditional_guardrail_blocks` and
+`pi_user_bash_is_not_gated_by_a_policy_that_names_the_bash_tool` in
 `crates/cli/tests/coverage/shared/server_tests.rs`.
 
 `test/fixtures/reentry-driver.ts` forces exactly one agent-run re-entry through

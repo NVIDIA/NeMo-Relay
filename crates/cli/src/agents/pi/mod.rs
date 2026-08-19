@@ -44,6 +44,13 @@ pub(super) const DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         "turn_end",
         "tool_call",
         "tool_execution_end",
+        // Not a pi hook name: posted after a request intercept's rewrite is applied to a tool
+        // call, so the trace records that the arguments the tool ran were not the ones proposed.
+        "tool_arguments_transformed",
+        // The bang-prefixed inline shell gate. `user_bash` is a pi hook; `user_bash_end` is not --
+        // pi reports no completion for inline shell, so the extension synthesizes the close.
+        "user_bash",
+        "user_bash_end",
         // Not a pi hook name: the extension posts this after deciding whether to point the active
         // model's provider at the gateway, so a trace with no LLM spans carries its own reason.
         "model_redirect",

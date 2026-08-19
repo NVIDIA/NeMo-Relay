@@ -131,6 +131,44 @@ export type ToolCallEventResult = {
   reason?: string;
 };
 
+/**
+ * Fired when the user runs a shell command inline with the `!` or `!!` prefix.
+ *
+ * This path never reaches the tool registry, so `tool_call` does not see it and
+ * none of the tool gating applies. `excludeFromContext` is the `!!` form, which
+ * keeps the command and its output out of the model's context -- including the
+ * output of a refusal.
+ *
+ * It fires in pi's interactive TUI and in RPC mode's `bash` command; there is no
+ * bang prefix in headless `-p` mode, which has no input loop to type it into.
+ */
+export type UserBashEvent = {
+  type: 'user_bash';
+  command: string;
+  excludeFromContext: boolean;
+  cwd: string;
+};
+
+/**
+ * Returning `result` makes pi skip execution and record that result as if the
+ * command had run; returning `operations` replaces the execution backend but
+ * keeps the original command. There is no block-and-reason form, so a refusal
+ * is a synthetic failed result -- see `src/user-bash.ts`.
+ *
+ * ⚠️ Unlike `tool_call`, `emitUserBash` wraps handlers in try/catch, so an
+ * exception here fails **open**: pi logs it and runs the command. And the first
+ * handler to return anything at all wins, so an earlier-loading extension can
+ * preempt this one -- `pi -e` loads first, `pi install` loads last.
+ */
+export type UserBashEventResult = {
+  result?: {
+    output: string;
+    exitCode: number | undefined;
+    cancelled: boolean;
+    truncated: boolean;
+  };
+};
+
 /** A model, narrowed to the fields this extension reads. */
 export type PiModel = {
   id: string;
@@ -176,6 +214,7 @@ export type ExtensionAPI = {
   on(event: 'tool_execution_start', handler: ExtensionHandler<ToolExecutionStartEvent>): void;
   on(event: 'tool_execution_end', handler: ExtensionHandler<ToolExecutionEndEvent>): void;
   on(event: 'tool_call', handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
+  on(event: 'user_bash', handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
   on(event: 'model_select', handler: ExtensionHandler<ModelSelectEvent>): void;
 
   /**

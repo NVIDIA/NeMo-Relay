@@ -109,10 +109,11 @@ it can block indefinitely before any hook fires.
 
 ## Tool Gating
 
-`tool_call` is the only pi hook that can block, and for model-invoked tools it
-is the only pre-execution decision point that sees arguments: pi applies
-`--tools`, `--exclude-tools`, `--no-tools`, and the runtime `setActiveTools` at
-tool-registry construction, never per call.
+For model-invoked tools, `tool_call` is the only pre-execution decision point
+that sees arguments: pi applies `--tools`, `--exclude-tools`, `--no-tools`, and
+the runtime `setActiveTools` at tool-registry construction, never per call. The
+user's own inline shell takes a different path and is gated separately. See
+[Inline Shell Gating](#inline-shell-gating).
 
 A guardrail rejection surfaces as HTTP 403 with
 `error.type = "nemo_relay_guardrail_rejected"` and the guardrail's own words in
@@ -162,9 +163,48 @@ A transform that violates the invariant **blocks the call**, with a reason
 stating that a policy could not be applied rather than that the request was
 refused. Running the original arguments would silently discard the policy.
 
+## Inline Shell Gating
+
+pi's bang prefix runs a command outside the tool registry: `!git status` runs it
+and shows the model the output, and `!!git status` runs it and keeps the output
+out of the model's context. Neither fires `tool_call`, so tool gating does not
+cover them. Both reach pi's `user_bash` hook, which the extension gates through
+the same guardrail chain by posting the command as a tool span start.
+
+<Warning>
+The tool name is `user_bash`, not `bash`. A guardrail receives only the tool name
+and the arguments, so a policy can distinguish a command the user typed from one
+the model proposed only if the two arrive under different names. **A policy that
+must cover both has to name both** — a rule written for `bash` alone does not
+gate the bang prefix.
+</Warning>
+
+The posted arguments are `command`, `cwd`, and `exclude_from_context`, the last
+of which is `true` for the `!!` form.
+
+pi's `user_bash` hook has no block-and-reason contract, so a refusal is a
+synthetic failed command result that pi records as though the command had run:
+
+| Field | Value |
+| --- | --- |
+| `exitCode` | `126`, the shell convention for a command that was found but could not be executed |
+| `output` | An attribution line, a blank line, then the guardrail's reason verbatim |
+| `cancelled` | `false` — nothing was started |
+| `truncated` | `false` — the message is whole |
+
+`NEMO_RELAY_PI_FAIL` governs this path as well. A rewritten command is refused
+rather than run: pi's `user_bash` result can replace the result or the execution
+backend, but never the command itself.
+
+Two limits are worth planning around. The gate records the decision, not the
+command — pi reports no completion for inline shell, so the span closes as soon
+as the verdict arrives and measures the policy round trip. And the hook fires
+only in the interactive TUI and in RPC mode; headless `-p` has no input loop to
+type a bang prefix into.
+
 ## Captured Events
 
-The extension posts 11 hooks. pi reports both ends of a turn, so Relay opens the
+The extension posts 15 hooks. pi reports both ends of a turn, so Relay opens the
 turn scope at pi's own `turn_start` instead of inferring one, and a mark that
 arrives between turns is recorded on the session scope rather than opening an
 empty turn to hold it.
@@ -177,8 +217,11 @@ empty turn to hold it.
 | `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
 | `session_compact` | Canonical `compaction` mark |
 | `model_select` | `model_redirect` mark recording whether redirection applied |
+| *(after a rewrite)* | `tool_arguments_transformed` mark, so the trace records that the arguments the tool ran were not the ones proposed |
 | `tool_call` | Tool span start, and the gate |
 | `tool_execution_end` | Tool span end, for every outcome including blocked |
+| `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
+| `user_bash_end` | Tool span end. Synthesized by the extension, because pi reports no completion for inline shell |
 
 pi's `tool_execution_start` is deliberately not forwarded: it fires before
 argument validation and also for calls that never execute. `tool_result` is not

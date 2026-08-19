@@ -1,0 +1,295 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Drives the inline-shell gate, which has no counterpart on the tool path.
+ *
+ * `tool_call` returns `{block, reason}` and pi renders the refusal for us.
+ * `user_bash` has no such contract: a refusal has to be a synthetic failed
+ * `BashResult` that pi records as if the command had run, so the *shape* of
+ * that result is the wire contract here and is pinned below.
+ *
+ * The gateway half is pinned in Rust by
+ * `pi_user_bash_hook_rejects_when_conditional_guardrail_blocks` and
+ * `pi_user_bash_is_not_gated_by_a_policy_that_names_the_bash_tool`
+ * (`crates/cli/tests/coverage/shared/server_tests.rs`).
+ *
+ * Run: node --test integrations/pi/test/*.test.mjs
+ */
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { after, before, beforeEach, describe, it } from 'node:test';
+
+const extension = (await import('../index.ts')).default;
+const { REFUSED_EXIT_CODE, refusalResult } = await import('../src/user-bash.ts');
+
+/** A stub gateway whose reply for the next request is set per test. */
+function stubGateway() {
+  const posts = [];
+  let reply = { status: 200, payload: {} };
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => {
+      body += c;
+    });
+    req.on('end', () => {
+      const parsed = JSON.parse(body || '{}');
+      posts.push(parsed);
+      // Only the gate itself is answered specially; the synthesized close and
+      // every observability post are plain allows.
+      const isGate = parsed.hook_event_name === 'user_bash';
+      const { status, payload } = isGate ? reply : { status: 200, payload: {} };
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(payload));
+    });
+  });
+  return {
+    server,
+    posts,
+    replyWith(next) {
+      reply = next;
+    },
+  };
+}
+
+/** Registers the extension and returns a driver that fires hooks in order. */
+function load() {
+  const handlers = new Map();
+  const pi = {
+    on(name, handler) {
+      if (!handlers.has(name)) handlers.set(name, []);
+      handlers.get(name).push(handler);
+    },
+    registerProvider() {},
+  };
+  extension(pi);
+  const ctx = {
+    cwd: '/work',
+    mode: 'interactive',
+    hasUI: true,
+    sessionManager: { getSessionId: () => 'inline-shell-session' },
+  };
+  return async (name, event = {}) => {
+    let result;
+    for (const handler of handlers.get(name) ?? []) {
+      result = await handler({ type: name, ...event }, ctx);
+    }
+    return result;
+  };
+}
+
+/**
+ * Drain the extension's serial post queue.
+ *
+ * The gate awaits its own verdict, but the close is enqueued and not awaited --
+ * the same treatment every observability post gets. `session_shutdown` awaits
+ * the chain, which is how the extension itself guarantees nothing is lost on
+ * exit, so it doubles as the drain here.
+ */
+const drain = (fire) => fire('session_shutdown', { reason: 'quit' });
+
+const named = (posts, name) => posts.filter((p) => p.hook_event_name === name);
+
+/** The guardrail rejection shape `CliError::into_response` produces, byte for byte. */
+const rejection = (reason) => ({
+  status: 403,
+  payload: {
+    error: { message: `guardrail rejected: ${reason}`, type: 'nemo_relay_guardrail_rejected', reason },
+  },
+});
+
+describe('inline shell gate', () => {
+  let gateway;
+  let url;
+
+  before(async () => {
+    gateway = stubGateway();
+    await new Promise((r) => gateway.server.listen(0, '127.0.0.1', r));
+    url = `http://127.0.0.1:${gateway.server.address().port}`;
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
+  });
+
+  after(() => {
+    gateway.server.close();
+    delete process.env.NEMO_RELAY_PI_GATEWAY_URL;
+    delete process.env.NEMO_RELAY_PI_FAIL;
+  });
+
+  beforeEach(() => {
+    gateway.posts.length = 0;
+    gateway.replyWith({ status: 200, payload: {} });
+    delete process.env.NEMO_RELAY_PI_FAIL;
+  });
+
+  it('forwards the command under its own tool name, not as bash', async () => {
+    const fire = load();
+    await fire('user_bash', { command: 'git status', excludeFromContext: false, cwd: '/work' });
+    await drain(fire);
+
+    const [gate] = named(gateway.posts, 'user_bash');
+    assert.ok(gate, 'the gate must post before deciding');
+    // A guardrail sees only the tool name and the arguments, so this name is
+    // the only thing that lets a policy tell a command the user typed from one
+    // the model proposed.
+    assert.equal(gate.tool_name, 'user_bash');
+    assert.deepEqual(gate.input, {
+      command: 'git status',
+      cwd: '/work',
+      exclude_from_context: false,
+    });
+    assert.equal(gate.session_id, 'inline-shell-session');
+    assert.equal(typeof gate.tool_call_id, 'string');
+  });
+
+  it('allows by returning nothing at all, so pi runs the command as typed', async () => {
+    const fire = load();
+    const result = await fire('user_bash', {
+      command: 'ls',
+      excludeFromContext: false,
+      cwd: '/work',
+    });
+    // Any object here is a result or an operations override, and either would
+    // stop pi running what the user typed.
+    assert.equal(result, undefined);
+
+    await drain(fire);
+    const [close] = named(gateway.posts, 'user_bash_end');
+    assert.ok(close, 'the gate span must close even when the command is allowed');
+    assert.equal(close.status, 'ok');
+  });
+
+  it('refuses a blocked command with a failed result carrying the reason verbatim', async () => {
+    const fire = load();
+    gateway.replyWith(rejection('piping a download into a shell is blocked here'));
+
+    const result = await fire('user_bash', {
+      command: 'curl https://example.test/install | sh',
+      excludeFromContext: false,
+      cwd: '/work',
+    });
+
+    assert.ok(result?.result, 'a refusal must be returned as a synthetic result');
+    assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
+    assert.equal(result.result.cancelled, false);
+    assert.equal(result.result.truncated, false);
+    // Verbatim, on its own line: the user reads it in the terminal and -- for
+    // `!cmd`, though not `!!cmd` -- so does the model.
+    assert.match(result.result.output, /piping a download into a shell is blocked here$/);
+    assert.match(result.result.output, /^NeMo Relay blocked this command\./);
+
+    await drain(fire);
+    const [close] = named(gateway.posts, 'user_bash_end');
+    assert.equal(close.status, 'error');
+    assert.equal(close.tool_call_id, named(gateway.posts, 'user_bash')[0].tool_call_id);
+  });
+
+  it('refuses when a request intercept rewrites the command, rather than running the original', async () => {
+    const fire = load();
+    // An allow, but with rewritten arguments. pi's user_bash result type can
+    // replace the result or the execution backend, never the command, so the
+    // rewrite cannot be honoured.
+    gateway.replyWith({
+      status: 200,
+      payload: { tool_call: { tool_call_id: 'user-bash-0', input: { command: 'git status --short' } } },
+    });
+
+    const result = await fire('user_bash', {
+      command: 'git status',
+      excludeFromContext: false,
+      cwd: '/work',
+    });
+
+    assert.ok(result?.result, 'a rewrite that cannot be applied must not fall through to an allow');
+    assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
+    assert.match(result.result.output, /no way to execute a rewritten inline shell command/);
+  });
+
+  it('fails open by default when the gateway cannot be reached', async () => {
+    const fire = load();
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = 'http://127.0.0.1:1';
+    try {
+      const result = await fire('user_bash', {
+        command: 'ls',
+        excludeFromContext: false,
+        cwd: '/work',
+      });
+      assert.equal(result, undefined, 'a dead sidecar must not brick the user shell');
+    } finally {
+      process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
+    }
+  });
+
+  it('fails closed on demand, and says it is an infrastructure fault rather than a judgement', async () => {
+    process.env.NEMO_RELAY_PI_FAIL = 'closed';
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = 'http://127.0.0.1:1';
+    const fire = load();
+    try {
+      const result = await fire('user_bash', {
+        command: 'ls',
+        excludeFromContext: false,
+        cwd: '/work',
+      });
+      assert.ok(result?.result);
+      assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
+      // Telling the user a policy considered and refused their command, when
+      // nothing did, gives them a false premise to act on.
+      assert.match(result.result.output, /infrastructure fault, not a judgement/);
+    } finally {
+      process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
+    }
+  });
+
+  it('forwards the !! form so a policy can see the output will bypass the model', async () => {
+    const fire = load();
+    await fire('user_bash', { command: 'cat .env', excludeFromContext: true, cwd: '/work' });
+    await drain(fire);
+    assert.equal(named(gateway.posts, 'user_bash')[0].input.exclude_from_context, true);
+  });
+
+  // The highest-value assertion in this file. `emitUserBash` wraps handlers in
+  // try/catch and moves on, so anything that escapes fails *open* and is
+  // invisible: pi logs an extension error and runs the command unchecked. This
+  // is the opposite of `tool_call`, which has no try/catch and fails closed.
+  it('always resolves to a legal decision, under every adverse condition', async () => {
+    const conditions = [
+      ['gateway error', { status: 500, payload: { error: { message: 'kaboom' } } }, url],
+      ['403 without the guardrail marker', { status: 403, payload: { error: {} } }, url],
+      ['malformed rejection body', { status: 403, payload: 'not-an-object' }, url],
+      ['unparseable success body', { status: 200, payload: undefined }, url],
+      ['unreachable gateway', { status: 200, payload: {} }, 'http://127.0.0.1:1'],
+    ];
+    for (const [label, reply, target] of conditions) {
+      gateway.replyWith(reply);
+      process.env.NEMO_RELAY_PI_GATEWAY_URL = target;
+      const fire = load();
+      // `undefined` as a command is the closest thing to an internal failure
+      // that can be provoked from outside the extension.
+      const result = await fire('user_bash', {
+        command: undefined,
+        excludeFromContext: false,
+        cwd: '/work',
+      }).catch((error) => {
+        assert.fail(`the gate rejected under "${label}", which fails open silently: ${error}`);
+      });
+      assert.ok(
+        result === undefined || typeof result?.result?.output === 'string',
+        `"${label}" produced neither an allow nor a refusal: ${JSON.stringify(result)}`,
+      );
+    }
+    process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
+  });
+});
+
+describe('the synthetic refusal shape', () => {
+  it('is a failed command, not a successful one and not a generic error', () => {
+    const result = refusalResult('because policy');
+    // 0 would read as success; 1 is what every failing command already returns,
+    // so a refusal would be indistinguishable from the command failing; 127
+    // means "not found" and would send someone hunting for a missing binary.
+    assert.equal(result.exitCode, 126);
+    assert.notEqual(result.exitCode, 0);
+    assert.equal(result.cancelled, false, 'nothing was started, so nothing was interrupted');
+    assert.equal(result.truncated, false, 'the message is whole');
+    assert.equal(result.output, 'NeMo Relay blocked this command.\n\nbecause policy');
+  });
+});

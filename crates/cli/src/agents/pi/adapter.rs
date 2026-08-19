@@ -46,8 +46,19 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
             // subagents are an extension-level concept it does not surface.
             subagent_start: &[],
             subagent_end: &[],
-            tool_start: &["tool_call", "toolCall"],
-            tool_end: &["tool_execution_end", "toolExecutionEnd"],
+            // `user_bash` is pi's bang-prefixed inline shell, which never
+            // reaches the tool registry and so never fires `tool_call`. It is
+            // gated as a tool start under its own tool name so the same
+            // conditional-execution guardrail chain decides it; `user_bash_end`
+            // is synthesized by the extension, because pi reports no completion
+            // for inline shell.
+            tool_start: &["tool_call", "toolCall", "user_bash", "userBash"],
+            tool_end: &[
+                "tool_execution_end",
+                "toolExecutionEnd",
+                "user_bash_end",
+                "userBashEnd",
+            ],
             // pi has an explicit turn boundary at both ends, unlike Codex and
             // Claude Code which only signal it through `Stop`. Classifying the
             // open as well as the close is what stops the gateway inventing a

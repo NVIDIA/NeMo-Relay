@@ -9,13 +9,18 @@
  * is a thin HTTP client to the NeMo Relay CLI gateway: it forwards pi's
  * lifecycle to `/hooks/pi`, and gates tool calls on the gateway's verdict.
  *
- * **Governance.** `tool_call` is the only pi hook that can block, and for
- * model-invoked tools it is the only pre-execution decision point that sees
- * arguments -- `--tools` / `--exclude-tools` / `--no-tools` and the runtime
- * `setActiveTools` are applied at tool-registry construction, never per call.
- * A gateway guardrail rejection arrives as HTTP 403 and is translated into
- * `{block, reason}`; pi hands that reason to the model verbatim, so the model
- * reads the guardrail's own words.
+ * **Governance, on two paths.** For model-invoked tools, `tool_call` is the only
+ * pre-execution decision point that sees arguments -- `--tools` /
+ * `--exclude-tools` / `--no-tools` and the runtime `setActiveTools` are applied
+ * at tool-registry construction, never per call. A gateway guardrail rejection
+ * arrives as HTTP 403 and is translated into `{block, reason}`; pi hands that
+ * reason to the model verbatim, so the model reads the guardrail's own words.
+ *
+ * The user's own bang-prefixed shell (`!cmd`) never reaches the tool registry,
+ * so `tool_call` cannot see it. It is gated separately through `user_bash`,
+ * under its own tool name and with a refusal shaped as a failed command rather
+ * than as a blocked tool call, because pi gives that hook no reason contract.
+ * See `src/user-bash.ts`.
  *
  * **Lifecycle mapping.** Two pi shapes make a naive mapping wrong:
  *
@@ -68,6 +73,13 @@ import {
   isNotable,
   redirectConfigFromEnv,
 } from './src/provider-redirect.ts';
+import {
+  USER_BASH_END_HOOK,
+  USER_BASH_HOOK,
+  USER_BASH_TOOL_NAME,
+  refusalResult,
+  transformRefusalReason,
+} from './src/user-bash.ts';
 import type {
   AgentEndEvent,
   AgentSettledEvent,
@@ -85,6 +97,8 @@ import type {
   ToolExecutionStartEvent,
   TurnEndEvent,
   TurnStartEvent,
+  UserBashEvent,
+  UserBashEventResult,
 } from './src/pi-hook-types.ts';
 
 export default function nemoRelayExtension(pi: ExtensionAPI): void {
@@ -96,6 +110,15 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
   let turnSeq = 0;
   /** Tool names by call id, so the end payload can name the tool pi started. */
   const toolNames = new Map<string, string>();
+  /**
+   * Inline shell commands have no pi-supplied identifier.
+   *
+   * `user_bash` carries only the command text, so the gate synthesizes a call
+   * id to correlate its own start and end. Per runtime rather than globally
+   * unique, which is all the gateway's tool map needs: it is keyed by call id
+   * within one session.
+   */
+  let userBashSeq = 0;
 
   /**
    * Serializes every post to the gateway, in hook order.
@@ -469,6 +492,131 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       ...attribution(),
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Inline shell
+  // ---------------------------------------------------------------------------
+
+  /** Close the gate span, whatever the outcome, so the trace stays balanced. */
+  const endUserBash = (
+    ctx: ExtensionContext,
+    callId: string,
+    status: 'ok' | 'error',
+    content: string,
+  ): void => {
+    emit(ctx, {
+      hook_event_name: USER_BASH_END_HOOK,
+      tool_call_id: callId,
+      tool_name: USER_BASH_TOOL_NAME,
+      result: { content },
+      status,
+      ...attribution(),
+    });
+  };
+
+  /**
+   * The second governance seam: pi's bang-prefixed inline shell.
+   *
+   * `!cmd` and `!!cmd` bypass the tool registry entirely -- they reach
+   * `emitUserBash`, not `tool_call` -- so nothing about the tool gate covers
+   * them. This closes that gap using the gateway machinery that already exists:
+   * the command is posted as a tool start named `user_bash`, so the same
+   * conditional-execution guardrail chain decides it and the same 403 contract
+   * carries the reason back.
+   *
+   * Three pi facts shape every line of this handler.
+   *
+   * 1. **There is no block-and-reason contract.** A refusal is a synthetic
+   *    failed `BashResult` and pi records it exactly as if the command had run.
+   *    See `src/user-bash.ts` for the shape and why those field values.
+   * 2. **`emitUserBash` catches**, so throwing fails *open* and the command
+   *    runs unchecked. Nothing here is allowed to escape; the catch resolves an
+   *    internal failure through the same policy as an unreachable gateway.
+   * 3. **The first handler to return anything wins.** Loaded with `-e` this one
+   *    is first; installed with `pi install` it loads last and an earlier
+   *    extension can preempt it, in which case the gateway never sees the
+   *    command at all.
+   *
+   * What the gate does *not* do is observe the command. pi has no completion
+   * hook for inline shell -- `user_bash` is the only one -- so on an allow the
+   * span closes immediately and measures the policy round trip, not the
+   * command. Taking execution over to fix that would mean supplying pi with
+   * custom `operations`, which drops the user's configured shell path and pi's
+   * process-tree cancellation; the sidecar does not change how pi runs things.
+   */
+  pi.on(
+    'user_bash',
+    async (
+      event: UserBashEvent,
+      ctx: ExtensionContext,
+    ): Promise<UserBashEventResult | undefined> => {
+      const callId = `user-bash-${userBashSeq++}`;
+      try {
+        const active = ensureConfig(ctx);
+        // Enqueued like `tool_call`, so a turn boundary posted earlier in the
+        // same turn reaches the gateway first.
+        const outcome = await enqueue(() =>
+          postHook(active, {
+            hook_event_name: USER_BASH_HOOK,
+            tool_call_id: callId,
+            tool_name: USER_BASH_TOOL_NAME,
+            input: {
+              command: event.command,
+              cwd: event.cwd,
+              // `!!` keeps the command and its output out of the model's
+              // context, including the output of a refusal. A policy may
+              // reasonably care.
+              exclude_from_context: event.excludeFromContext,
+            },
+            ...attribution(),
+          }),
+        );
+
+        const decision =
+          outcome.kind === 'fault'
+            ? resolveFault(active, outcome.detail, USER_BASH_TOOL_NAME)
+            : outcome;
+
+        if (decision.kind === 'block') {
+          endUserBash(ctx, callId, 'error', decision.reason);
+          return { result: refusalResult(decision.reason) };
+        }
+
+        // An intercept rewrote the command. pi's result type can replace the
+        // result or the execution backend but never the command itself, so the
+        // rewrite cannot be honoured -- and running the original would discard
+        // the policy decision. Refuse, and say which of the two it is.
+        if (decision.kind === 'allow' && decision.body?.tool_call?.input !== undefined) {
+          const reason = transformRefusalReason();
+          endUserBash(ctx, callId, 'error', reason);
+          return { result: refusalResult(reason) };
+        }
+
+        endUserBash(ctx, callId, 'ok', 'Allowed by policy; pi executed the command.');
+        // `undefined` is the only correct allow value: any object at all is a
+        // result or an operations override, and either would stop pi running
+        // the command as the user typed it.
+        return undefined;
+      } catch (error) {
+        // Reached only if something inside this handler failed -- `postHook`
+        // resolves its own transport errors. Failing open here would be silent,
+        // so it is resolved as a fault under the configured policy instead.
+        //
+        // The policy is re-read rather than defaulted: if `ensureConfig` is
+        // what failed then `config` is still null, and hard-coding fail-open
+        // there would override an explicit `NEMO_RELAY_PI_FAIL=closed` -- the
+        // one case where an operator has asked for exactly this to block.
+        const detail = error instanceof Error ? error.message : String(error);
+        const fault = resolveFault(
+          config ?? configFromEnv(safeSessionId(ctx)),
+          `the inline-shell gate failed: ${detail}`,
+          USER_BASH_TOOL_NAME,
+        );
+        if (fault.kind === 'block') return { result: refusalResult(fault.reason) };
+        return undefined;
+      }
+    },
+  );
 }
 
 /** pi's session id, with a fallback so a missing manager cannot break loading. */

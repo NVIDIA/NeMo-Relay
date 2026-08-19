@@ -1096,6 +1096,21 @@ impl Session {
         self.open_turn(event_metadata, Value::Null, "implicit")
     }
 
+    // Chooses the enclosing scope for a tool event that arrives with no turn open.
+    //
+    // Same reasoning as `mark`: a harness that reports its own turn start is telling the gateway
+    // where turns begin, so a tool event between turns is genuinely between turns, and opening one
+    // to hold it invents a turn the harness never reported. pi's inline-shell gate is what makes
+    // this reachable -- a user typing `!cmd` at an idle prompt is outside every turn, while pi's
+    // model-invoked tool calls always arrive inside one. Codex and Claude Code report no turn
+    // start, so they keep opening turns lazily and are unaffected.
+    fn ensure_tool_scope_started(&mut self, event_metadata: Value) -> Result<(), CliError> {
+        if self.agent_kind.has_explicit_turn_start() && self.turn_scope.is_none() {
+            return self.ensure_agent_started(event_metadata);
+        }
+        self.ensure_turn_started(event_metadata)
+    }
+
     fn ensure_turn_started_for_gateway(&mut self, start: &LlmGatewayStart) -> Result<(), CliError> {
         if self.turn_scope.is_some() {
             return Ok(());
@@ -1530,7 +1545,7 @@ impl Session {
     // scope. Duplicate tool IDs are ignored so repeated pre-tool hooks do not create parallel
     // handles for one agent tool invocation.
     async fn start_tool(&mut self, event: ToolEvent) -> Result<(), CliError> {
-        self.ensure_turn_started(event.metadata.clone())?;
+        self.ensure_tool_scope_started(event.metadata.clone())?;
         if self.tools.contains_key(&event.tool_call_id) {
             return Ok(());
         }
@@ -1600,7 +1615,7 @@ impl Session {
     // Ends a tool call, synthesizing a start if no matching handle exists. This keeps post-only
     // hooks observable and preserves the final result/status instead of dropping orphaned endings.
     async fn end_tool(&mut self, event: ToolEvent) -> Result<Option<SubscriberDelivery>, CliError> {
-        self.ensure_turn_started(event.metadata.clone())?;
+        self.ensure_tool_scope_started(event.metadata.clone())?;
         let event_metadata = self.event_identity_metadata(event.metadata.clone());
         let completed_agent_subagent_id = alignment::completed_subagent_from_tool(&event);
         let explicit_subagent_id = event

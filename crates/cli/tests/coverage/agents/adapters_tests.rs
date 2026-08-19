@@ -1159,6 +1159,50 @@ fn pi_compaction_is_classified_only_once_it_has_happened() {
     );
 }
 
+// pi's bang-prefixed inline shell never reaches the tool registry, so it never fires `tool_call`
+// and none of the tool gating covers it. It is classified as a tool boundary so the same
+// conditional-execution guardrail chain decides it; the close is synthesized by the extension,
+// because pi reports no completion for inline shell.
+#[test]
+fn pi_inline_shell_is_classified_as_a_tool_boundary() {
+    let started = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "user_bash",
+            "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "input": { "command": "git status", "cwd": "/work", "exclude_from_context": false }
+        }),
+        &HeaderMap::new(),
+    );
+    match started.events.as_slice() {
+        [NormalizedEvent::ToolStarted(event)] => {
+            // The name a guardrail matches on. Deliberately not `bash`: a policy has to be able to
+            // tell a command the user typed from one the model proposed, and the guardrail chain
+            // sees only the name and the arguments.
+            assert_eq!(event.tool_name, "user_bash");
+            assert_eq!(event.arguments["command"], json!("git status"));
+        }
+        events => panic!("user_bash must open a tool span. events: {events:?}"),
+    }
+
+    let ended = pi::adapt(
+        json!({
+            "session_id": "pi-session",
+            "hook_event_name": "user_bash_end",
+            "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "status": "error"
+        }),
+        &HeaderMap::new(),
+    );
+    assert!(
+        matches!(ended.events.as_slice(), [NormalizedEvent::ToolEnded(_)]),
+        "user_bash_end must close the tool span. events: {:?}",
+        ended.events
+    );
+}
+
 // The promotion is what makes attribution survive on tool events at all: the session manager
 // builds tool spans from the extracted call id, name, arguments, result and metadata, and drops
 // the raw payload. Without this the keys would be accepted on the wire and silently discarded.

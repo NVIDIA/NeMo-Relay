@@ -5648,3 +5648,107 @@ async fn pi_re_entry_produces_two_turns_attributed_to_two_attempts() {
     drop(captured);
     deregister_subscriber(subscriber_name).unwrap();
 }
+
+// pi's inline shell is the one tool event that can arrive with no turn open: `!git status` typed
+// at an idle prompt happens between turns, not inside one. Opening a turn to hold it would invent
+// a boundary pi never reported -- the same defect `has_explicit_turn_start` already fixed for
+// marks, reached from the tool side instead.
+#[tokio::test]
+async fn pi_inline_shell_between_turns_does_not_invent_a_turn() {
+    let subscriber_name = "cli-pi-inline-shell-scope-test";
+    let _ = deregister_subscriber(subscriber_name);
+    let captured = Arc::new(StdMutex::new(Vec::<(String, Option<ScopeCategory>)>::new()));
+    let events = captured.clone();
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| {
+            let Some(metadata) = event.metadata() else {
+                return;
+            };
+            if metadata.get("session_id").and_then(Value::as_str) != Some("pi-inline-shell-session")
+            {
+                return;
+            }
+            events
+                .lock()
+                .unwrap()
+                .push((event.name().to_string(), event.scope_category()));
+        }),
+    )
+    .unwrap();
+
+    let manager = SessionManager::new(session_test_config());
+    let session = json!({ "session_id": "pi-inline-shell-session" });
+    for payload in [
+        json!({ "hook_event_name": "session_start", "reason": "startup" }),
+        json!({ "hook_event_name": "agent_start", "attempt_index": 0 }),
+        json!({
+            "hook_event_name": "turn_start", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        json!({
+            "hook_event_name": "turn_end", "turn_index": 0, "turn_seq": 0, "attempt_index": 0
+        }),
+        // The user types `!git status` at the prompt, after the turn closed.
+        json!({
+            "hook_event_name": "user_bash", "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash",
+            "input": { "command": "git status", "cwd": "/work", "exclude_from_context": false },
+            "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({
+            "hook_event_name": "user_bash_end", "tool_call_id": "user-bash-0",
+            "tool_name": "user_bash", "status": "ok", "attempt_index": 0, "turn_seq": 0
+        }),
+        json!({ "hook_event_name": "agent_end", "attempt_index": 0 }),
+        json!({ "hook_event_name": "agent_settled", "attempts": 1, "attempt_index": 0 }),
+        json!({ "hook_event_name": "session_shutdown", "reason": "quit" }),
+    ] {
+        let mut merged = session.clone();
+        merged
+            .as_object_mut()
+            .unwrap()
+            .extend(payload.as_object().unwrap().clone());
+        apply_pi_hook(&manager, merged).await;
+    }
+
+    flush_subscribers().unwrap();
+    let captured = captured.lock().unwrap();
+    let sequence = captured
+        .iter()
+        .map(|(name, category)| (name.as_str(), *category))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        sequence
+            .iter()
+            .filter(|(name, category)| *name == "pi-turn" && *category == Some(ScopeCategory::Start))
+            .count(),
+        1,
+        "pi reported one turn; the inline shell command must not open a second. sequence: \
+         {sequence:?}"
+    );
+    // The span still exists -- it is not being dropped, only re-parented onto the session scope,
+    // which is where a command typed between turns belongs.
+    assert!(
+        sequence.contains(&("user_bash", Some(ScopeCategory::Start)))
+            && sequence.contains(&("user_bash", Some(ScopeCategory::End))),
+        "the inline shell command must still produce a balanced span. sequence: {sequence:?}"
+    );
+    let turn_end = sequence
+        .iter()
+        .position(|(name, category)| *name == "pi-turn" && *category == Some(ScopeCategory::End))
+        .expect("the one turn should close");
+    let shell_start = sequence
+        .iter()
+        .position(|(name, category)| {
+            *name == "user_bash" && *category == Some(ScopeCategory::Start)
+        })
+        .expect("the inline shell span should open");
+    assert!(
+        turn_end < shell_start,
+        "the command was typed after the turn closed, so its span belongs outside it. sequence: \
+         {sequence:?}"
+    );
+    drop(captured);
+    deregister_subscriber(subscriber_name).unwrap();
+}
