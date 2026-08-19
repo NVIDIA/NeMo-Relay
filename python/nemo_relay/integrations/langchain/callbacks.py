@@ -218,6 +218,26 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
                     metadata=completed.metadata,
                     timestamp=completed.ended_at,
                 )
+            except ValueError:
+                # ``scope.pop`` converts output before mutating the stack, so a
+                # rejected payload can be safely discarded and the close retried.
+                if completed.output is None:
+                    _logger.error("NeMo Relay: scope.pop failed", exc_info=True)
+                    return
+
+                _logger.error("NeMo Relay: scope.pop rejected output; retrying without output", exc_info=True)
+                completed = completed._replace(output=None)
+                self._completed[top.uuid] = completed
+                try:
+                    nemo_relay.scope.pop(
+                        completed.handle,
+                        output=None,
+                        metadata=completed.metadata,
+                        timestamp=completed.ended_at,
+                    )
+                except Exception:
+                    _logger.error("NeMo Relay: scope.pop retry without output failed", exc_info=True)
+                    return
             except Exception:
                 # The runtime can refuse before it mutates the stack, so the scope
                 # may still be live and closable later. Keep the completion -- it is

@@ -607,6 +607,33 @@ async def test_an_unserializable_output_does_not_strand_the_scope(
     assert nemo_relay.scope.get_handle().uuid == baseline.uuid
 
 
+async def test_invalid_output_does_not_block_the_completion_queue(
+    handler: NemoRelayCallbackHandler,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A permanently invalid output cannot strand every completed scope below it."""
+    parent_run, run_a, run_b = uuid4(), uuid4(), uuid4()
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+
+    _start(handler, parent_run, "parent")
+    _start(handler, run_a, "A", parent_run_id=parent_run)
+    _start(handler, run_b, "B", parent_run_id=parent_run)
+
+    _end(handler, run_a, "A")
+    assert len(handler._completed) == 1
+
+    with caplog.at_level("ERROR"):
+        handler.on_chain_end({"unsupported": object()}, run_id=run_b)
+
+    assert handler._completed == {}
+    assert nemo_relay.scope.get_handle().name == "parent"
+    assert any(record.levelname == "ERROR" for record in caplog.records)
+
+    _end(handler, parent_run, "parent")
+    assert handler._completed == {}
+    nemo_relay.scope.pop(request)
+
+
 async def test_pydantic_output_is_serialized_before_scope_close(
     handler: NemoRelayCallbackHandler,
     subscribed_events: list[nemo_relay.Event],
