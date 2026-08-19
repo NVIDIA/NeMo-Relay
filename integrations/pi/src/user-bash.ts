@@ -98,8 +98,8 @@ export function refusalResult(reason: string): BashResult {
  *
  * pi's `UserBashEventResult` can replace the *result* or supply custom
  * execution `operations`, but it cannot replace the command: both call sites
- * pass the original string on to `executeBash`, and the terminal component has
- * already been built from it. Taking over execution to run the rewrite instead
+ * pass the original string on to `executeBash`, and neither reads anything back
+ * out of the event. Taking over execution to run the rewrite instead
  * would mean reimplementing pi's shell selection, command prefix and
  * process-tree cancellation, which is a behaviour change the sidecar has no
  * business making.

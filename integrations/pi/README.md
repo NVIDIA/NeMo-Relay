@@ -197,8 +197,8 @@ says explicitly that it is an infrastructure fault rather than a judgement.
 
 **A rewritten command is refused, not run.** pi's `user_bash` result can replace
 the *result* or the execution backend, but never the command — both call sites
-pass the original text on, and the terminal component has already been built
-from it. So a request intercept that rewrites an inline command cannot be
+pass the original text straight on to `executeBash` and read nothing back out of
+the event. So a request intercept that rewrites an inline command cannot be
 honoured, and the command is refused rather than run unmodified, on the same
 rule the tool path applies to a transform it cannot apply safely.
 
