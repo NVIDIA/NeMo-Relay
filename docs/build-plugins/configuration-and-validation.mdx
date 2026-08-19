@@ -21,7 +21,7 @@ or manages an isolated stack. Disabling request rewriting, including with
 | File | Purpose |
 |---|---|
 | `plugins.toml` | Runtime configuration. It contains component kinds, `enabled` state, component-local `config`, validation policy, and references to discoverable manifests. Relay can layer discovered files with binding-provided configuration. |
-| `relay-plugin.toml` | Package manifest for one discoverable native library or `grpc-v1` worker. It declares identity, compatibility, entrypoint, optional JSON Schema, and integrity metadata. It does not replace the component configuration in `plugins.toml`. |
+| `relay-plugin.toml` | [Package manifest](/build-plugins/package-discoverable-plugins) for one discoverable native library or `grpc-v1` worker. It declares identity, compatibility, entrypoint, optional JSON Schema, and integrity metadata. It does not replace the component configuration in `plugins.toml`. |
 
 The binding APIs use the same canonical document shape as `plugins.toml`: a document
 version, `components`, and `policy`. Each component has a `kind`, an `enabled` flag, and a
@@ -83,7 +83,8 @@ arbitrary third-party JSON object; implement and test that behavior in the plugi
 ## Publish the Component Schema with the Package
 
 The following strict schema is used by the Python worker and native examples. The native
-example adds an `executor` object because only the typed native SDK owns a Tokio executor.
+example adds an `executor` object because only the
+[typed native SDK](/build-plugins/native/about) owns a Tokio executor.
 `additionalProperties: false` is repeated inside each object so a misspelled control fails
 at the exact nesting level where it appears.
 

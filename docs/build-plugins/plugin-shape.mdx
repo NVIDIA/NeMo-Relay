@@ -16,8 +16,8 @@ installs those registrations through a component-scoped context.
 | Part | Responsibility |
 |---|---|
 | Stable identity | A language-binding plugin is registered under a kind; native and worker implementations report their plugin identity during loading or handshake. Configuration uses that identity in `components[].kind`. |
-| `validate` | Examines component-local JSON and returns structured diagnostics without installing behavior or performing lasting side effects. |
-| `register` | Receives the validated component configuration and a `PluginContext`, then installs the component's subscribers and middleware. The Rust language-binding hook returns a future. Python, Node.js, native, and worker hooks register synchronously, although many callbacks they install are asynchronous. |
+| `validate` | Examines component-local JSON and returns [structured diagnostics](/build-plugins/fundamentals/configuration-and-validation) without installing behavior or performing lasting side effects. |
+| `register` | Receives the validated component configuration and a [`PluginContext`](/build-plugins/fundamentals/plugin-context), then installs the component's subscribers and middleware. The Rust language-binding hook returns a future. Python, Node.js, native, and worker hooks register synchronously, although many callbacks they install are asynchronous. |
 | `allows_multiple_components` | Declares whether one plugin implementation can back more than one configured component. The default differs by SDK, so an implementation should set or test the intended behavior instead of relying on assumption. |
 | Component ownership | Every registration made through the context belongs to the component being activated. Relay qualifies registration names and tracks cleanup on that component's behalf. |
 
@@ -151,9 +151,10 @@ registration only when their lifetime is tied to the component and they can be s
 when activation fails or configuration is cleared.
 
 Language-binding applications remove active plugin configuration with the binding's
-clear API and can deregister a plugin kind when the implementation itself is no longer
-available. Dynamic hosts clear component registrations before unloading a native
-library or stopping a worker. Worker shutdown also ends in-flight callback service,
+[clear API](/build-plugins/language-binding/register-behavior) and can deregister a
+plugin kind when the implementation itself is no longer available. Dynamic hosts
+clear component registrations before unloading a native library or stopping a
+worker. Worker shutdown also ends in-flight callback service,
 closes the authenticated endpoint, and terminates the managed process.
 
 ## Verify the Lifecycle
