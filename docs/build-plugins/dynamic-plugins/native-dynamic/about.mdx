@@ -124,6 +124,35 @@ path, then replace `<artifact-sha256>` with that library's SHA-256 digest. Use
 Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example) for a complete example
 with validation, middleware, scopes, and configuration schema support.
 
+## Inject Event Metadata
+
+Register a component-owned global callback when the plugin starts. Relay calls
+the callback for every Event while the component is active. The callback
+receives an immutable Event snapshot and returns flat key/value additions for
+`Event.metadata`:
+
+```rust
+use std::collections::BTreeMap;
+
+use nemo_relay_plugin::Json;
+
+context.register_event_metadata_injector(
+    "plugin-context",
+    0,
+    |_event| async move {
+        let additions: BTreeMap<String, Json> = BTreeMap::from([(
+            "app.source".into(),
+            Json::String("plugin".into()),
+        )]);
+        Ok(additions)
+    },
+)?;
+```
+
+The plugin can inspect the Event to decide which additions to return but cannot
+modify it directly. Relay validates and merges accepted additions before Event
+sanitizers run. Clearing the plugin component removes the registration.
+
 ## Native ABI v4
 
 The entry symbol receives a `*const NemoRelayNativeHostApiV1` pointer. It

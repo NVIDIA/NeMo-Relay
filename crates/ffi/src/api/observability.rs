@@ -668,6 +668,28 @@ fn parse_mark_exclude_names(ptr: *const c_char) -> Result<Vec<String>, NemoRelay
     })
 }
 
+fn parse_promote_metadata_prefixes(ptr: *const c_char) -> Result<Vec<String>, NemoRelayStatus> {
+    if ptr.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(value) = c_str_to_json(ptr) else {
+        return Err(NemoRelayStatus::InvalidJson);
+    };
+    let prefixes: Vec<String> = serde_json::from_value(value).map_err(|error| {
+        set_last_error(&format!(
+            "promote_metadata_prefixes must be an array of strings: {error}"
+        ));
+        NemoRelayStatus::InvalidArg
+    })?;
+    nemo_relay::observability::validate_metadata_promotion_prefixes(&prefixes).map_err(
+        |error| {
+            set_last_error(&error);
+            NemoRelayStatus::InvalidArg
+        },
+    )?;
+    Ok(prefixes)
+}
+
 fn parse_attribute_mappings(
     ptr: *const c_char,
 ) -> Result<Vec<nemo_relay::observability::OtlpAttributeMapping>, NemoRelayStatus> {
@@ -871,6 +893,53 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
     attribute_mappings_json: *const c_char,
     out: *mut *mut FfiOpenTelemetrySubscriber,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_otel_subscriber_create_with_projection_options_v2(
+            otel_type,
+            transport,
+            endpoint,
+            headers_json,
+            resource_attributes_json,
+            service_name,
+            service_namespace,
+            service_version,
+            instrumentation_scope,
+            timeout_millis,
+            mark_projection,
+            mark_exclude_names_json,
+            attribute_mappings_json,
+            std::ptr::null(),
+            out,
+        )
+    }
+}
+
+/// Creates one typed OpenTelemetry exporter subscriber with projection and metadata controls.
+///
+/// `promote_metadata_prefixes_json` is a JSON array of literal metadata prefixes,
+/// such as `["nv."]`. Pass null to disable metadata promotion.
+///
+/// # Safety
+/// Any non-null C strings must be valid and `out` must be non-null.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_options_v2(
+    otel_type: *const c_char,
+    transport: *const c_char,
+    endpoint: *const c_char,
+    headers_json: *const c_char,
+    resource_attributes_json: *const c_char,
+    service_name: *const c_char,
+    service_namespace: *const c_char,
+    service_version: *const c_char,
+    instrumentation_scope: *const c_char,
+    timeout_millis: u64,
+    mark_projection: *const c_char,
+    mark_exclude_names_json: *const c_char,
+    attribute_mappings_json: *const c_char,
+    promote_metadata_prefixes_json: *const c_char,
+    out: *mut *mut FfiOpenTelemetrySubscriber,
+) -> NemoRelayStatus {
     clear_last_error();
     if let Err(status) = required_out_ptr(out) {
         return status;
@@ -902,7 +971,13 @@ pub unsafe extern "C" fn nemo_relay_otel_subscriber_create_with_projection_optio
         .with_attribute_mappings(match parse_attribute_mappings(attribute_mappings_json) {
             Ok(value) => value,
             Err(status) => return status,
-        });
+        })
+        .with_promote_metadata_prefixes(
+            match parse_promote_metadata_prefixes(promote_metadata_prefixes_json) {
+                Ok(value) => value,
+                Err(status) => return status,
+            },
+        );
     let subscriber = match create_otel_subscriber(config) {
         Ok(subscriber) => subscriber,
         Err(status) => return status,

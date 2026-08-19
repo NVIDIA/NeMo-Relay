@@ -69,6 +69,35 @@ identity from `WorkerPlugin::plugin_id()`; custom launchers can use
 credentials and runs until Relay requests shutdown. Do not start the worker
 directly for normal operation.
 
+## Inject Event Metadata
+
+Register a global callback from `WorkerPlugin::register`. Relay sends each
+Event to the worker over `grpc-v1`, and the callback returns flat key/value
+additions for `Event.metadata`:
+
+```rust
+use std::collections::BTreeMap;
+
+use nemo_relay_worker::Json;
+
+context.register_event_metadata_injector(
+    "plugin-context",
+    0,
+    |_event| async move {
+        let additions: BTreeMap<String, Json> = BTreeMap::from([(
+            "app.source".into(),
+            Json::String("plugin".into()),
+        )]);
+        Ok(additions)
+    },
+);
+```
+
+The callback receives an immutable Event snapshot. Relay validates and merges
+accepted additions before Event sanitizers run. A callback error omits that
+callback's additions without dropping the Event. Stopping the worker component
+removes the registration.
+
 ## Read Host Runtime Diagnostics
 
 Use the runtime handle inside an asynchronous callback to read the active

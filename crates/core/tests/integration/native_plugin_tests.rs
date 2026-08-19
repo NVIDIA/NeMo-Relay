@@ -1520,6 +1520,110 @@ async fn plugin_host_activation_owns_configuration_until_clear() {
 }
 
 #[tokio::test]
+async fn native_event_metadata_injector_enriches_events_and_is_removed_on_clear() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let mut spec = host_spec("fixture_native", &manifest_ref);
+    spec.config = Map::from_iter([("event_metadata_injector_only".into(), json!(true))]);
+    let (activation, report) = PluginHostActivation::activate(PluginConfig::default(), [spec])
+        .await
+        .expect("native plugin host should activate");
+    assert!(!report.has_errors());
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "native_event_metadata_injector_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-native-before-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("injected mark should flush");
+    let injected = find_event(
+        &events.lock().unwrap(),
+        "external-plugin-event-metadata-injection-native-before-clear",
+        None,
+    )
+    .clone();
+    assert_eq!(injected.metadata().unwrap()["existing"], true);
+    assert_eq!(
+        injected.metadata().unwrap()["external.injector.transport"],
+        "native_dynamic_rust"
+    );
+
+    activation.clear().expect("native plugin host should clear");
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-native-after-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("post-clear mark should emit");
+    flush_subscribers().expect("post-clear mark should flush");
+    let events = events.lock().unwrap();
+    let after_clear = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-native-after-clear",
+        None,
+    );
+    assert_eq!(after_clear.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+}
+
+#[tokio::test]
+async fn native_event_metadata_injector_error_preserves_event_delivery() {
+    let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_plugin();
+    let manifest_ref = write_manifest(&fixture);
+    let mut spec = host_spec("fixture_native", &manifest_ref);
+    spec.config = Map::from_iter([
+        ("event_metadata_injector_only".into(), json!(true)),
+        ("event_metadata_injector_error".into(), json!(true)),
+    ]);
+    let (activation, _) = PluginHostActivation::activate(PluginConfig::default(), [spec])
+        .await
+        .expect("native plugin host should activate");
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "native_event_metadata_injector_error_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    emit_scope_mark(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-native-error")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("failed injector must not block delivery");
+    let events = events.lock().unwrap();
+    let delivered = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-native-error",
+        None,
+    );
+    assert_eq!(delivered.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+    activation.clear().expect("native plugin host should clear");
+}
+
+#[tokio::test]
 async fn plugin_host_activation_combines_static_base_and_dynamic_components() {
     let _guard = NATIVE_PLUGIN_TEST_LOCK.lock().await;
     let _ = deregister_plugin(STATIC_BASE_PLUGIN_KIND);

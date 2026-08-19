@@ -6,9 +6,9 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -24,11 +24,12 @@ use futures_util::FutureExt;
 use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionFn,
-    LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext,
-    LlmSanitizeRequestFn, LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    LlmStreamExecutionNextFn, MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
+    LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, LlmStreamExecutionNextFn,
+    MiddlewareContinuationContext, ToolConditionalFn, ToolExecutionFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{
     ScopeStackHandle, ThreadScopeStackBinding, capture_thread_scope_stack, create_scope_stack,
@@ -3474,6 +3475,35 @@ fn wrap_native_async_event_sanitize(
     })
 }
 
+fn wrap_native_async_event_metadata_injector(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> EventMetadataInjectorFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |event| {
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            serde_json::from_value::<BTreeMap<String, Json>>(
+                invoke_native_async_callback(
+                    cb,
+                    user_data,
+                    serde_json::json!({"event": event}),
+                    None,
+                    None,
+                )
+                .await?,
+            )
+            .map_err(|error| {
+                FlowError::Internal(format!(
+                    "invalid native async Event metadata additions: {error}"
+                ))
+            })
+        })
+    })
+}
+
 fn wrap_native_async_tool_execution(
     instance: Arc<NativePluginInstance>,
     cb: NemoRelayNativeAsyncMiddlewareCb,
@@ -3776,6 +3806,12 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
                 &name,
                 priority,
                 wrap_native_async_event_sanitize(instance, cb, user_data, free_fn),
+            ),
+        NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector => context
+            .register_event_metadata_injector(
+                &name,
+                priority,
+                wrap_native_async_event_metadata_injector(instance, cb, user_data, free_fn),
             ),
     };
     match registration {

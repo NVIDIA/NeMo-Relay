@@ -137,6 +137,7 @@ class TestObservabilityConfigHelpers:
             "mark_projection": "inherit",
             "mark_exclude_names": ["llm.chunk"],
             "attribute_mappings": [],
+            "promote_metadata_prefixes": [],
             "transport": "http_binary",
             "service_name": "unknown_service",
             "instrumentation_scope": "opentelemetry",
@@ -148,6 +149,12 @@ class TestObservabilityConfigHelpers:
             "header_env": {"authorization": "OTEL_AUTHORIZATION"},
             "resource_attributes": {},
         }
+        endpoint = OpenTelemetryEndpointConfig(
+            "gen_ai",
+            "http://localhost:4318/v1/traces",
+            promote_metadata_prefixes=["nv."],
+        )
+        assert endpoint.to_dict()["promote_metadata_prefixes"] == ["nv."]
 
         wrapped = ComponentSpec(ObservabilityConfig(atof=AtofConfig())).to_dict()
         assert wrapped["kind"] == OBSERVABILITY_PLUGIN_KIND

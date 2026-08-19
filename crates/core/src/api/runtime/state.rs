@@ -21,8 +21,8 @@ use futures_util::{FutureExt, Stream};
 
 use crate::api::event::{
     BaseEvent, CategoryProfile, Event, EventCategory, EventSanitizeFields, MarkEvent,
-    ScopeCategory, ScopeEvent, llm_attributes_to_strings, scope_attributes_to_strings,
-    tool_attributes_to_strings,
+    ScopeCategory, ScopeEvent, is_valid_event_metadata_attribute_key, llm_attributes_to_strings,
+    scope_attributes_to_strings, tool_attributes_to_strings,
 };
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
@@ -1785,27 +1785,26 @@ fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Re
     Ok(())
 }
 
-fn is_valid_event_metadata_attribute_key(key: &str) -> bool {
-    key.split('.').all(|segment| {
-        !segment.is_empty()
-            && segment.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
-            })
-    })
+fn is_otel_compatible_attribute_number(value: &serde_json::Number) -> bool {
+    if let Some(value) = value.as_u64() {
+        return i64::try_from(value).is_ok();
+    }
+    value.as_i64().is_some() || value.as_f64().is_some()
 }
 
 fn is_otel_compatible_attribute_value(value: &Json) -> bool {
     fn primitive_kind(value: &Json) -> Option<u8> {
         match value {
             Json::Bool(_) => Some(0),
-            Json::Number(_) => Some(1),
+            Json::Number(value) if is_otel_compatible_attribute_number(value) => Some(1),
             Json::String(_) => Some(2),
             _ => None,
         }
     }
 
     match value {
-        Json::Bool(_) | Json::Number(_) | Json::String(_) => true,
+        Json::Bool(_) | Json::String(_) => true,
+        Json::Number(value) => is_otel_compatible_attribute_number(value),
         Json::Array(values) => match values.first().and_then(primitive_kind) {
             None => values.is_empty(),
             Some(kind) => values

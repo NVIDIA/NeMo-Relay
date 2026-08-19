@@ -67,12 +67,13 @@ fn async_abi_discriminants_reject_unknown_values() {
         Kind::MarkSanitize,
         Kind::ScopeSanitizeStart,
         Kind::ScopeSanitizeEnd,
+        Kind::EventMetadataInjector,
     ];
     for (discriminant, kind) in middleware_kinds.into_iter().enumerate() {
         assert_eq!(kind as u32, discriminant as u32);
         assert_eq!(Kind::try_from(discriminant as u32), Ok(kind));
     }
-    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(14).is_err());
+    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(15).is_err());
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(1),
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
@@ -3287,6 +3288,13 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         },
     )
     .unwrap();
+    ctx.register_event_metadata_injector("event-metadata-async", 15, |event| async move {
+        Ok(std::collections::BTreeMap::from([(
+            "plugin.event_name".into(),
+            json!(event.name()),
+        )]))
+    })
+    .unwrap();
 
     let metadata = ASYNC_REGISTRATIONS
         .lock()
@@ -3301,7 +3309,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(metadata.len(), 13);
+    assert_eq!(metadata.len(), 14);
     assert_eq!(metadata[0].1, "mark-async");
     assert_eq!(metadata[0].2, 1);
     assert_eq!(
@@ -3333,6 +3341,18 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         "timestamp": "2026-01-01T00:00:00Z",
         "name": "checkpoint"
     });
+    let metadata_registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector);
+    let result = invoke_async_registration(
+        &host,
+        &metadata_registration,
+        json!({ "event": event }),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result, json!({ "plugin.event_name": "checkpoint" }));
+    unsafe { metadata_registration.free() };
+
     for kind in [
         NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart,

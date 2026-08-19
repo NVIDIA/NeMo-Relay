@@ -826,6 +826,8 @@ pub enum NemoRelayNativeAsyncMiddlewareKind {
     ScopeSanitizeStart = 12,
     /// Scope-end event sanitizer.
     ScopeSanitizeEnd = 13,
+    /// Event metadata injector.
+    EventMetadataInjector = 14,
 }
 
 impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
@@ -847,6 +849,7 @@ impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
             11 => Ok(Self::MarkSanitize),
             12 => Ok(Self::ScopeSanitizeStart),
             13 => Ok(Self::ScopeSanitizeEnd),
+            14 => Ok(Self::EventMetadataInjector),
             _ => Err(()),
         }
     }
