@@ -607,6 +607,42 @@ async def test_an_unserializable_output_does_not_strand_the_scope(
     assert nemo_relay.scope.get_handle().uuid == baseline.uuid
 
 
+async def test_pydantic_output_is_serialized_before_scope_close(
+    handler: NemoRelayCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+):
+    """Structured outputs retain their fields without blocking scope closure."""
+    from pydantic import BaseModel
+
+    class StructuredResult(BaseModel):
+        answer: str
+        confidence: float
+
+    run_id = uuid4()
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+    _start(handler, run_id, "A")
+
+    handler.on_chain_end(
+        {"structured_response": StructuredResult(answer="complete", confidence=0.95)},
+        run_id=run_id,
+    )
+
+    await nemo_relay.subscribers.flush_async()
+    scope_end = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "end" and event.name == "A"
+    )
+    assert scope_end.data == {
+        "structured_response": {
+            "answer": "complete",
+            "confidence": 0.95,
+        }
+    }
+    assert handler._completed == {}
+    nemo_relay.scope.pop(request)
+
+
 async def test_a_failed_run_completes_its_scope_the_same_way(
     handler: NemoRelayCallbackHandler,
 ):
