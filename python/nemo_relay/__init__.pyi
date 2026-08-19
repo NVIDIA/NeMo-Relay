@@ -234,7 +234,7 @@ Exceptional flow:
     the remaining sanitizer chain.
 """
 EventMetadataScalar: TypeAlias = str | int | float | bool
-EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int | float] | list[bool]
+EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
 EventMetadata: TypeAlias = dict[str, EventMetadataValue]
 EventMetadataInjectorCallback: TypeAlias = Callable[
     [Event],
