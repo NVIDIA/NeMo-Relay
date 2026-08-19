@@ -42,6 +42,9 @@ fn centralized_minimum_versions_accept_stable_boundaries() {
     let cases = [
         (CodingAgent::ClaudeCode, "2.1.121 (Claude Code)"),
         (CodingAgent::Codex, "codex-cli 0.143.0"),
+        // pi prints the bare version and nothing else, so there is no product token to match --
+        // an accept path neither of the others exercises.
+        (CodingAgent::Pi, "0.84.0"),
     ];
 
     for (agent, output) in cases {
@@ -60,6 +63,11 @@ fn centralized_minimum_versions_reject_old_prerelease_and_malformed_output() {
         (CodingAgent::ClaudeCode, "2.1.121 (Other Agent)"),
         (CodingAgent::Codex, "codex-cli 0.142.9"),
         (CodingAgent::Codex, "codex-cli 0.143.0-alpha.1"),
+        (CodingAgent::Pi, "0.83.9"),
+        (CodingAgent::Pi, "0.84.0-alpha.1"),
+        // A prefixed line is not something pi emits, so it is a parse failure rather than an
+        // old-version rejection.
+        (CodingAgent::Pi, "pi 0.84.0"),
     ];
 
     for (agent, output) in cases {

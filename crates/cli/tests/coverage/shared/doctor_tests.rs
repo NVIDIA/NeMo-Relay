@@ -348,6 +348,20 @@ fn format_human_uses_symbols_for_agent_statuses() {
             annotation: "not configured".into(),
             checks: Vec::new(),
         },
+        AgentInfo {
+            name: "pi",
+            status: Status::Warn,
+            configured: true,
+            command: "pi".into(),
+            path: Some(PathBuf::from("/bin/pi")),
+            version: Some("0.84.0".into()),
+            annotation: "hooks: emitted by the extension".into(),
+            checks: vec![Check {
+                name: "pi extension load path",
+                status: Status::Warn,
+                details: "project scope, which pi loads only for a trusted project".into(),
+            }],
+        },
     ];
 
     let rendered = format_human(&report);
@@ -356,6 +370,12 @@ fn format_human_uses_symbols_for_agent_statuses() {
     assert!(rendered.contains("    ·  codex"));
     assert!(!rendered.contains("    pass "));
     assert!(!rendered.contains("    info "));
+    // pi's findings are the reason agents carry checks at all: where the extension sits decides
+    // whether pi loads it, and a status symbol alone cannot say that.
+    assert!(
+        rendered.contains("pi extension load path: project scope"),
+        "an agent check must reach the human report: {rendered}"
+    );
 }
 
 #[test]
@@ -2405,16 +2425,32 @@ fn format_agents_human_lists_supported_and_separates_detected() {
 
 #[test]
 fn format_agents_json_matches_doctor_agents_shape() {
-    let agents = vec![AgentInfo {
-        name: "claude",
-        status: Status::Pass,
-        configured: true,
-        command: "claude".into(),
-        path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
-        version: Some("2.1.4".into()),
-        annotation: "hooks: injected during run".into(),
-        checks: Vec::new(),
-    }];
+    let agents = vec![
+        AgentInfo {
+            name: "claude",
+            status: Status::Pass,
+            configured: true,
+            command: "claude".into(),
+            path: Some(PathBuf::from("/opt/homebrew/bin/claude")),
+            version: Some("2.1.4".into()),
+            annotation: "hooks: injected during run".into(),
+            checks: Vec::new(),
+        },
+        AgentInfo {
+            name: "pi",
+            status: Status::Warn,
+            configured: true,
+            command: "pi".into(),
+            path: Some(PathBuf::from("/opt/homebrew/bin/pi")),
+            version: Some("0.84.0".into()),
+            annotation: "hooks: emitted by the extension".into(),
+            checks: vec![Check {
+                name: "pi extension load path",
+                status: Status::Warn,
+                details: "project scope, which pi loads only for a trusted project".into(),
+            }],
+        },
+    ];
     let json = format_agents_json(&agents).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert!(parsed.is_array());
@@ -2424,6 +2460,19 @@ fn format_agents_json_matches_doctor_agents_shape() {
     assert_eq!(parsed[0]["command"], "claude");
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
+    // An agent with no findings must not grow an empty array in the schema: the field is skipped,
+    // so a consumer written against the pre-pi shape stays valid.
+    assert!(parsed[0].get("checks").is_none());
+    // pi is the one agent that reports findings of its own, so the nested shape is part of the
+    // published schema rather than an implementation detail.
+    assert_eq!(
+        parsed[1]["checks"],
+        serde_json::json!([{
+            "name": "pi extension load path",
+            "status": "warn",
+            "details": "project scope, which pi loads only for a trusted project"
+        }])
+    );
 }
 
 #[test]

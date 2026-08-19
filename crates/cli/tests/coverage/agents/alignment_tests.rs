@@ -453,6 +453,10 @@ fn route_event_through_alias_covers_all_event_variants() {
     let cases = vec![
         NormalizedEvent::AgentStarted(session_event("child", "SessionStart")),
         NormalizedEvent::AgentEnded(session_event("child", "SessionEnd")),
+        // Only pi reports a turn start, and unlike `TurnEnded` it must not close the alias --
+        // there is nothing for the parent to finish on it. Routing never looks at the agent
+        // kind, so the shared fixture still exercises the arm.
+        NormalizedEvent::TurnStarted(session_event("child", "turn_start")),
         NormalizedEvent::TurnEnded(session_event("child", "Stop")),
         NormalizedEvent::PromptSubmitted(session_event("child", "Prompt")),
         NormalizedEvent::Compaction(session_event("child", "Compact")),
