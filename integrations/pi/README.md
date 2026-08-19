@@ -276,8 +276,11 @@ one statically configured upstream per API family — `--openai-base-url` and
 redirecting is only correct when the gateway's upstream *is* the endpoint the
 selected model would otherwise call. Pointing an NVIDIA model at a gateway
 configured for `api.openai.com` does not degrade to "no spans"; it breaks the
-session. The extension therefore redirects only on a match, and records every
-outcome as a `model_redirect` mark so a trace without LLM spans explains itself.
+session. The extension therefore redirects only on a match, and records each
+outcome that explains something as a `model_redirect` mark so a trace without LLM
+spans accounts for itself. Two transient skips are evaluated but not marked — no
+model resolved yet, and a provider already pointed at the gateway — because a
+mark per `session_start` for either is noise.
 
 | Situation | Outcome |
 |---|---|
@@ -345,7 +348,7 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 | `agent_settled` | run-level mark | Fires exactly once, from a `finally`. Carries `attempts` (the count) and `attempt_index` (the last one) |
 | `turn_start` | turn scope **open** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, so the turn exists before pi's model call arrives |
 | `turn_end` | turn scope **close** | Carries `turn_index`, `turn_seq`, `attempt_index`. Awaited, for the same reason |
-| `session_start`, then every `model_select` | `model_redirect` mark | Synthesized. Re-evaluates redirection for the newly selected model, so a switch away from a provider the gateway fronts stops redirecting |
+| `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something | Synthesized. Re-evaluates redirection for the newly selected model, so a switch away from a provider the gateway fronts stops redirecting |
 | *(after a rewrite)* | `tool_arguments_transformed` mark | Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
 | `session_before_compact` | mark | Announced, not done, and cancellable by a later extension. Carries `reason`, `will_retry`, `tokens_before` |
 | `session_compact` | compaction | The completed compaction, which the runtime treats as proof the context was rebuilt |

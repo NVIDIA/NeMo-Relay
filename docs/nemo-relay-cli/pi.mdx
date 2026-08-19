@@ -269,8 +269,11 @@ The extension posts 15 event types, covering session, turn, tool and
 inline-shell activity. Twelve carry a pi hook's own name. The other three —
 `model_redirect`, `tool_arguments_transformed` and `user_bash_end` — are
 synthesized by the extension. The table below names the source of each:
-`model_redirect` is posted from `session_start` and again from every
-`model_select`, `tool_arguments_transformed` after a rewrite is applied, and
+redirection is evaluated at `session_start` and again on every `model_select`,
+and `model_redirect` is posted for each decision that explains something — a
+redirect, or a skip an operator can act on. Two transient skips are evaluated but
+not posted: no model resolved yet, and a provider already pointed at the gateway.
+`tool_arguments_transformed` is posted after a rewrite is applied, and
 `user_bash_end` after an inline-shell command is decided.
 
 pi reports both ends of a turn, so Relay opens the turn scope at pi's own
@@ -284,7 +287,7 @@ recorded on the session scope rather than opening an empty turn to hold it.
 | `turn_start` / `turn_end` | Turn scope open and close |
 | `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
 | `session_compact` | Canonical `compaction` mark |
-| `session_start`, then every `model_select` | `model_redirect` mark recording whether redirection applied. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
+| `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
 | *(after a rewrite)* | `tool_arguments_transformed` mark. Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
 | `tool_call` | Tool span start, and the gate |
 | `tool_execution_end` | Tool span end, for every outcome including blocked |
@@ -389,9 +392,11 @@ has never heard of them. Pointing both `--openai-base-url` and
 `--anthropic-base-url` at that provider unblocks it, unless a sibling speaks an
 API the gateway has no route for at all.
 
-Every outcome is recorded as a `model_redirect` mark on the session scope, so a
-trace with no LLM spans states its own reason. The decision is re-made on each
-model switch.
+Each of these outcomes is recorded as a `model_redirect` mark on the session
+scope, so a trace with no LLM spans states its own reason. The decision is
+re-made on each model switch; the two skips that explain nothing — no model
+resolved yet, and a provider already redirected — are evaluated but not marked,
+because one per `session_start` is noise in every trace.
 
 To capture a specific provider, point the gateway at it:
 
