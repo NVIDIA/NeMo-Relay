@@ -1566,11 +1566,20 @@ impl Session {
         // `AgentKind::applies_tool_argument_transforms`. The transformed arguments become the
         // span's arguments too, so the trace records what will execute rather than what was
         // proposed.
+        //
+        // The verdict above is on the arguments the harness proposed, and the chain is
+        // deliberately not re-run on the rewrite. That is the order a managed `tool_call_execute`
+        // uses, so a hook-driven tool call is gated exactly as an in-process one is. An intercept
+        // is policy, not something policy has to defend against -- re-deciding here would fork
+        // the middleware contract for one harness, and would evaluate every conditional guardrail
+        // twice, emitting two guardrail scope pairs and billing an LLM-judge guardrail twice for
+        // one call.
+        let mut rewrite = None;
         let arguments = if self.agent_kind.applies_tool_argument_transforms() {
             let transformed =
                 tool_request_intercepts(event.tool_name.as_str(), arguments.clone()).await?;
             if transformed != arguments {
-                self.tool_argument_transform = Some(ToolArgumentTransform {
+                rewrite = Some(ToolArgumentTransform {
                     tool_call_id: event.tool_call_id.clone(),
                     arguments: transformed.clone(),
                 });
@@ -1609,6 +1618,11 @@ impl Session {
                 owner_subagent_id: active_tool_owner_subagent_id,
             },
         );
+        // Published only once the start cannot fail. The field lives on the session until a hook
+        // response drains it, so a rewrite recorded before a failing start would ride out on the
+        // *next* response instead -- where the extension's `tool_call_id` echo reads it as
+        // another call's rewrite and refuses that call.
+        self.tool_argument_transform = rewrite;
         Ok(())
     }
 

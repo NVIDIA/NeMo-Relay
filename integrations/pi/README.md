@@ -170,6 +170,12 @@ the required keys of the required types afterwards.
 `format` are not checked — by choice, not because the schema is out of reach. A
 transform that rewrites a string to one the schema would reject still executes.
 
+**Nor is it a second policy decision.** The gateway's conditional-execution
+guardrails decide on the arguments pi proposed, before the rewrite, and are not
+re-run on the result — the same order a managed tool call uses. A request
+intercept can therefore rewrite a value a guardrail would have refused. Put the
+decision in the guardrail, not in a transform that outruns it.
+
 A refused transform **blocks the call**, with a reason that says the policy could
 not be applied rather than that the request was refused. Running the original
 arguments instead would silently discard a policy decision, which is the failure

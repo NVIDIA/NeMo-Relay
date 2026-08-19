@@ -207,6 +207,11 @@ may not add or remove keys, change a type, or change an array's length.
 That keeps the required keys and types intact, but it is not schema validation —
 `pattern`, `enum` and range constraints are not checked. A transform that
 rewrites a value to one the schema would reject will still execute.
+
+Conditional-execution guardrails decide on the arguments pi proposed, before the
+rewrite, and are not re-run on the result — the same order a managed tool call
+uses. A request intercept can therefore rewrite a value a guardrail would have
+refused. Put the decision in the guardrail, not in a transform that outruns it.
 </Warning>
 
 A transform that violates the invariant **blocks the call**, with a reason

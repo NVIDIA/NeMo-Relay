@@ -4666,6 +4666,29 @@ async fn pi_tool_call_hook_returns_arguments_a_request_intercept_rewrote() {
     .unwrap();
     let _cleanup = ToolInterceptCleanup("cli-pi-redactor");
 
+    let _ = deregister_tool_request_intercept("cli-pi-chain-witness");
+    register_tool_request_intercept(
+        "cli-pi-chain-witness",
+        // A higher number runs later: this is the "later intercept" the flag above protects, and
+        // it fires only on the first rewrite's output, so a chain that stopped early shows up in
+        // the response body as the unrewritten path.
+        2,
+        false,
+        Arc::new(|_name: String, args: Value| {
+            Box::pin(async move {
+                let mut args = args;
+                if let Some(object) = args.as_object_mut()
+                    && object.get("path").and_then(Value::as_str) == Some("/work/.env.example")
+                {
+                    object.insert("path".into(), json!("/work/.env.sample"));
+                }
+                Ok(args)
+            })
+        }),
+    )
+    .unwrap();
+    let _witness_cleanup = ToolInterceptCleanup("cli-pi-chain-witness");
+
     let app = router(test_config());
     let response = app
         .oneshot(
@@ -4692,9 +4715,85 @@ async fn pi_tool_call_hook_returns_arguments_a_request_intercept_rewrote() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(body["tool_call"]["tool_call_id"], json!("call-transform"));
+    // Only reachable through both intercepts in order, so this pins that the hook response
+    // carries the end of the chain rather than the first rewrite.
     assert_eq!(
         body["tool_call"]["input"],
-        json!({ "path": "/work/.env.example" })
+        json!({ "path": "/work/.env.sample" })
+    );
+}
+
+// The verdict is on the arguments pi proposed. Pinning one evaluation per call is what keeps the
+// pi hook on the same order as a managed tool call, and keeps a counting or LLM-judge guardrail
+// from being asked -- and billed -- twice about one call just because an intercept rewrote it.
+#[tokio::test]
+async fn pi_tool_call_hook_evaluates_conditional_guardrails_once_when_an_intercept_rewrites() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    static EVALUATIONS: AtomicUsize = AtomicUsize::new(0);
+    EVALUATIONS.store(0, Ordering::SeqCst);
+
+    let _ = deregister_tool_conditional_execution_guardrail("cli-pi-transform-counter");
+    register_tool_conditional_execution_guardrail(
+        "cli-pi-transform-counter",
+        1,
+        Arc::new(|_name, _args| {
+            Box::pin(async move {
+                EVALUATIONS.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            })
+        }),
+    )
+    .unwrap();
+    let _guardrail_cleanup = ToolGuardrailCleanup("cli-pi-transform-counter");
+
+    let _ = deregister_tool_request_intercept("cli-pi-transform-counter-intercept");
+    register_tool_request_intercept(
+        "cli-pi-transform-counter-intercept",
+        1,
+        false,
+        Arc::new(|_name: String, args: Value| {
+            Box::pin(async move {
+                let mut args = args;
+                if let Some(object) = args.as_object_mut() {
+                    object.insert("path".into(), json!("/work/.env"));
+                }
+                Ok(args)
+            })
+        }),
+    )
+    .unwrap();
+    let _intercept_cleanup = ToolInterceptCleanup("cli-pi-transform-counter-intercept");
+
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/pi")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "pi-transform-counter-session",
+                        "hook_event_name": "tool_call",
+                        "tool_call_id": "call-counted",
+                        "tool_name": "read",
+                        "input": { "path": "/work/README.md" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["tool_call"]["input"], json!({ "path": "/work/.env" }));
+    assert_eq!(
+        EVALUATIONS.load(Ordering::SeqCst),
+        1,
+        "the conditional chain must decide once, on the arguments pi proposed"
     );
 }
 
