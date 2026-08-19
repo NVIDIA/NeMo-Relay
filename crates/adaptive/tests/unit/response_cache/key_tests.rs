@@ -1120,6 +1120,28 @@ fn header_allowlist_policy_partitions_keys_and_normalizes_case() {
 }
 
 #[test]
+fn empty_header_allowlist_preserves_the_v1_key_document() {
+    let request = request(json!("raw prompt"));
+    let legacy_v1_key = fingerprint(&json!({
+        "v": 1,
+        "ns": "key-test",
+        "provider": "custom",
+        "strategy": "exact_request",
+        "codec": null,
+        "openai_chat_token_cap": null,
+        "body": "raw prompt",
+        "headers": {},
+    }))
+    .unwrap();
+
+    assert_eq!(
+        key_of("custom", &request, &cache_all_config()),
+        legacy_v1_key,
+        "the default empty allowlist must keep existing v1 Redis entries reachable"
+    );
+}
+
+#[test]
 fn tool_keys_are_disjoint_from_llm_keys() {
     let llm = key_of(
         "openai",

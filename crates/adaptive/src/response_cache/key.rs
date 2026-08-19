@@ -80,7 +80,7 @@ pub fn build_cache_key(
     let header_allowlist = normalized_header_allowlist(&config.header_allowlist);
     let headers = cache_key_headers(&request.headers, &header_allowlist);
 
-    let key_doc = json!({
+    let mut key_doc = json!({
         "v": CACHE_SCHEMA_VERSION,
         "ns": config.namespace,
         "provider": provider,
@@ -89,8 +89,16 @@ pub fn build_cache_key(
         "openai_chat_token_cap": chat_token_cap_spelling,
         "body": body,
         "headers": headers,
-        "header_allowlist": header_allowlist,
     });
+    // Preserve the original v1 key document for the default empty policy. A
+    // non-empty policy intentionally partitions entries from older policy
+    // configurations, including requests where the allowlisted header is absent.
+    if !header_allowlist.is_empty() {
+        key_doc
+            .as_object_mut()
+            .expect("cache key document is an object")
+            .insert("header_allowlist".to_string(), json!(header_allowlist));
+    }
     if contains_unrepresentable_int(&key_doc) {
         return KeyOutcome::Bypass(CacheReason::UnrepresentableNumber);
     }
