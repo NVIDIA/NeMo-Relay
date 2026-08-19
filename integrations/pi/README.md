@@ -74,6 +74,44 @@ The block reason reaches the model **verbatim**: pi hands it to
 as error codes — a reason that says what to do instead produces a model that
 adapts rather than one that gives up.
 
+## Argument transforms
+
+A Relay **request intercept** can rewrite a tool's arguments. The gateway never
+runs the tool, so the rewrite comes back in the allow response and the extension
+applies it to pi's `event.input` **in place** — which is what pi documents as
+the mechanism, and is required: pi hands the same object to the tool and to
+later handlers, so replacing the reference would be discarded.
+
+| Response body | Meaning |
+|---|---|
+| `{}` | Allow, arguments unchanged. Every non-gated hook, and any `tool_call` no intercept rewrote |
+| `{"tool_call": {"tool_call_id": "…", "input": {…}}}` | Allow, but execute *these* arguments |
+
+⚠️ **The rewrite is constrained, not validated.** pi validates arguments
+*before* the `tool_call` hook and never re-validates — its own types say "no
+re-validation is performed after mutation" — so a rewrite that violates the
+tool's schema would execute. The extension cannot check it against the schema
+either: pi exposes `tools` only on the `Extension` interface, which is an
+extension's *own* registered tools, so there is no way to read the schema of a
+built-in like `read`.
+
+So the extension enforces a **shape** invariant instead: a transform may rewrite
+the values of existing keys, preserving each value's JSON type, recursively.
+Adding a key, removing a key, changing a type, or changing an array's length is
+refused. An argument object that satisfied the schema before therefore still has
+the required keys of the required types afterwards.
+
+**This is structural, not schema validation.** `pattern`, `enum`, `minimum` and
+`format` are not checked and cannot be. A transform that rewrites a string to
+one the schema would reject still executes.
+
+A refused transform **blocks the call**, with a reason that says the policy could
+not be applied rather than that the request was refused. Running the original
+arguments instead would silently discard a policy decision, which is the failure
+the transform existed to prevent. This is a different axis from
+`NEMO_RELAY_PI_FAIL`, which governs an unreachable gateway rather than one that
+answered with something unusable.
+
 ## Model redirection
 
 pi resolves a base URL per model from a generated catalog, so there is no flag or

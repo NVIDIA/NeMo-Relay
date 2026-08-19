@@ -90,7 +90,10 @@ describe('gateway client wire contract', () => {
       tool_name: 'read',
       input: { path: 'README.md' },
     });
-    assert.deepEqual(outcome, { kind: 'allow' });
+    // An allow may carry a body (a rewritten payload from a request intercept), so assert the
+    // verdict rather than the exact object.
+    assert.equal(outcome.kind, 'allow');
+    assert.equal(outcome.reason, undefined);
   });
 
   it('turns a guardrail 403 into a block carrying the reason verbatim', async () => {

@@ -58,6 +58,11 @@ import {
   resolveFault,
 } from './src/gateway-client.ts';
 import {
+  applyTransform,
+  decideTransform,
+  refusalReason,
+} from './src/argument-transform.ts';
+import {
   type RedirectConfig,
   decideRedirect,
   isNotable,
@@ -416,10 +421,31 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
       const decision =
         outcome.kind === 'fault' ? resolveFault(active, outcome.detail, event.toolName) : outcome;
 
+      if (decision.kind === 'block') return { block: true, reason: decision.reason };
+
+      // Allowed. A request intercept may still have rewritten the arguments, in which case they
+      // arrive in the response body and pi expects them applied to `event.input` in place.
+      if (decision.kind === 'allow' && decision.body) {
+        const transform = decideTransform(decision.body, event.toolCallId, event.input);
+        if (transform.kind === 'refuse') {
+          // Blocking, not falling back: running the original arguments would discard a policy
+          // decision. Distinct from a guardrail rejection, and the reason says so.
+          return { block: true, reason: refusalReason(event.toolName, transform.reason) };
+        }
+        if (transform.kind === 'apply') {
+          applyTransform(event.input, transform.input);
+          emit(ctx, {
+            hook_event_name: 'tool_arguments_transformed',
+            tool_call_id: event.toolCallId,
+            tool_name: event.toolName,
+            ...attribution(),
+          });
+        }
+      }
+
       // `undefined` is the only correct allow value: a truthy result without
       // `block` is inert but overwrites earlier handlers' results.
-      if (decision.kind !== 'block') return undefined;
-      return { block: true, reason: decision.reason };
+      return undefined;
     },
   );
 

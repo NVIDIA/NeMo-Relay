@@ -19,9 +19,10 @@ use nemo_relay::api::llm::LlmRequestInterceptOutcome;
 use nemo_relay::api::registry::{
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_stream_execution_intercept, deregister_scope_sanitize_end_guardrail,
-    deregister_tool_conditional_execution_guardrail, register_llm_execution_intercept,
-    register_llm_request_intercept, register_llm_stream_execution_intercept,
-    register_scope_sanitize_end_guardrail, register_tool_conditional_execution_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_request_intercept,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_stream_execution_intercept, register_scope_sanitize_end_guardrail,
+    register_tool_conditional_execution_guardrail, register_tool_request_intercept,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::plugin::dynamic::DynamicPluginKind;
@@ -4506,4 +4507,105 @@ async fn gateway_streaming_hit_carries_event_stream_content_type() {
     shutdown_tx.send(()).unwrap();
     handle.await.unwrap().unwrap();
     let _ = nemo_relay::plugin::clear_plugin_configuration();
+}
+
+struct ToolInterceptCleanup(&'static str);
+
+impl Drop for ToolInterceptCleanup {
+    fn drop(&mut self) {
+        let _ = deregister_tool_request_intercept(self.0);
+    }
+}
+
+// The gateway cannot apply a rewrite -- it never runs the tool -- so a request intercept is only
+// useful to pi if its output travels back in the hook response. This asserts the whole path: the
+// chain runs on the hook, the rewrite reaches the body, and the tool_call_id is echoed so the
+// extension can tell the response belongs to the call it posted.
+#[tokio::test]
+async fn pi_tool_call_hook_returns_arguments_a_request_intercept_rewrote() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_tool_request_intercept("cli-pi-redactor");
+    register_tool_request_intercept(
+        "cli-pi-redactor",
+        1,
+        // Do not break the chain: a later intercept must still get to see the rewrite.
+        false,
+        Arc::new(|_name: String, args: Value| {
+            Box::pin(async move {
+                let mut args = args;
+                if let Some(object) = args.as_object_mut()
+                    && object.get("path").and_then(Value::as_str) == Some("/work/.env")
+                {
+                    object.insert("path".into(), json!("/work/.env.example"));
+                }
+                Ok(args)
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolInterceptCleanup("cli-pi-redactor");
+
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/pi")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "pi-transform-session",
+                        "hook_event_name": "tool_call",
+                        "tool_call_id": "call-transform",
+                        "tool_name": "read",
+                        "input": { "path": "/work/.env" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["tool_call"]["tool_call_id"], json!("call-transform"));
+    assert_eq!(
+        body["tool_call"]["input"],
+        json!({ "path": "/work/.env.example" })
+    );
+}
+
+// An unchanged call must keep returning the bare `{}` an allow has always been, or every existing
+// extension would start seeing a payload it has no contract for.
+#[tokio::test]
+async fn pi_tool_call_hook_omits_the_transform_when_nothing_rewrote_the_arguments() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let app = router(test_config());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/hooks/pi")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "session_id": "pi-no-transform-session",
+                        "hook_event_name": "tool_call",
+                        "tool_call_id": "call-plain",
+                        "tool_name": "read",
+                        "input": { "path": "/work/README.md" }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body, json!({}));
 }

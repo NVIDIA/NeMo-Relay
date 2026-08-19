@@ -40,6 +40,17 @@ impl AgentKind {
     pub(crate) const fn has_explicit_turn_start(self) -> bool {
         matches!(self, Self::Pi)
     }
+
+    // Whether this harness can execute arguments the gateway rewrote.
+    //
+    // Only pi: its `tool_call` hook documents in-place mutation of `input` as the mechanism, and
+    // the extension applies whatever the hook response carries. Codex and Claude Code have no
+    // equivalent return path, so running the request-intercept chain for them would record
+    // arguments on the tool span that never executed -- worse than not running it, because the
+    // trace would then disagree with reality.
+    pub(crate) const fn applies_tool_argument_transforms(self) -> bool {
+        matches!(self, Self::Pi)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -18,7 +18,7 @@ use nemo_relay::api::scope::{
 };
 use nemo_relay::api::tool::{
     ToolCallEndParams, ToolCallParams, ToolHandle, tool_call, tool_call_end,
-    tool_conditional_execution,
+    tool_conditional_execution, tool_request_intercepts,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
@@ -59,6 +59,27 @@ const ROUTING_IDENTITY_HEADERS: &[&str] = &[
     "x-nemo-relay-identity-quality",
     "x-nemo-relay-source",
 ];
+
+/// Arguments a request intercept rewrote, on their way back to the agent that will execute them.
+///
+/// The gateway cannot apply a transform itself -- it never runs the tool -- so the rewrite has to
+/// travel back in the hook response and be applied by the extension. One pi hook post carries at
+/// most one `tool_call`, so a single value is enough; `tool_call_id` lets the receiver assert the
+/// response belongs to the call it just sent.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ToolArgumentTransform {
+    pub(crate) tool_call_id: String,
+    pub(crate) arguments: Value,
+}
+
+/// What one batch of hook events produced that the HTTP response still has to carry.
+///
+/// Empty for every agent except pi, and empty for pi unless a request intercept actually changed
+/// the arguments.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct HookEffects {
+    pub(crate) tool_argument_transform: Option<ToolArgumentTransform>,
+}
 
 #[derive(Clone)]
 pub(crate) struct SessionManager {
@@ -153,6 +174,9 @@ fn insert_routing_identity_header(headers: &mut Map<String, Value>, name: &str, 
 pub(super) struct Session {
     agent_kind: AgentKind,
     session_id: String,
+    /// Set by `start_tool` when a request intercept rewrote the arguments; taken by the routing
+    /// layer once the event batch has been applied, so the hook response can carry it back.
+    tool_argument_transform: Option<ToolArgumentTransform>,
     scope_stack: ScopeStackHandle,
     session_started: bool,
     session_metadata: Value,
@@ -339,7 +363,8 @@ impl SessionManager {
         &self,
         headers: &HeaderMap,
         events: Vec<NormalizedEvent>,
-    ) -> Result<(), CliError> {
+    ) -> Result<HookEffects, CliError> {
+        let mut effects = HookEffects::default();
         let mut subscriber_deliveries = Vec::new();
         let mut alignment_state = self.alignment.lock().await;
         let mut sessions = self.inner.lock().await;
@@ -363,17 +388,21 @@ impl SessionManager {
                 continue;
             };
             let event_kind = event_agent_kind(&event);
-            let (should_remove_session, subscriber_delivery) = apply_event_to_session(
-                &mut sessions,
-                &session_id,
-                event,
-                event_kind,
-                config.clone(),
-                is_agent_started,
-            )
-            .await?;
+            let (should_remove_session, subscriber_delivery, tool_argument_transform) =
+                apply_event_to_session(
+                    &mut sessions,
+                    &session_id,
+                    event,
+                    event_kind,
+                    config.clone(),
+                    is_agent_started,
+                )
+                .await?;
             if let Some(subscriber_delivery) = subscriber_delivery {
                 subscriber_deliveries.push(subscriber_delivery);
+            }
+            if tool_argument_transform.is_some() {
+                effects.tool_argument_transform = tool_argument_transform;
             }
             if is_agent_started {
                 // A just-opened parent may unlock one or more child SessionStart hooks that arrived
@@ -395,7 +424,7 @@ impl SessionManager {
         for subscriber_delivery in subscriber_deliveries {
             subscriber_delivery.wait().await?;
         }
-        Ok(())
+        Ok(effects)
     }
 
     /// Legacy manual-lifecycle entry point retained for tests that drive correlation behavior
@@ -702,6 +731,7 @@ impl Session {
         Self {
             agent_kind,
             session_id,
+            tool_argument_transform: None,
             scope_stack: create_scope_stack(),
             session_started: false,
             session_metadata: Value::Null,
@@ -1514,10 +1544,30 @@ impl Session {
         } else {
             event.arguments
         };
+        tool_conditional_execution(event.tool_name.as_str(), &arguments).await?;
+
+        // Guardrails decide whether the call runs; request intercepts decide what it runs with.
+        // Only worth running for a harness that can actually execute the rewrite -- see
+        // `AgentKind::applies_tool_argument_transforms`. The transformed arguments become the
+        // span's arguments too, so the trace records what will execute rather than what was
+        // proposed.
+        let arguments = if self.agent_kind.applies_tool_argument_transforms() {
+            let transformed =
+                tool_request_intercepts(event.tool_name.as_str(), arguments.clone()).await?;
+            if transformed != arguments {
+                self.tool_argument_transform = Some(ToolArgumentTransform {
+                    tool_call_id: event.tool_call_id.clone(),
+                    arguments: transformed.clone(),
+                });
+            }
+            transformed
+        } else {
+            arguments
+        };
+
         let active_tool_arguments = arguments.clone();
         let active_tool_name = event.tool_name.clone();
         let active_tool_owner_subagent_id = owner.subagent_id.clone();
-        tool_conditional_execution(event.tool_name.as_str(), &arguments).await?;
         let metadata = tool_correlation_metadata(
             self.event_identity_metadata(event.metadata),
             owner.status,
@@ -1650,6 +1700,14 @@ impl Session {
         self.matching_tool_hint_index(event)
             .and_then(|index| self.pending_tool_hints[index].hint.subagent_id.clone())
             .filter(|subagent_id| self.subagents.contains_key(subagent_id))
+    }
+
+    /// Hand over any rewrite produced while applying this batch, clearing it.
+    ///
+    /// Taken rather than read so a later hook on the same session cannot re-apply a stale
+    /// transform to a different tool call.
+    fn take_tool_argument_transform(&mut self) -> Option<ToolArgumentTransform> {
+        self.tool_argument_transform.take()
     }
 
     // Emits a mark event after ensuring an enclosing scope exists. Generic and unknown hooks use

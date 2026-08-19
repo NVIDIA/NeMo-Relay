@@ -1220,11 +1220,15 @@ async fn pi_hook(
     state.touch();
     let Json(payload) = payload.map_err(hook_payload_rejection)?;
     let outcome = pi::adapt(payload, &headers);
-    state
+    let effects = state
         .sessions
         .apply_events(&headers, outcome.events)
         .await?;
-    Ok(Json(outcome.response))
+    // pi is the one agent whose hook response can carry a rewritten payload back: its `tool_call`
+    // hook documents in-place mutation of `input`, so the extension can apply what a request
+    // intercept produced. Absent a rewrite the body stays `{}`, which is what an allow has always
+    // been, so an older extension keeps working unchanged.
+    Ok(Json(pi::response_with_effects(outcome.response, &effects)))
 }
 
 fn hook_payload_rejection(rejection: JsonRejection) -> CliError {

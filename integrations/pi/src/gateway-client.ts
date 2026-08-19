@@ -6,7 +6,10 @@
  *
  * The wire contract, verified against `crates/cli`:
  *
- * - **Allow** is any 2xx. The adapter returns `{}`; the body is not meaningful.
+ * - **Allow** is any 2xx. The body is `{}` unless a request intercept rewrote
+ *   the arguments, in which case it carries
+ *   `{"tool_call": {"tool_call_id": "...", "input": {...}}}` and the caller is
+ *   expected to execute those arguments instead. See `argument-transform.ts`.
  * - **Block** is `403` with
  *   `{"error": {"type": "nemo_relay_guardrail_rejected", "reason": "<why>"}}`.
  *   The rejection comes from the tool conditional-execution guardrail chain that
@@ -23,7 +26,8 @@
 
 /** Outcome of posting one hook to the gateway. */
 export type HookOutcome =
-  | { kind: 'allow' }
+  /** Allowed. `body` carries a rewritten payload when a request intercept produced one. */
+  | { kind: 'allow'; body?: { tool_call?: { tool_call_id?: unknown; input?: unknown } } }
   | { kind: 'block'; reason: string }
   | { kind: 'fault'; detail: string };
 
@@ -79,7 +83,12 @@ export async function postHook(
       signal: controller.signal,
     });
 
-    if (response.ok) return { kind: 'allow' };
+    if (response.ok) {
+      // An allow body is `{}` unless a request intercept rewrote the arguments, so parsing is
+      // best effort: a body we cannot read is still an allow, just one with nothing to apply.
+      const body = await safeJson(response);
+      return body && typeof body === 'object' ? { kind: 'allow', body } : { kind: 'allow' };
+    }
 
     if (response.status === 403) {
       const body = await safeJson(response);
@@ -133,9 +142,15 @@ export function resolveFault(config: GatewayConfig, detail: string, toolName: st
   };
 }
 
-async function safeJson(response: Response): Promise<{ error?: Record<string, unknown> } | null> {
+async function safeJson(response: Response): Promise<{
+  error?: Record<string, unknown>;
+  tool_call?: { tool_call_id?: unknown; input?: unknown };
+} | null> {
   try {
-    return (await response.json()) as { error?: Record<string, unknown> };
+    return (await response.json()) as {
+      error?: Record<string, unknown>;
+      tool_call?: { tool_call_id?: unknown; input?: unknown };
+    };
   } catch {
     return null;
   }

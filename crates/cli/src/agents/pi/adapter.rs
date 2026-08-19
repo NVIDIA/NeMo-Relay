@@ -8,6 +8,7 @@ use crate::agents::shared::adapters::{
     AdapterOutcome, ClassificationRules, PI_PAYLOAD_EXTRACTOR, classify,
 };
 use crate::events::AgentKind;
+use crate::sessions::HookEffects;
 
 /// Normalizes pi extension hook payloads and returns the response the extension expects.
 ///
@@ -67,4 +68,34 @@ pub(crate) fn adapt(payload: Value, headers: &HeaderMap) -> AdapterOutcome {
         events,
         response: json!({}),
     }
+}
+
+/// Merge anything the session layer produced into the hook response body.
+///
+/// The wire contract the extension implements:
+///
+/// - `{}` -- allow, arguments unchanged. Every hook that is not a gated `tool_call` returns this,
+///   and so does a `tool_call` no intercept rewrote.
+/// - `{"tool_call": {"tool_call_id": "...", "input": {...}}}` -- allow, but execute *these*
+///   arguments instead. The extension applies them in place onto pi's `event.input`.
+/// - HTTP 403 with `error.type = "nemo_relay_guardrail_rejected"` -- block, reason verbatim.
+///   Produced by `CliError::into_response`, not here.
+///
+/// `tool_call_id` is echoed so the extension can refuse a body that does not belong to the call it
+/// just posted, rather than applying someone else's arguments.
+pub(crate) fn response_with_effects(response: Value, effects: &HookEffects) -> Value {
+    let Some(transform) = effects.tool_argument_transform.as_ref() else {
+        return response;
+    };
+    let mut response = response;
+    if let Some(object) = response.as_object_mut() {
+        object.insert(
+            "tool_call".into(),
+            json!({
+                "tool_call_id": transform.tool_call_id,
+                "input": transform.arguments,
+            }),
+        );
+    }
+    response
 }

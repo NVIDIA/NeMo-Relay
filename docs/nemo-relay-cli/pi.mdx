@@ -135,6 +135,33 @@ The default is fail-open, so an unreachable gateway does not brick the agent.
 explicitly that it is an infrastructure fault rather than a judgment about the
 request.
 
+## Argument Transforms
+
+A Relay request intercept can rewrite a tool call's arguments. The gateway never
+executes the tool, so the rewrite travels back in the allow response and the
+extension applies it to pi's `event.input` in place.
+
+| Response body | Meaning |
+| --- | --- |
+| `{}` | Allow, arguments unchanged |
+| `{"tool_call": {"tool_call_id": "…", "input": {…}}}` | Allow, but execute these arguments |
+
+<Warning>
+The rewrite is **constrained, not validated**. pi validates tool arguments
+before the hook and never re-validates, and the extension cannot read a built-in
+tool's schema, so the extension enforces a shape invariant instead: a transform
+may rewrite the values of existing keys, preserving each value's JSON type. It
+may not add or remove keys, change a type, or change an array's length.
+
+That keeps the required keys and types intact, but it is not schema validation —
+`pattern`, `enum` and range constraints are not checked. A transform that
+rewrites a value to one the schema would reject will still execute.
+</Warning>
+
+A transform that violates the invariant **blocks the call**, with a reason
+stating that a policy could not be applied rather than that the request was
+refused. Running the original arguments would silently discard the policy.
+
 ## Captured Events
 
 The extension posts 11 hooks. pi reports both ends of a turn, so Relay opens the
