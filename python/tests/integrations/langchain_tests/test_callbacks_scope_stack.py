@@ -579,6 +579,38 @@ async def test_a_transient_pop_failure_keeps_the_completion_for_a_later_close(
     nemo_relay.scope.pop(request)
 
 
+async def test_a_pop_value_error_keeps_the_original_completion(
+    handler: NemoRelayCallbackHandler,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A non-output validation failure must not trigger an output-less retry."""
+    run_id = uuid4()
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+    _start(handler, run_id, "A")
+
+    real_pop = nemo_relay.scope.pop
+    attempted_outputs: list[nemo_relay.Json | None] = []
+
+    def reject_pop(handle: nemo_relay.ScopeHandle, **kwargs: typing.Any) -> None:
+        attempted_outputs.append(kwargs.get("output"))
+        raise ValueError("timestamp datetime must be timezone-aware")
+
+    monkeypatch.setattr(nemo_relay.scope, "pop", reject_pop)
+
+    with caplog.at_level("ERROR"):
+        _end(handler, run_id, "A")
+
+    assert attempted_outputs == [{"done": "A"}]
+    assert len(handler._completed) == 1
+    assert next(iter(handler._completed.values())).output == {"done": "A"}
+
+    monkeypatch.setattr(nemo_relay.scope, "pop", real_pop)
+    handler._close_completed_scopes()
+    assert handler._completed == {}
+    nemo_relay.scope.pop(request)
+
+
 async def test_an_unserializable_output_does_not_strand_the_scope(
     handler: NemoRelayCallbackHandler,
     caplog: pytest.LogCaptureFixture,
