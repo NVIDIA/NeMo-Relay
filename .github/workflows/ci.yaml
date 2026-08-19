@@ -40,7 +40,7 @@ jobs:
     # Executes the get-pr-info action to determine if the PR has the skip-ci label, if the action fails we assume the
     # PR does not have the label
     name: Prepare
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     permissions:
       pull-requests: read
     steps:
@@ -202,7 +202,7 @@ jobs:
       - ci_node
       - ci_python
     if: ${{ always() && !cancelled() && needs.prepare.result == 'success' && ! fromJSON(needs.prepare.outputs.has_skip_ci_label) }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     permissions:
       contents: read
     steps:
@@ -260,7 +260,7 @@ jobs:
     name: Release Distribution Artifacts
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 15
     permissions:
       contents: write
@@ -353,7 +353,7 @@ jobs:
     name: Publish (crates.io)
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:
       contents: read
@@ -429,7 +429,7 @@ jobs:
     name: Publish (PyPI)
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:
       contents: read
@@ -491,7 +491,7 @@ jobs:
     name: Publish (npm)
     needs: [prepare, ci_required]
     if: ${{ needs.prepare.outputs.publish_packages == 'true' && needs.ci_required.result == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:
       contents: read

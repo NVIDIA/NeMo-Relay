@@ -55,12 +55,12 @@ jobs:
             platform: linux-amd64
             node_build_strategy: zig
             node_target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
           - &linux-arm64
             platform: linux-arm64
             node_build_strategy: zig
             node_target: aarch64-unknown-linux-gnu
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
           - &macos-arm64
             platform: macos-arm64
             node_build_strategy: native
@@ -154,7 +154,7 @@ jobs:
             node_build_strategy: zig
             node_target: x86_64-unknown-linux-musl
             platform: linux-musl-amd64
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
             container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
             package_name: nemo-relay-node-linux-x64-musl
           - &package-linux-musl-arm64
@@ -162,7 +162,7 @@ jobs:
             node_build_strategy: zig
             node_target: aarch64-unknown-linux-musl
             platform: linux-musl-arm64
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
             container_image: node:24-alpine3.22@sha256:191c9f0080fcbbc6547a85dc0ff7988072214a355aabdc1d2ec55a7dae5eea8a
             package_name: nemo-relay-node-linux-arm64-musl
 
@@ -258,7 +258,7 @@ jobs:
   PackageOpenClaw:
     name: Package OpenClaw plugin
     if: ${{ inputs.run_openclaw }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 30
     permissions:
       contents: read

@@ -53,10 +53,10 @@ jobs:
         include:
           - &linux-amd64
             platform: linux-amd64
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
           - &linux-arm64
             platform: linux-arm64
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
           - &macos-arm64
             platform: macos-arm64
             runner: macos-15
@@ -160,13 +160,13 @@ jobs:
             platform: linux-musl-amd64
             architecture: x86_64
             rust_target: x86_64-unknown-linux-musl
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
             container_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
           - &package-linux-musl-arm64
             platform: linux-musl-arm64
             architecture: aarch64
             rust_target: aarch64-unknown-linux-musl
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
             container_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268
 
     steps:
@@ -386,7 +386,7 @@ jobs:
           - *package-linux-musl-amd64
           - *package-linux-musl-arm64
           - platform: source-and-plugin
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
 
     steps:
       - name: Remove untrusted Homebrew tap

@@ -33,9 +33,9 @@ jobs:
       matrix:
         include:
           - platform: linux-amd64
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
           - platform: linux-arm64
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
           - platform: macos-arm64
             runner: macos-15
           - platform: windows-amd64

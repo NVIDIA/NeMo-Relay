@@ -28,7 +28,7 @@ jobs:
   changed-files:
     name: Detect docs changes
     if: ${{ github.ref_type != 'tag' && github.event_name != 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 10
     permissions:
       contents: read
@@ -55,7 +55,7 @@ jobs:
         needs.changed-files.outputs.docs == 'true'
         && startsWith(github.ref_name, 'pull-request/')
       }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     environment: fern
     timeout-minutes: 60
     permissions:
@@ -185,7 +185,7 @@ jobs:
         && github.event.action == 'closed'
         && github.event.pull_request.merged == true
       }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     environment: fern
     timeout-minutes: 10
     permissions:
@@ -241,7 +241,7 @@ jobs:
           || (github.event_name == 'workflow_dispatch' && (inputs.tag == '' || inputs.tag == null))
         )
       }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     environment: fern
     timeout-minutes: 60
     permissions:
@@ -370,7 +370,7 @@ jobs:
         github.ref_type == 'tag'
         || (github.event_name == 'workflow_dispatch' && inputs.tag != '' && inputs.tag != null)
       }}
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     environment: fern
     timeout-minutes: 60
     permissions:

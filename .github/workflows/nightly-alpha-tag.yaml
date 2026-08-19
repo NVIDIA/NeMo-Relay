@@ -16,7 +16,7 @@ concurrency:
 jobs:
   nightly-alpha-config:
     name: Load nightly alpha branches
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     permissions:
       contents: read
     outputs:
@@ -37,7 +37,7 @@ jobs:
   tag-nightly-alpha:
     name: Tag nightly alpha
     needs: nightly-alpha-config
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     strategy:
       fail-fast: false
       matrix:

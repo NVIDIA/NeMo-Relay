@@ -60,13 +60,13 @@ jobs:
       matrix:
         include:
           - platform: linux-amd64
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
             run_redis_tests: true
             redis_service_image: redis:7.4.7-alpine@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
             run_s3_tests: true
             s3_service_image: adobe/s3mock:5.0.0@sha256:c461c8f4234bd63540d2f3a3cabce69d814c78dc890a5af08727525a028e23da
           - platform: linux-arm64
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
             run_redis_tests: false
             redis_service_image: ''
             s3_service_image: ''
@@ -180,25 +180,25 @@ jobs:
         include:
           - &package-linux-amd64
             platform: linux-amd64
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
             target: x86_64-unknown-linux-gnu
             build_image: quay.io/pypa/manylinux2014_x86_64@sha256:35baef377f64c2ae2e7ed647917ecd090c50f6e8b06fd605012661c2e954cc92
             runtime_image: quay.io/pypa/manylinux2014_x86_64@sha256:35baef377f64c2ae2e7ed647917ecd090c50f6e8b06fd605012661c2e954cc92
           - &package-linux-arm64
             platform: linux-arm64
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
             target: aarch64-unknown-linux-gnu
             build_image: quay.io/pypa/manylinux2014_aarch64@sha256:63f73ecd2be3ad7cf66a402c72c1594b3f9140e263ab6838896e93a8fbf53794
             runtime_image: quay.io/pypa/manylinux2014_aarch64@sha256:63f73ecd2be3ad7cf66a402c72c1594b3f9140e263ab6838896e93a8fbf53794
           - &package-linux-musl-amd64
             platform: linux-musl-amd64
-            runner: ubuntu-latest
+            runner: linux-amd64-cpu4
             target: x86_64-unknown-linux-musl
             build_image: ''
             runtime_image: quay.io/pypa/musllinux_1_2_x86_64@sha256:7b54360b191356838f6e41d4b9820c69be4f3d8dc8e7bca26f2684d48e5c8633
           - &package-linux-musl-arm64
             platform: linux-musl-arm64
-            runner: ubuntu-24.04-arm
+            runner: linux-arm64-cpu4
             target: aarch64-unknown-linux-musl
             build_image: ''
             runtime_image: quay.io/pypa/musllinux_1_2_aarch64@sha256:274a947b4d5d745b56b868b0d052641e0798a652e3e65755987edf60547d1268

@@ -67,7 +67,7 @@ on:
 jobs:
   changes:
     name: Detect
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 10
     permissions:
       contents: read

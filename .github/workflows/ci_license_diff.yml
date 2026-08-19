@@ -27,7 +27,7 @@ env:
 jobs:
   license-diff:
     name: Run
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     timeout-minutes: 20
     permissions:
       contents: read
