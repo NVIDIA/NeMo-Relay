@@ -57,6 +57,7 @@ pi install /path/to/NeMo-Relay/integrations/pi
 |---|---|---|
 | `~/.pi/agent/extensions/` | Yes | No |
 | `pi install <local path>` | Yes | No |
+| `settings.json` `"extensions": [...]` | Yes | Only the project copy |
 | `-e <path>` | Per-invocation; what the launcher uses | No |
 | `.pi/extensions/` or `pi install --local` | **No** | **Yes** |
 | `pi install <git URL>` | **No** — see below | — |

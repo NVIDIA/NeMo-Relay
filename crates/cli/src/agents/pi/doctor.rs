@@ -205,8 +205,27 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
                 }),
         );
     };
+    let listed = |sites: &mut Vec<ExtensionSite>, settings: &Path, base: &Path, scope| {
+        sites.extend(
+            relay_extensions_listed_in_settings(settings, base)
+                .into_iter()
+                .map(|install| ExtensionSite {
+                    path: install.path,
+                    scope,
+                    filter: install.filter,
+                }),
+        );
+    };
     if let Some(dir) = user_extensions_dir() {
         discovered(&mut sites, &dir, ExtensionScope::User);
+    }
+    if let Some(agent_dir) = pi_agent_dir() {
+        listed(
+            &mut sites,
+            &agent_dir.join(PI_SETTINGS_FILE),
+            &agent_dir,
+            ExtensionScope::User,
+        );
     }
     if let Some(settings) = user_settings_path() {
         recorded(&mut sites, &settings, ExtensionScope::User);
@@ -216,12 +235,85 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
         &cwd.join(PI_CONFIG_DIR).join("extensions"),
         ExtensionScope::Project,
     );
+    let project_config = cwd.join(PI_CONFIG_DIR);
+    listed(
+        &mut sites,
+        &project_config.join(PI_SETTINGS_FILE),
+        &project_config,
+        ExtensionScope::Project,
+    );
     recorded(
         &mut sites,
-        &cwd.join(PI_CONFIG_DIR).join(PI_SETTINGS_FILE),
+        &project_config.join(PI_SETTINGS_FILE),
         ExtensionScope::Project,
     );
     sites
+}
+
+/// Copies named by `settings.json`'s own `extensions` array, in either scope.
+///
+/// A third registration route, and the one easiest to miss: it is a *sibling* of
+/// `packages`, read by a generic loop over pi's four resource types
+/// (`resolve`, pi `v0.84.0`, `core/package-manager.ts:906-931`) rather than by
+/// anything named after extensions -- `SettingsManager::getExtensionPaths` exists
+/// and has no callers, which makes the key look dead until that loop is read.
+/// Entries resolve against the settings file's own directory, exactly as
+/// `packages` entries do.
+///
+/// pi treats a *file* entry as the extension and walks a *directory* entry as a
+/// container of them (`collectResourceFiles` -> `collectAutoExtensionEntries`,
+/// `core/package-manager.ts:618-625`), so both shapes are checked: the entry
+/// itself, then its children.
+///
+/// A pattern entry (`+`, `-`, `!`) filters the collected set through the same
+/// globbing `packages` filters use, over files this module does not enumerate the
+/// way pi does -- so any pattern present makes the verdict `Undecided` rather than
+/// a guess in either direction.
+fn relay_extensions_listed_in_settings(settings: &Path, base: &Path) -> Vec<RecordedInstall> {
+    let Some(value) = std::fs::read_to_string(settings)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(entries) = value
+        .get("extensions")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    let entries: Vec<&str> = entries
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let filtered = entries
+        .iter()
+        .any(|entry| entry.starts_with(['+', '-', '!']));
+    let filter = if filtered {
+        SettingsFilter::Undecided
+    } else {
+        SettingsFilter::Loads
+    };
+    let mut found = Vec::new();
+    for entry in entries
+        .iter()
+        .filter(|entry| !entry.starts_with(['+', '-', '!']))
+    {
+        let resolved = base.join(entry);
+        if is_relay_extension(&resolved) {
+            found.push(RecordedInstall {
+                path: resolved,
+                filter,
+            });
+            continue;
+        }
+        found.extend(
+            relay_entries_in_directory(&resolved)
+                .into_iter()
+                .map(|path| RecordedInstall { path, filter }),
+        );
+    }
+    found
 }
 
 /// The path `nemo-relay run --agent pi` hands to `-e`, when there is one.

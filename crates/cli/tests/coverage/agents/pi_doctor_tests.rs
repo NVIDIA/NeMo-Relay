@@ -460,6 +460,91 @@ fn the_launch_path_prefers_a_copy_pi_already_loads() {
     assert_eq!(conflicting_extension_site(temp.path(), &launched), None);
 }
 
+// A third registration route, a sibling of `packages` in the same file, read by a generic loop
+// over pi's four resource types rather than by anything named after extensions. Missing it meant
+// doctor said "not located" and the launcher refused to start for a user pi loads fine.
+#[test]
+fn an_extensions_entry_in_settings_is_found_in_both_scopes() {
+    // User scope: entries resolve against the agent directory.
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    write_relay_package(&temp.path().join("checkout"));
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"extensions": ["../checkout/index.ts"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+    assert_eq!(sites.len(), 1, "{sites:?}");
+    assert_eq!(sites[0].scope, ExtensionScope::User);
+    assert_eq!(sites[0].filter, SettingsFilter::Loads);
+    drop(_env);
+
+    // Project scope: entries resolve against `<cwd>/.pi`, and pi trust-gates them.
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".pi")).unwrap();
+    write_relay_package(&project.path().join("checkout"));
+    std::fs::write(
+        project.path().join(".pi").join("settings.json"),
+        r#"{"extensions": ["../checkout/index.ts"]}"#,
+    )
+    .unwrap();
+    let empty_home = project.path().join("home");
+    std::fs::create_dir_all(&empty_home).unwrap();
+
+    let _env = scoped(None, Some(empty_home.as_os_str()));
+    let sites = relay_extension_sites(project.path());
+    assert!(
+        sites
+            .iter()
+            .any(|site| site.scope == ExtensionScope::Project),
+        "a project `extensions` entry is trust-gated and must be reported: {sites:?}"
+    );
+}
+
+// pi treats a directory entry as a *container* of extensions and walks it, so a parent directory
+// registers the package inside it.
+#[test]
+fn an_extensions_entry_naming_a_container_directory_is_walked() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    let container = temp.path().join("integrations");
+    write_relay_package(&container.join("pi"));
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"extensions": ["../integrations"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+    assert_eq!(sites.len(), 1, "{sites:?}");
+}
+
+// The array filters its collected set with the same globbing `packages` filters use, over files
+// this module does not enumerate the way pi does -- so a pattern makes it undecidable, not a Pass.
+#[test]
+fn an_extensions_entry_carrying_a_pattern_is_reported_as_undecided() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    write_relay_package(&temp.path().join("checkout"));
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"extensions": ["../checkout/index.ts", "-index.ts"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+    assert_eq!(sites.len(), 1, "{sites:?}");
+    assert_eq!(sites[0].filter, SettingsFilter::Undecided);
+}
+
 // B1: two copies inside ONE source. pi resolves every distinct package source, so both load
 // and post every hook twice -- and stopping at the first match hid exactly that.
 #[test]
