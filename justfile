@@ -485,7 +485,6 @@ local_dependencies = (
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
-    "nemo-relay-switchyard",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
@@ -775,7 +774,6 @@ published_cargo_packages() {
         nemo-relay \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
-        nemo-relay-switchyard \
         nemo-relay-ffi \
         nemo-relay-cli
 }
@@ -1655,11 +1653,6 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 ;;
             nemo-relay-pii-redaction)
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
-                ;;
-            nemo-relay-switchyard)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')

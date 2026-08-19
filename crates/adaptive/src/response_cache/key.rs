@@ -29,7 +29,7 @@ use crate::response_cache::store::CACHE_SCHEMA_VERSION;
 /// dropped before fingerprinting (IDs, routing, bookkeeping, streaming flag).
 pub const DEFAULT_SKIP_KEYS: &[&str] = &["stream", "user", "metadata", "store"];
 
-/// Relay-owned Switchyard backend partition. It is always keyed and never
+/// Relay-owned routing backend partition. It is always keyed and never
 /// depends on the user-configured header allowlist.
 const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
@@ -562,7 +562,7 @@ fn allowlisted_headers(headers: &Map<String, Json>, allowlist: &[String]) -> Map
 }
 
 /// Builds the key's header partition from configured headers plus the
-/// Relay-owned Switchyard backend ID.
+/// Relay-owned routing backend ID.
 fn cache_key_headers(headers: &Map<String, Json>, allowlist: &[String]) -> Map<String, Json> {
     let mut kept = allowlisted_headers(headers, allowlist);
     for (header_name, value) in headers {

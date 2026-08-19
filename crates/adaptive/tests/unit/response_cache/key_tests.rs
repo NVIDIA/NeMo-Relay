@@ -264,7 +264,7 @@ fn namespace_and_provider_separate_keys() {
 }
 
 #[test]
-fn switchyard_backend_partition_is_keyed_without_allowlisting() {
+fn routing_backend_partition_is_keyed_without_allowlisting() {
     let config = cache_all_config();
     assert!(config.header_allowlist.is_empty());
     let make = |backend: &str| {

@@ -256,16 +256,6 @@ The core crate ships a built-in `pricing` component. It loads catalog sources
 that response codecs can use to annotate managed LLM responses with cost
 estimates. Configure catalog sources through [Model Pricing](/configure-plugins/model-pricing).
 
-### Switchyard (Experimental)
-
-The experimental `switchyard` component asks a separately running Switchyard
-Decision API to select a configured model backend. It is excluded from default
-CLI builds and is registered only when the CLI is built with the optional
-`switchyard` feature. Direct Rust, Python, and Node.js hosts do not register it
-automatically. Refer to
-[Switchyard (Experimental)](/configure-plugins/switchyard/about) for the pinned
-compatibility and deployment requirements.
-
 For `plugins.toml` discovery, precedence, merge, and gateway editing rules,
 refer to [Plugin Configuration Files](/configure-plugins/plugin-configuration-files).
 

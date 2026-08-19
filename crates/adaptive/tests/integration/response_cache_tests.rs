@@ -39,7 +39,7 @@ mod response_cache_common;
 use response_cache_common::{activate_cache, call, chat_request};
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
-const SWITCHYARD_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
+const ROUTING_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
 fn reset_global() {
     let _ = clear_plugin_configuration();
@@ -79,7 +79,7 @@ fn chat_request_for_backend(prompt: &str, backend: &str) -> LlmRequest {
     let mut request = chat_request(prompt);
     request
         .headers
-        .insert(SWITCHYARD_BACKEND_HEADER.to_string(), json!(backend));
+        .insert(ROUTING_BACKEND_HEADER.to_string(), json!(backend));
     request
 }
 
@@ -269,7 +269,7 @@ async fn a_different_request_is_a_miss() {
 }
 
 #[tokio::test]
-async fn switchyard_backends_use_independent_buffered_entries() {
+async fn routing_backends_use_independent_buffered_entries() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     activate_cache(scoped_cache_config()).await;
@@ -933,7 +933,7 @@ async fn streaming_repeat_is_a_hit_that_skips_the_provider_and_replays_the_aggre
 }
 
 #[tokio::test]
-async fn switchyard_backends_use_independent_streaming_entries() {
+async fn routing_backends_use_independent_streaming_entries() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     activate_cache(scoped_cache_config()).await;
