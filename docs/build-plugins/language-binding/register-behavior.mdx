@@ -8,8 +8,9 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Registration converts a valid component document into owned runtime behavior. The
 example installs only the feature groups whose `enabled` values are true and reads
-priority and `break_chain` directly from configuration. It never calls a process-global
-middleware registrar from inside the plugin.
+[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) directly from
+configuration. It never calls a process-global middleware registrar from inside the
+plugin.
 
 ## Register One Equivalent Request Intercept
 
@@ -196,8 +197,9 @@ ctx.register_llm_stream_execution_intercept(
 </Tab>
 </Tabs>
 
-The LLM intercept returns the complete outcome rather than relying on mutation. In
-particular, it preserves `annotated`. The Rust request happens to be mutable inside its
+The LLM intercept returns the
+[complete outcome](/reference/llm-request-intercept-outcomes) rather than relying on
+mutation. In particular, it preserves `annotated`. The Rust request is mutable inside its
 owned callback value; Python creates a new typed request, and Node.js creates a new plain
 object. Those language differences do not change Relay semantics.
 

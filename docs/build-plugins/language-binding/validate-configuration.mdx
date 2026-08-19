@@ -17,8 +17,9 @@ future component and discover its mistakes before rollout.
 
 ## Return the Same Diagnostic Shape
 
-The following implementations return the same diagnostic fields while using each
-binding's native configuration types:
+The following implementations return the same
+[diagnostic fields](/build-plugins/fundamentals/configuration-and-validation) while
+using each binding's native configuration types:
 
 <Tabs>
 <Tab title="Python" language="python">
@@ -325,8 +326,9 @@ Use the following procedure to prove that validation remains separate from activ
 4. Validate the shared correct configuration. The report should have no error-level
    diagnostics.
 5. Remember that `initialize` also layers discovered `plugins.toml` configuration. In a
-   deployment that uses file discovery, validate the effective startup source rather
-   than assuming an isolated in-memory report describes the final activation.
+   deployment that uses [file discovery](/configure-plugins/plugin-configuration-files),
+   validate the effective startup source rather than assuming an isolated in-memory
+   report describes the final activation.
 
 Success means every binding catches the same invalid values before registration, a
 disabled component remains visible to validation, diagnostics are stable enough for

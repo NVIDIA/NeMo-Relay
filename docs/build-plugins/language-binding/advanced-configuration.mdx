@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 After one component works, the difficult questions are ownership questions: whether the
 kind can appear more than once, how a replacement interacts with the active report, and
-which API removes active behavior versus removing the implementation from future lookup.
+which API removes active behavior and which removes the implementation from future lookup.
 
 ## Multiple Component Instances
 
@@ -19,13 +19,15 @@ interfaces, so design and test their component behavior with the binding contrac
 than copying a Rust-only method into them.
 
 When multiple components are allowed, each receives a separate component config and
-registration context. Give an instance an operator-facing identity such as a region or
-tenant only when diagnostics and external resources need it. Registration names remain
+[registration context](/build-plugins/fundamentals/plugin-context). Give an instance
+an operator-facing identity such as a region or tenant only when diagnostics and
+external resources need it. Registration names remain
 local; Relay performs qualification and cleanup.
 
 ## Replacement and Reports
 
-Initialization replaces active configuration as a transaction. Validation and new
+Initialization replaces active configuration as a
+[transaction](/build-plugins/fundamentals/plugin-shape). Validation and new
 registration run before Relay commits the replacement. If a callback fails, Relay
 removes partial new registrations and attempts to retain or restore the last proven
 configuration. A cleanup failure is more serious: the process can retain a runtime
