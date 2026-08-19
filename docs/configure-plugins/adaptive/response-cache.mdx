@@ -1,6 +1,6 @@
 ---
 title: "Response Cache"
-description: "Configure response caching for managed LLM and tool calls."
+description: "Configure exact-match response caching for managed LLM calls."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -211,38 +211,6 @@ serialize those fields to canonical keys. Python uses
 to `"nemo_relay:"`, overriding the value in the fields table. Configure the
 same `key_prefix` in every process and binding that should share entries.
 </Note>
-
-## Tool-Result Caching
-
-Tool-result caching is disabled by default because a cache hit suppresses the
-real tool call. Enable it only for tools that are read-only and stable for their
-TTL. A classified cacheable tool reuses a result only when its name, retained
-arguments, and resolved tool version match.
-
-```toml
-[components.config.response_cache.tools]
-enabled = true
-
-[components.config.response_cache.tools.classes.read_only]
-cacheable = true
-tool_version = "docs-v3"
-members = ["docs_*"]
-
-[components.config.response_cache.tools.overrides.docs_preview]
-tool_version = "docs-preview-v2"
-```
-
-`ToolClass.tool_version` is folded into cache keys for every matching class
-member. Bump it when a shared tool implementation changes to invalidate that
-class's entries for members without an override version. An exact or wildcard
-`overrides` entry with its own `tool_version` takes precedence for that
-individual tool. Unclassified tools are never cached by default.
-
-Class members and override keys accept exact tool names or one of three
-wildcard forms: `prefix*`, `*suffix`, or `*contains*`. The catch-all `*` is
-also supported, but validation rejects using it to opt every tool into caching.
-Other wildcard placements, including multiple separated wildcards such as
-`get_*_price`, are rejected.
 
 ## Manual API
 
