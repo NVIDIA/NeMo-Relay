@@ -1673,12 +1673,22 @@ fn make_executable(path: &Path) {
 #[test]
 fn pi_launch_passes_the_gateway_upstreams_the_extension_redirects_against() {
     let _guard = current_dir_lock().lock().unwrap();
-    let extension = std::env::temp_dir().join("nemo-relay-pi-launch-test-extension.ts");
-    std::fs::write(&extension, "export default () => {};").unwrap();
-    let _env = EnvScope::set(&[(
-        crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
-        Some(extension.as_os_str()),
-    )]);
+    let temp = tempfile::tempdir().unwrap();
+    let extension = write_relay_pi_package(&temp.path().join("checkout"));
+    // Pin pi's agent directory at an empty one: the launcher now falls back to a
+    // user-scope install, so a developer's own would otherwise decide this result.
+    let empty_agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&empty_agent_dir).unwrap();
+    let _env = EnvScope::set(&[
+        (
+            crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
+            Some(extension.as_os_str()),
+        ),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(empty_agent_dir.as_os_str()),
+        ),
+    ]);
 
     let resolved = ResolvedConfig {
         gateway: GatewayConfig {
@@ -1725,5 +1735,95 @@ fn pi_launch_passes_the_gateway_upstreams_the_extension_redirects_against() {
         note.contains("https://integrate.api.nvidia.com/v1"),
         "the launch note should name the upstream redirection is judged against: {note}"
     );
-    let _ = std::fs::remove_file(&extension);
+}
+
+/// A directory pi resolves as this extension: a manifest naming it, beside an
+/// entry point. Returns the entry point, which is what `-e` is pointed at.
+fn write_relay_pi_package(dir: &std::path::Path) -> std::path::PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("package.json"), r#"{"name": "nemo-relay-pi"}"#).unwrap();
+    let entry = dir.join("index.ts");
+    std::fs::write(&entry, "export default () => {};").unwrap();
+    entry
+}
+
+// The install routes the README documents -- `pi install <path>` and a file drop
+// into `~/.pi/agent/extensions/` -- set no environment variable, and no document
+// tells a user to set one. While launching read only that variable, `doctor`
+// reported the extension as ready and the launcher refused to start.
+#[test]
+fn pi_launch_finds_a_user_scope_install_without_an_environment_variable() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_pi_package(&installed);
+    let _env = EnvScope::set(&[
+        (crate::agents::pi::launch::PI_EXTENSION_PATH_ENV, None),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(agent_dir.as_os_str()),
+        ),
+    ]);
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    )
+    .unwrap();
+
+    // pi de-duplicates the merged command-line and discovered extension sets by
+    // canonical path, so passing `-e` for something it would have found anyway
+    // loads it once -- and keeps the load working under `--no-extensions`.
+    let rendered = installed.display().to_string();
+    assert!(
+        prepared
+            .argv
+            .windows(2)
+            .any(|pair| pair[0] == "-e" && pair[1] == rendered),
+        "a user-scope install must be launchable: {:?}",
+        prepared.argv
+    );
+}
+
+// `-e` is never trust-gated. Promoting a project-scoped install to it would run
+// repository code pi itself declined to trust, which is the failure the preflight
+// exists to warn about rather than to work around.
+#[test]
+fn pi_launch_refuses_to_promote_a_project_scoped_install() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    write_relay_pi_package(&project.join(".pi").join("extensions").join("nemo-relay"));
+    let empty_agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&empty_agent_dir).unwrap();
+    let _env = EnvScope::set(&[
+        (crate::agents::pi::launch::PI_EXTENSION_PATH_ENV, None),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(empty_agent_dir.as_os_str()),
+        ),
+    ]);
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project).unwrap();
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    );
+
+    std::env::set_current_dir(previous).unwrap();
+    let Err(error) = prepared else {
+        panic!("a project-scoped install must not be promoted to `-e`");
+    };
+    assert!(
+        error.to_string().contains("trust-gated"),
+        "the launch error should say why the install it can see was not used: {error}"
+    );
 }

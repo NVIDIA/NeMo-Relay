@@ -26,7 +26,7 @@ use super::launch::{PI_EXTENSION_PATH_ENV, PI_GATEWAY_URL_ENV};
 ///
 /// Mirrors `getAgentDir()` (pi `config.ts:515-522`), including the environment
 /// override, so the preflight looks where pi will actually look.
-const PI_AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
+pub(crate) const PI_AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
 
 /// pi's configuration directory name, from its `piConfig.configDir`.
 const PI_CONFIG_DIR: &str = ".pi";
@@ -103,10 +103,17 @@ fn current_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// The explicitly configured extension, but only when it is *this* extension.
+///
+/// The name check is not redundant with the directory scans below. A stale or
+/// mistyped variable that happens to name an existing path -- somebody else's
+/// extension, or a checkout that no longer holds ours -- otherwise reported a
+/// Pass here *and* made the launcher hand that path to `-e`, so pi loaded code
+/// that emits no hooks while every Relay check said the setup was ready.
 fn extension_location() -> Option<PathBuf> {
     std::env::var_os(PI_EXTENSION_PATH_ENV)
         .map(PathBuf::from)
-        .filter(|path| path.exists())
+        .filter(|path| path.exists() && is_relay_extension(path))
 }
 
 /// The gateway URL the extension will post to.
@@ -187,6 +194,31 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
         });
     }
     sites
+}
+
+/// The path `nemo-relay run --agent pi` hands to `-e`, when there is one.
+///
+/// Explicit first, then user scope -- the order `relay_extension_sites` already
+/// returns. **Project scope is excluded on purpose.** `-e` is not trust-gated, so
+/// promoting a project-scoped extension to it would run repository code pi itself
+/// declined to trust: the launcher would be undoing the very gate this module
+/// exists to report. A site that is not a path on disk is excluded for a related
+/// reason -- `pi install` can record an npm or git specifier, and pi resolves an
+/// `-e` argument as a package *source*, so handing one back could make a launch
+/// fetch and install from the network.
+///
+/// Handing pi a path it would have discovered anyway is safe: pi canonicalizes and
+/// de-duplicates the merged command-line and discovered sets before loading
+/// (`mergePaths`, pi `v0.84.0`, `core/resource-loader.ts:845`), and both routes
+/// resolve a package directory through the same `pi.extensions` manifest, so the
+/// extension loads -- and registers its hooks -- exactly once. Passing the
+/// directory is also why nothing here reads that manifest: pi does it, and its
+/// entry-point precedence is pi's to change.
+pub(crate) fn launchable_extension_path(cwd: &Path) -> Option<PathBuf> {
+    relay_extension_sites(cwd)
+        .into_iter()
+        .find(|site| site.scope != ExtensionScope::Project && site.path.exists())
+        .map(|site| site.path)
 }
 
 /// The NeMo Relay extension inside a pi auto-discovery directory, if it is there.

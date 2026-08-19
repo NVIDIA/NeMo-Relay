@@ -61,6 +61,12 @@ pi install /path/to/NeMo-Relay/integrations/pi
 | `.pi/extensions/` or `pi install --local` | **No** | **Yes** |
 | `pi install <git URL>` | **No** — see below | — |
 
+Either user-scope route is enough for `nemo-relay run --agent pi`: the launcher
+resolves the extension from the same places `nemo-relay doctor pi` looks and
+passes what it finds to `-e`, so no environment variable is needed. It never
+promotes a **project-scoped** install that way — `-e` is not trust-gated, so
+doing so would load code pi itself declined to trust.
+
 ⚠️ **A git URL does not work, and fails silently.** pi has no
 subdirectory syntax for a git source: it clones the repository *root*, then looks
 there for a `pi` key in `package.json` or a top-level `extensions/` directory.
@@ -99,6 +105,7 @@ Run it first whenever Relay does not seem to be doing anything.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `NEMO_RELAY_PI_EXTENSION` | unset | Overrides where the launcher looks for this extension. Set by the launcher from what it resolved |
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |

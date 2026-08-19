@@ -114,10 +114,15 @@ trust-ungated, loads before extension discovery, and survives `--no-extensions`,
 so a launched session is instrumented regardless of the user's own pi
 configuration.
 
-Set `NEMO_RELAY_PI_EXTENSION` to the extension entry point. Unlike Claude Code
-and Codex, there is no Relay-managed install location to fall back on, because
-pi extensions live in the user's own configuration directories. Launch fails
-with that instruction when the extension cannot be located.
+The launcher resolves the extension from the same places `nemo-relay doctor pi`
+looks — `NEMO_RELAY_PI_EXTENSION` first, then a user-scope install — so either
+install route below is enough and no variable is required. Unlike Claude Code and
+Codex, there is no Relay-managed install location to fall back on, because pi
+extensions live in the user's own configuration directories.
+
+A **project-scoped** install is deliberately never used. `-e` is not trust-gated,
+so passing one would load repository code pi itself declined to trust. Launch
+fails instead, and names the install routes that are not gated.
 
 Inspect what would be launched without starting pi:
 

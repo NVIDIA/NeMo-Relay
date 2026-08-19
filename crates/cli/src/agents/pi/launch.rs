@@ -62,8 +62,12 @@ pub(crate) fn prepare(
     // extension regardless of the user's own pi configuration.
     let Some(path) = extension_path() else {
         return Err(CliError::Launch(format!(
-            "could not locate the NeMo Relay pi extension; set {PI_EXTENSION_PATH_ENV} to its \
-             entry point, or install it with `pi install <source>` and launch pi directly"
+            "could not locate the NeMo Relay pi extension at a load path that is not \
+             trust-gated; install it with `pi install <path to integrations/pi>` (without \
+             `--local`), copy it into `~/.pi/agent/extensions/`, or set \
+             {PI_EXTENSION_PATH_ENV} to its entry point. A project-scoped install is \
+             deliberately not used here: `-e` is never trust-gated, so passing one would load \
+             code pi itself would not trust. `nemo-relay doctor pi` reports what was found"
         )));
     };
     let rendered = path.display().to_string();
@@ -94,13 +98,15 @@ fn set_env(launch: &mut PreparedAgentLaunch, name: &str, value: &str) {
     launch.env.push((name.to_string(), value.to_string()));
 }
 
-/// Resolve the extension entry point, preferring an explicit override.
+/// Resolve the extension entry point, from the same places `doctor` looks.
 ///
-/// There is no installed location to fall back on the way Codex and Claude Code
-/// have one, because pi extensions live in the user's own configuration
-/// directories rather than in a NeMo Relay-managed plugin root.
+/// It reads no environment variable of its own, deliberately. A second read is
+/// how the two drifted: `doctor` resolved a user-scope install and reported the
+/// setup as ready, while launching refused to start because only the variable
+/// counted here -- and the variable is not something any document tells a user
+/// to set. `launchable_extension_path` also excludes the project scope, which
+/// `-e` would load past pi's trust gate.
 fn extension_path() -> Option<PathBuf> {
-    std::env::var_os(PI_EXTENSION_PATH_ENV)
-        .map(PathBuf::from)
-        .filter(|path| path.exists())
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    super::doctor::launchable_extension_path(&cwd)
 }

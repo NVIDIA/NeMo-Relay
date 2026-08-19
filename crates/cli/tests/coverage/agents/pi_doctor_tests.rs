@@ -76,8 +76,9 @@ fn an_empty_project_directory_is_not_reported() {
 #[test]
 fn the_explicit_path_is_reported_as_ungated() {
     let temp = tempfile::tempdir().unwrap();
-    let entry = temp.path().join("index.ts");
-    std::fs::write(&entry, "export default 1").unwrap();
+    let package = temp.path().join("checkout");
+    write_relay_package(&package);
+    let entry = package.join("index.ts");
     let empty_home = temp.path().join("home");
     std::fs::create_dir_all(&empty_home).unwrap();
 
@@ -274,13 +275,88 @@ fn somebody_elses_pi_extension_is_not_reported_as_ours() {
     assert!(!extension_configured());
 }
 
+// The explicit route was the one hole in that name check: any path that existed
+// counted, so a stale variable made doctor Pass *and* made the launcher inject the
+// path with `-e` -- a green check describing a session with no Relay code in it.
+#[test]
+fn an_unrelated_extension_named_by_the_environment_is_not_reported_as_ours() {
+    let temp = tempfile::tempdir().unwrap();
+    let other = temp.path().join("other");
+    write_other_package(&other);
+    let empty_home = temp.path().join("home");
+    std::fs::create_dir_all(&empty_home).unwrap();
+
+    let _env = scoped(
+        Some(other.join("index.ts").as_os_str()),
+        Some(empty_home.as_os_str()),
+    );
+    assert!(relay_extension_sites(temp.path()).is_empty());
+    assert!(!extension_configured());
+    assert!(launchable_extension_path(temp.path()).is_none());
+}
+
+// `-e` is never trust-gated, so falling back to a project-scoped site would make
+// the launcher run code pi refused to load -- undoing the gate this module reports.
+#[test]
+fn the_launch_path_never_promotes_a_project_scoped_extension() {
+    let temp = tempfile::tempdir().unwrap();
+    let project_extensions = temp.path().join(".pi").join("extensions");
+    std::fs::create_dir_all(&project_extensions).unwrap();
+    write_relay_package(&project_extensions.join("nemo-relay"));
+    let empty_home = temp.path().join("home");
+    std::fs::create_dir_all(&empty_home).unwrap();
+
+    let _env = scoped(None, Some(empty_home.as_os_str()));
+    assert!(!relay_extension_sites(temp.path()).is_empty());
+    assert!(launchable_extension_path(temp.path()).is_none());
+}
+
+// pi resolves an `-e` argument as a package source, so an npm specifier that
+// `pi install` recorded would be fetched and installed by a launch, not loaded.
+#[test]
+fn the_launch_path_skips_an_installed_source_that_is_not_a_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"packages": ["npm:nemo-relay-pi"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    assert!(!relay_extension_sites(temp.path()).is_empty());
+    assert!(launchable_extension_path(temp.path()).is_none());
+}
+
+// A user-scope install is what the README's install routes produce, and none of
+// them set an environment variable -- so the launcher has to find one without it.
+// An explicit path still wins, because someone who set it meant it.
+#[test]
+fn the_launch_path_prefers_the_explicit_route_over_a_user_scope_install() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_package(&installed);
+
+    let _discovered = scoped(None, Some(agent_dir.as_os_str()));
+    assert_eq!(launchable_extension_path(temp.path()), Some(installed));
+    drop(_discovered);
+
+    let explicit = temp.path().join("checkout");
+    write_relay_package(&explicit);
+    let _env = scoped(Some(explicit.as_os_str()), Some(agent_dir.as_os_str()));
+    assert_eq!(launchable_extension_path(temp.path()), Some(explicit));
+}
+
 // The headline status and the load-path check must agree: they now answer from the
 // same resolution, so one `doctor` run cannot say "not located" beside a Pass.
 #[test]
 fn the_headline_status_agrees_with_the_load_path_check() {
     let temp = tempfile::tempdir().unwrap();
-    let entry = temp.path().join("index.ts");
-    std::fs::write(&entry, "export default 1").unwrap();
+    let package = temp.path().join("checkout");
+    write_relay_package(&package);
+    let entry = package.join("index.ts");
     let empty_home = temp.path().join("home");
     std::fs::create_dir_all(&empty_home).unwrap();
 
