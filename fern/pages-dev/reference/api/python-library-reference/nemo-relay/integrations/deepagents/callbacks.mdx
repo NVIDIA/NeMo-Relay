@@ -17,7 +17,7 @@ Deep Agents callback handler for NeMo Relay observability.
 
 ### `NemoRelayDeepAgentsCallbackHandler(LangGraphNemoRelayCallbackHandler)`
 
-Bridge Deep Agents LangGraph lifecycle events to NeMo Relay marks.
+Bridge semantic Deep Agents runs and LangGraph lifecycle events to NeMo Relay.
 
 #### Methods
 
@@ -28,4 +28,12 @@ def NemoRelayDeepAgentsCallbackHandler(*args: Any, **kwargs: Any) -> None
 ```
 
 Create an instance.
+
+##### `on_chain_start`
+
+```python
+def on_chain_start(serialized: dict[str, Any], inputs: dict[str, Any], *, run_id: UUID, parent_run_id: UUID | None = None, tags: list[str] | None = None, metadata: dict[str, Any] | None = None, **kwargs: Any) -> Any
+```
+
+Push scopes for Deep Agents orchestrators and subagents, not graph nodes.
 
