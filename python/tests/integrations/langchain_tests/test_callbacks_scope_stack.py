@@ -676,13 +676,21 @@ async def test_pydantic_output_is_serialized_before_scope_close(
     class StructuredResult(BaseModel):
         answer: str
         confidence: float
+        request_id: UUID
 
     run_id = uuid4()
+    request_id = UUID("12345678-1234-5678-1234-567812345678")
     request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
     _start(handler, run_id, "A")
 
     handler.on_chain_end(
-        {"structured_response": StructuredResult(answer="complete", confidence=0.95)},
+        {
+            "structured_response": StructuredResult(
+                answer="complete",
+                confidence=0.95,
+                request_id=request_id,
+            )
+        },
         run_id=run_id,
     )
 
@@ -696,6 +704,7 @@ async def test_pydantic_output_is_serialized_before_scope_close(
         "structured_response": {
             "answer": "complete",
             "confidence": 0.95,
+            "request_id": str(request_id),
         }
     }
     assert handler._completed == {}
