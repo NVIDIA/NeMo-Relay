@@ -192,8 +192,10 @@ extension applies it to pi's `event.input` in place.
 
 <Warning>
 The rewrite is **constrained, not validated**. pi validates tool arguments
-before the hook and never re-validates, and the extension cannot read a built-in
-tool's schema, so the extension enforces a shape invariant instead: a transform
+before the hook and never re-validates. The extension could read the tool's
+schema — `pi.getAllTools()` exposes it for built-ins too — but deliberately does
+not: pi's tool set is per-session mutable, so a schema read once can go stale
+mid-session. It enforces a shape invariant instead: a transform
 may rewrite the values of existing keys, preserving each value's JSON type. It
 may not add or remove keys, change a type, or change an array's length.
 

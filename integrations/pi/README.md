@@ -144,10 +144,14 @@ later handlers, so replacing the reference would be discarded.
 ⚠️ **The rewrite is constrained, not validated.** pi validates arguments
 *before* the `tool_call` hook and never re-validates — its own types say "no
 re-validation is performed after mutation" — so a rewrite that violates the
-tool's schema would execute. The extension cannot check it against the schema
-either: pi exposes `tools` only on the `Extension` interface, which is an
-extension's *own* registered tools, so there is no way to read the schema of a
-built-in like `read`.
+tool's schema would execute.
+
+The extension *could* check it: `pi.getAllTools()` returns every configured
+tool — built-ins included — with its TypeBox `parameters` schema. That is
+deliberately not used. pi's tool set is per-session mutable (`setActiveTools`,
+`registerTool`), so a schema read once can go stale mid-session, and forwarding
+it would make the gateway carry pi's tool vocabulary for a check that does not
+need it.
 
 So the extension enforces a **shape** invariant instead: a transform may rewrite
 the values of existing keys, preserving each value's JSON type, recursively.
@@ -156,8 +160,8 @@ refused. An argument object that satisfied the schema before therefore still has
 the required keys of the required types afterwards.
 
 **This is structural, not schema validation.** `pattern`, `enum`, `minimum` and
-`format` are not checked and cannot be. A transform that rewrites a string to
-one the schema would reject still executes.
+`format` are not checked — by choice, not because the schema is out of reach. A
+transform that rewrites a string to one the schema would reject still executes.
 
 A refused transform **blocks the call**, with a reason that says the policy could
 not be applied rather than that the request was refused. Running the original

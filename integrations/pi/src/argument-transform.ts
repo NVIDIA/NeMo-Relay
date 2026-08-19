@@ -15,21 +15,25 @@
  *    `tool_call` receives, and pi's own types say "later `tool_call` handlers
  *    see earlier mutations. No re-validation is performed after mutation." So
  *    arguments that violate the tool's schema will execute.
- * 2. *The extension cannot see the schema.* pi exposes `tools` only on the
- *    `Extension` interface, which is an extension's own registered tools --
- *    there is no accessor for the schema of a built-in like `read` or `bash`.
- *    Neither we nor the gateway can check the rewrite against it.
+ * 2. *The schema is reachable, and deliberately not used.* `pi.getAllTools()`
+ *    returns every configured tool -- built-ins included -- with its TypeBox
+ *    `parameters` schema (`extensions/types.ts:1334`, impl
+ *    `core/agent-session.ts:908`). So validating locally, or forwarding the
+ *    schema to the gateway, are both possible. They are not done because the
+ *    tool set is per-session mutable (`setActiveTools`, `registerTool`), so a
+ *    forwarded schema can go stale mid-session, and carrying pi's tool
+ *    vocabulary into the gateway buys precision this transform does not need.
  *
- * So the transform is constrained instead of validated: it may **rewrite the
+ * So the transform is constrained rather than validated: it may **rewrite the
  * values of existing keys, preserving each value's JSON type**, recursively.
  * Adding a key, removing a key, changing a type, or changing an array's length
  * is refused. An object that satisfied the schema before therefore still has
  * the required keys, of the required types, afterwards.
  *
  * ⚠️ **This is a structural guarantee, not schema validation.** Value-level
- * constraints -- `pattern`, `enum`, `minimum`, `format` -- are not checked and
- * cannot be. A transform that rewrites a string to one the schema would reject
- * still executes.
+ * constraints -- `pattern`, `enum`, `minimum`, `format` -- are not checked. That
+ * is a choice, not a limit: see point 2. A transform that rewrites a string to
+ * one the schema would reject still executes.
  *
  * A refused transform **blocks the call**. Running the original arguments would
  * silently discard a policy decision, which is the failure the transform
