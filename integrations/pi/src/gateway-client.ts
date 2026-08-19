@@ -144,7 +144,7 @@ export function resolveFault(config: GatewayConfig, detail: string, toolName: st
     reason:
       `The NeMo Relay policy gateway could not be reached to authorize this ${toolName} call, ` +
       `so it was blocked rather than allowed through unchecked. This is an infrastructure fault, ` +
-      `not a judgement about the request. Details: ${detail}`,
+      `not a judgment about the request. Details: ${detail}`,
   };
 }
 

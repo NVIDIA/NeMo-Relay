@@ -17,7 +17,7 @@
  *    arguments that violate the tool's schema will execute.
  * 2. *The schema is reachable, and deliberately not used.* `pi.getAllTools()`
  *    returns every configured tool -- built-ins included -- with its TypeBox
- *    `parameters` schema (`extensions/types.ts:1334`, impl
+ *    `parameters` schema (pi `v0.84.0`, `core/extensions/types.ts:1334`, impl
  *    `core/agent-session.ts:908`). So validating locally, or forwarding the
  *    schema to the gateway, are both possible. They are not done because the
  *    tool set is per-session mutable (`setActiveTools`, `registerTool`), so a
@@ -162,6 +162,6 @@ export function refusalReason(toolName: string, detail: string): string {
     `A NeMo Relay policy rewrote the arguments for this ${toolName} call, but the rewrite could ` +
     `not be applied safely: ${detail}. The call was blocked rather than run with the original ` +
     `arguments, because running them would ignore the policy. This is a configuration problem in ` +
-    `the policy, not a judgement about your request.`
+    `the policy, not a judgment about your request.`
   );
 }

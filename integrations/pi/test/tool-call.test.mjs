@@ -109,7 +109,7 @@ describe('the tool_call gate', () => {
     assert.match(result.reason, /added sudo/);
     // Falling back to the original arguments would silently discard a policy
     // decision, which is the failure the transform exists to prevent.
-    assert.match(result.reason, /not a judgement about your request/);
+    assert.match(result.reason, /not a judgment about your request/);
     assert.deepEqual(event.input, { path: '/work/.env' }, 'a refused rewrite must not be applied');
   });
 
@@ -138,7 +138,7 @@ describe('the tool_call gate', () => {
     assert.equal(result?.block, true);
     // Telling the model a policy considered and refused its call, when nothing
     // did, gives it a false premise to reason from.
-    assert.match(result.reason, /infrastructure fault, not a judgement/);
+    assert.match(result.reason, /infrastructure fault, not a judgment/);
   });
 
   it('treats a 403 without the guardrail marker as a fault, not a policy decision', async () => {
@@ -181,7 +181,7 @@ describe('an extension ahead of the gate', () => {
 
   beforeEach(() => gateway.reset());
 
-  // The documented blind spot, pinned as behaviour rather than prose: pi stops
+  // The documented blind spot, pinned as behavior rather than prose: pi stops
   // at the first handler that returns anything, so on the `pi install` path --
   // which loads last -- the call is blocked and the gateway never learns it
   // happened. `-e` inverts the order, which is why the launcher uses it.

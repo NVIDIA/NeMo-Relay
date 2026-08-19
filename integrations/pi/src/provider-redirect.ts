@@ -14,9 +14,10 @@
  *
  * With `baseUrl` and no `models`, pi rewrites the URL of every existing model
  * for that provider and keeps their API, headers, costs and context windows
- * (`applyExtension`, `core/provider-composer.ts:215`). That is far cheaper than
- * pi's own `custom-provider-*` examples, which register a `streamSimple` and
- * re-implement a provider protocol; the extension stays a thin client.
+ * (`applyExtension`, pi `v0.84.0`, `core/provider-composer.ts:215`). That is far
+ * cheaper than pi's own `custom-provider-*` examples, which register a
+ * `streamSimple` and re-implement a provider protocol; the extension stays a
+ * thin client.
  *
  * **Redirection is conditional, and the condition is the whole design.** The
  * gateway forwards to one statically configured upstream per API family and a

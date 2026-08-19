@@ -9,9 +9,10 @@
 //! extension sits and whether pi will actually load it.
 //!
 //! **The failure this module exists for is silent.** pi adds project-scoped
-//! extensions to its candidate set only when the project is trusted
-//! (`core/package-manager.ts:2394`), and `-p`, `--mode json` and `--mode rpc`
-//! never prompt for trust (`docs/security.md:29`). Under the default policy a
+//! extensions to its candidate set only when the project is trusted (pi
+//! `v0.84.0`, `core/package-manager.ts:2395`), and `-p`, `--mode json` and
+//! `--mode rpc` never prompt for trust (`docs/security.md:29`). Under the
+//! default policy a
 //! project-scoped extension is therefore dropped by a bare conditional -- not
 //! by an error path, so it never reaches pi's extension-load error list and pi
 //! does not consider it a failure. Nothing reports it, and **the extension
@@ -24,8 +25,8 @@ use super::launch::{PI_EXTENSION_PATH_ENV, PI_GATEWAY_URL_ENV};
 
 /// pi's per-user configuration root, `~/.pi/agent` unless overridden.
 ///
-/// Mirrors `getAgentDir()` (pi `config.ts:515-522`), including the environment
-/// override, so the preflight looks where pi will actually look.
+/// Mirrors `getAgentDir()` (pi `v0.84.0`, `config.ts:515-521`), including the
+/// environment override, so the preflight looks where pi will actually look.
 pub(crate) const PI_AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
 
 /// pi's configuration directory name, from its `piConfig.configDir`.

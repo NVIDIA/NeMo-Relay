@@ -125,7 +125,7 @@ describe('gateway client wire contract', () => {
   });
 
   it('does not present a 403 without the guardrail marker as a policy decision', async () => {
-    // An authorization failure is not a judgement about the request; reporting
+    // An authorization failure is not a judgment about the request; reporting
     // it as one would tell the model a policy considered and refused its call.
     const outcome = await postHook(baseConfig(url), { hook_event_name: 'naked-403' });
     assert.equal(outcome.kind, 'fault');
@@ -181,7 +181,7 @@ describe('failure policy', () => {
       'read',
     );
     assert.equal(outcome.kind, 'block');
-    assert.match(outcome.reason, /infrastructure fault, not a judgement/);
+    assert.match(outcome.reason, /infrastructure fault, not a judgment/);
     assert.match(outcome.reason, /connection refused/);
   });
 });

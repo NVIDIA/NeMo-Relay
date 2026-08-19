@@ -3,7 +3,7 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NeMo Relay extension for pi
+# NeMo Relay Extension for pi
 
 A pi extension that forwards pi's lifecycle to the NeMo Relay CLI gateway and
 gates tool calls on the gateway's verdict.
@@ -24,7 +24,7 @@ signatures before relying on them.
 generic environment override — it resolves `baseUrl` per model from a generated
 catalog — so the extension points the active model's provider at the gateway
 itself. It only does so when the gateway forwards to the endpoint that
-model would otherwise have called; see [Model redirection](#model-redirection).
+model would otherwise have called; see [Model Redirection](#model-redirection).
 When it does not, you get tool and turn activity but no LLM spans.
 
 ## Usage
@@ -41,7 +41,7 @@ NEMO_RELAY_PI_GATEWAY_URL=http://127.0.0.1:4040 \
 `--no-extensions`, which makes it the reliable way to load this. It is also what
 `nemo-relay run --agent pi` uses.
 
-### Where to install it
+### Where to Install It
 
 **User scope only**, by either of two routes:
 
@@ -53,7 +53,7 @@ cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
 pi install /path/to/NeMo-Relay/integrations/pi
 ```
 
-| Path | Install here? | Trust-gated? |
+| Path | Install Here? | Trust-Gated? |
 |---|---|---|
 | `~/.pi/agent/extensions/` | Yes | No |
 | `pi install <local path>` | Yes | No |
@@ -113,17 +113,17 @@ Run it first whenever Relay does not seem to be doing anything.
 | `NEMO_RELAY_PI_OPENAI_UPSTREAM` | unset | What the gateway forwards OpenAI-compatible traffic to. Set by the launcher |
 | `NEMO_RELAY_PI_ANTHROPIC_UPSTREAM` | unset | What the gateway forwards Anthropic traffic to. Set by the launcher |
 
-## How tool gating works
+## How Tool Gating Works
 
 For model-invoked tools, `tool_call` is the only pre-execution decision point
 that sees arguments — pi's `--tools`, `--exclude-tools`, `--no-tools` and
 runtime `setActiveTools` are all applied at tool-registry construction, never
 per call. The user's own inline shell takes a different path and is gated
-separately; see [Inline shell](#inline-shell).
+separately; see [Inline Shell](#inline-shell).
 
 The wire contract, pinned from both sides by tests:
 
-| Gateway response | Extension behaviour |
+| Gateway Response | Extension Behavior |
 |---|---|
 | 2xx | allow |
 | 403 with `error.type = "nemo_relay_guardrail_rejected"` | block, using `error.reason` |
@@ -135,7 +135,7 @@ The block reason reaches the model **verbatim**: pi hands it to
 as error codes — a reason that says what to do instead produces a model that
 adapts rather than one that gives up.
 
-## Argument transforms
+## Argument Transforms
 
 A Relay **request intercept** can rewrite a tool's arguments. The gateway never
 runs the tool, so the rewrite comes back in the allow response and the extension
@@ -143,10 +143,16 @@ applies it to pi's `event.input` **in place** — which is what pi documents as
 the mechanism, and is required: pi hands the same object to the tool and to
 later handlers, so replacing the reference would be discarded.
 
-| Response body | Meaning |
+| Response Body | Meaning |
 |---|---|
 | `{}` | Allow, arguments unchanged. Every non-gated hook, and any `tool_call` no intercept rewrote |
 | `{"tool_call": {"tool_call_id": "…", "input": {…}}}` | Allow, but execute *these* arguments |
+
+`tool_call_id` is **echoed, and checked**: the extension applies a transform only
+when the id is a string equal to the call it just posted. An envelope carrying
+`input` under a missing, non-string, or different id is refused rather than
+applied to whichever call happens to be open — and a refusal blocks, the same as
+a shape violation does.
 
 ⚠️ **The rewrite is constrained, not validated.** pi validates arguments
 *before* the `tool_call` hook and never re-validates — its own types say "no
@@ -183,7 +189,7 @@ the transform existed to prevent. This is a different axis from
 `NEMO_RELAY_PI_FAIL`, which governs an unreachable gateway rather than one that
 answered with something unusable.
 
-## Inline shell
+## Inline Shell
 
 pi's bang prefix runs a command without going through the tool registry:
 `!git status` runs it and shows the model the output, `!!git status` runs it and
@@ -205,7 +211,7 @@ both**; a rule written only for `bash` does not gate the bang prefix.
 | `cwd` | pi's working directory for the command |
 | `exclude_from_context` | `true` for the `!!` form, whose output the model never sees |
 
-### The refusal shape
+### The Refusal Shape
 
 pi gives `user_bash` no block-and-reason contract — there is no `{block,
 reason}` here — so a refusal has to be a **synthetic failed command result**,
@@ -220,16 +226,16 @@ which pi records exactly as if the command had run:
 
 `NEMO_RELAY_PI_FAIL` governs this path too: a gateway that cannot be reached
 allows the command by default, and refuses it under `closed` with a reason that
-says explicitly that it is an infrastructure fault rather than a judgement.
+says explicitly that it is an infrastructure fault rather than a judgment.
 
 **A rewritten command is refused, not run.** pi's `user_bash` result can replace
 the *result* or the execution backend, but never the command — both call sites
 pass the original text straight on to `executeBash` and read nothing back out of
 the event. So a request intercept that rewrites an inline command cannot be
-honoured, and the command is refused rather than run unmodified, on the same
+honored, and the command is refused rather than run unmodified, on the same
 rule the tool path applies to a transform it cannot apply safely.
 
-### Limits worth knowing
+### Limits Worth Knowing
 
 - **The gate decides; it does not observe.** pi has no completion hook for
   inline shell, so on an allow the span closes immediately: it measures the
@@ -250,7 +256,7 @@ rule the tool path applies to a transform it cannot apply safely.
   component *after* the hook resolves, so a slow gateway shows nothing at all
   until `NEMO_RELAY_PI_TIMEOUT_MS` expires. Keep that timeout short.
 
-## Model redirection
+## Model Redirection
 
 pi resolves a base URL per model from a generated catalog, so there is no flag or
 environment variable to point it at the gateway. The extension does it directly:
@@ -279,6 +285,7 @@ outcome as a `model_redirect` mark so a trace without LLM spans explains itself.
 | Gateway forwards somewhere else | Skipped, `upstream-mismatch` |
 | Model's API has no gateway route (Bedrock, Azure OpenAI Responses, Google, Google Vertex, Mistral, OpenAI Codex, Radius) | Skipped, `unserviceable-api` |
 | Launched outside `nemo-relay run --agent pi`, so the upstream is unknown | Skipped, `unknown-upstream` — set `NEMO_RELAY_PI_REDIRECT=force` to override |
+| Another model of the same provider targets an endpoint the gateway does not front | Skipped, `provider-mixed-endpoints` — the registration is provider-wide, so point both upstreams at that provider |
 
 `nemo-relay run --agent pi` sets the two upstream variables for you. Running pi
 by hand against a standalone gateway means setting them yourself, or forcing.
@@ -291,7 +298,7 @@ above do not. Count from `builtinProviders()` rather than from the 38 files in
 `providers/data/`: Radius is a purely dynamic provider with no static catalog
 entry, so a file count loses it.
 
-## Hook mapping
+## Hook Mapping
 
 pi's lifecycle is `session -> agent run -> turn -> message | tool execution`.
 Two shapes make a naive mapping wrong.
@@ -331,7 +338,7 @@ gateway; neither is worth it here.
 concurrently, so `tool_execution_end` arrives out of submission order. All
 per-call state is keyed by `toolCallId`, the only correlator pi provides.
 
-| pi hook | Forwarded as | Note |
+| pi Hook | Forwarded As | Note |
 |---|---|---|
 | `session_start` / `session_shutdown` | session boundary | **Not** `agent_start`/`agent_end` — those repeat on re-entry. `session_shutdown` is ignored for `reason: "reload"`, which continues the same session |
 | `agent_start` / `agent_end` | run-level marks | Carry `attempt_index`; not a run boundary. Recorded on the session scope, not inside a turn |
@@ -345,7 +352,7 @@ per-call state is keyed by `toolCallId`, the only correlator pi provides.
 | `tool_call` | tool start, and the gate | The only blocking hook. Carries `attempt_index`, `turn_seq` |
 | `tool_execution_end` | tool end | For **every** outcome, including blocked. Carries `attempt_index`, `turn_seq` |
 | `tool_execution_start` | *not forwarded* | Registered, but only to remember a tool name for the matching end: it fires before validation and for calls that never execute |
-| `user_bash` | tool start, and the second gate | The bang prefix, which never reaches the tool registry. Gated under the tool name `user_bash` — see [Inline shell](#inline-shell) |
+| `user_bash` | tool start, and the second gate | The bang prefix, which never reaches the tool registry. Gated under the tool name `user_bash` — see [Inline Shell](#inline-shell) |
 | *(synthesized)* `user_bash_end` | tool end | pi reports no completion for inline shell, so the extension closes the span itself |
 
 `tool_result` is deliberately unused: it does not fire for blocked calls, and in
@@ -357,7 +364,7 @@ is recorded on the session scope rather than opening an empty turn to hold it.
 Codex and Claude Code report only `Stop`, so their turns stay lazily opened by
 the first event of the turn.
 
-## What is not represented
+## What Is Not Represented
 
 **Tool results are truncated at 2000 characters** before they are forwarded, with
 the overflow replaced by a `... [truncated N chars]` suffix. The gateway
@@ -415,11 +422,11 @@ uncaught exception do not.
 **LLM spans, when redirection is skipped.** They are present whenever the
 gateway fronts the endpoint the active model would otherwise have called, and
 absent otherwise — the `model_redirect` mark in the trace names which it was and
-why. See [Model redirection](#model-redirection).
+why. See [Model Redirection](#model-redirection).
 
 **The outcome of an inline shell command.** pi reports no completion for the bang
 prefix, so the gate records the decision, not the command. See
-[Inline shell](#inline-shell).
+[Inline Shell](#inline-shell).
 
 ## Development
 

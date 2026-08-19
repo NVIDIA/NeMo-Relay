@@ -135,11 +135,11 @@ describe('applying the transform', () => {
 describe('the refusal reason', () => {
   // pi hands the reason to the model verbatim, so it has to read as guidance and must not look
   // like the model did something wrong.
-  it('names the tool, the cause, and that it is not a judgement of the request', () => {
+  it('names the tool, the cause, and that it is not a judgment of the request', () => {
     const reason = refusalReason('read', 'input added sudo');
     assert.match(reason, /read/);
     assert.match(reason, /input added sudo/);
-    assert.match(reason, /not a judgement about your request/);
+    assert.match(reason, /not a judgment about your request/);
     assert.match(reason, /blocked rather than run with the original/);
   });
 });

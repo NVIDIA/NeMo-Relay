@@ -11,8 +11,23 @@
  * on the pi package, which matters because pi ships breaking changes through
  * *minor* releases and has no major-release channel.
  *
- * Re-verify these signatures against the pinned pi version before relying on
- * them; a silent shape change would show up as missing spans, not a type error.
+ * Unlike OpenClaw, pi *does* publish these declarations -- `ToolCallEvent`,
+ * `ToolCallEventResult`, `ExtensionAPI` and `ProviderConfig` all come out of
+ * `@earendil-works/pi-coding-agent`'s package root. Importing them is declined on
+ * cost, not availability. That package is the entire agent -- TUI, provider
+ * stack, a wasm image codec -- and it ships an `npm-shrinkwrap.json` pinning
+ * ~140 further packages, every one of which would land in this repository's
+ * lockfile and in the Node license inventory the license-diff job walks, to type
+ * a file that erases to nothing at runtime. The shapes below are also
+ * deliberately *wider* than pi's: `toolName: string` with
+ * `input: Record<string, unknown>` accepts every member of pi's per-tool
+ * `ToolCallEvent` union, which is what lets `src/argument-transform.ts` write
+ * gateway-supplied keys without narrowing per tool.
+ *
+ * The version and commit above are the contract that keeps this in step. On a pi
+ * bump, re-read that file and re-run `just test-pi`. Re-verify these signatures
+ * before relying on them; a silent shape change would show up as missing spans,
+ * not a type error.
  */
 
 /** Fired when an agent loop starts. Carries no run identifier. */
@@ -71,7 +86,7 @@ export type SessionShutdownEvent = {
  *
  * A handler must return `undefined` here. Returning an object is how pi's API
  * spells "cancel this compaction, or replace its result", so an accidental
- * return value from an observability hook would change pi's behaviour.
+ * return value from an observability hook would change pi's behavior.
  */
 export type SessionBeforeCompactEvent = {
   type: 'session_before_compact';

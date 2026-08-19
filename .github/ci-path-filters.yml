@@ -190,9 +190,16 @@ node:
 openclaw:
   - 'integrations/openclaw/**'
 
-# The pi extension is a hook client for the CLI gateway, so its contract is
-# shared with the Rust adapter and route -- a change on either side can break
-# the other.
+# The pi extension is a hook client for the CLI gateway, so a change to the
+# adapter it posts against should re-run the extension's own suite.
+#
+# Only the adapter paths are listed, deliberately. `test-pi` is a TypeScript
+# typecheck plus Node tests against a *stub* gateway, so it cannot observe the
+# `/hooks/pi` route, the event classifier, or the session manager no matter what
+# changes there -- and `crates/cli/src/sessions/**` alone would put a full Node
+# matrix on nearly every CLI change. Those files are covered by the `rust`
+# filter, which matches every `crates/**/*.rs` file and runs the workspace tests
+# that exercise the route for real.
 pi:
   - 'crates/cli/src/agents/pi/**'
   - 'crates/cli/src/agents/shared/adapters.rs'

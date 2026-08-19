@@ -118,7 +118,7 @@ describe('inline shell gate', () => {
     const fire = load();
     // An allow, but with rewritten arguments. pi's user_bash result type can
     // replace the result or the execution backend, never the command, so the
-    // rewrite cannot be honoured.
+    // rewrite cannot be honored.
     gateway.replyWith({
       status: 200,
       payload: { tool_call: { tool_call_id: 'user-bash-0', input: { command: 'git status --short' } } },
@@ -150,7 +150,7 @@ describe('inline shell gate', () => {
     }
   });
 
-  it('fails closed on demand, and says it is an infrastructure fault rather than a judgement', async () => {
+  it('fails closed on demand, and says it is an infrastructure fault rather than a judgment', async () => {
     process.env.NEMO_RELAY_PI_FAIL = 'closed';
     process.env.NEMO_RELAY_PI_GATEWAY_URL = 'http://127.0.0.1:1';
     const fire = load();
@@ -164,7 +164,7 @@ describe('inline shell gate', () => {
       assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
       // Telling the user a policy considered and refused their command, when
       // nothing did, gives them a false premise to act on.
-      assert.match(result.result.output, /infrastructure fault, not a judgement/);
+      assert.match(result.result.output, /infrastructure fault, not a judgment/);
     } finally {
       process.env.NEMO_RELAY_PI_GATEWAY_URL = url;
     }
@@ -185,7 +185,7 @@ describe('inline shell gate', () => {
     });
     assert.ok(result?.result, 'an unreadable success must not fall through to an allow');
     assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
-    assert.match(result.result.output, /infrastructure fault, not a judgement/);
+    assert.match(result.result.output, /infrastructure fault, not a judgment/);
   });
 
   it('forwards the !! form so a policy can see the output will bypass the model', async () => {

@@ -8,7 +8,7 @@
  * exercised the handlers themselves, so the identity fields the gateway cannot
  * infer -- `attempt_index` and `turn_seq` -- were implemented and demonstrated
  * once in a live trace but never pinned. These tests pin them, plus the
- * shutdown-reason behaviour.
+ * shutdown-reason behavior.
  *
  * Run: node --test integrations/pi/test/*.test.mjs
  */
@@ -316,7 +316,7 @@ describe('compaction', () => {
   });
 
   // pi spells "cancel this compaction, or replace its result" as a returned object, so an
-  // observability handler that returned anything would change pi's behaviour.
+  // observability handler that returned anything would change pi's behavior.
   it('never returns a value that could cancel or replace pi compaction', async () => {
     const fire = load();
     await fire('session_start', { reason: 'startup' });

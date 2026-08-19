@@ -640,7 +640,7 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
 
         // An intercept rewrote the command. pi's result type can replace the
         // result or the execution backend but never the command itself, so the
-        // rewrite cannot be honoured -- and running the original would discard
+        // rewrite cannot be honored -- and running the original would discard
         // the policy decision. Refuse, and say which of the two it is.
         if (decision.kind === 'allow' && decision.body?.tool_call?.input !== undefined) {
           const reason = transformRefusalReason();

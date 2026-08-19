@@ -101,10 +101,10 @@ export function refusalResult(reason: string): BashResult {
  * pass the original string on to `executeBash`, and neither reads anything back
  * out of the event. Taking over execution to run the rewrite instead
  * would mean reimplementing pi's shell selection, command prefix and
- * process-tree cancellation, which is a behaviour change the sidecar has no
+ * process-tree cancellation, which is a behavior change the sidecar has no
  * business making.
  *
- * So the rewrite cannot be honoured, and the command is refused rather than run
+ * So the rewrite cannot be honored, and the command is refused rather than run
  * unmodified -- the same rule the tool path already applies to a transform it
  * cannot apply safely, and for the same reason: running the original would
  * silently discard a policy decision.
@@ -115,6 +115,6 @@ export function transformRefusalReason(): string {
     'execute a rewritten inline shell command -- the bang prefix runs the text you typed. The ' +
     'command was refused rather than run unmodified, because running it would ignore the policy. ' +
     'Re-run it with the change applied by hand, or ask the policy owner to gate the bash tool ' +
-    'instead. This is a configuration problem in the policy, not a judgement about the command.'
+    'instead. This is a configuration problem in the policy, not a judgment about the command.'
   );
 }
