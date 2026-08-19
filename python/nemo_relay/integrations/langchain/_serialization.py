@@ -244,6 +244,14 @@ class LangChainCodec(LlmCodec):
         for message in annotated.messages:
             provider_tool_calls = None
             if message.get("role") == "assistant":
+                for index, (original_message, original_tool_calls) in enumerate(original_provider_tool_calls):
+                    if index in matched_original_messages or message != original_message:
+                        continue
+                    matched_original_messages.add(index)
+                    provider_tool_calls = original_tool_calls
+                    break
+
+            if message.get("role") == "assistant" and provider_tool_calls is None:
                 message_without_tool_calls = {key: value for key, value in message.items() if key != "tool_calls"}
                 for index, (original_message, original_tool_calls) in enumerate(original_provider_tool_calls):
                     original_without_tool_calls = {

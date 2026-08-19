@@ -342,6 +342,72 @@ def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload_after_p
     }
 
 
+def test_langchain_request_codec_preserves_reordered_provider_tool_calls():
+    from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    first_provider_tool_calls = [
+        {
+            "id": "call-one",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+            "provider_field": "first",
+        }
+    ]
+    second_provider_tool_calls = [
+        {
+            "id": "call-two",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "NY"}'},
+            "provider_field": "second",
+        }
+    ]
+    request = nemo_relay.LLMRequest(
+        {},
+        {
+            "messages": messages_to_dict(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call-one",
+                                "name": "get_weather",
+                                "args": {"city": "SF"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={"tool_calls": first_provider_tool_calls},
+                    ),
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call-two",
+                                "name": "get_weather",
+                                "args": {"city": "NY"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={"tool_calls": second_provider_tool_calls},
+                    ),
+                ]
+            )
+        },
+    )
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    annotated.messages = list(reversed(annotated.messages))
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
+
+    assert [message.additional_kwargs["tool_calls"] for message in rebuilt] == [
+        second_provider_tool_calls,
+        first_provider_tool_calls,
+    ]
+
+
 def test_model_call_intercept_rebuilds_provider_tool_calls(
     nemo_relay_middleware: NemoRelayMiddleware,
     model_request: ModelRequest[Any],
