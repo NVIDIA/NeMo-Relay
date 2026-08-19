@@ -12,6 +12,15 @@ use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 
 use crate::codec::resolve;
 
+pub(crate) fn is_valid_event_metadata_attribute_key(key: &str) -> bool {
+    key.split('.').all(|segment| {
+        !segment.is_empty()
+            && segment.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+    })
+}
+
 /// Core-only normalized LLM accessors for ATOF events.
 ///
 /// These helpers use built-in codec resolution, so they live in the runtime

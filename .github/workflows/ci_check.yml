@@ -202,7 +202,7 @@ jobs:
           uv tool install pre-commit==${{ steps.ci-config.outputs.pre_commit_version }}
           FLOW_CI_UV_SYNC_EXTRA_ARGS=()
           if [[ "$PYTHON_INTEGRATION_LANGCHAIN" == "true" ]]; then
-            FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra langchain --extra langgraph --extra deepagents)
+            FLOW_CI_UV_SYNC_EXTRA_ARGS+=(--extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents)
           fi
 
           uv sync --inexact --no-install-project --no-install-package nemo-relay "${FLOW_CI_UV_SYNC_EXTRA_ARGS[@]}"

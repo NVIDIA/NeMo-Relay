@@ -1442,7 +1442,7 @@ test-python-langchain:
     {{ bash_helpers }}
     pytest_cmd=(pytest)
     cd "$NEMO_RELAY_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents
     activate_project_venv
     export_uv_python_runtime
     python_executable="$(project_python_executable)"

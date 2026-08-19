@@ -71,6 +71,7 @@ function openTelemetryEndpoint(config) {
     headers: {},
     header_env: {},
     resource_attributes: {},
+    promote_metadata_prefixes: [],
     ...config,
   };
 }

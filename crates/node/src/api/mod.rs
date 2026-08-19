@@ -298,7 +298,8 @@ fn build_otel_config(
                 .mark_exclude_names
                 .unwrap_or_else(nemo_relay::observability::default_mark_exclude_names),
         )
-        .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?);
+        .with_attribute_mappings(parse_attribute_mappings(options.attribute_mappings)?)
+        .with_promote_metadata_prefixes(options.promote_metadata_prefixes.unwrap_or_default());
     Ok(config)
 }
 
@@ -4560,6 +4561,8 @@ pub struct OpenTelemetryConfig {
     pub mark_exclude_names: Option<Vec<String>>,
     /// Attribute aliases for full and OpenInference projections.
     pub attribute_mappings: Option<Json>,
+    /// Literal Event metadata prefixes copied to top-level OTLP attributes.
+    pub promote_metadata_prefixes: Option<Vec<String>>,
 }
 
 /// OpenTelemetry-backed event subscriber.

@@ -3,6 +3,7 @@
 
 //! End-to-end coverage for the Rust gRPC worker SDK service.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
@@ -121,6 +122,11 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             .supported_surfaces
             .contains(&(RegistrationSurface::LlmStreamExecutionIntercept as i32))
     );
+    assert!(
+        handshake
+            .supported_surfaces
+            .contains(&(RegistrationSurface::EventMetadataInjector as i32))
+    );
 
     let bad_health = client
         .health(Request::new(HealthRequest {
@@ -207,7 +213,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 21);
+    assert_eq!(registrations.len(), 22);
     for local_name in [
         "llm-sanitize-request",
         "llm-sanitize-response",
@@ -531,6 +537,13 @@ async fn worker_service_invokes_every_registration_surface() {
         events.lock().expect("events lock").as_slice(),
         ["subscriber-event"]
     );
+
+    let metadata = invoke_json(
+        &mut client,
+        event_invoke_surface("event-metadata", RegistrationSurface::EventMetadataInjector),
+    )
+    .await;
+    assert_eq!(metadata, json!({"worker.event_name": "subscriber-event"}));
 
     let mark_fields = invoke_json(
         &mut client,
@@ -1813,6 +1826,12 @@ impl WorkerPlugin for SurfacePlugin {
                 .lock()
                 .expect("events lock")
                 .push(event.name().into());
+        });
+        ctx.register_event_metadata_injector("event-metadata", 1, |event| async move {
+            Ok(BTreeMap::from([(
+                "worker.event_name".into(),
+                json!(event.name()),
+            )]))
         });
         ctx.register_mark_sanitize_guardrail("event-sanitize", 1, |event, mut fields| {
             let event_name = event.name().to_owned();

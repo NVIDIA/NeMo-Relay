@@ -72,6 +72,7 @@ export interface OpenTelemetryEndpointConfig {
   mark_projection?: 'inherit' | 'event' | 'tool';
   mark_exclude_names?: string[];
   attribute_mappings?: Array<{ key: string; alias: string }>;
+  promote_metadata_prefixes?: string[];
   transport?: 'http_binary' | 'grpc';
   headers?: Record<string, string>;
   header_env?: Record<string, string>;

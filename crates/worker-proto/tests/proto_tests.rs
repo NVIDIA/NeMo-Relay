@@ -22,6 +22,7 @@ fn worker_protocol_identifier_is_stable() {
 #[test]
 fn registration_surface_values_are_stable() {
     assert_eq!(RegistrationSurface::Subscriber as i32, 1);
+    assert_eq!(RegistrationSurface::EventMetadataInjector as i32, 2);
     assert_eq!(RegistrationSurface::ToolSanitizeRequestGuardrail as i32, 10);
     assert_eq!(
         RegistrationSurface::ToolSanitizeResponseGuardrail as i32,
