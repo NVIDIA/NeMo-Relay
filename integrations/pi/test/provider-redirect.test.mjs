@@ -66,6 +66,22 @@ describe('redirect decision', () => {
     assert.match(decision.reason, /wrong provider/);
   });
 
+  // pi's `modelRegistry.getAll()` returns the selected model too, so with a real pi
+  // runtime a model is always one of its own siblings. While the whole-provider scan
+  // ran first, this -- the ordinary mismatch, and the commonest outcome there is --
+  // was reported as `provider-mixed-endpoints`, naming the selected model as the
+  // sibling blocking itself. Same decision; the code has to be the actionable one.
+  it('reports an ordinary mismatch as itself when the model is its own sibling', () => {
+    const decision = decideRedirect(
+      nvidiaModel,
+      matchConfig({ openaiUpstream: 'https://api.openai.com/v1' }),
+      none,
+      [nvidiaModel],
+    );
+    assert.equal(decision.kind, 'skip');
+    assert.equal(decision.code, 'upstream-mismatch');
+  });
+
   it('picks the upstream matching the model’s API family, not the other one', () => {
     // Anthropic model, anthropic upstream matches, openai upstream does not.
     const decision = decideRedirect(
@@ -80,6 +96,19 @@ describe('redirect decision', () => {
   it('refuses an API the gateway has no route for', () => {
     for (const api of ['google-generative-ai', 'bedrock-converse-stream', 'mistral-conversations']) {
       const decision = decideRedirect({ ...nvidiaModel, api }, matchConfig(), none);
+      assert.equal(decision.kind, 'skip', api);
+      assert.equal(decision.code, 'unserviceable-api', api);
+    }
+  });
+
+  // `model.api` is a free-form string in pi, so the serviceable-API lookup must not
+  // answer for names every JavaScript object inherits. On an object-literal map
+  // `constructor` and `__proto__` read back truthy, and this model -- whose endpoint
+  // happens to be the anthropic upstream -- was redirected into a route the gateway
+  // does not have, with the inherited value rendered into the reason string.
+  it('refuses an API named after an inherited object property', () => {
+    for (const api of ['constructor', 'toString', 'valueOf', '__proto__']) {
+      const decision = decideRedirect({ ...anthropicModel, api }, matchConfig(), none);
       assert.equal(decision.kind, 'skip', api);
       assert.equal(decision.code, 'unserviceable-api', api);
     }

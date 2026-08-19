@@ -248,9 +248,11 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
     redirect ??= redirectConfigFromEnv(active.url);
 
     // The join key is baked into the registration, so it cannot follow a session
-    // replacement on its own: `/new`, `/resume` and `/fork` keep this runtime
-    // alive and give it a new session id, leaving every redirected provider
-    // stamping the old one onto its requests. Re-register when it moves.
+    // replacement on its own. pi `v0.84.0` tears the extension runtime down and
+    // builds a fresh one for `/new`, `/resume` and `/fork`, so this branch does not
+    // fire there -- it is kept for a host that reuses one runtime across session
+    // ids, which would otherwise leave every redirected provider stamping the old
+    // one onto its requests. Re-register when it moves.
     const sessionKey = safeSessionId(ctx);
     if (registeredSessionKey !== null && registeredSessionKey !== sessionKey) {
       redirectedProviders.clear();

@@ -29,6 +29,9 @@ import { createServer } from 'node:http';
  * post the block came from.
  *
  * @param gatedHook the `hook_event_name` whose reply `replyWith` controls
+ *
+ * A reply is `{status, payload, delayMs}`, or `{status, raw, delayMs}` to send a
+ * body verbatim -- which is the only way to reach the unreadable-success path.
  */
 export function stubGateway(gatedHook) {
   const posts = [];
@@ -42,10 +45,13 @@ export function stubGateway(gatedHook) {
       const parsed = JSON.parse(body || '{}');
       posts.push(parsed);
       const gated = gatedHook !== undefined && parsed.hook_event_name === gatedHook;
-      const { status, payload, delayMs } = gated ? reply : { status: 200, payload: {} };
+      const { status, payload, raw, delayMs } = gated ? reply : { status: 200, payload: {} };
       const send = () => {
         res.writeHead(status, { 'content-type': 'application/json' });
-        res.end(JSON.stringify(payload ?? {}));
+        // `raw` lets a case put a body on the wire that `JSON.parse` cannot read.
+        // The client treats an unreadable success as a fault rather than an empty
+        // allow, and nothing `JSON.stringify` produces can reach that branch.
+        res.end(raw ?? JSON.stringify(payload ?? {}));
       };
       if (delayMs) setTimeout(send, delayMs);
       else send();

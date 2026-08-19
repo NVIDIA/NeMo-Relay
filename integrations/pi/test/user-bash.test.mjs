@@ -170,6 +170,24 @@ describe('inline shell gate', () => {
     }
   });
 
+  // A 2xx body that does not parse may have carried a required transform, so it
+  // cannot be read as an empty allow -- that runs the original command and discards
+  // the policy. Only a raw body reaches this branch; anything `JSON.stringify`
+  // produces parses, which is why the adverse-condition sweep below could not see it.
+  it('treats a success body it cannot read as a fault, not an empty allow', async () => {
+    process.env.NEMO_RELAY_PI_FAIL = 'closed';
+    gateway.replyWith({ status: 200, raw: '{ truncated' });
+    const fire = load();
+    const result = await fire('user_bash', {
+      command: 'ls',
+      excludeFromContext: false,
+      cwd: '/work',
+    });
+    assert.ok(result?.result, 'an unreadable success must not fall through to an allow');
+    assert.equal(result.result.exitCode, REFUSED_EXIT_CODE);
+    assert.match(result.result.output, /infrastructure fault, not a judgement/);
+  });
+
   it('forwards the !! form so a policy can see the output will bypass the model', async () => {
     const fire = load();
     await fire('user_bash', { command: 'cat .env', excludeFromContext: true, cwd: '/work' });
@@ -186,7 +204,7 @@ describe('inline shell gate', () => {
       ['gateway error', { status: 500, payload: { error: { message: 'kaboom' } } }, url],
       ['403 without the guardrail marker', { status: 403, payload: { error: {} } }, url],
       ['malformed rejection body', { status: 403, payload: 'not-an-object' }, url],
-      ['unparseable success body', { status: 200, payload: undefined }, url],
+      ['unparseable success body', { status: 200, raw: '{ truncated' }, url],
       ['unreachable gateway', { status: 200, payload: {} }, 'http://127.0.0.1:1'],
       // pi builds its terminal component only after this handler resolves, so a gateway
       // that never answers shows the user nothing at all until the timeout fires.

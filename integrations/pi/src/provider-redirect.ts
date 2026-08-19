@@ -32,12 +32,22 @@
  * endpoint and produce no LLM spans, which is the honest outcome.
  */
 
-/** The API families the gateway serves, mapped to the upstream that backs each. */
-const SERVICEABLE_APIS: Record<string, 'openai' | 'anthropic'> = {
-  'openai-completions': 'openai',
-  'openai-responses': 'openai',
-  'anthropic-messages': 'anthropic',
-};
+/**
+ * The API families the gateway serves, mapped to the upstream that backs each.
+ *
+ * A `Map` rather than an object literal because pi does not constrain this key:
+ * `api` is `KnownApi | (string & {})` and reaches us from models.json, remote
+ * catalogs and other extensions. On an object literal an `api` of `constructor`
+ * or `__proto__` resolves through the prototype chain to something truthy, so
+ * the unserviceable-API guard -- whose whole job is to keep a model the gateway
+ * cannot route out of the gateway -- would not fire, and the model was scored
+ * against the Anthropic upstream instead.
+ */
+const SERVICEABLE_APIS = new Map<string, 'openai' | 'anthropic'>([
+  ['openai-completions', 'openai'],
+  ['openai-responses', 'openai'],
+  ['anthropic-messages', 'anthropic'],
+]);
 
 export type RedirectConfig = {
   /** Gateway base URL; the root, never root + `/v1`. */
@@ -92,7 +102,7 @@ export type RedirectDecision =
  * to. Applied to every sibling because the registration is provider-wide.
  */
 function isSafeToRedirect(model: RedirectModel, config: RedirectConfig): boolean {
-  const family = SERVICEABLE_APIS[model.api];
+  const family = SERVICEABLE_APIS.get(model.api);
   if (!family) return false;
   const upstream = family === 'openai' ? config.openaiUpstream : config.anthropicUpstream;
   if (!upstream) return false;
@@ -164,7 +174,7 @@ export function decideRedirect(
     };
   }
 
-  const family = SERVICEABLE_APIS[model.api];
+  const family = SERVICEABLE_APIS.get(model.api);
   if (!family) {
     // Seven of pi's 39 built-in providers speak an API the gateway has no
     // route for: Bedrock, Azure OpenAI Responses, Google, Google Vertex,
@@ -210,6 +220,23 @@ export function decideRedirect(
     };
   }
 
+  // Ahead of the sibling scan, deliberately. pi's `modelRegistry.getAll()` returns
+  // the selected model too, so it is one of its own siblings -- and while the scan
+  // ran first, an ordinary endpoint mismatch was reported as
+  // `provider-mixed-endpoints`, naming the selected model as the sibling that
+  // blocked it. Same decision either way; this is the code an operator can act on.
+  if (normalizeBaseUrl(upstream) !== normalizeBaseUrl(model.baseUrl)) {
+    return {
+      kind: 'skip',
+      code: 'upstream-mismatch',
+      provider: model.provider,
+      api: model.api,
+      reason:
+        `model targets ${model.baseUrl} but the gateway forwards ${family} traffic to ${upstream}; ` +
+        `redirecting would send the request to the wrong provider`,
+    };
+  }
+
   // `registerProvider(name, {baseUrl})` rewrites the URL of EVERY model of that
   // provider, so a decision made from the selected model alone is a decision made
   // on behalf of its siblings. Several pi 0.84 providers mix API families at
@@ -229,18 +256,6 @@ export function decideRedirect(
         `redirecting ${model.provider} would also move its ${unsafe.api} models, and ` +
         `${unsafe.id} targets ${unsafe.baseUrl}, which the gateway does not front; ` +
         `point both upstreams at ${model.provider}, or accept no LLM spans for it`,
-    };
-  }
-
-  if (normalizeBaseUrl(upstream) !== normalizeBaseUrl(model.baseUrl)) {
-    return {
-      kind: 'skip',
-      code: 'upstream-mismatch',
-      provider: model.provider,
-      api: model.api,
-      reason:
-        `model targets ${model.baseUrl} but the gateway forwards ${family} traffic to ${upstream}; ` +
-        `redirecting would send the request to the wrong provider`,
     };
   }
 

@@ -666,7 +666,8 @@ describe('the session join key on redirected providers', () => {
   });
 
   // The key is baked in at registration, so it cannot follow a replacement on its
-  // own -- `/new`, `/resume` and `/fork` keep this runtime alive with a new id.
+  // own. pi `v0.84.0` rebuilds the runtime for `/new`, `/resume` and `/fork`, so
+  // this pins the defence rather than a path pi takes today.
   it('is refreshed when the session is replaced under the same runtime', async () => {
     const { fire, registrations, setSession } = loadRecording('sess-one');
     await fire('session_start', { reason: 'startup' });
