@@ -874,6 +874,57 @@ def invalid(event, fields):
 }
 
 #[test]
+fn event_metadata_injector_wrapper_covers_sync_async_and_invalid_results() {
+    use nemo_relay::api::event::{BaseEvent, MarkEvent};
+
+    let _python = crate::test_support::init_python_test();
+    let (_context_module, sync_injector, async_injector, invalid_injector) = Python::attach(|py| {
+        let context_module = install_event_sanitizer_context_module(py);
+        let module = load_module(
+            py,
+            r#"
+import asyncio
+
+def inject(event):
+    return {"python.sync": event.name}
+
+async def inject_async(event):
+    await asyncio.sleep(0)
+    return {"python.async": True}
+
+def invalid(event):
+    return [event.name]
+"#,
+        );
+        (
+            context_module,
+            wrap_py_event_metadata_injector_fn(module.getattr("inject").unwrap().unbind()),
+            wrap_py_event_metadata_injector_fn(module.getattr("inject_async").unwrap().unbind()),
+            wrap_py_event_metadata_injector_fn(module.getattr("invalid").unwrap().unbind()),
+        )
+    });
+    let event = Arc::new(Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("checkpoint").build(),
+        None,
+        None,
+    )));
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    let sync_values = runtime.block_on(sync_injector(event.clone())).unwrap();
+    assert_eq!(sync_values.get("python.sync"), Some(&json!("checkpoint")));
+
+    let async_values = runtime.block_on(async_injector(event.clone())).unwrap();
+    assert_eq!(async_values.get("python.async"), Some(&json!(true)));
+
+    let invalid = runtime.block_on(invalid_injector(event)).unwrap_err();
+    assert!(
+        invalid
+            .to_string()
+            .contains("invalid event metadata injector result")
+    );
+}
+
+#[test]
 fn awaitable_middleware_wrappers_cover_success_and_failure() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {

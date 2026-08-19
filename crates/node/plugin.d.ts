@@ -211,6 +211,12 @@ export interface PluginContext {
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
    */
   registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
+  /** Register an event metadata injector for this component. */
+  registerEventMetadataInjector(
+    name: string,
+    priority: number,
+    callback: (event: Json) => Record<string, Json> | Promise<Record<string, Json>>,
+  ): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,
