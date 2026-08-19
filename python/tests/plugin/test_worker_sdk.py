@@ -532,6 +532,9 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def subscriber(event: Json) -> None:
             await ctx.runtime.emit_mark("tests.subscriber", event)
 
+        async def event_metadata(event: Json) -> dict[str, Json]:
+            return {"worker.event_name": event["name"]}
+
         async def mark_sanitize(event: Json, fields: Json) -> Json:
             return {**fields, "data": {"sanitized": f"mark:{event['name']}"}, "metadata": None}
 
@@ -589,6 +592,7 @@ class AllSurfacesPlugin(WorkerPlugin):
                 yield _tag(chunk, "llm_stream_execution")
 
         ctx.register_subscriber("subscriber", subscriber)
+        ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
         ctx.register_scope_sanitize_end_guardrail("scope_end_sanitize", scope_end_sanitize, priority=3)
@@ -632,6 +636,7 @@ def test_generated_proto_matches_worker_contract():
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["activation_id"].number == 1
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
     assert pb.SUBSCRIBER == 1
+    assert pb.EVENT_METADATA_INJECTOR == 2
     assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
@@ -695,6 +700,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     ]
     assert registrations == [
         ("subscriber", pb.SUBSCRIBER, 0, False),
+        ("event_metadata", pb.EVENT_METADATA_INJECTOR, 1, False),
         ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
         ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
         ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
@@ -1446,6 +1452,18 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
 
             ctx.register_tool_request_intercept("fail", fail)
 
+    class FailingEventMetadataPlugin(WorkerPlugin):
+        plugin_id = "tests.failing_event_metadata"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def fail(event: Json) -> dict[str, Json]:
+                del event
+                raise RuntimeError("event metadata boom")
+
+            ctx.register_event_metadata_injector("fail", fail)
+
     validate_service = _service(FailingValidatePlugin(), RecordingHostStub())
     validate = await validate_service.Validate(
         _validate_request(plugin_id="tests.failing_validate"),
@@ -1467,6 +1485,19 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
     response = await invoke_service.Invoke(_tool_request("fail", pb.TOOL_REQUEST_INTERCEPT, {}), AbortContext())
     assert response.WhichOneof("result") == "error"
     assert "invoke boom" in response.error.message
+
+    event_service = _service(FailingEventMetadataPlugin(), RecordingHostStub())
+    await _register(event_service, plugin_id="tests.failing_event_metadata")
+    event_response = await event_service.Invoke(
+        _invoke_request(
+            "fail",
+            pb.EVENT_METADATA_INJECTOR,
+            event=_json_envelope(EVENT_SCHEMA, {"name": "event"}),
+        ),
+        AbortContext(),
+    )
+    assert event_response.WhichOneof("result") == "error"
+    assert "event metadata boom" in event_response.error.message
 
 
 async def test_register_is_idempotent_and_rejects_changed_component_config():
@@ -1595,6 +1626,17 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert mark_request.name == "tests.subscriber"
     assert mark_request.scope.scope_stack_id == "invoke-stack"
     assert mark_request.scope.parent_scope_id == "parent-scope"
+
+    event_metadata = await service.Invoke(
+        _invoke_request(
+            "event_metadata",
+            pb.EVENT_METADATA_INJECTOR,
+            event=_json_envelope(EVENT_SCHEMA, {"name": "metadata-event"}),
+        ),
+        AbortContext(),
+    )
+    assert event_metadata.WhichOneof("result") == "json"
+    assert _envelope_value(event_metadata.json.value) == {"worker.event_name": "metadata-event"}
 
     tool_sanitize_request = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL)
     assert tool_sanitize_request["tag"] == "sanitize_lookup"
@@ -3162,6 +3204,7 @@ def _llm_stream_next(runtime: PluginRuntime, request: Json) -> AsyncIterator[Jso
 def _all_expected_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
+        pb.EVENT_METADATA_INJECTOR,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

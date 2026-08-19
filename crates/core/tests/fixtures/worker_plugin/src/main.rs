@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
+
 use nemo_relay_worker::{
     ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest,
     METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType, PendingMarkSpec,
@@ -59,6 +61,37 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             return Ok(());
         }
 
+        let event_metadata_injector_error = fixture_flag(config, "event_metadata_injector_error");
+        let exit_in_event_metadata_injector =
+            fixture_flag(config, "exit_in_event_metadata_injector");
+        ctx.register_event_metadata_injector(
+            "fixture_event_metadata_injector",
+            0,
+            move |event| async move {
+                if exit_in_event_metadata_injector {
+                    std::process::exit(44);
+                }
+                if event_metadata_injector_error {
+                    return Err(WorkerSdkError::Callback(
+                        "fixture Event metadata injector error requested".into(),
+                    ));
+                }
+                let mut additions = BTreeMap::new();
+                if event
+                    .name()
+                    .starts_with("external-plugin-event-metadata-injection")
+                {
+                    additions.insert(
+                        "external.injector.transport".into(),
+                        json!("rust_grpc_worker"),
+                    );
+                }
+                Ok(additions)
+            },
+        );
+        if fixture_flag(config, "event_metadata_injector_only") {
+            return Ok(());
+        }
         let runtime = ctx
             .runtime()
             .ok_or_else(|| WorkerSdkError::Callback("runtime handle missing".into()))?;
@@ -230,12 +263,13 @@ fn register_fixture_tool_hooks(
                 .await?;
             let mut result = result;
             result.result = mark_json(result.result, "worker_plugin_tool_execution");
-            Ok(ToolExecutionInterceptOutcome::from(result)
-            .with_pending_mark(
-                PendingMarkSpec::builder()
-                    .name("fixture.worker.tool_execution.mark")
-                    .build(),
-            ))
+            Ok(
+                ToolExecutionInterceptOutcome::from(result).with_pending_mark(
+                    PendingMarkSpec::builder()
+                        .name("fixture.worker.tool_execution.mark")
+                        .build(),
+                ),
+            )
         },
     );
 }

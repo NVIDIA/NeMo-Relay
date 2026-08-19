@@ -52,6 +52,7 @@ Public data types:
 
 Public callback aliases:
     SubscriberCallback: Event subscriber callback.
+    EventMetadataInjectorCallback: Event metadata injector callback.
     EventSanitizeCallback: Mark or scope event sanitizer callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
@@ -82,6 +83,7 @@ from ._api import (
     DataSchema,
     DiagnosticLevel,
     Event,
+    EventMetadataInjectorCallback,
     EventSanitizeCallback,
     EventSanitizeFields,
     Json,
@@ -136,6 +138,7 @@ __all__ = [
     "DataSchema",
     "DiagnosticLevel",
     "Event",
+    "EventMetadataInjectorCallback",
     "EventSanitizeCallback",
     "EventSanitizeFields",
     "Json",

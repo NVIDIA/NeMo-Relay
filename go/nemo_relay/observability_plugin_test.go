@@ -75,6 +75,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		NewObservabilityOpenTelemetryEndpointConfig(OpenTelemetryTypeFull, "http://localhost:4318/v1/traces"),
 	}
 	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
+	otel.Endpoints[0].PromoteMetadataPrefixes = []string{"nv."}
 	maxQueueSize := uint64(4096)
 	maxExportBatchSize := uint64(256)
 	scheduledDelayMillis := uint64(750)
@@ -161,6 +162,10 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	}
 	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {
 		t.Fatalf("expected OpenTelemetry header_env in serialized config: %#v", wrapped.Config)
+	}
+	promotePrefixes := otelEndpoints[0].(map[string]any)["promote_metadata_prefixes"].([]any)
+	if len(promotePrefixes) != 1 || promotePrefixes[0] != "nv." {
+		t.Fatalf("expected OpenTelemetry metadata promotion prefixes in serialized config: %#v", wrapped.Config)
 	}
 	if otelEndpoints[0].(map[string]any)["max_queue_size"] != float64(4096) ||
 		otelEndpoints[0].(map[string]any)["max_export_batch_size"] != float64(256) ||

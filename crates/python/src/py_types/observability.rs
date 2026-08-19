@@ -490,6 +490,8 @@ pub struct PyOpenTelemetryConfig {
     pub(crate) headers: HashMap<String, String>,
     pub(crate) resource_attributes: HashMap<String, String>,
     pub(crate) attribute_mappings: Vec<nemo_relay::observability::OtlpAttributeMapping>,
+    #[pyo3(get, set)]
+    pub(crate) promote_metadata_prefixes: Vec<String>,
 }
 
 impl PyOpenTelemetryConfig {
@@ -534,10 +536,15 @@ impl PyOpenTelemetryConfig {
                 .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         nemo_relay::observability::validate_attribute_mappings(&self.attribute_mappings)
             .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        nemo_relay::observability::validate_metadata_promotion_prefixes(
+            &self.promote_metadata_prefixes,
+        )
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         Ok(config
             .with_mark_projection(mark_projection)
             .with_mark_exclude_names(self.mark_exclude_names.clone())
-            .with_attribute_mappings(self.attribute_mappings.clone()))
+            .with_attribute_mappings(self.attribute_mappings.clone())
+            .with_promote_metadata_prefixes(self.promote_metadata_prefixes.clone()))
     }
 }
 
@@ -559,6 +566,7 @@ impl PyOpenTelemetryConfig {
             headers: HashMap::new(),
             resource_attributes: HashMap::new(),
             attribute_mappings: Vec::new(),
+            promote_metadata_prefixes: Vec::new(),
         }
     }
 

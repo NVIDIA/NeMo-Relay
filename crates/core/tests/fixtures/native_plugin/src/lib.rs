@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,9 +59,40 @@ impl NativePlugin for FixtureNativePlugin {
 
     fn register(
         &mut self,
-        _plugin_config: &Map<String, Json>,
+        plugin_config: &Map<String, Json>,
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
+        let event_metadata_injector_error = plugin_config
+            .get("event_metadata_injector_error")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        ctx.register_event_metadata_injector(
+            "fixture_event_metadata_injector",
+            0,
+            move |event| async move {
+                if event_metadata_injector_error {
+                    return Err("fixture Event metadata injector error requested".into());
+                }
+                let mut additions = BTreeMap::new();
+                if event
+                    .name()
+                    .starts_with("external-plugin-event-metadata-injection")
+                {
+                    additions.insert(
+                        "external.injector.transport".into(),
+                        json!("native_dynamic_rust"),
+                    );
+                }
+                Ok(additions)
+            },
+        )?;
+        if plugin_config
+            .get("event_metadata_injector_only")
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         let runtime = ctx.runtime();
         ctx.register_subscriber("fixture_subscriber", {
             let runtime = runtime.clone();

@@ -244,6 +244,386 @@ def test_langchain_model_request_codec_round_trips_messages(model_request: Model
     assert round_tripped.messages[0].content == "hello from intercept"
 
 
+def test_langchain_request_codec_preserves_provider_tool_calls():
+    from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    provider_tool_calls = [
+        {
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+        }
+    ]
+    request = nemo_relay.LLMRequest(
+        {},
+        {
+            "messages": messages_to_dict(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call-weather",
+                                "name": "get_weather",
+                                "args": {"city": "SF"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={"tool_calls": provider_tool_calls},
+                    )
+                ]
+            )
+        },
+    )
+
+    codec = LangChainCodec()
+    encoded = codec.encode(codec.decode(request), request)
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], encoded.content["messages"]))[0]
+    assert isinstance(rebuilt, AIMessage)
+
+    assert rebuilt.tool_calls == [
+        {
+            "id": "call-weather",
+            "name": "get_weather",
+            "args": {"city": "SF"},
+            "type": "tool_call",
+        }
+    ]
+    assert rebuilt.additional_kwargs["tool_calls"] == provider_tool_calls
+
+
+def test_langchain_request_codec_preserves_chat_nvidia_tool_call_payload_after_prepending_message():
+    from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    convert_message_to_dict = pytest.importorskip("langchain_nvidia_ai_endpoints._utils").convert_message_to_dict
+    provider_tool_calls = [
+        {
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+        }
+    ]
+    request = nemo_relay.LLMRequest(
+        {},
+        {
+            "messages": messages_to_dict(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call-weather",
+                                "name": "get_weather",
+                                "args": {"city": "SF"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={"tool_calls": provider_tool_calls},
+                    )
+                ]
+            )
+        },
+    )
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    annotated.messages = [{"role": "user", "content": "Prepended by an interceptor"}, *annotated.messages]
+    encoded = codec.encode(annotated, request)
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], encoded.content["messages"]))[1]
+
+    assert convert_message_to_dict(rebuilt) == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": provider_tool_calls,
+    }
+
+
+def test_langchain_request_codec_preserves_reordered_provider_tool_calls():
+    from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    first_provider_tool_calls = [
+        {
+            "id": "call-one",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+            "provider_field": "first",
+        }
+    ]
+    second_provider_tool_calls = [
+        {
+            "id": "call-two",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "NY"}'},
+            "provider_field": "second",
+        }
+    ]
+    request = nemo_relay.LLMRequest(
+        {},
+        {
+            "messages": messages_to_dict(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call-one",
+                                "name": "get_weather",
+                                "args": {"city": "SF"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={"tool_calls": first_provider_tool_calls},
+                    ),
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "id": "call-two",
+                                "name": "get_weather",
+                                "args": {"city": "NY"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={"tool_calls": second_provider_tool_calls},
+                    ),
+                ]
+            )
+        },
+    )
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    annotated.messages = list(reversed(annotated.messages))
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))
+
+    assert [message.additional_kwargs["tool_calls"] for message in rebuilt] == [
+        second_provider_tool_calls,
+        first_provider_tool_calls,
+    ]
+
+
+def test_langchain_request_codec_rebuilds_provider_tool_calls_after_content_edit():
+    from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    request = nemo_relay.LLMRequest(
+        {},
+        {
+            "messages": messages_to_dict(
+                [
+                    AIMessage(
+                        content="sensitive content",
+                        tool_calls=[
+                            {
+                                "id": "call-weather",
+                                "name": "get_weather",
+                                "args": {"city": "SF"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={
+                            "tool_calls": [
+                                {
+                                    "id": "call-weather",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                                }
+                            ]
+                        },
+                    )
+                ]
+            )
+        },
+    )
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    annotated.messages = [{**annotated.messages[0], "content": "[redacted]"}]
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))[0]
+
+    assert isinstance(rebuilt, AIMessage)
+    assert rebuilt.additional_kwargs["tool_calls"] == [
+        {
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+        }
+    ]
+
+
+def test_langchain_request_codec_builds_provider_tool_calls_for_new_assistant():
+    from langchain_core.messages import AIMessage, HumanMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    request = nemo_relay.LLMRequest({}, {"messages": messages_to_dict([HumanMessage(content="hello")])})
+
+    codec = LangChainCodec()
+    annotated = codec.decode(request)
+    annotated.messages = [
+        *annotated.messages,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+                }
+            ],
+        },
+    ]
+    rebuilt = messages_from_dict(cast(list[dict[str, Any]], codec.encode(annotated, request).content["messages"]))[1]
+
+    assert isinstance(rebuilt, AIMessage)
+    assert rebuilt.additional_kwargs["tool_calls"] == [
+        {
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+        }
+    ]
+
+
+def test_langchain_request_codec_keeps_multi_block_tool_calls_on_first_assistant_fragment():
+    from langchain_core.messages import AIMessage, messages_from_dict, messages_to_dict
+
+    from nemo_relay.integrations.langchain._serialization import LangChainCodec
+
+    request = nemo_relay.LLMRequest(
+        {},
+        {
+            "messages": messages_to_dict(
+                [
+                    AIMessage(
+                        content=[{"type": "text", "text": "first"}, {"type": "text", "text": "second"}],
+                        tool_calls=[
+                            {
+                                "id": "call-weather",
+                                "name": "get_weather",
+                                "args": {"city": "SF"},
+                                "type": "tool_call",
+                            }
+                        ],
+                        additional_kwargs={
+                            "tool_calls": [
+                                {
+                                    "id": "call-weather",
+                                    "type": "function",
+                                    "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                                }
+                            ]
+                        },
+                    )
+                ]
+            )
+        },
+    )
+
+    codec = LangChainCodec()
+    rebuilt = messages_from_dict(
+        cast(list[dict[str, Any]], codec.encode(codec.decode(request), request).content["messages"])
+    )
+    assert all(isinstance(message, AIMessage) for message in rebuilt)
+    rebuilt_assistants = cast(list[AIMessage], rebuilt)
+
+    assert [message.tool_calls for message in rebuilt_assistants] == [
+        [{"id": "call-weather", "name": "get_weather", "args": {"city": "SF"}, "type": "tool_call"}],
+        [],
+    ]
+    assert [message.additional_kwargs for message in rebuilt_assistants] == [
+        {
+            "tool_calls": [
+                {
+                    "id": "call-weather",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+                }
+            ]
+        },
+        {},
+    ]
+
+
+def test_model_call_intercept_rebuilds_provider_tool_calls(
+    nemo_relay_middleware: NemoRelayMiddleware,
+    model_request: ModelRequest[Any],
+    model_request_handler: tuple[Callable[[ModelRequest[Any]], ModelResponse[Any]], dict[str, ModelRequest[Any]]],
+):
+    from langchain_core.messages import AIMessage
+
+    provider_tool_calls = [
+        {
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"SF"}'},
+        }
+    ]
+    original = model_request.override(
+        messages=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call-weather",
+                        "name": "get_weather",
+                        "args": {"city": "SF"},
+                        "type": "tool_call",
+                    }
+                ],
+                additional_kwargs={"tool_calls": provider_tool_calls},
+            )
+        ]
+    )
+
+    def change_tool_call(_: str, request: nemo_relay.LLMRequest, annotated: Any):
+        assert annotated is not None
+        annotated.messages = [
+            {
+                **message,
+                "tool_calls": [
+                    {
+                        **message["tool_calls"][0],
+                        "function": {
+                            **message["tool_calls"][0]["function"],
+                            "arguments": '{"city":"San Jose"}',
+                        },
+                    }
+                ],
+            }
+            if message.get("role") == "assistant"
+            else message
+            for message in annotated.messages
+        ]
+        return nemo_relay.LLMRequestInterceptOutcome(request, annotated)
+
+    nemo_relay.intercepts.register_llm_request("test_langchain_change_tool_call", 1, False, change_tool_call)
+    try:
+        (handler, seen_request) = model_request_handler
+        nemo_relay_middleware.wrap_model_call(original, handler)
+    finally:
+        nemo_relay.intercepts.deregister_llm_request("test_langchain_change_tool_call")
+
+    rebuilt = next(message for message in seen_request["request"].messages if message.type == "ai")
+    assert isinstance(rebuilt, AIMessage)
+    assert rebuilt.tool_calls[0]["args"] == {"city": "San Jose"}
+    assert rebuilt.additional_kwargs["tool_calls"] == [
+        {
+            "id": "call-weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"San Jose"}'},
+        }
+    ]
+
+
 def test_payload_to_model_request_moves_relay_headers_to_chat_nvidia_transport(model_request: ModelRequest[Any]):
     from nemo_relay.integrations.langchain._serialization import (
         model_request_to_payload,

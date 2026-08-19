@@ -143,6 +143,15 @@ to the other exporters.
 | `mark_projection` | `inherit` | Mark representation for `full` and `openinference`: `inherit`, `event`, or `tool`. |
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
+| `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
+
+Metadata promotion preserves the original Event metadata and does not replace
+attributes produced by a trace projection or `attribute_mappings`. Relay omits
+selected keys in namespaces owned by Relay or supported semantic projections:
+`nemo_relay.`, `gen_ai.`, `error.`, `exception.`, `input.`, `output.`, `llm.`,
+`openinference.`, `server.`, `service.`, `session.`, `tool.`, `tool_call.`, and
+`user.`. Relay also omits the bare `metadata` key. Rejected values produce a
+rate-limited operational diagnostic without dropping the Event or span.
 
 ## Log and Metric Endpoint Resolution
 

@@ -3,7 +3,7 @@
 
 //! gRPC worker dynamic plugin loader and host-side proxy adapter.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -69,7 +69,7 @@ use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use crate::api::runtime::{
-    EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
     MiddlewareContinuationContext, ToolExecutionNextFn, current_scope_stack, with_scope_stack,
 };
@@ -1065,6 +1065,12 @@ impl WorkerPluginInstance {
                 RegistrationSurface::Subscriber => {
                     self.install_subscriber_registration(ctx, &registration.local_name)?
                 }
+                RegistrationSurface::EventMetadataInjector => self
+                    .install_event_metadata_injector_registration(
+                        ctx,
+                        &registration.local_name,
+                        registration.priority,
+                    )?,
                 RegistrationSurface::MarkSanitizeGuardrail
                 | RegistrationSurface::ScopeSanitizeStartGuardrail
                 | RegistrationSurface::ScopeSanitizeEndGuardrail => self
@@ -1115,6 +1121,26 @@ impl WorkerPluginInstance {
                 }
             }),
         )
+    }
+
+    fn install_event_metadata_injector_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        name: &str,
+        priority: i32,
+    ) -> crate::plugin::Result<()> {
+        let instance = Arc::new(self.clone_for_callback());
+        let callback_name = name.to_owned();
+        let callback: EventMetadataInjectorFn = Arc::new(move |event| {
+            let instance = instance.clone();
+            let callback_name = callback_name.clone();
+            Box::pin(async move {
+                instance
+                    .invoke_event_metadata_injector(&callback_name, &event)
+                    .await
+            })
+        });
+        ctx.register_event_metadata_injector(name, priority, callback)
     }
 
     fn install_event_sanitize_registration(
@@ -1497,6 +1523,26 @@ impl WorkerPluginCallback {
                 "worker subscriber returned unexpected result".into(),
             )),
         }
+    }
+
+    async fn invoke_event_metadata_injector(
+        &self,
+        registration_name: &str,
+        event: &Event,
+    ) -> FlowResult<BTreeMap<String, Json>> {
+        let request = self.base_request(
+            registration_name,
+            RegistrationSurface::EventMetadataInjector,
+            None,
+            Some(invoke_request_payload_event(event)),
+        );
+        let value = json_from_invoke_response(self.invoke_async(request).await?)?;
+        let additions = serde_json::from_value::<BTreeMap<String, Json>>(value).map_err(|err| {
+            FlowError::Internal(format!(
+                "worker returned invalid Event metadata additions: {err}"
+            ))
+        })?;
+        Ok(additions)
     }
 
     async fn invoke_event_sanitize(
