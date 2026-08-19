@@ -74,10 +74,10 @@ class NemoRelayDeepAgentsCallbackHandler(LangGraphNemoRelayCallbackHandler):
 
         integration = metadata.get("ls_integration")
         if langgraph_node is not None:
-            if langgraph_node == name:
-                return None
             if integration == "langchain_create_agent" and name == configured_name:
                 return configured_name
+            if langgraph_node == name:
+                return None
             return None
 
         if configured_name is not None and name == configured_name:

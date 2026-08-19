@@ -502,7 +502,7 @@ def test_callback_handler_creates_only_semantic_agent_scopes(
                 "ls_integration": "langchain_create_agent",
                 "lc_agent_name": "reviewer",
                 "lc_versions": {"deepagents": "0.7.4"},
-                "langgraph_node": "tools",
+                "langgraph_node": "reviewer",
             },
         )
         callback_handler.on_chain_end({"messages": ["done"]}, run_id=root_run_id)
@@ -533,7 +533,7 @@ def test_callback_handler_creates_only_semantic_agent_scopes(
         "ls_integration": "langchain_create_agent",
         "lc_agent_name": "reviewer",
         "lc_versions": {"deepagents": "0.7.4"},
-        "langgraph_node": "tools",
+        "langgraph_node": "reviewer",
         "integration": "deepagents",
         "deepagents_agent_name": "reviewer",
         "deepagents_agent_role": "subagent",
