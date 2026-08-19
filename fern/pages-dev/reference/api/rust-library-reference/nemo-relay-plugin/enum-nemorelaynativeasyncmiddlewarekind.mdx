@@ -11,7 +11,7 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 ```rust
 #[repr(u32)]pub enum NemoRelayNativeAsyncMiddlewareKind {
-Show 14 variants    ToolSanitizeRequest = 0,
+Show 15 variants    ToolSanitizeRequest = 0,
     ToolSanitizeResponse = 1,
     ToolConditionalExecution = 2,
     ToolRequestIntercept = 3,
@@ -25,6 +25,7 @@ Show 14 variants    ToolSanitizeRequest = 0,
     MarkSanitize = 11,
     ScopeSanitizeStart = 12,
     ScopeSanitizeEnd = 13,
+    EventMetadataInjector = 14,
 }
 ```
 
@@ -119,6 +120,12 @@ Scope-start event sanitizer.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "ScopeSanitizeEnd = 13"}} /></pre>
 
 Scope-end event sanitizer.
+
+### `EventMetadataInjector = 14`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "EventMetadataInjector = 14"}} /></pre>
+
+Event metadata injector.
 
 ## Trait Implementations
 
