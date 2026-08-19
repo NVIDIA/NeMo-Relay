@@ -1789,6 +1789,49 @@ fn pi_launch_finds_a_user_scope_install_without_an_environment_variable() {
     );
 }
 
+// `-e` adds to pi's set rather than replacing it, and pi de-duplicates by path, not by package,
+// so a second distinct copy loads beside the launched one and every hook is posted twice -- each
+// turn closed as superseded by its own duplicate. Nothing suppresses discovery from here without
+// also dropping the user's own extensions, so the launch is refused and both copies are named.
+#[test]
+fn pi_launch_refuses_when_two_copies_would_load() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let explicit = write_relay_pi_package(&temp.path().join("checkout"));
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_pi_package(&installed);
+    let _env = EnvScope::set(&[
+        (
+            crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
+            Some(explicit.as_os_str()),
+        ),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(agent_dir.as_os_str()),
+        ),
+    ]);
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    );
+
+    let Err(error) = prepared else {
+        panic!("a second distinct copy must refuse the launch");
+    };
+    let message = error.to_string();
+    // Both paths, because the user has to pick one and cannot without knowing where they are.
+    assert!(
+        message.contains(&explicit.display().to_string())
+            && message.contains(&installed.display().to_string()),
+        "the launch error should name both copies: {message}"
+    );
+}
+
 // `-e` is never trust-gated. Promoting a project-scoped install to it would run
 // repository code pi itself declined to trust, which is the failure the preflight
 // exists to warn about rather than to work around.

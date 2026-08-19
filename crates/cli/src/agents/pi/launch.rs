@@ -70,6 +70,22 @@ pub(crate) fn prepare(
              code pi itself would not trust. `nemo-relay doctor pi` reports what was found"
         )));
     };
+    // `-e` loads *in addition to* discovery, so a second copy of this extension elsewhere on the
+    // machine is a second package to pi and loads beside this one, posting every hook twice: each
+    // turn closed as superseded by its own duplicate, and the inline-shell gate deciding one
+    // command twice. There is no way to suppress it from here that does not also drop the user's
+    // own extensions -- `--no-extensions` keeps `-e` but discards everything discovered -- so
+    // refuse and name both copies rather than launch a session whose trace is doubled.
+    if let Some(duplicate) = conflicting_extension_path(&path) {
+        return Err(CliError::Launch(format!(
+            "two copies of the NeMo Relay pi extension would load in the same session: {} and \
+             {}. pi de-duplicates its extension set by path, not by package, so both register \
+             hooks and every turn, tool and inline-shell event is reported twice. Remove one \
+             copy, or point {PI_EXTENSION_PATH_ENV} at the one you keep",
+            path.display(),
+            duplicate.display()
+        )));
+    }
     let rendered = path.display().to_string();
     set_env(launch, PI_EXTENSION_PATH_ENV, &rendered);
     insert_after_host(
@@ -107,6 +123,14 @@ fn set_env(launch: &mut PreparedAgentLaunch, name: &str, value: &str) {
 /// to set. `launchable_extension_path` also excludes the project scope, which
 /// `-e` would load past pi's trust gate.
 fn extension_path() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    super::doctor::launchable_extension_path(&cwd)
+    super::doctor::launchable_extension_path(&current_dir())
+}
+
+/// The other copy pi would load beside the launched one, if there is one.
+fn conflicting_extension_path(launched: &std::path::Path) -> Option<PathBuf> {
+    super::doctor::conflicting_extension_site(&current_dir(), launched)
+}
+
+fn current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }

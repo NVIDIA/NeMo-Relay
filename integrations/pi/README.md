@@ -105,7 +105,7 @@ Run it first whenever Relay does not seem to be doing anything.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `NEMO_RELAY_PI_EXTENSION` | unset | Overrides where the launcher looks for this extension. Set by the launcher from what it resolved |
+| `NEMO_RELAY_PI_EXTENSION` | unset | The first place the launcher looks for this extension. Ignored unless the path exists **and** its `package.json` names `nemo-relay-pi`, in which case resolution falls through to a user-scope install. Set by the launcher from what it resolved |
 | `NEMO_RELAY_PI_GATEWAY_URL` | `http://127.0.0.1:4040` | Gateway base URL |
 | `NEMO_RELAY_PI_TIMEOUT_MS` | `5000` | Per-request timeout |
 | `NEMO_RELAY_PI_FAIL` | `open` | `closed` blocks tool calls and inline shell commands when the gateway is unreachable |

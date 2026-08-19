@@ -4804,6 +4804,76 @@ async fn pi_tool_call_hook_evaluates_conditional_guardrails_once_when_an_interce
     );
 }
 
+// The rewrite is drained by the response that carries it and never rides out on the next one. That
+// is the invariant behind publishing it only after the tool start can no longer fail: the
+// extension's `tool_call_id` echo reads a stale rewrite as another call's and refuses that call, so
+// a leak here blocks an unrelated tool rather than merely mis-recording one.
+#[tokio::test]
+async fn pi_tool_call_hook_hands_a_rewrite_to_one_response_only() {
+    let _guard = PLUGIN_CONFIG_TEST_LOCK.lock().await;
+    let _ = deregister_tool_request_intercept("cli-pi-drain-once");
+    register_tool_request_intercept(
+        "cli-pi-drain-once",
+        1,
+        false,
+        Arc::new(|_name: String, args: Value| {
+            Box::pin(async move {
+                let mut args = args;
+                if let Some(object) = args.as_object_mut()
+                    && object.get("path").and_then(Value::as_str) == Some("/work/first")
+                {
+                    object.insert("path".into(), json!("/work/rewritten"));
+                }
+                Ok(args)
+            })
+        }),
+    )
+    .unwrap();
+    let _cleanup = ToolInterceptCleanup("cli-pi-drain-once");
+
+    let app = router(test_config());
+    let post = |call_id: &'static str, path: &'static str| {
+        let app = app.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/hooks/pi")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            json!({
+                                "session_id": "pi-drain-session",
+                                "hook_event_name": "tool_call",
+                                "tool_call_id": call_id,
+                                "tool_name": "read",
+                                "input": { "path": path }
+                            })
+                            .to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice::<Value>(&bytes).unwrap()
+        }
+    };
+
+    let rewritten = post("call-first", "/work/first").await;
+    assert_eq!(rewritten["tool_call"]["tool_call_id"], json!("call-first"));
+    assert_eq!(
+        rewritten["tool_call"]["input"],
+        json!({ "path": "/work/rewritten" })
+    );
+
+    // A second, unrelated call the intercept does not touch. If the first rewrite were still on
+    // the session it would surface here under the wrong id, and the extension would refuse it.
+    let untouched = post("call-second", "/work/second").await;
+    assert_eq!(untouched, json!({}), "a drained rewrite must not reappear");
+}
+
 // An unchanged call must keep returning the bare `{}` an allow has always been, or every existing
 // extension would start seeing a payload it has no contract for.
 #[tokio::test]

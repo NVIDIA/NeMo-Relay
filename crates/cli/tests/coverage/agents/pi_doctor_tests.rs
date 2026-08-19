@@ -329,6 +329,171 @@ fn the_launch_path_skips_an_installed_source_that_is_not_a_path() {
     assert!(launchable_extension_path(temp.path()).is_none());
 }
 
+// pi's own configuration selector rewrites a string entry into the object form the
+// moment a user toggles any resource of that package, so this shape is not a hand
+// edit -- and while only strings were read, one keystroke in pi's UI made doctor
+// report an installed extension as missing and made the launcher refuse to start.
+#[test]
+fn an_object_form_package_entry_is_found() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    let checkout = temp.path().join("checkout");
+    write_relay_package(&checkout);
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"packages": [{"source": "../checkout"}]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+
+    assert_eq!(sites.len(), 1, "{sites:?}");
+    assert_eq!(sites[0].scope, ExtensionScope::User);
+    assert!(!sites[0].disabled_by_settings);
+    // Compared canonically: a recorded source is relative to the settings file, so the
+    // resolved path keeps the `..` pi itself would resolve away.
+    assert_eq!(
+        launchable_extension_path(temp.path()).map(|path| std::fs::canonicalize(path).unwrap()),
+        Some(std::fs::canonicalize(&checkout).unwrap())
+    );
+}
+
+// A non-empty pattern list is matched against the package manifest, which this
+// module does not read. Reporting it as loaded is the deliberate direction: a false
+// negative here is the exact failure the whole module exists to prevent.
+#[test]
+fn an_object_form_entry_with_extension_patterns_is_still_found() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    write_relay_package(&temp.path().join("checkout"));
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"packages": [{"source": "../checkout", "extensions": ["index.ts"], "skills": []}]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+
+    assert_eq!(sites.len(), 1, "{sites:?}");
+    assert!(!sites[0].disabled_by_settings);
+}
+
+// Installed and switched off is not the same as absent, and must not be reported as
+// either a plain Pass or a missing install. The launch path deliberately still uses
+// it: `-e` applies no settings filter.
+#[test]
+fn an_object_form_entry_whose_extensions_are_disabled_is_reported_as_disabled() {
+    for body in [
+        r#"{"packages": [{"source": "../checkout", "extensions": []}]}"#,
+        r#"{"packages": [{"source": "../checkout", "autoload": false}]}"#,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let agent_dir = temp.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        let checkout = temp.path().join("checkout");
+        write_relay_package(&checkout);
+        std::fs::write(agent_dir.join("settings.json"), body).unwrap();
+
+        let _env = scoped(None, Some(agent_dir.as_os_str()));
+        let sites = relay_extension_sites(temp.path());
+
+        assert_eq!(sites.len(), 1, "{body}: {sites:?}");
+        assert!(sites[0].disabled_by_settings, "{body}");
+        // Still launchable, deliberately: `-e` applies no settings filter, so the launcher
+        // instruments a session the user's own `pi` runs are missing.
+        assert_eq!(
+            launchable_extension_path(temp.path()).map(|path| std::fs::canonicalize(path).unwrap()),
+            Some(std::fs::canonicalize(&checkout).unwrap()),
+            "{body}"
+        );
+    }
+}
+
+// Two ungated copies can be live at once -- a variable someone set at a checkout
+// months ago, and the user-scope install the README recommends. Both are reported,
+// because the order is the contract the launch path reads.
+#[test]
+fn a_distinct_explicit_copy_and_a_user_install_are_both_reported_explicit_first() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_package(&installed);
+    let explicit = temp.path().join("checkout");
+    write_relay_package(&explicit);
+
+    let _env = scoped(Some(explicit.as_os_str()), Some(agent_dir.as_os_str()));
+    let sites = relay_extension_sites(temp.path());
+
+    assert_eq!(sites.len(), 2, "{sites:?}");
+    assert_eq!(sites[0].scope, ExtensionScope::Explicit);
+    assert_eq!(sites[0].path, explicit);
+    assert_eq!(sites[1].scope, ExtensionScope::User);
+
+    // And that is exactly the case pi cannot see: it de-duplicates by path, so both
+    // load, and every hook is posted twice.
+    assert_eq!(
+        conflicting_extension_site(temp.path(), &explicit),
+        Some(installed)
+    );
+}
+
+// One install is reachable both as its directory and as the entry file inside it,
+// and pi resolves both to the same file through the `pi.extensions` manifest. That
+// is one copy, and refusing to launch it would be a false alarm on the setup the
+// launcher itself produces.
+#[test]
+fn the_same_install_reached_two_ways_is_not_a_second_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_package(&installed);
+    let entry = installed.join("index.ts");
+
+    let _env = scoped(Some(entry.as_os_str()), Some(agent_dir.as_os_str()));
+    assert_eq!(conflicting_extension_site(temp.path(), &entry), None);
+}
+
+// pi canonicalizes with `realpathSync`, so a symlinked copy is one copy to pi and
+// must be one copy here.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_copy_is_not_a_second_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_package(&installed);
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(&installed, &link).unwrap();
+
+    let _env = scoped(Some(link.as_os_str()), Some(agent_dir.as_os_str()));
+    assert_eq!(conflicting_extension_site(temp.path(), &link), None);
+}
+
+// pi loads a project-scoped copy only for a trusted project, so it is not reliably
+// a second load -- and refusing on it would block launches that are fine. The trust
+// warning already names it.
+#[test]
+fn a_project_scoped_copy_is_not_a_second_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    let installed = agent_dir.join("extensions").join("nemo-relay");
+    write_relay_package(&installed);
+    write_relay_package(
+        &temp
+            .path()
+            .join(".pi")
+            .join("extensions")
+            .join("nemo-relay"),
+    );
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    assert_eq!(conflicting_extension_site(temp.path(), &installed), None);
+}
+
 // A user-scope install is what the README's install routes produce, and none of
 // them set an environment variable -- so the launcher has to find one without it.
 // An explicit path still wins, because someone who set it meant it.

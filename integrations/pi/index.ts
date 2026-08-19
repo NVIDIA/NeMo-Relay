@@ -41,7 +41,7 @@
  *    All per-call state is keyed by `toolCallId`, which is the only correlator
  *    pi provides.
  *
- * Load it with `pi -e <path-to-this-file>`, or let `nemo-relay launch pi` do it.
+ * Load it with `pi -e <path-to-this-file>`, or let `nemo-relay run --agent pi` do it.
  *
  * **Model redirection.** pi resolves a base URL per model from a generated
  * catalog, so the extension points the active model's provider at the gateway

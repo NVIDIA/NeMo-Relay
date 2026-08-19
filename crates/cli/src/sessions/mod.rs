@@ -1622,6 +1622,11 @@ impl Session {
         // response drains it, so a rewrite recorded before a failing start would ride out on the
         // *next* response instead -- where the extension's `tool_call_id` echo reads it as
         // another call's rewrite and refuses that call.
+        //
+        // The failing branch has no test of its own, deliberately: `tool_call` is fallible only
+        // through process-global state, so inducing it would corrupt every other test in this
+        // binary. What is pinned instead is the invariant on the success side -- a rewrite reaches
+        // exactly one hook response, never the next one.
         self.tool_argument_transform = rewrite;
         Ok(())
     }

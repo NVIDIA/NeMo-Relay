@@ -43,7 +43,7 @@ pub(super) struct AgentDescriptor {
 /// rejects pi explicitly and the gateway surface (hooks, launch, doctor) is
 /// implemented for real.
 pub(crate) const PI_MARKETPLACE_UNSUPPORTED: &str = "pi has no plugin marketplace; install the NeMo Relay pi extension with `pi install <source>` \
-     or place it in `~/.pi/agent/extensions/`, then run pi through `nemo-relay launch pi`";
+     or place it in `~/.pi/agent/extensions/`, then run pi through `nemo-relay run --agent pi`";
 
 /// Reached only if a marketplace code path forgets to reject pi first.
 macro_rules! pi_marketplace_unreachable {

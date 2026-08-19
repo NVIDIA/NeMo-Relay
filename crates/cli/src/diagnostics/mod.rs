@@ -534,14 +534,45 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
                 "{} is project-scoped, so pi loads it only when the project is trusted, and \
                  `-p`, `--mode json` and `--mode rpc` never prompt -- it is silently skipped \
                  there, with nothing reporting it. Install at user scope \
-                 (`~/.pi/agent/extensions/`, or `pi install` without `--local`), or launch with \
-                 `nemo-relay run --agent pi`, which passes `-e` and is never trust-gated",
-                project.path.display()
+                 (`~/.pi/agent/extensions/`, or `pi install` without `--local`), or set {} to \
+                 it. `nemo-relay run --agent pi` passes `-e`, which is never trust-gated, but it \
+                 resolves only those two routes and refuses a project-scoped copy for the same \
+                 reason this warns about one",
+                project.path.display(),
+                crate::agents::pi::launch::PI_EXTENSION_PATH_ENV
             ),
         };
     }
 
     match sites.first() {
+        // Reachable without the launcher at all: pi scans its extensions directory and its
+        // recorded packages independently, so a user holding both a copy and an install
+        // double-loads under plain `pi`, with no Relay command involved.
+        Some(site)
+            if let Some(duplicate) =
+                crate::agents::pi::doctor::conflicting_extension_site(cwd, &site.path) =>
+        {
+            Check {
+                name: NAME,
+                status: Status::Warn,
+                details: format!(
+                    "two copies would load: {} and {}. pi de-duplicates by path, not by                      package, so both register hooks and every event is reported twice -- each                      turn is closed as superseded by its own duplicate, and the inline-shell                      gate decides one command twice. Keep one copy",
+                    site.path.display(),
+                    duplicate.display()
+                ),
+            }
+        }
+        // Installed, and switched off in pi's own settings. Same silent drop as the trust gate,
+        // from the other direction -- and `-e` ignores those filters, so the launcher still
+        // instruments a session the user's own `pi` runs are missing.
+        Some(site) if site.disabled_by_settings => Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "{} is recorded in pi's settings with its extensions filtered off, so pi does                  not load it -- remove the `extensions` filter, or the `autoload: false`, on                  that entry. `nemo-relay run --agent pi` is unaffected: it passes `-e`, which                  applies no settings filter",
+                site.path.display()
+            ),
+        },
         Some(site) => Check {
             name: NAME,
             status: Status::Pass,

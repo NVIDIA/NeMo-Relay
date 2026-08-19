@@ -72,8 +72,10 @@ cp -r integrations/pi ~/.pi/agent/extensions/nemo-relay
 pi install /path/to/NeMo-Relay/integrations/pi
 ```
 
-`nemo-relay run --agent pi` needs neither — it passes the extension with `-e`,
-which loads first and is never trust-gated.
+`nemo-relay run --agent pi` resolves either route too — or
+`NEMO_RELAY_PI_EXTENSION`, if you set it — and passes what it finds to `-e`,
+which loads first and is never trust-gated. It needs one of them: it never
+promotes a project-scoped install to `-e`.
 
 <Warning>
 **Do not install from a git URL.** pi has no subdirectory syntax for a git
@@ -116,7 +118,7 @@ configuration.
 
 The launcher resolves the extension from the same places `nemo-relay doctor pi`
 looks — `NEMO_RELAY_PI_EXTENSION` first, then a user-scope install — so either
-install route below is enough and no variable is required. Unlike Claude Code and
+install route above is enough and no variable is required. Unlike Claude Code and
 Codex, there is no Relay-managed install location to fall back on, because pi
 extensions live in the user's own configuration directories.
 

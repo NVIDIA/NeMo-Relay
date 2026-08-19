@@ -72,6 +72,18 @@ impl ExtensionScope {
 pub(crate) struct ExtensionSite {
     pub(crate) path: PathBuf,
     pub(crate) scope: ExtensionScope,
+    /// Whether pi's own settings switch this copy off.
+    ///
+    /// An object-form `packages` entry carries per-resource filters, and two shapes leave nothing
+    /// enabled for extensions: an empty `extensions` array, and `autoload: false` with no
+    /// extension patterns (pi `v0.84.0`, `core/package-manager.ts:2208` and `:2232`). The copy is
+    /// installed and pi still never loads it, which is the same silent drop as the trust gate and
+    /// must not read as a plain Pass.
+    ///
+    /// A launch is unaffected on purpose: `-e` resolves its argument with no filter at all, so
+    /// `launchable_extension_path` ignores this flag. The user asked for instrumentation by
+    /// running the launcher; the warning is for their own `pi` sessions.
+    pub(crate) disabled_by_settings: bool,
 }
 
 /// Human-readable hook status for `nemo-relay doctor`.
@@ -164,6 +176,7 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
         sites.push(ExtensionSite {
             path,
             scope: ExtensionScope::Explicit,
+            disabled_by_settings: false,
         });
     }
     if let Some(dir) = user_extensions_dir()
@@ -172,26 +185,32 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
         sites.push(ExtensionSite {
             path,
             scope: ExtensionScope::User,
+            disabled_by_settings: false,
         });
     }
     if let Some(settings) = user_settings_path()
-        && let Some(path) = relay_package_in_settings(&settings)
+        && let Some(install) = relay_package_in_settings(&settings)
     {
         sites.push(ExtensionSite {
-            path,
+            path: install.path,
             scope: ExtensionScope::User,
+            disabled_by_settings: install.disabled,
         });
     }
     if let Some(path) = relay_entry_in_directory(&cwd.join(PI_CONFIG_DIR).join("extensions")) {
         sites.push(ExtensionSite {
             path,
             scope: ExtensionScope::Project,
+            disabled_by_settings: false,
         });
     }
-    if let Some(path) = relay_package_in_settings(&cwd.join(PI_CONFIG_DIR).join(PI_SETTINGS_FILE)) {
+    if let Some(install) =
+        relay_package_in_settings(&cwd.join(PI_CONFIG_DIR).join(PI_SETTINGS_FILE))
+    {
         sites.push(ExtensionSite {
-            path,
+            path: install.path,
             scope: ExtensionScope::Project,
+            disabled_by_settings: install.disabled,
         });
     }
     sites
@@ -214,12 +233,60 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
 /// resolve a package directory through the same `pi.extensions` manifest, so the
 /// extension loads -- and registers its hooks -- exactly once. Passing the
 /// directory is also why nothing here reads that manifest: pi does it, and its
-/// entry-point precedence is pi's to change.
+/// entry-point precedence is pi's to change. A copy pi would *not* have
+/// discovered is a different matter, and is what `conflicting_extension_site`
+/// is for.
 pub(crate) fn launchable_extension_path(cwd: &Path) -> Option<PathBuf> {
     relay_extension_sites(cwd)
         .into_iter()
         .find(|site| site.scope != ExtensionScope::Project && site.path.exists())
         .map(|site| site.path)
+}
+
+/// A *second* copy of this extension that pi would load beside the launched one.
+///
+/// `-e` adds to pi's extension set; it does not replace it. pi merges the
+/// command-line and discovered sets and de-duplicates them by canonicalized path
+/// alone (`mergePaths`, pi `v0.84.0`, `core/resource-loader.ts:845`), and the
+/// identity it gives a local package is that same path (`getPackageIdentity`,
+/// `core/package-manager.ts:1660`) -- so **nothing in pi notices that two
+/// directories hold one package**. Each copy gets its own factory call and its own
+/// handler map (`core/extensions/loader.ts:506`), and the runner walks every
+/// extension for every hook (`core/extensions/runner.ts:805`), so every hook is
+/// posted twice. A duplicated `turn_start` closes the turn its twin just opened as
+/// superseded, and the inline-shell gate decides one command twice under two
+/// spans, with the second verdict the one the user gets.
+///
+/// Compared by *package root* rather than by path, because one install is
+/// reachable both as its directory and as the entry file inside it, and pi
+/// resolves both to the same file through the `pi.extensions` manifest. Symlinks
+/// are resolved because pi resolves them too -- its `canonicalizePath` is
+/// `realpathSync` (`utils/paths.ts:28`) -- so a symlinked copy is one copy to pi
+/// and must be one copy here.
+///
+/// Project scope is excluded: pi loads a project-scoped extension only for a
+/// trusted project, so it is not reliably a second load, and refusing on it would
+/// block launches that are fine. The existing trust warning already names it.
+pub(crate) fn conflicting_extension_site(cwd: &Path, launched: &Path) -> Option<PathBuf> {
+    let launched_root = package_root(launched);
+    relay_extension_sites(cwd)
+        .into_iter()
+        .filter(|site| site.scope != ExtensionScope::Project)
+        .find(|site| package_root(&site.path) != launched_root)
+        .map(|site| site.path)
+}
+
+/// The package directory a site belongs to, or `None` when it is not on disk.
+///
+/// A source that is not a path -- an npm or git specifier `pi install` recorded --
+/// has no root to compare and is a separate installed copy by construction, so
+/// `None` is the honest answer and makes it compare unequal to a real checkout.
+fn package_root(path: &Path) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    if manifest_names_relay(&canonical.join("package.json")) {
+        return Some(canonical);
+    }
+    canonical.parent().map(Path::to_path_buf)
 }
 
 /// The NeMo Relay extension inside a pi auto-discovery directory, if it is there.
@@ -260,31 +327,82 @@ fn manifest_names_relay(manifest: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// A `packages` entry that records this extension, and whether pi will load it.
+struct RecordedInstall {
+    path: PathBuf,
+    disabled: bool,
+}
+
 /// The NeMo Relay package among the sources `pi install` recorded, if any.
 ///
-/// Each entry is a source string, and a local one is a path relative to the
-/// settings file's own directory. Only a local source can be resolved from here
-/// -- an npm or git source is a name, not a location -- so those fall back to
+/// Each entry is **either a source string or an object** carrying that same source
+/// under `source` alongside per-resource filters (pi `v0.84.0`,
+/// `core/settings-manager.ts:72-87`); both shapes resolve through one code path in
+/// pi. Reading only the string shape was not a theoretical gap: pi's own
+/// configuration selector rewrites a string entry into the object form the moment a
+/// user toggles any resource of that package
+/// (`interactive/components/config-selector.ts:595-598`), so one keystroke in pi's
+/// own UI made this check report an installed extension as missing -- and the
+/// launcher, which shares this resolution, refuse to start.
+///
+/// A local source is a path relative to the settings file's own directory, which is
+/// where pi resolves it from too (`getBaseDirForScope`,
+/// `core/package-manager.ts:2107-2115`). Only a local source can be resolved from
+/// here -- an npm or git source is a name, not a location -- so those fall back to
 /// matching the package name inside the specifier, which is the best signal
 /// available without fetching anything.
-fn relay_package_in_settings(settings: &Path) -> Option<PathBuf> {
+fn relay_package_in_settings(settings: &Path) -> Option<RecordedInstall> {
     let base = settings.parent()?;
     let raw = std::fs::read_to_string(settings).ok()?;
     let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value
-        .get("packages")?
-        .as_array()?
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .find_map(|source| {
-            let resolved = base.join(source);
-            if is_relay_extension(&resolved) {
-                return Some(resolved);
-            }
-            source
-                .contains(RELAY_PACKAGE_NAME)
-                .then(|| PathBuf::from(source))
-        })
+    value.get("packages")?.as_array()?.iter().find_map(|entry| {
+        let source = package_source(entry)?;
+        let disabled = entry_disables_extensions(entry);
+        let resolved = base.join(source);
+        if is_relay_extension(&resolved) {
+            return Some(RecordedInstall {
+                path: resolved,
+                disabled,
+            });
+        }
+        source
+            .contains(RELAY_PACKAGE_NAME)
+            .then(|| RecordedInstall {
+                path: PathBuf::from(source),
+                disabled,
+            })
+    })
+}
+
+/// The source string of one `packages` entry, whichever shape it was written in.
+fn package_source(entry: &serde_json::Value) -> Option<&str> {
+    entry
+        .as_str()
+        .or_else(|| entry.get("source").and_then(serde_json::Value::as_str))
+}
+
+/// Whether an object-form entry's filters switch that package's extensions off.
+///
+/// Only the two shapes pi decides without consulting the package manifest are
+/// recognized: an empty `extensions` array disables every extension file in the
+/// package (`applyPackageFilter`, pi `v0.84.0`, `core/package-manager.ts:2208`),
+/// and `autoload: false` starts from nothing, so an entry adding no `extensions`
+/// patterns adds nothing back (`applyPackageDeltaFilter`, `:2232`).
+///
+/// A non-empty pattern list is matched against the manifest, which this module does
+/// not read, so it counts as enabled. Guessing wrong in that direction produces the
+/// false negative this module exists to prevent.
+fn entry_disables_extensions(entry: &serde_json::Value) -> bool {
+    let Some(object) = entry.as_object() else {
+        return false;
+    };
+    match object
+        .get("extensions")
+        .and_then(serde_json::Value::as_array)
+    {
+        Some(patterns) => patterns.is_empty(),
+        None => object.get("autoload") == Some(&serde_json::Value::Bool(false)),
+    }
 }
 
 /// `<agent dir>/settings.json`, where `pi install` records a user-scope package.
