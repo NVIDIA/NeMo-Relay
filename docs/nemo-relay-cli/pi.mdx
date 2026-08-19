@@ -14,6 +14,13 @@ model traffic reaches it when the gateway forwards to the endpoint the selected
 model would otherwise call, which is what [Model
 Redirection](#model-redirection) explains.
 
+pi has no native hook-configuration file, and its external event stream is
+observation-only, so hook calls cannot be injected from outside the process. They
+originate inside a pi *extension*, which Relay ships at `integrations/pi/`. The
+extension is a thin HTTP client: it forwards pi's lifecycle to `POST /hooks/pi`
+and gates tool calls on the gateway's verdict. All policy and all span
+construction stay in the gateway.
+
 <Warning>
 pi ships breaking changes through *minor* releases and has no major-release
 channel. The integration is verified against pi `v0.84.0`. Re-verify hook
@@ -21,43 +28,12 @@ signatures after a pi upgrade; a silent shape change appears as missing spans,
 not as an error.
 </Warning>
 
-## How It Differs From Codex and Claude Code
-
-pi has no native hook-configuration file, and its external event stream is
-observation-only, so hook calls cannot be injected from outside the process.
-They must originate inside a pi *extension*. Relay ships one at
-`integrations/pi/`, and it is a thin HTTP client: it forwards pi's lifecycle to
-`POST /hooks/pi` and gates tool calls on the gateway's verdict. All policy and
-all span construction stay in the gateway.
-
-Three consequences follow from that shape:
-
-- There is no persistent plugin install. pi has no plugin marketplace — no
-  manifest, no `pi plugin` verb, and no MCP client for a plugin-owned server to
-  serve — so `nemo-relay install pi` is unsupported and says so. Install the
-  extension with `pi install <source>` or place it in an auto-discovered
-  directory (`~/.pi/agent/extensions/`, `.pi/extensions/`).
-- The extension pays a round trip per gated tool call. pi awaits extension
-  handlers on its critical path, so a blocking hook is synchronous by
-  construction. Observability-only hooks are queued rather than awaited and
-  drained at shutdown, so they do not charge that path — while the gateway
-  answers. Posts go out one at a time in hook order, so a gating hook also waits
-  for whatever is queued ahead of it: against a gateway that holds requests, the
-  first gate of a session pays `NEMO_RELAY_PI_TIMEOUT_MS` once per queued post,
-  not once.
-- Model traffic is redirected by the extension, not by configuration. pi
-  resolves `baseUrl` per model from a generated catalog and has no base-URL flag
-  or generic environment override, so the extension calls
-  `registerProvider(provider, { baseUrl })` itself — and only when doing so is
-  safe. See [Model Redirection](#model-redirection).
-
 ## Requirements
 
 Install pi 0.84.x, and confirm the NeMo Relay extension is reachable. Anything
 below 0.84.0 is rejected; anything above 0.84.x is accepted but reported as
 **unverified**, by both `doctor` and the launcher, because pi can change a hook
 shape in a minor release and the symptom is missing spans rather than an error:
-
 
 ```bash
 nemo-relay doctor pi
@@ -67,6 +43,12 @@ That command reports two things nothing else can: which path the extension will
 load from and whether pi will trust it, and whether the gateway is answering at
 the URL the extension posts to. Run it first whenever Relay does not seem to be
 doing anything.
+
+There is no persistent plugin install. pi has no plugin marketplace — no
+manifest, no `pi plugin` verb, and no MCP client for a plugin-owned server to
+serve — so `nemo-relay install pi` is unsupported. Install the extension with
+`pi install <source>` or place it in an auto-discovered directory
+(`~/.pi/agent/extensions/`, `.pi/extensions/`).
 
 ### Install At User Scope
 
@@ -107,7 +89,6 @@ path — so pi does not treat it as a failure and never reports it, and the
 extension cannot report it either, because it is not running. The only symptom
 is that Relay appears to do nothing. `nemo-relay doctor pi` warns about it.
 </Warning>
-
 ## Transparent Run
 
 Use the wrapper for no-install local observability. pi has no `nemo-relay pi`
@@ -146,7 +127,6 @@ Inspect what would be launched without starting pi:
 ```bash
 nemo-relay run --dry-run --print --agent pi
 ```
-
 ## Standalone Gateway
 
 Run a long-lived gateway and point pi at it by hand:
@@ -171,7 +151,46 @@ Run headless pi with `< /dev/null`. pi drains piped standard input before the
 session starts and returns early only for a TTY, so under an automated harness
 it can block indefinitely before any hook fires.
 </Warning>
+## Captured Events
 
+The extension posts 15 event types, covering session, turn, tool and
+inline-shell activity. Twelve carry a pi hook's own name. The other three —
+`model_redirect`, `tool_arguments_transformed` and `user_bash_end` — are
+synthesized by the extension. The table below names the source of each:
+redirection is evaluated at `session_start` and again on every `model_select`,
+and `model_redirect` is posted for each decision that explains something — a
+redirect, or a skip an operator can act on. Two transient skips are evaluated but
+not posted: no model resolved yet, and a provider already pointed at the gateway.
+`tool_arguments_transformed` is posted after a rewrite is applied, and
+`user_bash_end` after an inline-shell command is decided.
+
+pi reports both ends of a turn, so Relay opens the turn scope at pi's own
+`turn_start` instead of inferring one, and a mark that arrives between turns is
+recorded on the session scope rather than opening an empty turn to hold it.
+
+| pi hook | Relay lifecycle |
+| --- | --- |
+| `session_start` / `session_shutdown` | Session scope. `session_shutdown` is ignored for `reason: "reload"`, which continues the same session |
+| `agent_start` / `agent_end` / `agent_settled` | Marks on the session scope |
+| `turn_start` / `turn_end` | Turn scope open and close |
+| `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
+| `session_compact` | Canonical `compaction` mark |
+| `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
+| *(after a rewrite)* | `tool_arguments_transformed` mark. Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
+| `tool_call` | Tool span start, and the gate |
+| `tool_execution_end` | Tool span end, for every outcome including blocked |
+| `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
+| *(after `user_bash` completes)* | `user_bash_end`, a tool span end. Synthesized by the extension, because pi reports no completion for inline shell |
+
+pi's `tool_execution_start` is deliberately not forwarded: it fires before
+argument validation and also for calls that never execute. `tool_result` is not
+forwarded either, because it does not fire at all for blocked calls and in the
+parallel path it fires before `tool_execution_end`.
+
+A blocked call still produces a well-formed tool span. The guardrail rejects
+before the span opens, but pi fires `tool_execution_end` for blocked calls too,
+and the gateway synthesizes the missing pair, tagged
+`tool_correlation_status: "agent_fallback"`.
 ## Tool Gating
 
 For model-invoked tools, `tool_call` is the only pre-execution decision point
@@ -204,7 +223,6 @@ places: nothing answered, nothing answered in time (the gateway may be up and
 slow), the gateway answered without a decision (a rejected payload, an unreadable
 body, a 403 with no guardrail marker), or the gate itself failed before the
 gateway was asked.
-
 ## Argument Transforms
 
 A Relay request intercept can rewrite a tool call's arguments. The gateway never
@@ -249,7 +267,6 @@ The shipped `examples/rust-native-plugin` demonstrates the mechanism rather than
 a policy: its tool request intercept tags arguments with `native_plugin_tag` and
 `native_tool_request_intercept`, which adds keys and so blocks every pi tool
 call. Enable it to see the refusal, not as a template to copy.
-
 ## Inline Shell Gating
 
 pi's bang prefix runs a command outside the tool registry: `!git status` runs it
@@ -288,100 +305,6 @@ command — pi reports no completion for inline shell, so the span closes as soo
 as the verdict arrives and measures the policy round trip. And the hook fires
 only in the interactive TUI and in RPC mode; headless `-p` has no input loop to
 type a bang prefix into.
-
-## Captured Events
-
-The extension posts 15 event types, covering session, turn, tool and
-inline-shell activity. Twelve carry a pi hook's own name. The other three —
-`model_redirect`, `tool_arguments_transformed` and `user_bash_end` — are
-synthesized by the extension. The table below names the source of each:
-redirection is evaluated at `session_start` and again on every `model_select`,
-and `model_redirect` is posted for each decision that explains something — a
-redirect, or a skip an operator can act on. Two transient skips are evaluated but
-not posted: no model resolved yet, and a provider already pointed at the gateway.
-`tool_arguments_transformed` is posted after a rewrite is applied, and
-`user_bash_end` after an inline-shell command is decided.
-
-pi reports both ends of a turn, so Relay opens the turn scope at pi's own
-`turn_start` instead of inferring one, and a mark that arrives between turns is
-recorded on the session scope rather than opening an empty turn to hold it.
-
-| pi hook | Relay lifecycle |
-| --- | --- |
-| `session_start` / `session_shutdown` | Session scope. `session_shutdown` is ignored for `reason: "reload"`, which continues the same session |
-| `agent_start` / `agent_end` / `agent_settled` | Marks on the session scope |
-| `turn_start` / `turn_end` | Turn scope open and close |
-| `session_before_compact` | Mark. The compaction is announced, not yet done, and a later extension can still cancel it |
-| `session_compact` | Canonical `compaction` mark |
-| `session_start`, then every `model_select` | `model_redirect` mark, for each decision that explains something. Synthesized: the decision is re-evaluated per model, so a switch away from a provider the gateway fronts stops redirecting |
-| *(after a rewrite)* | `tool_arguments_transformed` mark. Synthesized, so the trace records that the arguments the tool ran were not the ones proposed |
-| `tool_call` | Tool span start, and the gate |
-| `tool_execution_end` | Tool span end, for every outcome including blocked |
-| `user_bash` | Tool span start named `user_bash`, and the inline shell gate |
-| *(after `user_bash` completes)* | `user_bash_end`, a tool span end. Synthesized by the extension, because pi reports no completion for inline shell |
-
-pi's `tool_execution_start` is deliberately not forwarded: it fires before
-argument validation and also for calls that never execute. `tool_result` is not
-forwarded either, because it does not fire at all for blocked calls and in the
-parallel path it fires before `tool_execution_end`.
-
-A blocked call still produces a well-formed tool span. The guardrail rejects
-before the span opens, but pi fires `tool_execution_end` for blocked calls too,
-and the gateway synthesizes the missing pair, tagged
-`tool_correlation_status: "agent_fallback"`.
-
-## What The Gate Is Authoritative Over
-
-pi runs every `tool_call` handler unless one returns `block`, and all of them
-share the same mutable `input` object with no re-validation before execution.
-Loading with `-e` puts this gate first, which prevents an *earlier* extension
-pre-empting it — but an extension loaded after it can rewrite arguments Relay has
-already authorized, and those execute unreviewed.
-
-<Warning>
-pi exposes no ordering API and no post-chain hook, so this cannot be prevented
-from inside an extension. In a mixed extension stack, the tool gate is
-authoritative over **the model**, not over **the other extensions**.
-</Warning>
-
-## Tool-Result Policy Is Not Available
-
-Relay's only tool middleware that can change what a tool *returned* is the
-execution intercept, which wraps the callback and so owns execution. pi runs its
-tools in its own process and reports the outcome, and the gateway builds spans
-from hook posts rather than executing anything, so neither side ever holds that
-callback.
-
-<Warning>
-This is broader than pi. **A tool execution intercept registered by any plugin
-does not run under the CLI gateway at all** — the registry's only consumer is
-`tool_call_execute`, which the gateway never calls, because it applies policy
-through the hook path instead. Conditional-execution guardrails and request
-intercepts do run there, since both have standalone runners the gateway invokes
-directly; there is no response-phase equivalent to invoke.
-</Warning>
-
-## Interrupted Sessions
-
-pi registers **no SIGINT handler in any mode**. All three modes install handlers
-for `SIGTERM`, plus `SIGHUP` off Windows, and raw mode is set only by the
-interactive TUI — so under `-p`, `--mode json` and `--mode rpc`, Ctrl+C is a real
-SIGINT that terminates the process with teardown never running. pi's
-`session_shutdown` never fires, and the extension never drains its queue.
-
-The loss is bounded. Every hook the extension *awaits* has already reached the
-gateway: both gates and both turn boundaries block on their round trip. An
-interrupt can therefore drop only observability marks queued since the last
-awaited hook, and the gateway keeps everything already delivered — the session
-scope is left open rather than the trace being lost.
-
-| Exit | Teardown runs? |
-| --- | --- |
-| `/quit`, normal completion | Yes |
-| `SIGTERM`, `SIGHUP` | Yes |
-| `SIGINT` (Ctrl+C in a headless mode) | **No** |
-| `SIGKILL`, uncaught exception | **No** |
-
 ## Model Redirection
 
 pi has no base-URL flag and no generic environment override — it resolves a base
@@ -446,7 +369,6 @@ Point pi at the gateway **root**, not the root plus `/v1`. The Anthropic SDK
 appends `/v1/messages` itself, while the OpenAI SDK appends `/chat/completions`;
 the gateway serves both shapes from the root.
 </Warning>
-
 ## Agent-Run Attribution
 
 One pi prompt can re-enter the agent run several times — provider retry,
@@ -476,7 +398,6 @@ strictly within a session.
 Subagents are not represented. pi has no nested-agent hook of its own, and a
 child pi process running this extension posts under its own session id, so it
 appears as an unrelated session rather than as a subagent.
-
 ## Smoke Test
 
 Check hook forwarding directly. A 200 is an allow; a 403 with the guardrail
@@ -488,7 +409,6 @@ curl -s -w '\nHTTP:%{http_code}\n' -X POST http://127.0.0.1:4040/hooks/pi \
   -H 'content-type: application/json' \
   -d '{"hook_event_name":"tool_call","session_id":"smoke-pi","tool_call_id":"c1","tool_name":"read","input":{"path":"README.md"}}'
 ```
-
 ## Verify Export
 
 Complete a pi turn, then confirm the exporter output. With an ATOF file sink
@@ -499,8 +419,7 @@ under it.
 If turn scopes are missing entirely, the extension is not loading. pi collects
 extension load errors rather than aborting, so a failure is silent — run pi with
 `-e` pointing at the entry point directly to isolate it.
-
-## Troubleshoot Missing LLM Spans
+## Troubleshoot LLM Lifecycle
 
 Look for the `model_redirect` mark on the session scope: it names the outcome and
 the reason. The common ones are `upstream-mismatch` (start the gateway with
@@ -512,3 +431,64 @@ speaks an API the gateway has no route for — pick another model), and
 — point both upstreams at that provider, or select a model elsewhere.
 
 Tool and turn activity are unaffected by any of these.
+
+## Limitations
+
+### What The Gate Is Authoritative Over
+
+pi runs every `tool_call` handler unless one returns `block`, and all of them
+share the same mutable `input` object with no re-validation before execution.
+Loading with `-e` puts this gate first, which prevents an *earlier* extension
+pre-empting it — but an extension loaded after it can rewrite arguments Relay has
+already authorized, and those execute unreviewed.
+
+<Warning>
+pi exposes no ordering API and no post-chain hook, so this cannot be prevented
+from inside an extension. In a mixed extension stack, the tool gate is
+authoritative over **the model**, not over **the other extensions**.
+</Warning>
+### Tool-Result Policy Is Not Available
+
+Relay's only tool middleware that can change what a tool *returned* is the
+execution intercept, which wraps the callback and so owns execution. pi runs its
+tools in its own process and reports the outcome, and the gateway builds spans
+from hook posts rather than executing anything, so neither side ever holds that
+callback.
+
+<Warning>
+This is broader than pi. **A tool execution intercept registered by any plugin
+does not run under the CLI gateway at all** — the registry's only consumer is
+`tool_call_execute`, which the gateway never calls, because it applies policy
+through the hook path instead. Conditional-execution guardrails and request
+intercepts do run there, since both have standalone runners the gateway invokes
+directly; there is no response-phase equivalent to invoke.
+</Warning>
+### Interrupted Sessions
+
+pi registers **no SIGINT handler in any mode**. All three modes install handlers
+for `SIGTERM`, plus `SIGHUP` off Windows, and raw mode is set only by the
+interactive TUI — so under `-p`, `--mode json` and `--mode rpc`, Ctrl+C is a real
+SIGINT that terminates the process with teardown never running. pi's
+`session_shutdown` never fires, and the extension never drains its queue.
+
+The loss is bounded. Every hook the extension *awaits* has already reached the
+gateway: both gates and both turn boundaries block on their round trip. An
+interrupt can therefore drop only observability marks queued since the last
+awaited hook, and the gateway keeps everything already delivered — the session
+scope is left open rather than the trace being lost.
+
+| Exit | Teardown runs? |
+| --- | --- |
+| `/quit`, normal completion | Yes |
+| `SIGTERM`, `SIGHUP` | Yes |
+| `SIGINT` (Ctrl+C in a headless mode) | **No** |
+| `SIGKILL`, uncaught exception | **No** |
+### Gateway Round Trips
+
+pi awaits extension handlers on its critical path, so a blocking hook is
+synchronous by construction. Observability-only hooks are queued rather than
+awaited and drained at shutdown, so they do not charge that path — while the
+gateway answers. Posts go out one at a time in hook order, so a gating hook also
+waits for whatever is queued ahead of it: against a gateway that holds requests,
+the first gate of a session pays `NEMO_RELAY_PI_TIMEOUT_MS` once per queued post,
+not once.
