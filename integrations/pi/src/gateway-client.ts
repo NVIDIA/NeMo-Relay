@@ -32,13 +32,24 @@ export type HookOutcome =
   /**
    * Neither a verdict nor a usable success.
    *
-   * `reached` is false when nothing came back -- the connection failed, or nothing
-   * answered in time -- and true when the gateway did answer and the answer was not
-   * a decision, such as a rejected payload or a body that will not parse. Both block
-   * under `NEMO_RELAY_PI_FAIL=closed`, but they send whoever reads the block to two
-   * different places, so the reason has to say which one happened.
+   * `origin` says where it went wrong, because all four send whoever reads the
+   * block somewhere different and they all block identically under
+   * `NEMO_RELAY_PI_FAIL=closed`. A single "could not be reached" was wrong for
+   * three of them.
    */
-  | { kind: 'fault'; detail: string; reached: boolean };
+  | { kind: 'fault'; detail: string; origin: FaultOrigin };
+
+/**
+ * Where a fault happened, which is what a reader has to know to act on it.
+ *
+ * - `transport` -- nothing answered. The gateway is down, or the URL is wrong.
+ * - `timeout` -- nothing answered *in time*. The gateway may be up and slow, and
+ *   posts are serialized, so a gate also waits out everything queued ahead of it.
+ * - `response` -- the gateway answered, and the answer was not a decision: a
+ *   rejected payload, an unreadable body, a 403 with no guardrail marker.
+ * - `handler` -- the gateway was never asked. This extension threw.
+ */
+export type FaultOrigin = 'transport' | 'timeout' | 'response' | 'handler';
 
 /** The fault arm of {@link HookOutcome}, named so a caller can build one. */
 export type HookFault = Extract<HookOutcome, { kind: 'fault' }>;
@@ -105,7 +116,7 @@ export async function postHook(
       if (body === null || typeof body !== 'object' || Array.isArray(body)) {
         return {
           kind: 'fault',
-          reached: true,
+          origin: 'response',
           detail: 'gateway returned a success body that is not a JSON object',
         };
       }
@@ -120,18 +131,19 @@ export async function postHook(
       }
       // A 403 without the guardrail marker is an authorization fault, not a
       // policy decision; do not present it to the model as one.
-      return { kind: 'fault', reached: true, detail: `gateway returned 403 without a guardrail reason` };
+      return { kind: 'fault', origin: 'response', detail: `gateway returned 403 without a guardrail reason` };
     }
 
-    return { kind: 'fault', reached: true, detail: `gateway returned HTTP ${response.status}` };
+    return { kind: 'fault', origin: 'response', detail: `gateway returned HTTP ${response.status}` };
   } catch (error) {
-    const detail =
-      error instanceof Error && error.name === 'AbortError'
-        ? `gateway did not respond within ${config.timeoutMs}ms`
-        : `gateway request failed: ${error instanceof Error ? error.message : String(error)}`;
-    // Nothing usable came back: a transport failure, or a timeout that may have arrived
-    // and never answered. Either way there is no response to have misread.
-    return { kind: 'fault', reached: false, detail };
+    const timedOut = error instanceof Error && error.name === 'AbortError';
+    const detail = timedOut
+      ? `gateway did not respond within ${config.timeoutMs}ms`
+      : `gateway request failed: ${error instanceof Error ? error.message : String(error)}`;
+    // A timeout is not an unreachable gateway. It may be up and slow, and because posts are
+    // serialized a gate also waits out everything queued ahead of it -- so the remedy is the
+    // timeout value or the gateway's speed, not the socket.
+    return { kind: 'fault', origin: timedOut ? 'timeout' : 'transport', detail };
   } finally {
     clearTimeout(timer);
   }
@@ -161,14 +173,18 @@ export function resolveFault(
   toolName: string,
 ): HookOutcome {
   if (config.onFault === 'open') return { kind: 'allow' };
-  // Two openings, one tail. The tail is the part a model has to act on and it is the
-  // same either way: nothing judged the request, so the request is not what to change.
-  // The opening differs because "could not be reached", said of a gateway that replied
-  // 413, sends the reader to debug connectivity -- the one thing that is working. This
-  // string reaches the model verbatim, so it is also what the user reads.
-  const opening = fault.reached
-    ? `The NeMo Relay policy gateway answered this ${toolName} call without a usable decision`
-    : `The NeMo Relay policy gateway could not be reached to authorize this ${toolName} call`;
+  // One opening per origin, one tail. The tail is the part a model has to act on and it is
+  // the same for all four: nothing judged the request, so the request is not what to change.
+  // The openings differ because they are debugged in four different places, and "could not
+  // be reached" said of a gateway that replied 413 sends the reader to the one thing that is
+  // working. This string reaches the model verbatim, so it is also what the user reads.
+  const openings: Record<FaultOrigin, string> = {
+    transport: `The NeMo Relay policy gateway could not be reached to authorize this ${toolName} call`,
+    timeout: `The NeMo Relay policy gateway did not answer in time to authorize this ${toolName} call`,
+    response: `The NeMo Relay policy gateway answered this ${toolName} call without a usable decision`,
+    handler: `The NeMo Relay policy gate failed before it could authorize this ${toolName} call`,
+  };
+  const opening = openings[fault.origin];
   return {
     kind: 'block',
     reason:

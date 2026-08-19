@@ -678,9 +678,9 @@ export default function nemoRelayExtension(pi: ExtensionAPI): void {
         const detail = error instanceof Error ? error.message : String(error);
         const fault = resolveFault(
           config ?? configFromEnv(safeSessionId(ctx)),
-          // Not `reached`: this is the handler failing, not the gateway. Whatever the
-          // gateway said, no decision came out of it here.
-          { kind: 'fault', reached: false, detail: `the inline-shell gate failed: ${detail}` },
+          // `handler`, not a transport failure: the gateway was never asked. Saying it could
+          // not be reached would send the reader to a socket that is fine.
+          { kind: 'fault', origin: 'handler', detail: `the inline-shell gate failed: ${detail}` },
           USER_BASH_TOOL_NAME,
         );
         if (fault.kind === 'block') return { result: refusalResult(fault.reason) };

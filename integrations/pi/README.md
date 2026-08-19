@@ -228,8 +228,10 @@ which pi records exactly as if the command had run:
 `NEMO_RELAY_PI_FAIL` governs this path too: a gateway that cannot be reached
 allows the command by default, and refuses it under `closed` with a reason that
 says explicitly that it is an infrastructure fault rather than a judgment — and
-whether the gateway never answered or answered without a decision, so the reader
-is not sent to debug a socket that is working.
+which of four it was: no answer, no answer *in time*, an answer that was not a
+decision, or the gate failing before the gateway was asked. A timeout is not an
+unreachable gateway, and neither is a 413, so the reader is not sent to debug a
+socket that is working.
 
 **A rewritten command is refused, not run.** pi's `user_bash` result can replace
 the *result* or the execution backend, but never the command — both call sites

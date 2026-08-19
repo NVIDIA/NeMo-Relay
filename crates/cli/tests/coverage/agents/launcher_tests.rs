@@ -1832,6 +1832,57 @@ fn pi_launch_refuses_when_two_copies_would_load() {
     );
 }
 
+// The note describes a *second* copy, so it must not fire for a project entry pi's settings
+// switch off (it never loads) nor for one that canonicalizes to the launched package (pi
+// de-duplicates by path, so it loads once).
+#[test]
+fn a_project_copy_that_cannot_double_the_trace_is_not_noted() {
+    let _guard = current_dir_lock().lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let shared = project.join(".pi").join("extensions").join("nemo-relay");
+    write_relay_pi_package(&shared);
+    // A project settings entry pointing at a copy whose extensions are filtered off.
+    std::fs::create_dir_all(project.join(".pi")).unwrap();
+    write_relay_pi_package(&project.join("off"));
+    std::fs::write(
+        project.join(".pi").join("settings.json"),
+        r#"{"packages": [{"source": "../off", "extensions": []}]}"#,
+    )
+    .unwrap();
+    let empty_agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&empty_agent_dir).unwrap();
+    // Launch the very copy the project holds, so the remaining project site is the same package.
+    let _env = EnvScope::set(&[
+        (
+            crate::agents::pi::launch::PI_EXTENSION_PATH_ENV,
+            Some(shared.as_os_str()),
+        ),
+        (
+            crate::agents::pi::doctor::PI_AGENT_DIR_ENV,
+            Some(empty_agent_dir.as_os_str()),
+        ),
+    ]);
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&project).unwrap();
+
+    let prepared = PreparedAgentLaunch::new(
+        CodingAgent::Pi,
+        vec!["pi".into()],
+        "http://127.0.0.1:4040",
+        &ResolvedConfig::default(),
+        false,
+    );
+
+    std::env::set_current_dir(previous).unwrap();
+    let prepared = prepared.expect("the same package reached twice is one copy");
+    let notes = prepared.notes.join(" ");
+    assert!(
+        !notes.contains("second copy of this extension under the project"),
+        "neither project site can double the trace: {notes}"
+    );
+}
+
 // `-e` is never trust-gated. Promoting a project-scoped install to it would run
 // repository code pi itself declined to trust, which is the failure the preflight
 // exists to warn about rather than to work around.

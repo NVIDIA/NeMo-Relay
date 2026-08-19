@@ -357,7 +357,7 @@ fn an_object_form_package_entry_is_found() {
 
     assert_eq!(sites.len(), 1, "{sites:?}");
     assert_eq!(sites[0].scope, ExtensionScope::User);
-    assert!(!sites[0].disabled_by_settings);
+    assert_eq!(sites[0].filter, SettingsFilter::Loads);
     // Compared canonically: a recorded source is relative to the settings file, so the
     // resolved path keeps the `..` pi itself would resolve away.
     assert_eq!(
@@ -369,17 +369,14 @@ fn an_object_form_package_entry_is_found() {
 // A non-empty pattern list is matched against the package manifest, which this
 // module does not read. Reporting it as loaded is the deliberate direction: a false
 // negative here is the exact failure the whole module exists to prevent.
-// The other side of the same table. A `+` include, a bare name, and anything this module
-// cannot decide -- a glob, which pi expands with `minimatch` -- all count as enabled, because
-// a false warning costs more than a missing one.
+// The other side of the same table: a `+` force-include, a bare include naming the entry, and
+// an `autoload: false` delta that adds it back all leave pi loading it.
 #[test]
 fn an_object_form_entry_whose_patterns_leave_it_loaded_is_not_reported_as_disabled() {
     for body in [
         r#"{"packages": [{"source": "../checkout", "extensions": ["+index.ts"]}]}"#,
         r#"{"packages": [{"source": "../checkout", "extensions": ["index.ts"]}]}"#,
         r#"{"packages": [{"source": "../checkout", "autoload": false, "extensions": ["+index.ts"]}]}"#,
-        // Deliberate fail-open: pi's glob matcher is not reimplemented here.
-        r#"{"packages": [{"source": "../checkout", "extensions": ["!*.ts"]}]}"#,
     ] {
         let temp = tempfile::tempdir().unwrap();
         let agent_dir = temp.path().join("agent");
@@ -391,8 +388,76 @@ fn an_object_form_entry_whose_patterns_leave_it_loaded_is_not_reported_as_disabl
         let sites = relay_extension_sites(temp.path());
 
         assert_eq!(sites.len(), 1, "{body}: {sites:?}");
-        assert!(!sites[0].disabled_by_settings, "{body}");
+        assert_eq!(sites[0].filter, SettingsFilter::Loads, "{body}");
     }
+}
+
+// An include list that never names this entry leaves pi loading nothing from the package --
+// step 1 keeps only what the includes match. Decidable without a glob matcher, and previously
+// reported as a plain Pass.
+#[test]
+fn an_include_list_that_omits_this_entry_is_reported_as_disabled() {
+    for body in [
+        r#"{"packages": [{"source": "../checkout", "extensions": ["other.ts"]}]}"#,
+        r#"{"packages": [{"source": "../checkout", "autoload": false, "extensions": ["+other.ts"]}]}"#,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let agent_dir = temp.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        write_relay_package(&temp.path().join("checkout"));
+        std::fs::write(agent_dir.join("settings.json"), body).unwrap();
+
+        let _env = scoped(None, Some(agent_dir.as_os_str()));
+        let sites = relay_extension_sites(temp.path());
+        assert_eq!(sites[0].filter, SettingsFilter::Excluded, "{body}");
+    }
+}
+
+// A glob is pi's to evaluate, not this module's -- but saying Pass would claim pi loads the
+// extension on no evidence, which is the claim this whole module exists to stop making.
+#[test]
+fn a_glob_filter_is_reported_as_undecided_rather_than_as_loaded() {
+    for body in [
+        r#"{"packages": [{"source": "../checkout", "extensions": ["!*.ts"]}]}"#,
+        r#"{"packages": [{"source": "../checkout", "extensions": ["src/*.ts"]}]}"#,
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let agent_dir = temp.path().join("agent");
+        std::fs::create_dir_all(&agent_dir).unwrap();
+        write_relay_package(&temp.path().join("checkout"));
+        std::fs::write(agent_dir.join("settings.json"), body).unwrap();
+
+        let _env = scoped(None, Some(agent_dir.as_os_str()));
+        let sites = relay_extension_sites(temp.path());
+        assert_eq!(sites[0].filter, SettingsFilter::Undecided, "{body}");
+    }
+}
+
+// Choosing the first site regardless of its filter manufactured the duplicate it then refused:
+// `-e` re-enables the disabled copy, and the enabled one becomes a genuine second load.
+#[test]
+fn the_launch_path_prefers_a_copy_pi_already_loads() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_dir = temp.path().join("agent");
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    write_relay_package(&temp.path().join("off"));
+    let live = temp.path().join("live");
+    write_relay_package(&live);
+    std::fs::write(
+        agent_dir.join("settings.json"),
+        r#"{"packages": [{"source": "../off", "extensions": []}, "../live"]}"#,
+    )
+    .unwrap();
+
+    let _env = scoped(None, Some(agent_dir.as_os_str()));
+    let launched = launchable_extension_path(temp.path()).unwrap();
+
+    assert_eq!(
+        std::fs::canonicalize(&launched).unwrap(),
+        std::fs::canonicalize(&live).unwrap(),
+        "the enabled copy must win, so the disabled one stays disabled"
+    );
+    assert_eq!(conflicting_extension_site(temp.path(), &launched), None);
 }
 
 // B1: two copies inside ONE source. pi resolves every distinct package source, so both load
@@ -475,7 +540,7 @@ fn an_object_form_entry_with_extension_patterns_is_still_found() {
     let sites = relay_extension_sites(temp.path());
 
     assert_eq!(sites.len(), 1, "{sites:?}");
-    assert!(!sites[0].disabled_by_settings);
+    assert_eq!(sites[0].filter, SettingsFilter::Loads);
 }
 
 // Installed and switched off is not the same as absent, and must not be reported as
@@ -504,7 +569,7 @@ fn an_object_form_entry_whose_extensions_are_disabled_is_reported_as_disabled() 
         let sites = relay_extension_sites(temp.path());
 
         assert_eq!(sites.len(), 1, "{body}: {sites:?}");
-        assert!(sites[0].disabled_by_settings, "{body}");
+        assert_eq!(sites[0].filter, SettingsFilter::Excluded, "{body}");
         // Still launchable, deliberately: `-e` applies no settings filter, so the launcher
         // instruments a session the user's own `pi` runs are missing.
         assert_eq!(

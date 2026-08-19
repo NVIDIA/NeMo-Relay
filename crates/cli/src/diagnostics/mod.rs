@@ -526,9 +526,12 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
 
     // Ahead of the project warning, because a project copy must not hide it: the two ungated
     // copies load whether or not the project is trusted, and that is the louder problem.
-    if let Some(site) = sites.first()
+    // Asked of the copy the launcher would choose, not of whichever site sorts first: a copy pi's
+    // settings switch off is not one of the two that load, and naming it here would report a
+    // duplicate that does not exist.
+    if let Some(launched) = crate::agents::pi::doctor::launchable_extension_path(cwd)
         && let Some(duplicate) =
-            crate::agents::pi::doctor::conflicting_extension_site(cwd, &site.path)
+            crate::agents::pi::doctor::conflicting_extension_site(cwd, &launched)
     {
         return Check {
             name: NAME,
@@ -538,7 +541,7 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
                  so both register hooks and every event is reported twice -- each turn is \
                  closed as superseded by its own duplicate, and the inline-shell gate decides \
                  one command twice. Keep one copy",
-                site.path.display(),
+                launched.display(),
                 duplicate.display()
             ),
         };
@@ -562,18 +565,33 @@ fn pi_extension_trust_check(cwd: &Path) -> Check {
         };
     }
 
+    use crate::agents::pi::doctor::SettingsFilter;
     match sites.first() {
         // Installed, and switched off in pi's own settings. Same silent drop as the trust gate,
         // from the other direction -- and `-e` ignores those filters, so the launcher still
         // instruments a session the user's own `pi` runs are missing.
-        Some(site) if site.disabled_by_settings => Check {
+        Some(site) if site.filter == SettingsFilter::Excluded => Check {
             name: NAME,
             status: Status::Warn,
             details: format!(
                 "{} is recorded in pi's settings with its extensions filtered off, so pi does not \
-                 load it -- remove the `extensions` filter, or the `autoload: false`, on \
-                 that entry. `nemo-relay run --agent pi` is unaffected: it passes `-e`, \
-                 which applies no settings filter",
+                 load it -- remove the `extensions` filter, or the `autoload: false`, on that \
+                 entry. `nemo-relay run --agent pi` is unaffected: it passes `-e`, which applies \
+                 no settings filter",
+                site.path.display()
+            ),
+        },
+        // Installed, with a filter this check cannot evaluate: pi matches glob patterns with
+        // `minimatch`, which is not reimplemented here. Reporting Pass would claim pi loads it,
+        // and that is the claim this whole check exists to stop being made on no evidence.
+        Some(site) if site.filter == SettingsFilter::Undecided => Check {
+            name: NAME,
+            status: Status::Warn,
+            details: format!(
+                "{} is recorded in pi's settings with a glob filter on its extensions, and \
+                 whether pi loads it cannot be decided from here. Check that filter if NeMo \
+                 Relay appears to do nothing. `nemo-relay run --agent pi` is unaffected: it \
+                 passes `-e`, which applies no settings filter",
                 site.path.display()
             ),
         },

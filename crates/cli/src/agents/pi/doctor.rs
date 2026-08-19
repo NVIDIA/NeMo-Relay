@@ -72,18 +72,22 @@ impl ExtensionScope {
 pub(crate) struct ExtensionSite {
     pub(crate) path: PathBuf,
     pub(crate) scope: ExtensionScope,
-    /// Whether pi's own settings switch this copy off.
+    /// What pi's own settings do to this copy.
     ///
-    /// An object-form `packages` entry carries per-resource filters, and two shapes leave nothing
-    /// enabled for extensions: an empty `extensions` array, and `autoload: false` with no
-    /// extension patterns (pi `v0.84.0`, `core/package-manager.ts:2208` and `:2232`). The copy is
-    /// installed and pi still never loads it, which is the same silent drop as the trust gate and
-    /// must not read as a plain Pass.
+    /// A copy pi will not load is installed and still silently absent -- the same failure as the
+    /// trust gate, from another direction -- so it must not read as a plain Pass. A copy whose
+    /// filter this check cannot evaluate must not read as one either.
     ///
-    /// A launch is unaffected on purpose: `-e` resolves its argument with no filter at all, so
-    /// `launchable_extension_path` ignores this flag. The user asked for instrumentation by
-    /// running the launcher; the warning is for their own `pi` sessions.
-    pub(crate) disabled_by_settings: bool,
+    /// `-e` applies no settings filter, so a launch can still use an `Excluded` copy; that is
+    /// deliberate, and it is why `launchable_extension_path` merely *prefers* a loading one.
+    pub(crate) filter: SettingsFilter,
+}
+
+impl ExtensionSite {
+    /// Whether pi loads this copy without help -- what makes it a second copy beside `-e`.
+    fn loads_on_its_own(&self) -> bool {
+        self.scope != ExtensionScope::Project && self.filter == SettingsFilter::Loads
+    }
 }
 
 /// Human-readable hook status for `nemo-relay doctor`.
@@ -176,7 +180,7 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
         sites.push(ExtensionSite {
             path,
             scope: ExtensionScope::Explicit,
-            disabled_by_settings: false,
+            filter: SettingsFilter::Loads,
         });
     }
     let discovered = |sites: &mut Vec<ExtensionSite>, dir: &Path, scope| {
@@ -186,7 +190,7 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
                 .map(|path| ExtensionSite {
                     path,
                     scope,
-                    disabled_by_settings: false,
+                    filter: SettingsFilter::Loads,
                 }),
         );
     };
@@ -197,7 +201,7 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
                 .map(|install| ExtensionSite {
                     path: install.path,
                     scope,
-                    disabled_by_settings: install.disabled,
+                    filter: install.filter,
                 }),
         );
     };
@@ -240,11 +244,24 @@ pub(crate) fn relay_extension_sites(cwd: &Path) -> Vec<ExtensionSite> {
 /// entry-point precedence is pi's to change. A copy pi would *not* have
 /// discovered is a different matter, and is what `conflicting_extension_site`
 /// is for.
+/// A copy pi already loads is preferred over one its settings switch off, even
+/// when the disabled one comes first. `-e` applies no settings filter, so passing
+/// the disabled copy would *re-enable* it -- and then the enabled one is a genuine
+/// second copy and the launch is refused over a duplicate the choice manufactured.
+/// Choosing the enabled copy leaves the disabled one disabled and loads exactly
+/// once. A disabled copy is still used when it is all there is, because `-e` makes
+/// it work.
 pub(crate) fn launchable_extension_path(cwd: &Path) -> Option<PathBuf> {
-    relay_extension_sites(cwd)
-        .into_iter()
-        .find(|site| site.scope != ExtensionScope::Project && site.path.exists())
-        .map(|site| site.path)
+    let sites = relay_extension_sites(cwd);
+    let usable = || {
+        sites
+            .iter()
+            .filter(|site| site.scope != ExtensionScope::Project && site.path.exists())
+    };
+    usable()
+        .find(|site| site.filter == SettingsFilter::Loads)
+        .or_else(|| usable().next())
+        .map(|site| site.path.clone())
 }
 
 /// A *second* copy of this extension that pi would load beside the launched one.
@@ -288,9 +305,30 @@ pub(crate) fn conflicting_extension_site(cwd: &Path, launched: &Path) -> Option<
     let launched_root = package_root(launched);
     relay_extension_sites(cwd)
         .into_iter()
-        .filter(|site| site.scope != ExtensionScope::Project && !site.disabled_by_settings)
+        .filter(ExtensionSite::loads_on_its_own)
         .find(|site| package_root(&site.path) != launched_root)
         .map(|site| site.path)
+}
+
+/// Project-scoped copies that would load *beside* the launched one, if the project
+/// is trusted.
+///
+/// Two exclusions, both for the same reason the launcher does not refuse on these:
+/// a copy pi's settings switch off never loads, and a copy that canonicalizes to
+/// the launched package is the same package -- pi de-duplicates by path, so it
+/// loads once. Warning about either would describe a doubled trace that cannot
+/// happen.
+pub(crate) fn project_copies_beside(cwd: &Path, launched: &Path) -> Vec<PathBuf> {
+    let launched_root = package_root(launched);
+    relay_extension_sites(cwd)
+        .into_iter()
+        .filter(|site| {
+            site.scope == ExtensionScope::Project
+                && site.filter != SettingsFilter::Excluded
+                && package_root(&site.path) != launched_root
+        })
+        .map(|site| site.path)
+        .collect()
 }
 
 /// The package directory a site belongs to, or `None` when it is not on disk.
@@ -371,7 +409,7 @@ fn manifest_names_relay(manifest: &Path) -> bool {
 /// A `packages` entry that records this extension, and whether pi will load it.
 struct RecordedInstall {
     path: PathBuf,
-    disabled: bool,
+    filter: SettingsFilter,
 }
 
 /// The NeMo Relay package among the sources `pi install` recorded, if any.
@@ -414,17 +452,17 @@ fn relay_packages_in_settings(settings: &Path) -> Vec<RecordedInstall> {
             let source = package_source(entry)?;
             let resolved = base.join(source);
             if is_relay_extension(&resolved) {
-                let disabled = entry_disables_extensions(entry, &resolved);
+                let filter = entry_filters_extensions(entry, &resolved);
                 return Some(RecordedInstall {
                     path: resolved,
-                    disabled,
+                    filter,
                 });
             }
             source
                 .contains(RELAY_PACKAGE_NAME)
                 .then(|| RecordedInstall {
                     path: PathBuf::from(source),
-                    disabled: entry_disables_extensions(entry, Path::new(source)),
+                    filter: entry_filters_extensions(entry, Path::new(source)),
                 })
         })
         .collect()
@@ -437,93 +475,201 @@ fn package_source(entry: &serde_json::Value) -> Option<&str> {
         .or_else(|| entry.get("source").and_then(serde_json::Value::as_str))
 }
 
-/// Whether an object-form entry's filters switch that package's extensions off.
+/// What an object-form entry's filters do to that package's extensions.
 ///
-/// An empty `extensions` array disables every extension file in the package
-/// (`applyPackageFilter`, pi `v0.84.0`, `core/package-manager.ts:2208`), and
-/// `autoload: false` starts from nothing, so an entry adding no patterns adds
-/// nothing back (`applyPackageDeltaFilter`, `:2232`).
-///
-/// **A non-empty list can disable just as completely, and that is the shape users
-/// actually get.** pi's configuration selector switches one resource off by
-/// appending `-<path relative to the package root>`
-/// (`interactive/components/config-selector.ts:607`), and a `-` pattern is pi's
-/// last step, overriding every include (`applyPatterns`, `:745-755`). Reading a
-/// non-empty list as "enabled" reported a plain Pass for a package pi loads
-/// nothing from -- the same silent drop the rest of this module exists to catch.
-///
-/// Deciding that needs the entry points the manifest declares, because that is
-/// what pi matches the patterns against. Reading them is not the entry-point
-/// precedence `-e` leaves to pi: the launcher still hands pi the directory and
-/// lets pi choose what to load from it.
-fn entry_disables_extensions(entry: &serde_json::Value, path: &Path) -> bool {
+/// pi sorts a pattern list into four buckets: `+x` force-include and `-x`
+/// force-exclude, both compared as exact strings, and `!x` exclude and bare `x`
+/// include, both matched as globs (`applyPatterns`, pi `v0.84.0`,
+/// `core/package-manager.ts:712-756`). Only the exact ones can be decided from
+/// here without reimplementing `minimatch`, which is why the answer is a tri-state
+/// rather than a bool: reporting a package as loaded because a glob could not be
+/// read is the same silent Pass this module exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsFilter {
+    /// pi loads this package's extensions.
+    Loads,
+    /// pi loads none of them -- the entry point is filtered out for certain.
+    Excluded,
+    /// The filter turns on a glob this check does not evaluate. pi has the files
+    /// and the matcher; this does not, so it says so rather than guessing.
+    Undecided,
+}
+
+fn entry_filters_extensions(entry: &serde_json::Value, path: &Path) -> SettingsFilter {
     let Some(object) = entry.as_object() else {
-        return false;
+        return SettingsFilter::Loads;
     };
     let autoload_off = object.get("autoload") == Some(&serde_json::Value::Bool(false));
     let Some(patterns) = object
         .get("extensions")
         .and_then(serde_json::Value::as_array)
     else {
-        return autoload_off;
+        // `autoload: false` with no patterns starts from nothing and adds nothing back
+        // (`applyPackageDeltaFilter`, `core/package-manager.ts:2232`).
+        return if autoload_off {
+            SettingsFilter::Excluded
+        } else {
+            SettingsFilter::Loads
+        };
     };
     let patterns: Vec<&str> = patterns
         .iter()
         .filter_map(serde_json::Value::as_str)
         .collect();
+    // An empty array explicitly disables every resource of the type
+    // (`applyPackageFilter`, `core/package-manager.ts:2208`).
     if patterns.is_empty() {
-        return true;
+        return SettingsFilter::Excluded;
     }
     let declared = manifest_extension_entries(path);
-    // Nothing to compare against -- a source that is not on disk, or a manifest whose
-    // entries are globs pi expands with `minimatch`. pi has the files and this does
-    // not, so the answer that does not warn is the honest one: a missing warning costs
-    // a user a puzzle, a false one costs them trust in the whole check.
-    !declared.is_empty()
-        && declared
-            .iter()
-            .all(|entry| force_excluded(entry, &patterns, autoload_off))
-}
-
-/// Whether a filter's patterns leave one declared entry point switched off.
-///
-/// A force-exclude is pi's final step and overrides every include, so under a normal
-/// filter any `-` naming the file settles it (`applyPatterns`, pi `v0.84.0`,
-/// `core/package-manager.ts:752`). Under an `autoload: false` delta the patterns are
-/// replayed in order and the last one naming the file wins instead
-/// (`applyAutoloadDisabledPatterns`, `:760`); a file no pattern names is never added
-/// back, which the caller's empty-list branch already covers.
-fn force_excluded(entry: &str, patterns: &[&str], autoload_off: bool) -> bool {
-    let mut naming = patterns
-        .iter()
-        .filter_map(|pattern| exact_pattern(pattern))
-        .filter(|(_, target)| *target == entry);
-    if autoload_off {
-        return naming.next_back().is_some_and(|(marker, _)| marker == '-');
+    if declared.is_empty() {
+        return SettingsFilter::Undecided;
     }
-    naming.any(|(marker, _)| marker == '-')
+    let verdicts = declared
+        .iter()
+        .map(|entry| entry_verdict(entry, &patterns, autoload_off));
+    let mut excluded = true;
+    for verdict in verdicts {
+        match verdict {
+            SettingsFilter::Undecided => return SettingsFilter::Undecided,
+            SettingsFilter::Loads => excluded = false,
+            SettingsFilter::Excluded => {}
+        }
+    }
+    if excluded {
+        SettingsFilter::Excluded
+    } else {
+        SettingsFilter::Loads
+    }
 }
 
-/// The `+`/`-` marker and the path an exact pattern names, when it is one.
+/// What a filter's patterns do to one declared entry point.
 ///
-/// pi compares these as strings rather than globs, after stripping a leading `./`
-/// (`normalizeExactPattern`, pi `v0.84.0`, `core/package-manager.ts:656`), which is
-/// what makes them decidable from here at all.
-fn exact_pattern(pattern: &str) -> Option<(char, &str)> {
-    let marker = pattern.chars().next()?;
-    if marker != '+' && marker != '-' {
+/// Under a normal filter the order is include, exclude, force-include,
+/// force-exclude, and only the last step is unconditional -- so a `-` naming the
+/// entry settles it, and otherwise the answer turns on whether any include or
+/// exclude glob could match. Under an `autoload: false` delta the patterns are
+/// replayed in order and the last one naming the entry wins, with an entry no
+/// pattern names never added at all (`applyAutoloadDisabledPatterns`,
+/// `core/package-manager.ts:760-777`).
+fn entry_verdict(entry: &str, patterns: &[&str], autoload_off: bool) -> SettingsFilter {
+    if autoload_off {
+        let mut decided = SettingsFilter::Excluded;
+        for pattern in patterns {
+            match classify_pattern(pattern, entry) {
+                PatternEffect::Unknown => return SettingsFilter::Undecided,
+                PatternEffect::Names(enabled) => {
+                    decided = if enabled {
+                        SettingsFilter::Loads
+                    } else {
+                        SettingsFilter::Excluded
+                    };
+                }
+                PatternEffect::Silent => {}
+            }
+        }
+        return decided;
+    }
+
+    let mut force_excluded = false;
+    let mut force_included = false;
+    let mut includes = 0_usize;
+    let mut included = false;
+    let mut excluded = false;
+    for pattern in patterns {
+        let (marker, target) = split_pattern(pattern);
+        let literal = literal_target(target);
+        match marker {
+            Some('+') => force_included |= target_matches(target, entry),
+            Some('-') => force_excluded |= target_matches(target, entry),
+            Some('!') => match literal {
+                Some(literal) => excluded |= literal == entry,
+                // A glob exclude could remove the entry, and only a force-include
+                // would bring it back.
+                None if !force_included => return SettingsFilter::Undecided,
+                None => {}
+            },
+            _ => {
+                includes += 1;
+                match literal {
+                    Some(literal) => included |= literal == entry,
+                    None => return SettingsFilter::Undecided,
+                }
+            }
+        }
+    }
+    if force_excluded {
+        return SettingsFilter::Excluded;
+    }
+    if force_included {
+        return SettingsFilter::Loads;
+    }
+    // With no includes at all, step 1 keeps everything.
+    if (includes == 0 || included) && !excluded {
+        SettingsFilter::Loads
+    } else {
+        SettingsFilter::Excluded
+    }
+}
+
+/// What one `autoload: false` delta pattern does to a given entry.
+enum PatternEffect {
+    /// Names the entry, and either enables or disables it.
+    Names(bool),
+    /// Cannot say -- the pattern is a glob.
+    Unknown,
+    /// Names something else.
+    Silent,
+}
+
+fn classify_pattern(pattern: &str, entry: &str) -> PatternEffect {
+    let (marker, target) = split_pattern(pattern);
+    let enabled = !matches!(marker, Some('-') | Some('!'));
+    if matches!(marker, Some('+') | Some('-')) {
+        return if target_matches(target, entry) {
+            PatternEffect::Names(enabled)
+        } else {
+            PatternEffect::Silent
+        };
+    }
+    match literal_target(target) {
+        Some(literal) if literal == entry => PatternEffect::Names(enabled),
+        Some(_) => PatternEffect::Silent,
+        None => PatternEffect::Unknown,
+    }
+}
+
+/// The `+`/`-`/`!` marker and the rest of a pattern.
+fn split_pattern(pattern: &str) -> (Option<char>, &str) {
+    match pattern.chars().next() {
+        Some(marker @ ('+' | '-' | '!')) => (Some(marker), &pattern[marker.len_utf8()..]),
+        _ => (None, pattern),
+    }
+}
+
+/// A pattern's target with a leading `./` removed, unless it carries glob syntax.
+///
+/// pi strips that prefix before comparing (`normalizeExactPattern`, pi `v0.84.0`,
+/// `core/package-manager.ts:656`), which is what makes an exact pattern decidable
+/// from here at all.
+fn literal_target(target: &str) -> Option<&str> {
+    if target.contains(['*', '?', '[', '{']) {
         return None;
     }
-    let target = &pattern[marker.len_utf8()..];
-    Some((marker, target.strip_prefix("./").unwrap_or(target)))
+    Some(target.strip_prefix("./").unwrap_or(target))
+}
+
+/// Whether an exact pattern names this entry. Exact patterns are never globs.
+fn target_matches(target: &str, entry: &str) -> bool {
+    target.strip_prefix("./").unwrap_or(target) == entry
 }
 
 /// The extension entry points a package declares, relative to its own root.
 ///
-/// Empty when they cannot be pinned down: a source that is not on disk, or a
+/// Empty when they cannot be pinned down -- a source that is not on disk, or a
 /// manifest entry carrying a glob or an override marker, which pi expands with
-/// `globSync` and `minimatch` rather than comparing as a string. The caller reads
-/// empty as "cannot tell" and does not warn.
+/// `globSync` rather than comparing as a string. The caller reads empty as
+/// "cannot tell" and says so rather than reporting a Pass.
 fn manifest_extension_entries(path: &Path) -> Vec<String> {
     let Some(root) = package_root(path) else {
         return Vec::new();

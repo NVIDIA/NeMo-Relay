@@ -96,7 +96,7 @@ describe('gateway client wire contract', () => {
       const outcome = await postHook(baseConfig(url), { hook_event_name: name });
       assert.equal(outcome.kind, 'fault', `${name} must not be a plain allow`);
       assert.match(outcome.detail, /not a JSON object/);
-      assert.equal(outcome.reached, true, `${name} answered; it was not unreachable`);
+      assert.equal(outcome.origin, 'response', `${name} answered; it was not unreachable`);
     }
   });
 
@@ -130,14 +130,14 @@ describe('gateway client wire contract', () => {
     // it as one would tell the model a policy considered and refused its call.
     const outcome = await postHook(baseConfig(url), { hook_event_name: 'naked-403' });
     assert.equal(outcome.kind, 'fault');
-    assert.equal(outcome.reached, true, 'a refusal is an answer');
+    assert.equal(outcome.origin, 'response', 'a refusal is an answer');
   });
 
   it('reports a non-403 error status as a fault, not a block', async () => {
     const outcome = await postHook(baseConfig(url), { hook_event_name: 'boom' });
     assert.equal(outcome.kind, 'fault');
     assert.match(outcome.detail, /HTTP 500/);
-    assert.equal(outcome.reached, true);
+    assert.equal(outcome.origin, 'response');
   });
 
   it('times out rather than hanging pi\'s critical path', async () => {
@@ -146,7 +146,7 @@ describe('gateway client wire contract', () => {
     });
     assert.equal(outcome.kind, 'fault');
     assert.match(outcome.detail, /did not respond within 50ms/);
-    assert.equal(outcome.reached, false, 'nothing came back to have misread');
+    assert.equal(outcome.origin, 'timeout', 'slow is not the same as absent');
   });
 
   it('reports an unreachable gateway as a fault', async () => {
@@ -155,7 +155,7 @@ describe('gateway client wire contract', () => {
       hook_event_name: 'tool_call',
     });
     assert.equal(outcome.kind, 'fault');
-    assert.equal(outcome.reached, false);
+    assert.equal(outcome.origin, 'transport');
   });
 
   it('sends the session id in both the header and the payload', async () => {
@@ -173,7 +173,7 @@ describe('failure policy', () => {
   it('fails open by default so a dead sidecar does not brick the agent', () => {
     const outcome = resolveFault(
       { url: '', timeoutMs: 1, onFault: 'open', sessionId: 's' },
-      { kind: 'fault', reached: false, detail: 'connection refused' },
+      { kind: 'fault', origin: 'transport', detail: 'connection refused' },
       'read',
     );
     assert.deepEqual(outcome, { kind: 'allow' });
@@ -182,7 +182,7 @@ describe('failure policy', () => {
   it('fails closed on request, and says the block is infrastructure not policy', () => {
     const outcome = resolveFault(
       { url: '', timeoutMs: 1, onFault: 'closed', sessionId: 's' },
-      { kind: 'fault', reached: false, detail: 'connection refused' },
+      { kind: 'fault', origin: 'transport', detail: 'connection refused' },
       'read',
     );
     assert.equal(outcome.kind, 'block');
@@ -197,7 +197,7 @@ describe('failure policy', () => {
   it('says the gateway answered when it answered, rather than that it was unreachable', () => {
     const outcome = resolveFault(
       { url: '', timeoutMs: 1, onFault: 'closed', sessionId: 's' },
-      { kind: 'fault', reached: true, detail: 'gateway returned HTTP 413' },
+      { kind: 'fault', origin: 'response', detail: 'gateway returned HTTP 413' },
       'write',
     );
     assert.equal(outcome.kind, 'block');
@@ -206,6 +206,26 @@ describe('failure policy', () => {
     // The tail is unchanged: nothing judged the request either way.
     assert.match(outcome.reason, /infrastructure fault, not a judgment/);
     assert.match(outcome.reason, /HTTP 413/);
+  });
+
+  // A timeout is not an unreachable gateway, and a handler failure is not a transport
+  // result. All four block identically; the sentence is the only thing telling the reader
+  // which of four places to look.
+  it('gives each fault origin its own opening', () => {
+    const config = { url: '', timeoutMs: 1, onFault: 'closed', sessionId: 's' };
+    const opening = (origin) =>
+      resolveFault(config, { kind: 'fault', origin, detail: 'd' }, 'read').reason;
+
+    assert.match(opening('transport'), /could not be reached/);
+    assert.match(opening('timeout'), /did not answer in time/);
+    assert.match(opening('response'), /without a usable decision/);
+    assert.match(opening('handler'), /gate failed before it could authorize/);
+
+    const openings = ['transport', 'timeout', 'response', 'handler'].map(opening);
+    assert.equal(new Set(openings).size, 4, 'each origin must read differently');
+    for (const reason of openings) {
+      assert.match(reason, /infrastructure fault, not a judgment/);
+    }
   });
 });
 
