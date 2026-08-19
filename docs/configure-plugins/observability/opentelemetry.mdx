@@ -157,9 +157,9 @@ you configure at least one prefix.
 |---|---|
 | Promotion prefixes | ASCII letters, numbers, underscores, and hyphens in nonempty segments separated by single dots, with an optional trailing dot. Matching is literal and case-sensitive. |
 | Supported values | Strings, booleans, signed 64-bit integers, floating-point numbers, empty arrays, and homogeneous arrays containing one supported primitive type. |
-| Rejected values | Nulls, objects, nested arrays, mixed-type arrays, and unsigned integers larger than `i64::MAX`. |
+| Rejected values | Nulls, objects, nested arrays, mixed-type arrays, and integers outside the signed 64-bit range. |
 | Scope lifecycle | A Scope-end key is authoritative when Relay constructs the final span. When Scope-end omits the key, the Scope-start value remains. |
-| OpenTelemetry collisions | Projection-owned attributes and configured attribute-mapping aliases win over promoted metadata. |
+| OpenTelemetry collisions | Projection-owned attributes always win. For `full` and `openinference`, configured attribute-mapping aliases also win over promoted metadata. |
 
 For example, `"app."`, `"app_"`, and `"app-"` are valid literal prefixes.
 Leading or repeated dots, whitespace, other punctuation, and glob expressions
@@ -182,8 +182,9 @@ numbers, empty arrays, and homogeneous arrays of those primitive types. Relay
 omits rejected values and records a bounded runtime diagnostic containing the
 key and reason, but it does not record the rejected value or stop trace export.
 
-Projection-owned attributes and configured attribute-mapping aliases take
-precedence over promoted metadata with the same key. Relay also omits selected
+Projection-owned attributes take precedence over promoted metadata with the
+same key. For `full` and `openinference`, configured attribute-mapping aliases
+also take precedence. Relay also omits selected
 keys in namespaces owned by Relay or supported semantic projections:
 `nemo_relay.`, `gen_ai.`, `error.`, `exception.`, `input.`, `output.`, `llm.`,
 `openinference.`, `server.`, `service.`, `session.`, `tool.`, `tool_call.`, and
