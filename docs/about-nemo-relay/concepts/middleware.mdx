@@ -9,12 +9,13 @@ import { MermaidStyles } from "@/components/MermaidStyles";
 SPDX-License-Identifier: Apache-2.0 */}
 
 This page explains the runtime behavior that runs around managed tool and LLM
-calls and sanitizes emitted mark and scope events.
+calls, injects metadata into events, and sanitizes emitted mark and scope events.
 
 ## What Middleware Is
 
-Middleware controls or transforms tool and LLM execution and sanitizes emitted
-events. NeMo Relay applies each middleware type at a specific lifecycle point.
+Middleware can control or transform tool and LLM execution. It can also enrich
+or sanitize emitted events. NeMo Relay applies each middleware type at a
+specific lifecycle point.
 
 Middleware is organized by lifecycle meaning rather than as one undifferentiated
 hook system.
@@ -27,8 +28,9 @@ registrations accept callbacks that return a value or an awaitable when invoked
 through an asynchronous Relay API or queued event publication. Worker and
 native-plugin middleware can also complete asynchronously. Within each
 middleware chain, Relay awaits entries sequentially in priority order so later
-callbacks observe earlier middleware output. Payload and event sanitizer chains
-run on the queued publication path and do not delay managed execution.
+callbacks observe earlier middleware output. Event payload transformations,
+event metadata injectors, and event sanitizer chains run on the queued
+publication path and do not delay managed execution.
 
 The experimental raw C FFI and Go binding retain synchronous middleware
 callbacks. Relay invokes each callback on a native thread and waits for it to
@@ -49,18 +51,20 @@ sanitization and publication rather than awaiting it. Manual lifecycle APIs
 synchronous and create or close their handle immediately.
 
 <Warning>
-Event sanitizers, conditional-execution guardrails, request intercepts,
-execution intercepts, and subscribers are not re-entrant. These callbacks must
-not invoke another NeMo Relay API that runs middleware, flushes subscriber
-delivery, waits on an exporter, or clears plugins. Scope APIs remain supported:
-callbacks may create, push, or pop scopes at any nesting level and may replace
-the active scope stack with an arbitrary stack. Emitting a new event is the
-only supported operation that can enqueue additional callback work; Relay
-queues that event for later publication instead of recursively dispatching it.
+Event metadata injectors, event sanitizers, conditional-execution guardrails,
+request intercepts, execution intercepts, and subscribers are not re-entrant.
+These callbacks must not invoke another NeMo Relay API that runs middleware,
+flushes subscriber delivery, waits on an exporter, or clears plugins. Scope
+APIs remain supported. Callbacks may create, push, or pop scopes at any nesting
+level and may replace the active scope stack with an arbitrary stack. Emitting
+a new event is the only supported operation that can enqueue additional
+callback work; Relay queues that event for later publication instead of
+recursively dispatching it.
 An event sanitizer must await child tasks whose emissions belong to its
 reserved FIFO position. Relay cancels detached async sanitizer tasks after the
 sanitizer returns. Detached blocking work runs without that sanitizer
 publication context and must not emit events for the completed publication.
+</Warning>
 
 An execution intercept may invoke the `next` continuation supplied to that
 callback. This is the only supported way for an intercept to enter the
@@ -79,12 +83,11 @@ application-owned `result` and an optional opaque `annotation`. A forwarding
 intercept must preserve both fields in its `ToolExecutionInterceptOutcome` or
 deliberately replace or remove the annotation. Relay retains pending marks
 separately from this application-visible result.
-</Warning>
 
 ## Registration Levels
 
-Middleware and subscribers can be registered at different levels depending on their
-lifetime and visibility.
+Middleware and subscribers can be registered at different levels depending on
+their lifetime and visibility.
 
 ### Global Registrations
 
@@ -107,10 +110,11 @@ everything in application code.
 
 ## Middleware Families
 
-NeMo Relay has two major middleware families with three distinct purposes:
+NeMo Relay provides four middleware purposes:
 
 - **Intercepts** change the real request or callback execution path.
 - **Conditional-execution guardrails** decide whether the real work runs.
+- **Event metadata injectors** add flat metadata to emitted events.
 - **Sanitize guardrails** change emitted observability without changing the real
   request or result.
 
@@ -122,6 +126,8 @@ Choose the middleware type that matches the behavior you need:
   rejected.
 - Use a **request intercept** when the real request must change before the call.
 - Use an **execution intercept** when code must run before or after the callback.
+- Use an **event metadata injector** when every emitted event should receive
+  additional flat metadata before sanitization.
 - Use a **sanitize guardrail** when only subscribers and exporters should see
   rewritten data.
 - Use a **mark or scope event sanitizer** when the sensitive fields are in
@@ -143,6 +149,11 @@ block execution. A rejection is normal control flow, not a callback failure. An
 execution intercept cannot undo work from a `next` continuation that it already
 invoked. This fail-closed contract is the same whether the callback completes
 directly or asynchronously.
+
+Event metadata injectors fail open. If an event metadata injector fails, panics,
+or returns invalid attributes, Relay logs the failure, ignores only that
+injector's output for the current event, and continues with later injectors
+using the event as it stood before the failed injector.
 
 ## Intercepts
 
@@ -176,6 +187,33 @@ Use them when code must run before or after the callback, such as:
 LLM streaming has a stream execution path for wrappers that need to run around
 chunk delivery and finalization rather than only around a single response
 object.
+
+## Event Metadata Injection
+
+Event metadata injectors add values to the existing event `metadata` object.
+They run on every delivered event and receive the current event as immutable
+context, so a callback can inspect the event kind and name before deciding what
+to return.
+
+Event metadata keys contain one or more non-empty segments made of ASCII
+letters, digits, underscores, or hyphens. Segments may be separated by single
+dots, so keys such as `region.zone.name` are valid. Leading dots, trailing dots,
+consecutive dots, whitespace, and unsupported punctuation are invalid. Relay
+stores accepted keys literally, which is why dots do not create nested objects.
+Values may be strings, numbers, booleans, or homogeneous lists of those
+primitive types. Nested objects, `null`, and mixed-type lists are rejected as
+one atomic callback result.
+
+Injection is insert-only and existing event metadata is never overwritten.
+Injectors run in ascending numeric priority and then by registration name, so
+the first injector to insert a missing key wins. A later injector that returns
+the same key cannot replace it.
+
+Register injectors globally, on an owning scope, or through a plugin
+registration context. Injectors execute on the queued serial publication path,
+before event sanitizers, so they do not delay the managed tool or LLM callback.
+Sanitizers retain the final decision to preserve, rewrite, or remove injected
+metadata before subscriber and exporter delivery.
 
 ## Guardrails
 
@@ -229,16 +267,18 @@ arguments passed to the callback or the real value returned to the caller.
 ## Queued Event Publication
 
 Scope operations, marks, and manual or managed tool/LLM lifecycle calls do not
-await observability sanitizers. At emission time Relay snapshots the event-only
-payload, visible sanitizer chains, and subscribers, then places the work on a
-serial dispatcher. The dispatcher awaits the specialized tool or LLM payload
-sanitizers, then the event sanitizers, and publishes the event later in FIFO
-order.
+await observability middleware. At emission time Relay snapshots the event-only
+payload, visible event metadata injectors, sanitizer chains, and subscribers,
+then places the work on a serial dispatcher. The dispatcher completes the
+internal tool or LLM event payload transformation, applies event metadata
+injectors, runs event sanitizers, and publishes the event later in FIFO order.
 
 Subscriber and exporter delivery is therefore delayed, while start/end/mark
 order is preserved. Closing a scope or deregistering middleware after emission
-does not affect queued snapshots. Sanitizer failures fail closed: Relay records
-the callback failure and withholds the governed observability payload.
+does not affect queued snapshots. Injector failures fail open and omit that
+injector's output. Sanitizer failures fail closed: Relay records the callback
+failure, clears the governed observability fields, and continues publication
+with the event shell.
 
 ## Managed Execution Order
 
@@ -246,6 +286,8 @@ Tool calls and buffered LLM calls follow one normal path grouped into request,
 execution, and response phases.
 
 <MermaidStyles />
+
+The following diagram shows the managed execution and serial publication paths.
 
 ```mermaid
 flowchart LR
@@ -272,15 +314,20 @@ flowchart LR
     Callback --> QueueEnd
 
     subgraph PublicationPath[Serial Publication Path]
-        RequestSanitizers[Request Sanitizers]
-        StartEvent[Scope-Start Sanitizers and Deliver Start]
-        ResponseSanitizers[Response Sanitizers]
-        EndEvent[Scope-End Sanitizers and Deliver End]
-        RequestSanitizers --> StartEvent --> ResponseSanitizers --> EndEvent
+        RequestTransform[Request Event Payload Transform]
+        StartInjection[Event Metadata Injectors]
+        StartSanitizers[Scope-Start Event Sanitizers]
+        DeliverStart[Deliver Start Event]
+        ResponseTransform[Response Event Payload Transform]
+        EndInjection[Event Metadata Injectors]
+        EndSanitizers[Scope-End Event Sanitizers]
+        DeliverEnd[Deliver End Event]
+        RequestTransform --> StartInjection --> StartSanitizers --> DeliverStart
+        DeliverStart --> ResponseTransform --> EndInjection --> EndSanitizers --> DeliverEnd
     end
 
-    QueueStart -.-> RequestSanitizers
-    QueueEnd -.-> ResponseSanitizers
+    QueueStart -.-> RequestTransform
+    QueueEnd -.-> ResponseTransform
 ```
 
 The phases run as follows:
@@ -291,9 +338,10 @@ The phases run as follows:
 2. **Execution phase:** Execution intercepts wrap or replace the real callback.
 3. **Response phase:** Relay snapshots and enqueues the end event's
    observability copy, then returns the real result.
-4. **Publication path:** The serial dispatcher runs request or response
-   sanitizers, then the matching scope-event sanitizers, and finally delivers
-   the event to subscribers and exporters.
+4. **Publication path:** The serial dispatcher completes the internal request or
+   response event payload transformation, applies event metadata injectors, runs
+   the matching scope-event sanitizers, and finally delivers the event to
+   subscribers and exporters.
 
 The start event is submitted before execution begins, but its sanitizers run
 later on the publication path and may overlap application execution. The serial
@@ -303,6 +351,7 @@ for queued sanitization and delivery when a caller needs that barrier.
 This ordering preserves the distinction between the families:
 
 - Use an intercept to change real execution.
+- Use an event metadata injector to add observability context.
 - Use a sanitize guardrail to change only emitted observability.
 
 ### Rejection Path
