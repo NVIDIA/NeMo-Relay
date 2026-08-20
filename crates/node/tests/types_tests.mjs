@@ -43,7 +43,7 @@ describe('Type constants', () => {
     assert.equal(ScopeType.Unknown, 10);
   });
 
-  it('type-checks the public observability API fixture', () => {
+  it('type-checks the public API fixtures', () => {
     execFileSync(
       process.execPath,
       [
@@ -58,6 +58,7 @@ describe('Type constants', () => {
         '--moduleResolution',
         'NodeNext',
         'tests/public_observability_api_fixture.ts',
+        'tests/public_event_metadata_api_fixture.ts',
       ],
       {
         cwd: fileURLToPath(new URL('..', import.meta.url)),

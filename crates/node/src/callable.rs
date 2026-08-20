@@ -9,7 +9,7 @@
 //! handles serialization of arguments to/from JSON and manages cross-thread communication
 //! between the Rust async runtime and the Node.js event loop.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,10 +22,11 @@ use napi::threadsafe_function::{
 use napi::{Env, JsFunction, JsObject, JsUnknown, NapiRaw, NapiValue};
 use napi_derive::napi;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
+    LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
+    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionNextFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
@@ -614,6 +615,41 @@ pub fn wrap_js_event_sanitize_promise_fn(func: Arc<PromiseAwareFn>) -> EventSani
                 data: fields.data,
                 category_profile,
                 metadata: fields.metadata,
+            })
+        })
+    })
+}
+
+/// Wrap a Promise-aware JavaScript event metadata injector.
+pub fn wrap_js_event_metadata_injector_promise_fn(
+    func: Arc<PromiseAwareFn>,
+) -> EventMetadataInjectorFn {
+    Arc::new(move |event: Arc<Event>| {
+        let func = func.clone();
+        Box::pin(async move {
+            let event_json = JsEvent::try_from_event(&event)
+                .map(JsEvent::into_json)
+                .map_err(|error| {
+                    let error = FlowError::Internal(format!(
+                        "failed to serialize JavaScript event metadata injector context: {error}"
+                    ));
+                    record_callback_error(error.to_string());
+                    error
+                })?;
+            let publication =
+                nemo_relay::api::runtime::subscriber_dispatcher::in_dispatcher_callback();
+            let value = if publication {
+                func.call_spread_for_publication(vec![event_json]).await
+            } else {
+                func.call(event_json).await
+            }
+            .inspect_err(|error| record_callback_error(error.to_string()))?;
+            serde_json::from_value::<BTreeMap<String, Json>>(value).map_err(|error| {
+                let error = FlowError::Internal(format!(
+                    "invalid JavaScript event metadata injector result: {error}"
+                ));
+                record_callback_error(error.to_string());
+                error
             })
         })
     })

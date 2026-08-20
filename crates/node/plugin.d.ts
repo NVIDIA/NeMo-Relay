@@ -204,6 +204,18 @@ export interface ToolExecutionInterceptOutcome {
   pendingMarks?: PendingMarkSpec[];
 }
 
+/** Scalar value accepted in event metadata additions. */
+export type EventMetadataScalar = string | number | boolean;
+
+/**
+ * Flat value accepted in event metadata additions. After JSON conversion,
+ * numeric arrays must contain only integer values or only floating-point values.
+ */
+export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
+
+/** Metadata additions returned by an event metadata injector. */
+export type EventMetadata = Record<string, EventMetadataValue>;
+
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
   /**
@@ -211,6 +223,12 @@ export interface PluginContext {
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
    */
   registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
+  /** Register an event metadata injector for this component. */
+  registerEventMetadataInjector(
+    name: string,
+    priority: number,
+    callback: (event: Json) => EventMetadata | Promise<EventMetadata>,
+  ): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,

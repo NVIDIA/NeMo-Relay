@@ -1785,19 +1785,38 @@ fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Re
     Ok(())
 }
 
-fn is_otel_compatible_attribute_number(value: &serde_json::Number) -> bool {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OtelAttributePrimitiveKind {
+    Boolean,
+    Integer,
+    Double,
+    String,
+}
+
+fn otel_compatible_attribute_number_kind(
+    value: &serde_json::Number,
+) -> Option<OtelAttributePrimitiveKind> {
     if let Some(value) = value.as_u64() {
-        return i64::try_from(value).is_ok();
+        return i64::try_from(value)
+            .is_ok()
+            .then_some(OtelAttributePrimitiveKind::Integer);
     }
-    value.as_i64().is_some() || value.as_f64().is_some()
+    if value.as_i64().is_some() {
+        return Some(OtelAttributePrimitiveKind::Integer);
+    }
+    value.as_f64().map(|_| OtelAttributePrimitiveKind::Double)
+}
+
+fn is_otel_compatible_attribute_number(value: &serde_json::Number) -> bool {
+    otel_compatible_attribute_number_kind(value).is_some()
 }
 
 fn is_otel_compatible_attribute_value(value: &Json) -> bool {
-    fn primitive_kind(value: &Json) -> Option<u8> {
+    fn primitive_kind(value: &Json) -> Option<OtelAttributePrimitiveKind> {
         match value {
-            Json::Bool(_) => Some(0),
-            Json::Number(value) if is_otel_compatible_attribute_number(value) => Some(1),
-            Json::String(_) => Some(2),
+            Json::Bool(_) => Some(OtelAttributePrimitiveKind::Boolean),
+            Json::Number(value) => otel_compatible_attribute_number_kind(value),
+            Json::String(_) => Some(OtelAttributePrimitiveKind::String),
             _ => None,
         }
     }

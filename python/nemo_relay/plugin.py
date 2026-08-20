@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
 
 from nemo_relay import (
+    EventMetadataInjectorCallback,
     EventSanitizeGuardrail,
     Json,
     JsonObject,
@@ -115,6 +116,12 @@ class PluginContext(Protocol):
 
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None:
         """Register an infallible event subscriber for this component."""
+        ...
+
+    def register_event_metadata_injector(
+        self, name: str, priority: int, callback: EventMetadataInjectorCallback
+    ) -> None:
+        """Register an event metadata injector for this component."""
         ...
 
     def register_mark_sanitize_guardrail(self, name: str, priority: int, callback: EventSanitizeGuardrail) -> None:
