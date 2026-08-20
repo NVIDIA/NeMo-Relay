@@ -5258,6 +5258,63 @@ async fn denied_atof_stream_retains_allowed_local_sink() {
     rollback_registrations(&mut registrations);
 }
 
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn denied_atof_stream_preserves_later_sink_index() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let section = AtofSectionConfig {
+        enabled: true,
+        sinks: vec![
+            AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                name: Some("denied".into()),
+                url: "https://collector.example/denied".into(),
+                transport: "http_post".into(),
+                headers: HashMap::new(),
+                header_env: HashMap::new(),
+                timeout_millis: 3_000,
+                field_name_policy: "preserve".into(),
+                activation_policy: Some(ExportActivationPolicyConfig {
+                    provider: "test.missing-atof-policy".into(),
+                    timeout_millis: 30_000,
+                    config: Json::Null,
+                }),
+            }),
+            AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                name: Some("invalid".into()),
+                url: "https://collector.example/invalid".into(),
+                transport: "invalid".into(),
+                headers: HashMap::new(),
+                header_env: HashMap::new(),
+                timeout_millis: 3_000,
+                field_name_policy: "preserve".into(),
+                activation_policy: None,
+            }),
+        ],
+    };
+    let error = register_atof_exporter(section, &mut PluginRegistrationContext::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("sinks[1]"), "{error}");
+}
+
+#[test]
+fn filtered_atif_storage_preserves_original_sink_labels() {
+    let dispatcher = AtifDispatcher::with_remote_storage_indices(
+        AtifSectionConfig {
+            storage: vec![AtifStorageConfig::Http(HttpStorageConfig {
+                endpoint: "https://collector.example/atif".into(),
+                headers: HashMap::new(),
+                header_env: HashMap::new(),
+                timeout_millis: 3_000,
+                activation_policy: None,
+            })],
+            ..AtifSectionConfig::default()
+        },
+        vec![2],
+    );
+    assert_eq!(dispatcher.sink_targets(), vec![SinkLabel::Remote(2)]);
+}
+
 #[test]
 fn export_activation_policy_config_validates_provider_and_timeout() {
     let config = json!({

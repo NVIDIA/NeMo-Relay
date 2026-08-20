@@ -1162,7 +1162,7 @@ fn register_full_payload_policy(
 }
 
 async fn register_atof_exporter(
-    mut section: AtofSectionConfig,
+    section: AtofSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
     let export_activation_policies = ctx.export_activation_policies();
@@ -1181,17 +1181,14 @@ async fn register_atof_exporter(
             }
         };
         if allowed {
-            allowed_sinks.push(sink);
+            allowed_sinks.push((index, sink));
         }
     }
-    section.sinks = allowed_sinks;
-    if section.sinks.is_empty() {
+    if allowed_sinks.is_empty() {
         return Ok(());
     }
-    let exporters = section
-        .sinks
+    let exporters = allowed_sinks
         .into_iter()
-        .enumerate()
         .map(|(index, sink)| {
             let config = CoreAtofExporterConfig {
                 sink: build_atof_sink_config(index, sink)?,
@@ -1306,21 +1303,32 @@ async fn register_atif_dispatcher(
         )
         .await
         {
-            allowed_storage.push(entry);
+            allowed_storage.push((index, entry));
         }
     }
-    section.storage = allowed_storage;
-    if had_remote_storage && section.storage.is_empty() {
+    if had_remote_storage && allowed_storage.is_empty() {
         return Ok(());
     }
 
-    let mut storage_vec = Vec::with_capacity(section.storage.len());
-    for (index, entry) in section.storage.iter().enumerate() {
+    let remote_storage_indices = allowed_storage
+        .iter()
+        .map(|(index, _)| *index)
+        .collect::<Vec<_>>();
+    let mut storage_vec = Vec::with_capacity(allowed_storage.len());
+    for (index, entry) in &allowed_storage {
+        let index = *index;
         storage_vec.push(build_atif_storage(index, entry)?);
     }
+    section.storage = allowed_storage
+        .into_iter()
+        .map(|(_, entry)| entry)
+        .collect();
     let storage: AtifStorageList = Arc::new(storage_vec);
 
-    let manager = Arc::new(Mutex::new(AtifDispatcher::new(section)));
+    let manager = Arc::new(Mutex::new(AtifDispatcher::with_remote_storage_indices(
+        section,
+        remote_storage_indices,
+    )));
     let dispatcher = atif_dispatcher_subscriber(
         Arc::clone(&manager),
         ctx.qualify_name("atif-"),
@@ -2261,6 +2269,7 @@ fn shutdown_opentelemetry_providers(
 
 struct AtifDispatcher {
     config: AtifSectionConfig,
+    remote_storage_indices: Vec<usize>,
     agents: HashMap<Uuid, ManagedAtifExporter>,
     scope_owners: HashMap<Uuid, Uuid>,
     scope_subscribers: HashMap<Uuid, String>,
@@ -2362,8 +2371,17 @@ enum SinkLabel {
 
 impl AtifDispatcher {
     fn new(config: AtifSectionConfig) -> Self {
+        let remote_storage_indices = (0..config.storage.len()).collect();
+        Self::with_remote_storage_indices(config, remote_storage_indices)
+    }
+
+    fn with_remote_storage_indices(
+        config: AtifSectionConfig,
+        remote_storage_indices: Vec<usize>,
+    ) -> Self {
         Self {
             config,
+            remote_storage_indices,
             agents: HashMap::new(),
             scope_owners: HashMap::new(),
             scope_subscribers: HashMap::new(),
@@ -2658,7 +2676,9 @@ impl AtifDispatcher {
         if self.config.storage.is_empty() {
             vec![SinkLabel::Local]
         } else {
-            (0..self.config.storage.len())
+            self.remote_storage_indices
+                .iter()
+                .copied()
                 .map(SinkLabel::Remote)
                 .collect()
         }
@@ -2979,6 +2999,7 @@ fn write_atif(
     storage: &[Arc<AtifRemoteStorage>],
     targets: &[SinkLabel],
 ) -> Vec<(SinkLabel, std::io::Result<()>)> {
+    let mut remote_position = 0;
     let mut results = targets
         .iter()
         .map(|label| {
@@ -2989,7 +3010,11 @@ fn write_atif(
                         "ATIF local destination has no output path",
                     )),
                 },
-                SinkLabel::Remote(index) => write_atif_remote(storage, *index, write),
+                SinkLabel::Remote(index) => {
+                    let result = write_atif_remote(storage, remote_position, *index, write);
+                    remote_position += 1;
+                    result
+                }
             };
             (label.clone(), result)
         })
@@ -3021,19 +3046,21 @@ fn write_atif_local(path: &PathBuf, payload: &[u8]) -> std::io::Result<()> {
 #[cfg(feature = "object-store")]
 fn write_atif_remote(
     storage: &[Arc<AtifRemoteStorage>],
-    index: usize,
+    storage_position: usize,
+    config_index: usize,
     write: &PendingAtifWrite,
 ) -> std::io::Result<()> {
-    let sink = storage
-        .get(index)
-        .ok_or_else(|| std::io::Error::other(format!("ATIF storage[{index}] is not registered")))?;
+    let sink = storage.get(storage_position).ok_or_else(|| {
+        std::io::Error::other(format!("ATIF storage[{config_index}] is not registered"))
+    })?;
     sink.put(&write.filename, &write.session_id, &write.payload)
 }
 
 #[cfg(not(feature = "object-store"))]
 fn write_atif_remote(
     _storage: &[Arc<AtifRemoteStorage>],
-    _index: usize,
+    _storage_position: usize,
+    _config_index: usize,
     _write: &PendingAtifWrite,
 ) -> std::io::Result<()> {
     Err(std::io::Error::other(
