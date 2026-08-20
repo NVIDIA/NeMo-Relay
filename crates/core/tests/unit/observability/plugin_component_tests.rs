@@ -5227,18 +5227,21 @@ async fn all_denied_atif_storage_does_not_fall_back_to_local_files() {
 #[allow(clippy::await_holding_lock)]
 async fn denied_atof_stream_retains_allowed_local_sink() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let output_directory = temp_dir("allowed-local-atof");
     let section = AtofSectionConfig {
         enabled: true,
         sinks: vec![
             AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
-                output_directory: Some(temp_dir("allowed-local-atof")),
+                output_directory: Some(output_directory.clone()),
                 filename: Some("events.jsonl".into()),
                 mode: "overwrite".into(),
             }),
             AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
                 name: Some("denied".into()),
                 url: "https://collector.example/events".into(),
-                transport: "http_post".into(),
+                // Construction would fail if policy filtering retained this sink.
+                transport: "invalid".into(),
                 headers: HashMap::new(),
                 header_env: HashMap::new(),
                 timeout_millis: 3_000,
@@ -5254,8 +5257,20 @@ async fn denied_atof_stream_retains_allowed_local_sink() {
     let mut context = PluginRegistrationContext::new();
     register_atof_exporter(section, &mut context).await.unwrap();
     let mut registrations = context.into_registrations();
-    assert!(!registrations.is_empty());
+    let agent = push_agent("allowed-local-atof-agent");
+    crate::api::scope::event(
+        crate::api::scope::EmitMarkEventParams::builder()
+            .name("checkpoint")
+            .parent(&agent)
+            .build(),
+    )
+    .unwrap();
+    pop(&agent);
     rollback_registrations(&mut registrations);
+
+    let content = fs::read_to_string(output_directory.join("events.jsonl")).unwrap();
+    assert_eq!(content.lines().count(), 3);
+    assert!(content.contains("\"name\":\"checkpoint\""));
 }
 
 #[tokio::test]
