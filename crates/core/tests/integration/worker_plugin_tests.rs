@@ -1523,10 +1523,6 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     .expect("Python tool execution intercept should call ToolNext and return its outcome");
     assert_eq!(tool_result.result["provider_result"], true);
     assert_eq!(
-        tool_result.result["_nemo_relay_plugin"]["tag"],
-        "managed-environment"
-    );
-    assert_eq!(
         tool_result.result["args"]["_nemo_relay_plugin"]["tag"],
         "managed-environment"
     );
@@ -1543,14 +1539,10 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
 
     flush_subscribers().expect("Python callback mark should flush");
     let captured_events = events.lock().unwrap();
-    find_event(
-        &captured_events,
-        "examples.python_grpc_worker.tool_request",
-        None,
-    );
+    find_event(&captured_events, "example.python_worker.tool_request", None);
     let tool_mark = find_event(
         &captured_events,
-        "examples.python_grpc_worker.tool_execution",
+        "example.python_worker.tool_execution",
         None,
     );
     assert_eq!(

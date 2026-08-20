@@ -59,21 +59,84 @@ navigation:
       - page: "About"
         path: ./build-plugins/about.mdx
         slug: about
-      - folder: ./build-plugins/language-binding
-        title: "Language Binding"
-        title-source: frontmatter
-      - section: "Dynamic Plugins"
-        slug: dynamic-plugins
+      - section: "Plugin Fundamentals"
+        slug: fundamentals
         contents:
-          - page: "Discoverable Plugins"
-            path: ./build-plugins/dynamic-plugins/about.mdx
+          - page: "Plugin Shape"
+            path: ./build-plugins/plugin-shape.mdx
+            slug: plugin-shape
+          - page: "Configuration and Validation"
+            path: ./build-plugins/configuration-and-validation.mdx
+            slug: configuration-and-validation
+          - page: "PluginContext"
+            path: ./build-plugins/plugin-context.mdx
+            slug: plugin-context
+      - section: "Language Binding Plugins"
+        slug: language-binding
+        contents:
+          - page: "About"
+            path: ./build-plugins/language-binding/about.mdx
             slug: about
-          - folder: ./build-plugins/dynamic-plugins/native-dynamic
-            title: "Native Dynamic"
-            title-source: frontmatter
-          - folder: ./build-plugins/dynamic-plugins/grpc-worker
-            title: "gRPC Worker"
-            title-source: frontmatter
+          - page: "Validate Configuration"
+            path: ./build-plugins/language-binding/validate-configuration.mdx
+            slug: validate-configuration
+          - page: "Register Behavior"
+            path: ./build-plugins/language-binding/register-behavior.mdx
+            slug: register-behavior
+          - page: "Advanced Configuration"
+            path: ./build-plugins/language-binding/advanced-configuration.mdx
+            slug: advanced-configuration
+          - page: "Runnable Examples"
+            path: ./build-plugins/language-binding/code-examples.mdx
+            slug: code-examples
+      - page: "Package Discoverable Plugins"
+        path: ./build-plugins/package-discoverable-plugins.mdx
+        slug: package-discoverable-plugins
+      - section: "Native Dynamic Plugins"
+        slug: native
+        contents:
+          - page: "About"
+            path: ./build-plugins/native/about.mdx
+            slug: about
+          - page: "Build and Package"
+            path: ./build-plugins/native/build-and-package.mdx
+            slug: build-and-package
+          - page: "Observe and Sanitize"
+            path: ./build-plugins/native/observe-and-sanitize.mdx
+            slug: observe-and-sanitize
+          - page: "Control Requests"
+            path: ./build-plugins/native/control-requests.mdx
+            slug: control-requests
+          - page: "Wrap Execution"
+            path: ./build-plugins/native/wrap-execution.mdx
+            slug: wrap-execution
+          - page: "Runtime Events and Scopes"
+            path: ./build-plugins/native/runtime-events-and-scopes.mdx
+            slug: runtime-events-and-scopes
+          - page: "Native ABI Reference"
+            path: ./build-plugins/native/native-abi-reference.mdx
+            slug: native-abi-reference
+      - section: "gRPC Worker Plugins"
+        slug: workers
+        contents:
+          - page: "About"
+            path: ./build-plugins/workers/about.mdx
+            slug: about
+          - page: "Python Worker"
+            path: ./build-plugins/workers/python.mdx
+            slug: python
+          - page: "Rust Worker"
+            path: ./build-plugins/workers/rust.mdx
+            slug: rust
+          - page: "Middleware and Continuations"
+            path: ./build-plugins/workers/middleware-and-continuations.mdx
+            slug: middleware-and-continuations
+          - page: "Runtime Events and Scopes"
+            path: ./build-plugins/workers/runtime-events-and-scopes.mdx
+            slug: runtime-events-and-scopes
+          - page: "grpc-v1 Protocol Reference"
+            path: ./build-plugins/workers/grpc-v1-protocol.mdx
+            slug: grpc-v1-protocol
   - folder: ./contribute
     title: "Contribute"
     slug: contribute

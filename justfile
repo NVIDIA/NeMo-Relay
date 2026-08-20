@@ -1270,6 +1270,9 @@ test-rust:
         cargo test --workspace --exclude nemo-relay-ffi
         cargo test -p nemo-relay-ffi -- --test-threads=1
     fi
+    cargo test --manifest-path examples/rust-native-plugin/Cargo.toml
+    cargo test --manifest-path examples/rust-grpc-worker-plugin/Cargo.toml
+    cargo test --manifest-path examples/language-binding-plugin/rust/Cargo.toml
 
 # --set [output_dir=<path>] [ci=true|false]
 test-python:
@@ -1317,6 +1320,7 @@ test-python:
     prepare_test_plugin_fixtures
     pytest_cmd+=(--durations=25)
     "$python_executable" -m "${pytest_cmd[@]}" --ignore=python/tests/integrations
+    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
     if is_true "{{ ci }}" && [[ -n "$rust_coverage_out" ]]; then
         cargo llvm-cov report \
             -p nemo-relay-python \
@@ -1349,6 +1353,8 @@ test-python-plugin:
         --cov=nemo_relay_plugin \
         --cov-report term-missing \
         --cov-fail-under=95
+    (cd examples/python-grpc-worker-plugin && uv run --locked --group test --reinstall-package nemo-relay-plugin pytest)
+    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
     just test-python-plugin-e2e
 
 test-python-plugin-e2e:
@@ -1561,6 +1567,16 @@ test-node:
     else
         npm test --workspace=nemo-relay-node
     fi
+    npm test --workspace=nemo-relay-node-language-binding-plugin-example
+
+# run each checked plugin authoring example from its own project directory
+test-plugin-examples:
+    (cd examples/rust-native-plugin && cargo test)
+    (cd examples/rust-grpc-worker-plugin && cargo test)
+    (cd examples/language-binding-plugin/rust && cargo test)
+    (cd examples/python-grpc-worker-plugin && uv run --locked --group test --reinstall-package nemo-relay-plugin pytest)
+    (cd examples/language-binding-plugin/python && uv run --locked --group test --reinstall-package nemo-relay pytest)
+    npm test --workspace=nemo-relay-node-language-binding-plugin-example
 
 # --set [ci=true|false]
 test-openclaw:

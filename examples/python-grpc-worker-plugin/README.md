@@ -5,52 +5,45 @@ SPDX-License-Identifier: Apache-2.0
 
 # Python gRPC Worker Plugin
 
-This example shows a Python worker plugin using the `nemo-relay-plugin` SDK. It
-registers tool request and execution intercepts, calls the host continuation,
-preserves the upstream tool-result annotation, and emits marks through both the
-host runtime and the execution outcome.
+This package is the complete Python worker used by the plugin authoring guide.
+It validates the shared documentation configuration, registers every safe
+`grpc-v1` surface, preserves annotations and Relay-owned accounting, uses
+invocation-scoped codec proxies, transforms streams lazily, and cleans up marks,
+scopes, isolated stacks, and cancelled tasks.
 
-The example targets Relay 0.8 or later and the canonical `grpc-v1` tool-result
-contract declared in `relay-plugin.toml`.
+The worker targets the Relay 0.8 `grpc-v1` result contract. Its tool continuation returns
+`ToolExecutionResult`. Its execution intercept preserves the application result, carries
+the upstream annotation under worker metadata, and adds Relay-owned pending marks.
 
-## Register With Relay
+Run the example's own test project from this directory:
 
-Run the following commands from this directory:
+```bash
+uv run --locked --group test pytest
+```
+
+Each test owns one contract and can be selected independently. The suite builds
+this directory as a wheel in a clean temporary project, checks the mandatory
+source digest and JSON Schema, validates configuration, asserts all 16
+registrations, and then exercises each policy, sanitizer, request rewrite,
+continuation, stream, mark, and scope behavior separately.
+
+To run the managed-environment lifecycle from this directory, create temporary
+Relay state, add the manifest, and enable the plugin:
 
 ```bash
 relay_tmp="$(mktemp -d)"
 relay_config="$relay_tmp/gateway.toml"
+: > "$relay_config"
 nemo-relay --config "$relay_config" plugins add ./relay-plugin.toml
 nemo-relay --config "$relay_config" plugins enable examples.python_grpc_worker
 nemo-relay --config "$relay_config" --bind 127.0.0.1:4040
 ```
 
-Press Ctrl+C to stop Relay. Then remove the plugin and its managed environment,
-and delete the temporary state:
+After stopping Relay, run the cleanup commands in the same shell session so
+`relay_config` and `relay_tmp` still identify the temporary Relay state.
+Removal also deletes the Relay-managed Python environment.
 
 ```bash
 nemo-relay --config "$relay_config" plugins remove examples.python_grpc_worker
-rm -rf "$relay_tmp"
+rm -rf -- "$relay_tmp"
 ```
-
-`plugins add` creates an isolated Relay-managed virtual environment and installs
-`source.manifest_root` into it with `python -m pip install`. Standard pip index,
-proxy, certificate, and wheelhouse environment variables control dependency
-resolution. Set `NEMO_RELAY_PYTHON` only when adding the plugin to select a base
-Python interpreter; Relay records and reuses the resulting environment during
-activation.
-
-Python workers cannot be loaded directly or by adding a manifest reference to
-`plugins.toml`. They must be registered through `plugins add`, which provisions
-the required environment. `plugins remove` deletes that Relay-managed
-environment.
-
-The SDK package owns the generated protobuf stubs and gRPC server setup. Relay
-starts the worker through the manifest entrypoint and supplies the worker
-socket, host socket, activation ID, and activation token environment variables.
-
-Async callbacks are cancelled cooperatively when the host caller times out or
-stops consuming a worker stream. Let `asyncio.CancelledError` propagate and put
-resource cleanup in `finally` blocks. Synchronous or blocking callback code
-cannot be preempted by the SDK; move that work off the event-loop thread and
-define its cancellation behavior explicitly.

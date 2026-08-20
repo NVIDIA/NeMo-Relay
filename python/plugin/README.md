@@ -21,38 +21,26 @@ dynamic worker plugins. Use it when plugin code should run in its own Python
 process and communicate with Relay through the versioned `grpc-v1` worker
 protocol.
 
-Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. The
-protocol name remains `grpc-v1`, while generated `ToolNext` responses and tool
-execution outcomes use structural protobuf `ToolExecutionResult` and
-`ToolExecutionInterceptOutcome` messages instead of schema-tagged JSON
-envelopes. Workers and custom bindings built for an earlier Relay release must
-regenerate their protobuf bindings, rebuild with this SDK, and declare a
-`compat.relay` range beginning at `0.8.0` or later.
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers and
+custom bindings built for earlier releases must regenerate protobuf bindings, rebuild,
+and declare `compat.relay` beginning at `0.8.0`. `ToolNext.call()` returns
+`ToolExecutionResult`, preserving opaque annotation metadata independently of the
+application result JSON.
 
-## Why Use It?
+## Authoring Surface
 
-- **Isolate plugin dependencies**: Run custom policy, middleware, or exporter
-  code outside the Relay host process.
-- **Use the shared runtime contract**: Register subscribers, guardrails, and
-  intercepts through `WorkerPlugin` and `PluginContext`.
-- **Call back into Relay safely**: Emit marks, create scopes, and continue
-  managed execution through the host runtime handle.
-- **Keep worker lifecycle managed**: Let Relay provision the worker environment,
-  start the entrypoint, and supply authenticated local endpoints.
+The following rows describe the plugin authoring surfaces available through this SDK.
 
-## What You Get
+| Surface | Role |
+|---|---|
+| `WorkerPlugin` and `PluginContext` | Define validation and install all 16 worker-owned subscriber and middleware registrations. |
+| `serve_plugin` | Starts an AsyncIO gRPC server from the Relay-managed environment and authenticated local activation endpoints. |
+| Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
+| Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
+| Generated transport bindings | Ship private protobuf bindings in the wheel, so installation does not require `protoc` or `grpcio-tools`. |
 
-- **`WorkerPlugin` and `PluginContext`**: The plugin validation and registration
-  contract for worker-owned runtime behavior.
-- **`serve_plugin`**: An AsyncIO gRPC server wired to the Relay-managed worker
-  environment.
-- **Typed runtime helpers**: JSON, event, scope, middleware, continuation, and
-  diagnostic types shared with Relay.
-- **Canonical tool results**: `ToolNext.call()` returns `ToolExecutionResult`,
-  preserving opaque annotations separately from application result JSON.
-- **Generated transport bindings**: Private protobuf bindings included in built
-  wheels; published-wheel installation does not require `protoc` or
-  `grpcio-tools`.
+The worker process isolates Python dependencies and crashes from Relay while preserving
+host-owned execution, event, scope, cancellation, and shutdown semantics.
 
 ## Installation
 
@@ -139,9 +127,6 @@ Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
 worker process.
 
-For a complete manifest and runnable plugin, see the
-[Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md).
-
 ## Request Intercepts
 
 LLM request intercepts return one canonical outcome:
@@ -199,16 +184,11 @@ cancellation RPC and all other worker RPCs, so offload blocking work and make
 its own cancellation behavior explicit.
 
 `grpc-v1` workers are expected to implement this best-effort cancellation
-contract. When a worker returns `accepted = false`, Relay still drops the
-transport request, but it cannot guarantee worker-side interruption.
+contract. Relay remains compatible with older workers that return
+`accepted = false`; in that case it still drops the transport request, but it
+cannot guarantee worker-side interruption.
 
 Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and
 tests for this SDK on Windows ARM64 rather than creating a package without its
 required gRPC runtime.
-
-## Documentation
-
-- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
-- [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Python gRPC worker plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/python-grpc-worker-plugin/README.md)
