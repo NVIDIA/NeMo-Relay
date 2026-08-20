@@ -971,6 +971,12 @@ impl PluginActivation {
                 .map_err(|error| CliError::Config(format!("invalid plugin config: {error}")))?,
             None => PluginConfig::default(),
         };
+        if let Some(error) = register_and_validate_plugin_components(&plugin_config)
+            .into_iter()
+            .next()
+        {
+            return Err(CliError::Config(error.to_string()));
+        }
         plugin_config
             .components
             .extend(dynamic_plugins.iter().map(|plugin| PluginComponentSpec {
@@ -978,12 +984,6 @@ impl PluginActivation {
                 enabled: true,
                 config: plugin.config.clone(),
             }));
-        if let Some(error) = register_and_validate_plugin_components(&plugin_config)
-            .into_iter()
-            .next()
-        {
-            return Err(CliError::Config(error.to_string()));
-        }
         for plugin in &dynamic_plugins {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
                 snapshot.verify_current()?;

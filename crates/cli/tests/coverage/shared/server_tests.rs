@@ -1838,6 +1838,28 @@ async fn static_only_cli_configuration_keeps_the_legacy_lifecycle() {
 }
 
 #[test]
+fn register_and_validate_plugin_components_rejects_legacy_switchyard_components() {
+    for enabled in [true, false] {
+        let config = PluginConfig {
+            components: vec![PluginComponentSpec {
+                kind: "switchyard".into(),
+                enabled,
+                config: Map::new(),
+            }],
+            ..PluginConfig::default()
+        };
+
+        let errors = register_and_validate_plugin_components(&config);
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, PluginComponentSetupError::RemovedSwitchyard)),
+            "legacy Switchyard components must be rejected when enabled is {enabled}"
+        );
+    }
+}
+
+#[test]
 fn plugin_component_setup_errors_render_every_diagnostic_variant() {
     let adaptive = PluginComponentSetupError::Adaptive("adaptive failure".into());
     assert_eq!(adaptive.check_name(), "Adaptive plugin");
@@ -1905,17 +1927,19 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     .expect("invalid config should fail activation");
     assert!(invalid.to_string().contains("invalid plugin config"));
 
-    let native = PluginActivation::initialize(
+    let dynamic_switchyard = PluginActivation::initialize(
         None,
         vec![dynamic_component_without_manifest(
-            "acme.native-missing",
+            "switchyard",
             DynamicPluginKind::RustDynamic,
         )],
     )
     .await
     .err()
-    .expect("native plugin without a manifest should fail activation");
-    assert!(native.to_string().contains("native dynamic plugin"));
+    .expect("dynamic Switchyard plugin without a manifest should reach dynamic activation");
+    let dynamic_switchyard = dynamic_switchyard.to_string();
+    assert!(dynamic_switchyard.contains("native dynamic plugin"));
+    assert!(!dynamic_switchyard.contains("removed in NeMo Relay 0.8"));
 
     let worker = PluginActivation::initialize(
         None,
