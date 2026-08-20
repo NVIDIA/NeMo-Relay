@@ -8,6 +8,7 @@ from typing import AsyncContextManager, Literal, Protocol, Self, TypedDict
 
 from nemo_relay import (
     Event,
+    EventMetadataInjectorCallback,
     EventSanitizeGuardrail,
     JsonObject,
     LlmConditionalExecutionGuardrail,
@@ -50,6 +51,9 @@ class ConfigReport(TypedDict):
 
 class PluginContext(Protocol):
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None: ...
+    def register_event_metadata_injector(
+        self, name: str, priority: int, callback: EventMetadataInjectorCallback
+    ) -> None: ...
     def register_mark_sanitize_guardrail(self, name: str, priority: int, callback: EventSanitizeGuardrail) -> None: ...
     def register_scope_sanitize_start_guardrail(
         self, name: str, priority: int, callback: EventSanitizeGuardrail

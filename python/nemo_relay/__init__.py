@@ -11,6 +11,7 @@ The main entry points are:
 - ``nemo_relay.tools`` for tool lifecycle management
 - ``nemo_relay.llm`` for non-streaming and streaming LLM lifecycle management
 - ``nemo_relay.guardrails`` and ``nemo_relay.intercepts`` for global middleware
+- ``nemo_relay.event_metadata`` for global event metadata injection
 - ``nemo_relay.scope_local`` for middleware scoped to a specific ``ScopeHandle``
 - ``nemo_relay.typed`` for codec-based typed wrappers
 - ``nemo_relay.plugin`` for global plugin configuration and custom plugin registration
@@ -199,6 +200,17 @@ ToolSanitizeGuardrail: TypeAlias = Callable[[str, Json], Json | Awaitable[Json]]
 EventSanitizeGuardrail: TypeAlias = Callable[
     ["Event", EventSanitizeFields], EventSanitizeFields | Awaitable[EventSanitizeFields]
 ]
+#: Primitive values accepted from event metadata injectors.
+EventMetadataScalar: TypeAlias = str | int | float | bool
+#: Flat event metadata value accepted from an injector. Lists must be empty or
+#: contain values of one primitive type; Relay validates this at runtime.
+EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
+#: Flat metadata additions returned by an event metadata injector.
+EventMetadata: TypeAlias = dict[str, EventMetadataValue]
+#: Additive middleware callback that inspects an immutable event and returns
+#: proposed metadata additions. Both synchronous and asynchronous callbacks are
+#: supported.
+EventMetadataInjectorCallback: TypeAlias = Callable[["Event"], EventMetadata | Awaitable[EventMetadata]]
 #: Guardrail callback that can block tool execution by returning a rejection
 #: message. Returning ``None`` allows execution to continue.
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
@@ -256,6 +268,7 @@ LlmStreamExecutionIntercept: TypeAlias = Callable[
 from nemo_relay import (  # noqa: E402
     adaptive,
     codecs,
+    event_metadata,
     guardrails,
     intercepts,
     llm,
@@ -601,6 +614,7 @@ __all__ = [
     "tools",
     "llm",
     "guardrails",
+    "event_metadata",
     "intercepts",
     "subscribers",
     "scope_local",
@@ -669,6 +683,10 @@ __all__ = [
     "UnsupportedBehavior",
     "EventSanitizeFields",
     "EventSanitizeGuardrail",
+    "EventMetadataScalar",
+    "EventMetadataValue",
+    "EventMetadata",
+    "EventMetadataInjectorCallback",
     "ToolSanitizeGuardrail",
     "ToolConditionalExecutionGuardrail",
     "LlmSanitizeRequestGuardrail",

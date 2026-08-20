@@ -58,6 +58,13 @@ _EventSanitizeGuardrail: TypeAlias = Callable[
     [ScopeEvent | MarkEvent, _EventSanitizeFields],
     _EventSanitizeFields | Awaitable[_EventSanitizeFields],
 ]
+_EventMetadataScalar: TypeAlias = str | int | float | bool
+_EventMetadataValue: TypeAlias = _EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
+_EventMetadata: TypeAlias = dict[str, _EventMetadataValue]
+_EventMetadataInjector: TypeAlias = Callable[
+    [ScopeEvent | MarkEvent],
+    _EventMetadata | Awaitable[_EventMetadata],
+]
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str] | Awaitable[Optional[str]]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolExecutionIntercept: TypeAlias = Callable[
@@ -1451,6 +1458,7 @@ class PluginContext:
         Python plugin protocols expose the public shape. The native class exists
         for runtime registration callbacks.
     """
+    def register_event_metadata_injector(self, name: str, priority: int, callback: _EventMetadataInjector) -> None: ...
     def register_mark_sanitize_guardrail(self, name: str, priority: int, callback: _EventSanitizeGuardrail) -> None: ...
     def register_scope_sanitize_start_guardrail(
         self, name: str, priority: int, callback: _EventSanitizeGuardrail
@@ -1459,6 +1467,8 @@ class PluginContext:
         self, name: str, priority: int, callback: _EventSanitizeGuardrail
     ) -> None: ...
 
+def register_event_metadata_injector(name: str, priority: int, injector: _EventMetadataInjector) -> None: ...
+def deregister_event_metadata_injector(name: str) -> bool: ...
 def register_mark_sanitize_guardrail(name: str, priority: int, guardrail: _EventSanitizeGuardrail) -> None: ...
 def deregister_mark_sanitize_guardrail(name: str) -> bool: ...
 def register_scope_sanitize_start_guardrail(name: str, priority: int, guardrail: _EventSanitizeGuardrail) -> None: ...
@@ -1477,6 +1487,10 @@ def scope_register_scope_sanitize_end_guardrail(
     scope_uuid: str, name: str, priority: int, guardrail: _EventSanitizeGuardrail
 ) -> None: ...
 def scope_deregister_scope_sanitize_end_guardrail(scope_uuid: str, name: str) -> bool: ...
+def scope_register_event_metadata_injector(
+    scope_uuid: str, name: str, priority: int, injector: _EventMetadataInjector
+) -> None: ...
+def scope_deregister_event_metadata_injector(scope_uuid: str, name: str) -> bool: ...
 def create_scope_stack() -> ScopeStack:
     """Create a fresh native scope stack.
 

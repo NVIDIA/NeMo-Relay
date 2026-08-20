@@ -13,13 +13,14 @@ use pyo3::prelude::*;
 use serde_json::{Map, Value as Json};
 
 use nemo_relay::api::registry::{
-    deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
-    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_mark_sanitize_guardrail,
+    deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_event_metadata_injector,
     register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
     register_llm_request_intercept, register_llm_sanitize_request_guardrail,
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
@@ -39,8 +40,8 @@ use nemo_relay::plugin::{
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_callable::{
-    wrap_py_event_sanitize_fn, wrap_py_event_subscriber, wrap_py_llm_conditional_fn,
-    wrap_py_llm_exec_intercept_fn, wrap_py_llm_request_intercept_fn,
+    wrap_py_event_metadata_injector_fn, wrap_py_event_sanitize_fn, wrap_py_event_subscriber,
+    wrap_py_llm_conditional_fn, wrap_py_llm_exec_intercept_fn, wrap_py_llm_request_intercept_fn,
     wrap_py_llm_sanitize_request_fn, wrap_py_llm_sanitize_response_fn,
     wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn,
     wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
@@ -240,6 +241,26 @@ impl PyPluginContext {
 
 #[pymethods]
 impl PyPluginContext {
+    #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
+    fn register_event_metadata_injector(
+        &self,
+        name: &str,
+        priority: i32,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.register_callback(
+            name,
+            |qualified_name| {
+                register_event_metadata_injector(
+                    qualified_name,
+                    priority,
+                    wrap_py_event_metadata_injector_fn(callback),
+                )
+            },
+            deregister_event_metadata_injector,
+            "event metadata injector",
+        )
+    }
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
     fn register_mark_sanitize_guardrail(
         &self,
