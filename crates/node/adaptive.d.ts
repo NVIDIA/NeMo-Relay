@@ -52,7 +52,7 @@ export interface AcgConfig {
   stability_thresholds?: AcgStabilityThresholds;
 }
 
-/** Opt-in LLM response cache (exact-match) settings. */
+/** Opt-in exact-match LLM response and tool-result cache settings. */
 export interface ResponseCacheConfig {
   ttlSeconds?: number;
   /**
@@ -66,6 +66,8 @@ export interface ResponseCacheConfig {
   keyStrategy?: string;
   headerAllowlist?: string[];
   backend?: BackendSpec;
+  /** Opt-in tool-result cache; omit to leave the tool surface off. */
+  tools?: ToolCacheConfig;
 }
 
 interface ResponseCachePluginConfig {
@@ -78,7 +80,64 @@ interface ResponseCachePluginConfig {
   key_strategy?: string;
   header_allowlist?: string[];
   backend?: BackendSpec;
+  tools?: ToolCachePluginConfig;
 }
+
+/** Shared policy; omitted TTL and bypass rate inherit response-cache defaults. */
+export interface ToolClass {
+  cacheable?: boolean;
+  ttlSeconds?: number;
+  bypassRate?: number;
+  toolVersion?: string;
+  argSkip?: string[];
+  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
+  members?: string[];
+}
+
+/** Per-tool refinement; an explicit `argSkip: []` clears the class list. */
+export interface ToolOverride {
+  cacheable?: boolean;
+  ttlSeconds?: number;
+  bypassRate?: number;
+  toolVersion?: string;
+  argSkip?: string[];
+}
+
+/** Opt-in caching for tools that are read-only and stable for their TTL. */
+export interface ToolCacheConfig {
+  enabled?: boolean;
+  /**
+   * Tool execution-intercept priority; omit for Rust's default (100).
+   */
+  priority?: number;
+  /** Whether error-shaped tool results may be cached; defaults to false. */
+  cacheErrors?: boolean;
+  default?: ToolClass;
+  classes?: Record<string, ToolClass>;
+  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
+  overrides?: Record<string, ToolOverride>;
+}
+
+type ToolClassPluginConfig = Omit<ToolClass, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+  ttl_seconds?: number;
+  bypass_rate?: number;
+  tool_version?: string;
+  arg_skip?: string[];
+};
+
+type ToolOverridePluginConfig = Omit<ToolOverride, 'ttlSeconds' | 'bypassRate' | 'toolVersion' | 'argSkip'> & {
+  ttl_seconds?: number;
+  bypass_rate?: number;
+  tool_version?: string;
+  arg_skip?: string[];
+};
+
+type ToolCachePluginConfig = Omit<ToolCacheConfig, 'cacheErrors' | 'default' | 'classes' | 'overrides'> & {
+  cache_errors?: boolean;
+  default?: ToolClassPluginConfig;
+  classes?: Record<string, ToolClassPluginConfig>;
+  overrides?: Record<string, ToolOverridePluginConfig>;
+};
 
 /** Canonical config object for the top-level adaptive component. */
 export interface Config {
@@ -280,8 +339,8 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
 /**
  * Create response-cache settings with defaults applied.
  *
- * Merges caller-supplied overrides onto the opt-in LLM response-cache config
- * shape (exact-match) used by the adaptive plugin. This is a section of
+ * Merges caller-supplied overrides onto the opt-in LLM response and tool-result
+ * cache config shape (exact-match) used by the adaptive plugin. This is a section of
  * the adaptive component, not a standalone plugin kind.
  *
  * @param config - Partial response-cache settings to override.

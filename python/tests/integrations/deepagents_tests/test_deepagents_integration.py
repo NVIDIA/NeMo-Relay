@@ -502,6 +502,7 @@ def test_callback_handler_creates_only_semantic_agent_scopes(
                 "ls_integration": "langchain_create_agent",
                 "lc_agent_name": "reviewer",
                 "lc_versions": {"deepagents": "0.7.4"},
+                "langgraph_node": "reviewer",
             },
         )
         callback_handler.on_chain_end({"messages": ["done"]}, run_id=root_run_id)
@@ -532,6 +533,7 @@ def test_callback_handler_creates_only_semantic_agent_scopes(
         "ls_integration": "langchain_create_agent",
         "lc_agent_name": "reviewer",
         "lc_versions": {"deepagents": "0.7.4"},
+        "langgraph_node": "reviewer",
         "integration": "deepagents",
         "deepagents_agent_name": "reviewer",
         "deepagents_agent_role": "subagent",
@@ -539,6 +541,44 @@ def test_callback_handler_creates_only_semantic_agent_scopes(
     }
     assert starts["main-agent"].parent_uuid == starts["request"].uuid
     assert starts["reviewer"].parent_uuid == starts["main-agent"].uuid
+
+
+@pytest.mark.parametrize(
+    ("name", "langgraph_node"),
+    [
+        (None, "researcher"),
+        ("main-agent", "tools"),
+    ],
+)
+def test_callback_handler_ignores_nonsemantic_graph_nodes(
+    subscribed_events: list[nemo_relay.Event],
+    callback_handler: deepagents_integration.NemoRelayDeepAgentsCallbackHandler,
+    name: str | None,
+    langgraph_node: str,
+):
+    run_id = uuid4()
+
+    with nemo_relay.scope.scope("request", nemo_relay.ScopeType.Agent):
+        callback_handler.on_chain_start(
+            {},
+            {"messages": ["hello"]},
+            run_id=run_id,
+            name=name,
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_agent_name": "main-agent",
+                "lc_versions": {"deepagents": "0.7.4"},
+                "langgraph_node": langgraph_node,
+            },
+        )
+        callback_handler.on_chain_end({"messages": ["ignored"]}, run_id=run_id)
+
+    nemo_relay.subscribers.flush()
+    scope_events = [event for event in subscribed_events if isinstance(event, nemo_relay.ScopeEvent)]
+    assert [(event.scope_category, event.name) for event in scope_events] == [
+        ("start", "request"),
+        ("end", "request"),
+    ]
 
 
 def test_callback_handler_uses_fallback_for_unnamed_agent(

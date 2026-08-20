@@ -30,6 +30,34 @@ NeMo Relay is built into Hermes Agent. Do not install Relay separately or
 enable an observability plugin. Hermes Agent understands NeMo Relay plugin
 configurations.
 
+### Migrate to the Switchyard-Owned Dynamic Plugin
+
+Support for the Switchyard integration now shifts to the
+[Switchyard project](https://github.com/NVIDIA-NeMo/Switchyard). Switchyard
+0.3.0 will provide the dynamic plugin, release artifacts, and configuration
+documentation.
+
+NeMo Relay >=0.8.0 no longer ships the experimental `nemo-relay-switchyard`
+crate, the CLI `switchyard` feature, or the service-backed `switchyard`
+component. Configurations that contain `[[components]]` entries with
+`kind = "switchyard"` are rejected with migration guidance.
+
+To migrate an existing configuration:
+
+1. Remove the CLI `switchyard` Cargo feature and any dependency on
+   `nemo-relay-switchyard`.
+2. Remove the legacy `[[components]]` entry with `kind = "switchyard"`.
+3. Remove Decision API settings and ATOF HTTP sinks used only by the former
+   service integration. Keep any ATOF sink that another Relay consumer uses.
+4. Install and configure the Switchyard-owned dynamic plugin by following the
+   documentation published with Switchyard 0.3.0.
+
+Do not copy service-era component fields into a dynamic-plugin entry. The
+Switchyard release documentation is the source of truth for supported
+algorithms, target configuration, and migration details. For Relay's manifest,
+trust, policy, and activation model, refer to
+[Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
+
 ### Return Canonical Tool Execution Results
 
 <Warning title="Breaking Change">

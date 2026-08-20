@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
+
 use nemo_relay::plugin::{
     ConfigDiagnostic, ConfigPolicy, ConfigReport, DiagnosticLevel, UnsupportedBehavior,
 };
 use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
-use crate::response_cache::config::KEY_STRATEGY_EXACT_REQUEST;
+use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
+use crate::response_cache::tool::{is_supported_tool_pattern, wildcard_patterns_overlap};
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
     let mut report = ConfigReport::default();
@@ -198,6 +201,196 @@ fn validate_response_cache(report: &mut ConfigReport, config: &ResponseCacheConf
             Some("backend.kind"),
             format!("unknown backend kind '{other}'"),
         )),
+    }
+
+    if let Some(tools) = &config.tools {
+        validate_tool_cache(report, tools);
+    }
+}
+
+fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
+    validate_tool_policy(
+        report,
+        "default",
+        tools.default.ttl_seconds,
+        tools.default.bypass_rate,
+    );
+    if tools.default.cacheable {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_cacheable_default",
+            Some("tools.default.cacheable"),
+            "tools.default.cacheable must be false; use a named class or override to classify cacheable tools"
+                .to_string(),
+        ));
+    }
+    if !tools.default.members.is_empty() {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_default_members",
+            Some("tools.default"),
+            "tools.default.members is never matched (the default bucket applies to every \
+             unclassified tool); move these names into a named class"
+                .to_string(),
+        ));
+    }
+
+    let mut owning_class: HashMap<&str, &str> = HashMap::new();
+    for (class_name, class) in &tools.classes {
+        validate_tool_policy(
+            report,
+            &format!("classes.{class_name}"),
+            class.ttl_seconds,
+            class.bypass_rate,
+        );
+        for member in &class.members {
+            if !is_supported_tool_pattern(member) {
+                report.diagnostics.push(response_cache_error(
+                    "response_cache.tool_invalid_pattern",
+                    Some("tools.classes"),
+                    format!(
+                        "tool member '{member}' in class '{class_name}' must be an exact name, \
+                         'prefix*', '*suffix', or '*contains*'"
+                    ),
+                ));
+            }
+            if let Some(previous) = owning_class.get(member.as_str()) {
+                if *previous != class_name.as_str() {
+                    report.diagnostics.push(response_cache_error(
+                        "response_cache.tool_multiple_classes",
+                        Some("tools.classes"),
+                        format!(
+                            "tool member '{member}' appears in multiple classes ('{previous}' and \
+                             '{class_name}'); a member — exact name or pattern — may appear in at \
+                             most one class"
+                        ),
+                    ));
+                }
+            } else {
+                owning_class.insert(member.as_str(), class_name.as_str());
+            }
+            if class.cacheable && member == "*" {
+                report.diagnostics.push(response_cache_error(
+                    "response_cache.tool_catch_all_member",
+                    Some("tools.classes"),
+                    format!(
+                        "class '{class_name}' lists the catch-all member '{member}' with \
+                         cacheable = true, which caches every tool; use a named class to \
+                         classify cacheable tools"
+                    ),
+                ));
+            }
+        }
+    }
+
+    validate_conflicting_tool_class_patterns(report, tools);
+
+    for (tool_name, over) in &tools.overrides {
+        if !is_supported_tool_pattern(tool_name) {
+            report.diagnostics.push(response_cache_error(
+                "response_cache.tool_invalid_pattern",
+                Some("tools.overrides"),
+                format!(
+                    "tool override '{tool_name}' must be an exact name, 'prefix*', '*suffix', or \
+                     '*contains*'"
+                ),
+            ));
+        }
+        validate_tool_policy(
+            report,
+            &format!("overrides.{tool_name}"),
+            over.ttl_seconds,
+            over.bypass_rate,
+        );
+        if over.cacheable == Some(true) && tool_name == "*" {
+            report.diagnostics.push(response_cache_error(
+                "response_cache.tool_catch_all_override",
+                Some("tools.overrides"),
+                format!(
+                    "override '{tool_name}' sets cacheable = true for every tool; use a \
+                     named override to classify cacheable tools"
+                ),
+            ));
+        }
+    }
+
+    validate_conflicting_tool_override_patterns(report, tools);
+}
+
+fn validate_conflicting_tool_class_patterns(report: &mut ConfigReport, tools: &ToolCacheConfig) {
+    for (index, (left_name, left_class)) in tools.classes.iter().enumerate() {
+        for (right_name, right_class) in tools.classes.iter().skip(index + 1) {
+            if left_class.cacheable == right_class.cacheable {
+                continue;
+            }
+            let conflict = left_class.members.iter().any(|left_member| {
+                left_member.contains('*')
+                    && right_class.members.iter().any(|right_member| {
+                        left_member != right_member
+                            && right_member.contains('*')
+                            && wildcard_patterns_overlap(left_member, right_member)
+                    })
+            });
+            if conflict {
+                report.diagnostics.push(response_cache_error(
+                    "response_cache.tool_conflicting_classes",
+                    Some("tools.classes"),
+                    format!(
+                        "classes '{left_name}' and '{right_name}' contain overlapping wildcard \
+                         members with conflicting cacheable settings; split the patterns so one \
+                         policy applies to every tool"
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+fn validate_conflicting_tool_override_patterns(report: &mut ConfigReport, tools: &ToolCacheConfig) {
+    for (index, (left_name, left_override)) in tools.overrides.iter().enumerate() {
+        for (right_name, right_override) in tools.overrides.iter().skip(index + 1) {
+            // An omitted value inherits from whichever class wins for the
+            // concrete tool name. Because overlapping patterns can select
+            // different classes, only identical declarations are safe.
+            let conflicting_cacheability = left_override.cacheable != right_override.cacheable;
+            if !conflicting_cacheability
+                || !left_name.contains('*')
+                || !right_name.contains('*')
+                || !wildcard_patterns_overlap(left_name, right_name)
+            {
+                continue;
+            }
+            report.diagnostics.push(response_cache_error(
+                "response_cache.tool_conflicting_overrides",
+                Some("tools.overrides"),
+                format!(
+                    "overrides '{left_name}' and '{right_name}' overlap with conflicting \
+                     cacheable settings; split the patterns so one policy applies to every tool"
+                ),
+            ));
+        }
+    }
+}
+
+fn validate_tool_policy(
+    report: &mut ConfigReport,
+    location: &str,
+    ttl_seconds: Option<u64>,
+    bypass_rate: Option<f64>,
+) {
+    if ttl_seconds == Some(0) {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_invalid_ttl",
+            Some("tools"),
+            format!("tools.{location}.ttl_seconds must be greater than 0 when set"),
+        ));
+    }
+    if let Some(rate) = bypass_rate
+        && !(0.0..=1.0).contains(&rate)
+    {
+        report.diagnostics.push(response_cache_error(
+            "response_cache.tool_invalid_bypass_rate",
+            Some("tools"),
+            format!("tools.{location}.bypass_rate must be in [0.0, 1.0] when set"),
+        ));
     }
 }
 

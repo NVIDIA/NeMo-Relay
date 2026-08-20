@@ -352,11 +352,11 @@ normalization, under the default `key_strategy = "exact_request"`:
   header does not partition the key. Known auth headers are rejected, but
   validation cannot recognize every custom credential name, so never allowlist
   credentials.
-- The provider name and required namespace partition every key. A
-  Switchyard-selected backend ID is also partitioned automatically. Without
-  Switchyard, a provider name cannot distinguish upstreams that reuse that
-  name, so use separate configurations and namespaces for different trusted
-  upstream domains.
+- The provider name and required namespace partition every key. An internal
+  dispatch backend supplied by a routing plugin is also partitioned
+  automatically. A provider name alone cannot distinguish upstreams that reuse
+  that name, so use separate configurations and namespaces for different
+  trusted upstream domains.
 - Requests containing integers outside the exactly representable RFC 8785
   range (less than `-2^53` or greater than `2^53`) bypass the cache.
 
@@ -399,10 +399,10 @@ a failure when the config is invalid or the backend is unreachable.
 | `backend.config.url` | — | Redis connection URL. Required for the `redis` backend. |
 | `backend.config.key_prefix` | `"nemo-relay:llm-cache:"` | Prefix for keys in Redis. |
 
-For a gateway that uses Switchyard, `switchyard.priority` must be lower than
-`response_cache.priority`. To derive keys before ACG rewrites requests, set
-`response_cache.priority` lower than `acg.priority`. With all three components,
-priorities of `0`, `40`, and `50`, respectively, satisfy both orderings.
+A routing plugin that sets `x-nemo-relay-internal-dispatch-backend` must use a
+priority lower than `response_cache.priority` so backend selection runs before
+cache key derivation. To derive keys before ACG rewrites requests, set
+`response_cache.priority` lower than `acg.priority`.
 
 <Warning>
 Cached responses are stored unredacted. PII sanitize guardrails rewrite emitted
@@ -424,5 +424,3 @@ each mutually untrusted tenant or upstream domain.
 - `backend.kind` is unknown; or `redis` has a missing, non-string, or
   whitespace-only `backend.config.url`, uses a non-string `key_prefix`, or is
   unavailable because Relay was built without the `redis-backend` feature.
-- Gateway Switchyard priority is equal to or greater than
-  `response_cache.priority`.

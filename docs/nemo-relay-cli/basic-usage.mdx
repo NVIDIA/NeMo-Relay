@@ -327,10 +327,10 @@ Model pricing is configured with the same `plugins.toml` discovery path as
 Observability. The configured sources apply to transparent agent runs,
 standalone gateway runs, and evals or custom agents that initialize the same
 gateway plugin config. Framework integrations, harnesses, and custom hosts do
-not need their own model pricing logic when they emit managed LLM calls with
-response codecs: Relay attaches cost to the annotated response when the
-provider reports cost or when a configured model pricing source matches the
-response model and token usage.
+not need their own model pricing logic when they emit managed LLM calls or
+manual lifecycle events with normalized response annotations: Relay attaches
+cost to the annotated response when the provider reports cost or when a
+configured model pricing source matches the response model and token usage.
 
 Create a Relay model pricing catalog JSON file:
 

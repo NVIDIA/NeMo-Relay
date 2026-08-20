@@ -574,6 +574,8 @@ def _prepare_lc_payloads(payload: Any) -> Any:
             "type": "message",
             "message": messages_to_dict([payload]),
         }
+    elif hasattr(payload, "model_dump"):
+        prepared = _prepare_lc_payloads(payload.model_dump(mode="json"))
     else:
         prepared = payload
 
