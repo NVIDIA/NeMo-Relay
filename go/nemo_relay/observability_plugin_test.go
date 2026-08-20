@@ -205,7 +205,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 func assertExportActivationPolicy(t *testing.T, value any) {
 	t.Helper()
 	policy, ok := value.(map[string]any)
-	if !ok || policy["provider"] != "com.example.runtime-policy" || policy["timeout_millis"] != float64(5000) {
+	if !ok || policy["provider"] != "com.example.runtime-policy" || policy["timeout_millis"] != float64(30000) {
 		t.Fatalf("unexpected export activation policy: %#v", value)
 	}
 }

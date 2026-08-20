@@ -207,6 +207,10 @@ pub struct ExportActivationPolicyConfig {
     pub config: Json,
 }
 
+const MIN_EXPORT_ACTIVATION_TIMEOUT_MILLIS: u64 = 1_000;
+const DEFAULT_EXPORT_ACTIVATION_TIMEOUT_MILLIS: u64 = 30_000;
+const MAX_EXPORT_ACTIVATION_TIMEOUT_MILLIS: u64 = 300_000;
+
 /// Signal-common OTLP destination fields used by logs and metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -4793,14 +4797,16 @@ fn validate_export_activation_policy(
                 .to_string(),
         );
     }
-    if !(1..=60_000).contains(&activation_policy.timeout_millis) {
+    if !(MIN_EXPORT_ACTIVATION_TIMEOUT_MILLIS..=MAX_EXPORT_ACTIVATION_TIMEOUT_MILLIS)
+        .contains(&activation_policy.timeout_millis)
+    {
         push_policy_diag(
             diagnostics,
             policy.unsupported_value,
             "observability.unsupported_value",
             Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
             Some(format!("{field}.timeout_millis")),
-            "export activation policy timeout_millis must be between 1 and 60000".to_string(),
+            "export activation policy timeout_millis must be between 1000 and 300000".to_string(),
         );
     }
 }
@@ -5010,7 +5016,7 @@ async fn export_target_allowed(
         config: policy.config.clone(),
     };
     let outcome = tokio::time::timeout(
-        Duration::from_millis(policy.timeout_millis),
+        export_activation_timeout(policy.timeout_millis),
         export_activation_policies.evaluate(&policy.provider, request),
     )
     .await;
@@ -5036,6 +5042,13 @@ async fn export_target_allowed(
     allowed
 }
 
+fn export_activation_timeout(timeout_millis: u64) -> Duration {
+    Duration::from_millis(timeout_millis.clamp(
+        MIN_EXPORT_ACTIVATION_TIMEOUT_MILLIS,
+        MAX_EXPORT_ACTIVATION_TIMEOUT_MILLIS,
+    ))
+}
+
 const fn export_activation_target_kind_name(kind: ExportActivationTargetKind) -> &'static str {
     match kind {
         ExportActivationTargetKind::OtlpTrace => "otlp_trace",
@@ -5052,7 +5065,7 @@ fn default_observability_config_version() -> u32 {
 }
 
 fn default_export_activation_timeout_millis() -> u64 {
-    5_000
+    DEFAULT_EXPORT_ACTIVATION_TIMEOUT_MILLIS
 }
 
 fn default_atof_mode() -> String {

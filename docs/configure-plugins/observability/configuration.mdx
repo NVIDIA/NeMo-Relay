@@ -98,7 +98,7 @@ declares the `export_activation_policy` capability and registers one callback:
 ```toml
 [components.config.opentelemetry.endpoints.activation_policy]
 provider = "com.example.runtime-policy"
-timeout_millis = 5000
+timeout_millis = 30000
 config = { allowed_countries = ["US", "CA"], min_available_memory_mib = 2048 }
 ```
 
@@ -121,7 +121,10 @@ not accept policies. Derived OTLP log and metric endpoints inherit the trace
 policy, but Relay evaluates each signal separately with `otlp_log` or
 `otlp_metric` as its target kind.
 
-The timeout defaults to 5000 milliseconds and must be between 1 and 60000.
+The timeout defaults to 30000 milliseconds and must be between 1000 and 300000
+(one second and five minutes). Relay enforces these bounds when evaluating a
+policy even when the configuration policy reports unsupported values as
+warnings.
 A deny decision, missing provider, callback error, unsupported worker surface,
 or timeout denies only that target. Relay continues activation and emits a
 structured diagnostic that contains the provider ID, target kind, and reason,

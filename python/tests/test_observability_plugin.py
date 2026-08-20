@@ -95,7 +95,7 @@ class TestObservabilityConfigHelpers:
         )
         expected = {
             "provider": "com.example.runtime-policy",
-            "timeout_millis": 5000,
+            "timeout_millis": 30000,
             "config": {"allowed_countries": ["US", "CA"]},
         }
         assert (

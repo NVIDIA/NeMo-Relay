@@ -60,12 +60,12 @@ function exportActivationPolicy(config) {
   if (typeof config.provider !== 'string' || config.provider.trim() === '') {
     throw new TypeError('Export activation policy provider must be a nonblank string');
   }
-  const timeout = config.timeout_millis ?? 5000;
-  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 60000) {
-    throw new TypeError('Export activation policy timeout_millis must be between 1 and 60000');
+  const timeout = config.timeout_millis ?? 30000;
+  if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 300000) {
+    throw new TypeError('Export activation policy timeout_millis must be between 1000 and 300000');
   }
   return {
-    timeout_millis: 5000,
+    timeout_millis: 30000,
     config: null,
     ...config,
   };

@@ -263,7 +263,7 @@ func NewObservabilityConfig() ObservabilityConfig {
 
 // NewExportActivationPolicyConfig returns an activation policy with the canonical timeout.
 func NewExportActivationPolicyConfig(provider string) ExportActivationPolicyConfig {
-	return ExportActivationPolicyConfig{Provider: provider, TimeoutMillis: 5000}
+	return ExportActivationPolicyConfig{Provider: provider, TimeoutMillis: 30000}
 }
 
 // NewObservabilityAtofConfig returns disabled ATOF JSONL settings with native defaults.

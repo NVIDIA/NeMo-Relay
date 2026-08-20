@@ -57,7 +57,7 @@ class ExportActivationPolicyConfig:
     """Activation-time policy attached to one remote exporter target."""
 
     provider: str
-    timeout_millis: int = 5000
+    timeout_millis: int = 30000
     config: Json = None
 
     def to_dict(self) -> JsonObject:

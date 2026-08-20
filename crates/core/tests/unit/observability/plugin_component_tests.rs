@@ -5082,7 +5082,7 @@ async fn unavailable_and_timed_out_export_policies_fail_closed() {
             "test.slow-export-policy",
             Arc::new(|_| {
                 Box::pin(async {
-                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    tokio::time::sleep(Duration::from_millis(1_100)).await;
                     Ok(ExportActivationDecision::Allow)
                 })
             }),
@@ -5091,7 +5091,7 @@ async fn unavailable_and_timed_out_export_policies_fail_closed() {
     let mut timed_out = test_opentelemetry_endpoint();
     timed_out.activation_policy = Some(ExportActivationPolicyConfig {
         provider: "test.slow-export-policy".into(),
-        timeout_millis: 1,
+        timeout_millis: 1_000,
         config: Json::Null,
     });
     let mut context = PluginRegistrationContext::with_export_activation_policies(
@@ -5264,14 +5264,24 @@ fn export_activation_policy_config_validates_provider_and_timeout() {
         "version": 4,
         "opentelemetry": {
             "enabled": true,
-            "endpoints": [{
-                "type": "full",
-                "endpoint": "http://localhost:4318/v1/traces",
-                "activation_policy": {
-                    "provider": " ",
-                    "timeout_millis": 60001
+            "endpoints": [
+                {
+                    "type": "full",
+                    "endpoint": "http://localhost:4318/v1/traces",
+                    "activation_policy": {
+                        "provider": " ",
+                        "timeout_millis": 300001
+                    }
+                },
+                {
+                    "type": "full",
+                    "endpoint": "http://localhost:4318/v1/traces",
+                    "activation_policy": {
+                        "provider": "test.policy",
+                        "timeout_millis": 999
+                    }
                 }
-            }]
+            ]
         }
     });
     let diagnostics = validate_observability_plugin_config(config.as_object().unwrap());
@@ -5282,4 +5292,23 @@ fn export_activation_policy_config_validates_provider_and_timeout() {
         diagnostic.field.as_deref()
             == Some("opentelemetry.endpoints[0].activation_policy.timeout_millis")
     }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref()
+            == Some("opentelemetry.endpoints[1].activation_policy.timeout_millis")
+    }));
+}
+
+#[test]
+fn export_activation_policy_timeout_is_clamped_at_evaluation() {
+    let defaulted: ExportActivationPolicyConfig = serde_json::from_value(json!({
+        "provider": "test.policy"
+    }))
+    .unwrap();
+    assert_eq!(defaulted.timeout_millis, 30_000);
+    assert_eq!(export_activation_timeout(0), Duration::from_secs(1));
+    assert_eq!(export_activation_timeout(30_000), Duration::from_secs(30));
+    assert_eq!(
+        export_activation_timeout(u64::MAX),
+        Duration::from_secs(300)
+    );
 }
