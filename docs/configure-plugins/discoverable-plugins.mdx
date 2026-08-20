@@ -5,8 +5,6 @@ position: 3
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
-
-
 Use this guide to add a manifest-backed plugin that another author has
 packaged. Discoverable plugins are separate from built-in `[[components]]`:
 their `relay-plugin.toml` manifest describes a native shared library or a
@@ -76,6 +74,8 @@ signature and trusted public key. Use `nemo-relay plugins validate <plugin-id>`
 to evaluate the resolved host policy and artifact trust evidence before you run
 the gateway.
 
+The following policy requires a valid signature from one trusted Ed25519 public key:
+
 ```toml
 [plugins.policy.defaults]
 startup = "required"
@@ -101,18 +101,10 @@ Use `[[plugins.policy.rules]]` to apply an effect by `match_kind` or
 specific plugin. Rules and overrides can set `allowed`, `startup`,
 `attestation`, and `trusted_public_keys`.
 
-## Select the Authoring Guide
-
-Ask the plugin author for the correct manifest and artifact. Refer to these
-guides when you need to understand the package:
-
-- [Native Dynamic Plugins (Rust)](/build-plugins/dynamic-plugins/native-dynamic/about) covers
-  in-process Rust shared libraries and the native ABI.
-- [Build a Rust Native Plugin](/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example)
-  provides the Rust SDK example for a native shared library.
-- [gRPC Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about) covers
-  Relay-managed Rust workers.
-- [gRPC Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about)
-  covers Relay-managed Python workers.
-- [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol) describes the
-  shared `grpc-v1` protocol.
+Ask the plugin author for the correct manifest and artifact. If you also need
+to inspect or rebuild the package, the [native plugin guide](/build-plugins/native/about)
+explains in-process Rust shared libraries, while the [worker plugin
+guide](/build-plugins/workers/about) covers Relay-managed Rust, Python, and
+custom-command workers. Protocol implementers can use the [grpc-v1 protocol
+reference](/build-plugins/workers/grpc-v1-protocol) to inspect the complete
+transport contract.

@@ -1,0 +1,373 @@
+---
+title: "grpc-v1 Protocol Reference"
+description: "Reference every worker RPC, registration surface, envelope, capability, and shutdown stage."
+position: 35
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+`grpc-v1` is the stable worker protocol implemented by the Rust and Python SDKs. The
+current source of truth is
+[`crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto`](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker-proto/proto/nemo/relay/worker/v1/plugin_worker.proto).
+Generated protobuf types are wire material, not the recommended authoring API.
+
+Relay 0.8 retains the `grpc-v1` identifier and `nemo.relay.worker.v1` package, but it
+changes the tool-result boundary to structural protobuf messages. Rebuild workers,
+regenerate custom bindings, and declare `compat.relay` beginning at `0.8.0`; an earlier
+worker cannot decode the current `ToolNext` response or tool-execution outcome.
+
+The protocol consists of the worker-facing service implemented by the plugin process
+and the host-runtime service implemented by Relay. These are the current service
+definitions, including cancellation, codecs, and streaming continuations:
+
+```proto
+service PluginWorker {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+  rpc Validate(ValidateRequest) returns (ValidateResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+  rpc InvokeStream(InvokeRequest) returns (stream StreamChunk);
+  rpc CancelInvocation(CancelInvocationRequest) returns (WorkerAck);
+  rpc Shutdown(ShutdownRequest) returns (WorkerAck);
+}
+
+service RelayHostRuntime {
+  rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest)
+      returns (GetRuntimeDiagnosticsResponse);
+  rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
+  rpc PopScope(PopScopeRequest) returns (HostAck);
+  rpc CreateScopeStack(CreateScopeStackRequest)
+      returns (CreateScopeStackResponse);
+  rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
+  rpc ToolNext(ToolNextRequest) returns (ToolExecutionResultResponse);
+  rpc LlmNext(LlmNextRequest) returns (JsonResult);
+  rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
+  rpc DecodeLlmCodecRequest(LlmCodecDecodeRequest) returns (JsonResult);
+  rpc EncodeLlmCodecRequest(LlmCodecEncodeRequest) returns (JsonResult);
+  rpc DecodeLlmCodecResponse(LlmCodecDecodeResponse) returns (JsonResult);
+}
+```
+
+## Worker Service
+
+| RPC | Contract |
+|---|---|
+| `Handshake` | Relay supplies activation and plugin identity, Relay version, protocol, token, and host endpoint. The worker returns plugin identity and kind, multiple-component support, protocol, SDK and runtime metadata, and supported surfaces. |
+| `Health` | Confirms the authenticated activation, protocol, plugin identity, and current worker readiness. |
+| `Validate` | Receives component config in a JSON envelope and returns encoded diagnostics or a structured worker error. It must not register behavior. |
+| `Register` | Receives valid component config and returns owned registrations with local name, surface, priority, and `break_chain`. |
+| `Invoke` | Dispatches one subscriber, sanitizer, guardrail, request intercept, or unary execution callback and returns the surface-appropriate result. |
+| `InvokeStream` | Dispatches an LLM stream execution intercept and emits incremental value or error chunks. |
+| `CancelInvocation` | Cooperatively cancels one active invocation ID and reports whether cancellation was accepted. Unknown, completed, and already-cancelled IDs receive a negative acknowledgment. |
+| `Shutdown` | Stops new work for an activation and begins orderly worker termination with a reason. |
+
+Each lifecycle message carries the following fields. Fields described as envelopes use
+the schema identifiers in the JSON envelope table later on this page.
+
+| RPC | Request Fields | Response Fields |
+|---|---|---|
+| `Handshake` | `activation_id`, manifest `plugin_id`, `relay_version`, `worker_protocol`, `auth_token`, and `host_endpoint` | `plugin_id`, `plugin_kind`, `allows_multiple_components`, `worker_protocol`, `sdk_name`, `sdk_version`, `runtime_name`, `runtime_version`, and `supported_surfaces` |
+| `Health` | `activation_id` and `auth_token` | `ok`, `message`, `plugin_id`, `worker_protocol`, SDK name and version, and runtime name and version |
+| `Validate` | `activation_id`, `plugin_id`, `auth_token`, and component `config` | A `diagnostics` envelope or `error` |
+| `Register` | `activation_id`, `plugin_id`, `auth_token`, and validated component `config` | Repeated `registrations` or `error`; each registration contains `local_name`, `surface`, `priority`, and `break_chain` |
+| `Invoke` and `InvokeStream` | `activation_id`, `invocation_id`, `registration_name`, `surface`, optional `continuation_id`, captured `scope`, `auth_token`, and exactly one event, tool, or LLM payload | `Invoke` returns exactly one empty, JSON, guardrail, LLM request outcome, tool execution outcome, or error result. `InvokeStream` returns value chunks followed by clean stream closure or one terminal error chunk. |
+| `CancelInvocation` | `activation_id`, `invocation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
+| `Shutdown` | `activation_id`, `auth_token`, and `reason` | `accepted` and a human-readable `message` |
+
+## Registration Surfaces
+
+| Value | Surface | Invocation Result |
+|---:|---|---|
+| 1 | Subscriber | Empty result. |
+| 2 | Event metadata injector | JSON object containing proposed metadata additions. |
+| 10 | Tool sanitize request guardrail | Sanitized JSON. |
+| 11 | Tool sanitize response guardrail | Sanitized JSON. |
+| 12 | Tool conditional execution guardrail | Optional block reason. |
+| 13 | Tool request intercept | Rewritten JSON. |
+| 14 | Tool execution intercept | Tool execution outcome envelope. |
+| 20 | LLM sanitize request guardrail | Optional sanitized request. |
+| 21 | LLM sanitize response guardrail | Optional sanitized response. |
+| 22 | LLM conditional execution guardrail | Optional block reason. |
+| 23 | LLM request intercept | Complete request-intercept outcome envelope. |
+| 24 | LLM execution intercept | Provider-response JSON. |
+| 25 | LLM stream execution intercept | Server stream of incremental chunks. |
+| 30 | Mark sanitize guardrail | Replacement event sanitization fields. |
+| 31 | Scope-start sanitize guardrail | Replacement event sanitization fields. |
+| 32 | Scope-end sanitize guardrail | Replacement event sanitization fields. |
+
+The numeric values are part of the wire contract. Unknown value zero never represents
+a valid registration.
+
+```proto
+enum RegistrationSurface {
+  REGISTRATION_SURFACE_UNSPECIFIED = 0;
+  SUBSCRIBER = 1;
+  EVENT_METADATA_INJECTOR = 2;
+  TOOL_SANITIZE_REQUEST_GUARDRAIL = 10;
+  TOOL_SANITIZE_RESPONSE_GUARDRAIL = 11;
+  TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
+  TOOL_REQUEST_INTERCEPT = 13;
+  TOOL_EXECUTION_INTERCEPT = 14;
+  LLM_SANITIZE_REQUEST_GUARDRAIL = 20;
+  LLM_SANITIZE_RESPONSE_GUARDRAIL = 21;
+  LLM_CONDITIONAL_EXECUTION_GUARDRAIL = 22;
+  LLM_REQUEST_INTERCEPT = 23;
+  LLM_EXECUTION_INTERCEPT = 24;
+  LLM_STREAM_EXECUTION_INTERCEPT = 25;
+  MARK_SANITIZE_GUARDRAIL = 30;
+  SCOPE_SANITIZE_START_GUARDRAIL = 31;
+  SCOPE_SANITIZE_END_GUARDRAIL = 32;
+}
+```
+
+An invocation names the activation, invocation, registration, surface, optional
+continuation, captured scope, and token. Its payload is exactly one event, tool
+invocation, or LLM invocation. LLM sanitizer invocations additionally carry codec
+identity and an opaque invocation-scoped codec capability.
+
+For `EVENT_METADATA_INJECTOR`, Relay sends the immutable Event snapshot in
+`InvokeRequest.event`. The worker returns an `InvokeResponse.json` object containing
+proposed additions to `Event.metadata`. Relay validates and merges accepted additions
+before Event sanitizers run. A `WorkerError` omits that callback's additions without
+dropping the Event.
+
+```proto
+message InvokeRequest {
+  string activation_id = 1;
+  string invocation_id = 2;
+  string registration_name = 3;
+  RegistrationSurface surface = 4;
+  string continuation_id = 5;
+  ScopeContext scope = 6;
+  string auth_token = 7;
+
+  oneof payload {
+    JsonEnvelope event = 10;
+    ToolInvocation tool = 11;
+    LlmInvocation llm = 12;
+  }
+}
+
+message LlmInvocation {
+  string model_name = 1;
+  JsonEnvelope request = 2;
+  JsonEnvelope annotated_request = 3;
+  JsonEnvelope response = 4;
+  reserved 5, 6, 7, 8;
+  oneof sanitize_context {
+    LlmSanitizeRequestContext request_sanitize_context = 9;
+    LlmSanitizeResponseContext response_sanitize_context = 10;
+  }
+}
+
+message ToolInvocation {
+  string tool_name = 1;
+  JsonEnvelope value = 2;
+}
+
+message LlmCodecIdentity {
+  LlmCodecKind kind = 1;
+  optional string id = 2;
+}
+
+message LlmSanitizeRequestContext {
+  LlmCodecIdentity codec = 1;
+  optional string codec_capability_id = 2;
+}
+
+message LlmSanitizeResponseContext {
+  LlmCodecIdentity codec = 1;
+  optional string codec_capability_id = 2;
+}
+
+message InvokeResponse {
+  oneof result {
+    EmptyResult empty = 1;
+    JsonResult json = 2;
+    GuardrailResult guardrail = 3;
+    LlmRequestInterceptResult llm_request = 4;
+    WorkerError error = 5;
+    ToolExecutionInterceptResult tool_execution = 6;
+  }
+}
+```
+
+Tool values remain JSON, but the result boundary is structural so Relay can keep an
+opaque annotation beside the application value without treating either field as a
+schema-tagged envelope.
+
+```proto
+message JsonValue {
+  bytes json = 1;
+}
+
+message ToolExecutionResultResponse {
+  ToolExecutionResult value = 1;
+  WorkerError error = 2;
+}
+
+message ToolExecutionResult {
+  JsonValue result = 1;
+  JsonValue annotation = 2;
+}
+
+message ToolExecutionInterceptOutcome {
+  JsonValue result = 1;
+  JsonValue annotation = 2;
+  JsonValue pending_marks = 3;
+}
+```
+
+`continuation_id` is present only for execution intercepts. `scope` captures the host
+context used for continuation and runtime calls. `registration_name` is the
+component-local name the worker returned in `RegisterResponse`; Relay separately owns
+its qualification in the host registries.
+
+`LlmCodecKind` has four wire values: unspecified, built-in, runtime, and opaque. A built-in
+identity carries `openai_chat`, `openai_responses`, `anthropic_messages`, `oci_genai`,
+or `gemini_generate_content`; a runtime identity carries its registered ID. An opaque
+identity deliberately withholds an ID. The capability ID is optional and
+invocation-scoped. A worker must treat it as a secret and must not use it after the owner
+invocation ends.
+
+## Host-Runtime Service
+
+| RPC | Contract |
+|---|---|
+| `EmitMark` | Emits mark data and metadata under the supplied scope context. |
+| `GetRuntimeDiagnostics` | Returns the current bounded host-level diagnostic snapshot. |
+| `PushScope` | Opens a typed scope with name, data, metadata, and input, returning the handle required for pop. |
+| `PopScope` | Closes the owned scope handle with output and metadata. |
+| `CreateScopeStack` | Allocates an isolated stack and returns its opaque ID. |
+| `DropScopeStack` | Releases an isolated stack owned by the activation. |
+| `ToolNext` | Executes a tool continuation with JSON arguments and captured scope, returning a structural tool result or worker error. |
+| `LlmNext` | Executes a unary LLM continuation with a request and captured scope. |
+| `LlmStreamNext` | Executes a streaming LLM continuation and returns incremental chunks. |
+| `DecodeLlmCodecRequest` | Uses the invocation-scoped capability to decode a request into its annotated representation. |
+| `EncodeLlmCodecRequest` | Applies an annotated request to the original provider envelope. |
+| `DecodeLlmCodecResponse` | Decodes a provider response into its annotated representation. |
+
+The host-runtime request and response fields are complete in the following table:
+
+| RPC | Request Fields | Response Fields |
+|---|---|---|
+| `EmitMark` | `activation_id`, `auth_token`, captured `scope`, `name`, optional `data`, `metadata`, `data_schema`, and `severity` | `HostAck.ok` or `HostAck.error` |
+| `GetRuntimeDiagnostics` | `activation_id` and `auth_token` | Ordered `RuntimeDiagnostic` entries with `code`, `message`, and `count` |
+| `PushScope` | `activation_id`, `auth_token`, captured `scope`, `name`, `scope_type`, and optional `data`, `metadata`, and `input` | `scope_handle_id` or `error` |
+| `PopScope` | `activation_id`, `auth_token`, owned `scope_handle_id`, and optional `output` and `metadata` | `HostAck.ok` or `HostAck.error` |
+| `CreateScopeStack` | `activation_id` and `auth_token` | `scope_stack_id` or `error` |
+| `DropScopeStack` | `activation_id`, `auth_token`, and owned `scope_stack_id` | `HostAck.ok` or `HostAck.error` |
+| `ToolNext` | `activation_id`, `auth_token`, `continuation_id`, JSON `value`, and captured `scope` | `ToolExecutionResultResponse.value` or `error` |
+| `LlmNext` | `activation_id`, `auth_token`, `continuation_id`, typed `request`, and captured `scope` | JSON `value` or `error` |
+| `LlmStreamNext` | `activation_id`, `auth_token`, `continuation_id`, typed `request`, and captured `scope` | Incremental JSON value chunks, clean stream closure, or one terminal error chunk |
+| `DecodeLlmCodecRequest` | `activation_id`, `auth_token`, `codec_capability_id`, typed `request`, and owner `invocation_id` | Annotated LLM request or `error` |
+| `EncodeLlmCodecRequest` | `activation_id`, `auth_token`, `codec_capability_id`, `annotated_request`, `original_request`, and owner `invocation_id` | Typed LLM request or `error` |
+| `DecodeLlmCodecResponse` | `activation_id`, `auth_token`, `codec_capability_id`, provider `response`, and owner `invocation_id` | Annotated LLM response or `error` |
+
+`ScopeContext` contains `scope_stack_id` and `parent_scope_id`. `ScopeType` supports
+agent, function, tool, LLM, retriever, embedder, reranker, guardrail, evaluator, custom,
+and unknown scopes. The unspecified wire value is invalid for a pushed scope.
+
+`EmitMarkRequest.data_schema` uses the `nemo.relay.DataSchema@1` envelope, and
+`severity` accepts `trace`, `debug`, `info`, `warn`, or `error`. Omitting both preserves
+the original mark behavior. `GetRuntimeDiagnostics` aggregates repeated codes, retains
+the latest message, sorts entries by code, and returns at most 32 entries. It is a
+host-level view, so it does not identify the plugin that recorded a diagnostic.
+
+## Authentication and Endpoints
+
+Relay creates a fresh activation ID and high-entropy token, passes the worker and host
+endpoints through the activation environment, and sends the same values in handshake.
+Every later worker and host-runtime request includes the activation ID and token. SDKs
+bind the endpoint locally, prefer Unix domain sockets where supported, constrain TCP
+fallback to loopback, and reject mismatched credentials. Local authentication prevents
+accidental cross-activation calls; it does not make untrusted worker code safe.
+
+Relay supplies the following process environment to Rust, Python, and custom-command
+workers:
+
+| Variable | Contract |
+|---|---|
+| `NEMO_RELAY_WORKER_ID` | Opaque activation ID used in every authenticated request. It is not the manifest plugin ID. |
+| `NEMO_RELAY_PLUGIN_ID` | Manifest plugin ID that the handshake response must match. |
+| `NEMO_RELAY_WORKER_TOKEN` | High-entropy activation token used in every worker and host-runtime request. Do not log or persist it. |
+| `NEMO_RELAY_WORKER_SOCKET` | Worker listen endpoint. SDKs accept a Unix socket URI or a loopback TCP or HTTP endpoint; port zero requests an ephemeral TCP port. |
+| `NEMO_RELAY_HOST_SOCKET` | Relay host-runtime endpoint used for continuations, codecs, marks, and scopes. |
+| `NEMO_RELAY_WORKER_ENDPOINT_FILE` | Optional path where a worker that binds an ephemeral port writes its resolved endpoint after it begins accepting requests. |
+
+## JSON Envelopes and Errors
+
+`JsonEnvelope` contains a schema identifier and UTF-8 JSON bytes. General values use
+`nemo.relay.Json@1`; typed request, annotation, outcome, and event schemas identify their
+own expected shape. The envelope owns its bytes for the message lifetime, so neither side
+borrows language-runtime objects across RPCs.
+
+The current envelope schemas are as follows:
+
+| Schema Identifier | Payload |
+|---|---|
+| `nemo.relay.Json@1` | General configuration, tool values, provider responses, stream chunks, mark fields, and scope fields. |
+| `nemo.relay.Event@1` | ATOF event supplied to subscribers and event sanitizers. |
+| `nemo.relay.LlmRequest@1` | Provider request envelope used by LLM middleware, continuations, and request codec operations. |
+| `nemo.relay.AnnotatedLlmRequest@2` | Normalized LLM request annotation carried through request intercepts and codec operations. |
+| `nemo.relay.LlmRequestInterceptOutcome@2` | Rewritten request, optional annotation, pending marks, and optimization contributions. |
+| `nemo.relay.ToolExecutionInterceptOutcome@2` | Application tool result, optional annotation, and Relay-owned pending marks. |
+| `nemo.relay.DataSchema@1` | Name and version for a mark data payload. |
+| `nemo.relay.PluginDiagnostics@1` | Diagnostics returned from worker validation. |
+
+`JsonValue` contains exactly one JSON value and carries arbitrary tool results without
+numeric coercion. `ToolExecutionResult` requires that value in `result` and permits an
+optional `annotation`; JSON `null` annotations normalize to absence. A tool execution
+intercept returns `ToolExecutionInterceptOutcome`, which adds an optional JSON array of
+Relay-owned `pending_marks`. Surface results otherwise use empty, JSON, guardrail, LLM
+request outcome, or structured error variants. Stream chunks contain one JSON value or
+one terminal error. `WorkerError` carries a stable code, human-readable message, and
+retryable flag; transport errors remain distinct from plugin callback errors.
+
+```proto
+message JsonEnvelope {
+  string schema = 1;
+  bytes json = 2;
+}
+
+message StreamChunk {
+  oneof item {
+    JsonEnvelope value = 1;
+    WorkerError error = 2;
+  }
+}
+
+message WorkerError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+```
+
+A clean stream ends when the server stream closes after its last value. A callback
+failure travels as the terminal `error` item. Transport cancellation or an unavailable
+process remains a gRPC status and must not be rewritten into a plugin `WorkerError` by a
+custom implementation.
+
+## Cancellation and Shutdown Sequence
+
+The host and worker use the following sequence to end active work and release the worker
+process:
+
+1. Relay stops routing new calls to the component and sends `CancelInvocation` for
+   in-flight work that cannot drain normally.
+2. The worker acknowledges known active invocations and cooperatively cancels their async
+   tasks. Continuation and codec capabilities become unusable when their owner invocation
+   ends.
+3. Relay sends `Shutdown` with the activation ID, token, and reason. The worker stops its
+   service and closes the local endpoint.
+4. Relay waits for the managed process within its shutdown policy, terminates it if
+   necessary, removes component registrations, and deletes a managed Python environment
+   only during explicit package removal.
+
+Successful protocol verification covers authentication failures, envelope schema
+failures, every registration and result variant, repeated unary and incremental stream
+continuations, cancellation before and during callbacks, codec capability expiry, host
+runtime ownership errors, health, and orderly plus forced shutdown.

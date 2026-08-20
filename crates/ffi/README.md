@@ -82,19 +82,36 @@ allowing the event to continue through sanitization and delivery.
 The following C example registers application-wide metadata injection:
 
 ```c
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static char *inject_metadata(void *user_data, const FfiEvent *event) {
     (void)user_data;
     (void)event;
-    return strdup("{\"application.region\":\"us-central\"}");
+    const char payload[] = "{\"application.region\":\"us-central\"}";
+    char *result = malloc(sizeof(payload));
+    if (result == NULL) {
+        nemo_relay_set_last_error_message("failed to allocate injector result");
+        return NULL;
+    }
+    memcpy(result, payload, sizeof(payload));
+    return result;
 }
 
 NemoRelayStatus status = nemo_relay_register_event_metadata_injector(
     "application-metadata", 10, inject_metadata, NULL, NULL
 );
+if (status != NEMO_RELAY_STATUS_OK) {
+    fprintf(stderr, "registration failed: %s\n", nemo_relay_last_error());
+    return EXIT_FAILURE;
+}
 /* Emit scopes and marks while the callback is registered. */
-(void)nemo_relay_deregister_event_metadata_injector("application-metadata");
+status = nemo_relay_deregister_event_metadata_injector("application-metadata");
+if (status != NEMO_RELAY_STATUS_OK) {
+    fprintf(stderr, "cleanup failed: %s\n", nemo_relay_last_error());
+    return EXIT_FAILURE;
+}
 ```
 
 Use `nemo_relay_scope_register_event_metadata_injector` for an active scope or

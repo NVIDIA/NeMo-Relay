@@ -24,41 +24,20 @@ Native plugins run in the Relay process and are not sandboxed. They should
 depend on this crate rather than the host `nemo-relay` runtime crate, keeping
 the dynamic-library boundary on the stable C-compatible ABI.
 
-## Why Use It?
+## Authoring Surface
 
-- **Author native plugins safely**: Implement `NativePlugin` with typed Rust
-  callbacks instead of constructing ABI tables directly.
-- **Register real runtime behavior**: Use `PluginContext` for subscribers,
-  guardrails, and intercepts.
-- **Keep a stable boundary**: Export one versioned native entry point through
-  the `nemo_relay_plugin!` macro.
-- **Use host runtime helpers**: Emit events and manage scope state through the
-  high-level `PluginRuntime` wrapper.
-
-## What You Get
-
-- **`NativePlugin`**: Plugin kind, configuration validation, and registration
-  lifecycle contract.
-- **`PluginContext`**: Component-scoped registration APIs for middleware and
-  subscribers.
-- **`PluginRuntime`**: Typed helpers for Relay-owned scopes and marks.
-- **Stable native ABI v4**: C-compatible host and plugin tables behind the
-  safe Rust authoring interface. Relay negotiates frozen v3 and v2 tables for
-  Relay 0.8-built plugins that target those layouts.
-- **Typed async middleware**: Every typed guardrail, sanitizer, and intercept
-  returns a future driven by a per-plugin SDK-owned Tokio runtime. Subscribers
-  and raw synchronous ABI registrations remain synchronous.
-- **Async continuations and streams**: Cloneable `ToolNext`, `LlmNext`, and
-  `LlmStreamNext` handles support repeated or concurrent calls. Streaming LLM
-  continuations use a pull-based host handle.
-- **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, keeping
-  application results and opaque annotations adjacent across native API 1.
-- **Typed telemetry marks**: `PluginRuntime::emit_mark_with_options` carries a
-  `DataSchema` and `LogSeverity`; `emit_metric` validates and emits typed
-  `MetricMeasurement` values through the reserved Relay metric schema.
-- **Runtime diagnostics**: `PluginRuntime::runtime_diagnostics()` reads the
-  active host-level `RuntimeDiagnostics` snapshot, with ordered entries and
-  `get(code)` lookup.
+| Surface | Role |
+|---|---|
+| `NativePlugin` | Defines plugin identity, configuration validation, registration, and multiple-component behavior without requiring an author to construct ABI tables. |
+| `PluginContext` | Installs component-owned subscribers, guardrails, intercepts, continuations, and streams. |
+| `PluginRuntime` | Emits marks and manages Relay-owned scopes and scope stacks through typed host helpers. |
+| `nemo_relay_plugin!` | Exports the one versioned native entry point used by the loader. |
+| Native ABI v4 | Keeps C-compatible host and plugin tables behind the safe Rust interface while the host retains frozen v3 and v2 tables for previously compiled plugins. |
+| Typed async middleware | Drives guardrails, sanitizers, and intercepts on a per-component SDK-owned Tokio executor. Subscribers and raw ABI registrations remain synchronous. |
+| Async continuations and streams | `ToolNext`, `LlmNext`, and `LlmStreamNext` support repeated or concurrent downstream calls. Streaming LLM continuations use a pull-based host handle. |
+| Tool results | `ToolNext` returns `ToolExecutionResult`, which keeps an application result and optional annotation together. |
+| Typed telemetry marks | `emit_mark_with_options` adds `DataSchema` and `LogSeverity`; `emit_metric` validates `MetricMeasurement` values before it emits the reserved Relay metric schema. |
+| Runtime diagnostics | `PluginRuntime::runtime_diagnostics()` returns the active host-level `RuntimeDiagnostics` snapshot. Entries are ordered and available through `get(code)`. |
 
 ## Installation
 
@@ -102,26 +81,23 @@ nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_register_plugin, || ExamplePlug
 ```
 
 Build the `cdylib`, describe its entry symbol and compatibility in a
-`relay-plugin.toml` manifest, then register it through the Relay CLI. See the
+`relay-plugin.toml` manifest, then register it through the Relay CLI. Refer to the
 complete example for platform-specific artifact and manifest setup.
 
-Use `compat.native_api = "1"`. Relay 0.8 establishes the canonical
-`ToolExecutionResult` JSON contract as the native API 1 baseline. Every native
-plugin must be rebuilt for Relay 0.8 and declare a `compat.relay` range that
-excludes earlier versions. The recommended range is `>=0.8.0,<1.0`; an
-open-ended range such as `>=0.8.0` is also valid. The manifest is the plugin
-author's compatibility assertion, not proof that the artifact was rebuilt.
-
-The JSON contract is independent of the native host-table layout. This SDK
-continues to export ABI v4, whose C-compatible layouts and callback signatures
-are unchanged by the tool-result cutover. Future incompatible native JSON
-contract changes must increment `compat.native_api`. Relay creates one
+Typed async plugins require `compat.relay = ">=0.8.0,<1.0"`. Relay creates one
 SDK-owned Tokio executor for each configured plugin component. It defaults to
 two workers: enough for modest concurrent async I/O without broadly
 oversubscribing the host. Increase the count only when measured I/O concurrency
 leaves callbacks queued; lower it when the host runs many components or has a
 tight CPU budget. Do not block these workers; use async I/O or
 `tokio::task::spawn_blocking`.
+
+Relay 0.8 establishes canonical tool results as the native API 1 baseline. Tool
+callbacks and `ToolNext` return `ToolExecutionResult`, preserving an application result
+and optional opaque annotation. Tool execution intercepts return the same pair plus
+Relay-owned pending marks. The manifest contract remains `compat.native_api = "1"` and
+the C host-table ABI remains v4, but plugins must rebuild and exclude pre-0.8 Relay
+versions because the JSON result boundary changed.
 
 Set a plugin-wide default in Rust, then let the component's TOML configuration
 override it:
@@ -170,9 +146,3 @@ ABI-v2 compatibility tables cannot use runtime diagnostics.
 Relay scope context is restored around every poll of a registered middleware
 future. Child tasks created with `tokio::spawn` do not automatically inherit
 that scope context.
-
-## Documentation
-
-- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
-- [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Rust native plugin example](https://github.com/NVIDIA/NeMo-Relay/blob/main/examples/rust-native-plugin/README.md)

@@ -94,26 +94,24 @@ when materialized.
 Managed callbacks, continuations, and execute helpers use the same logical
 result in their native type or object shape:
 
-- Python uses `ToolExecutionResult(result, annotation=None)`.
-- Rust uses `ToolExecutionResult { result, annotation }` and its constructors.
-- Go uses `ToolExecutionResult { Result, Annotation }`.
-- Node.js uses `{ result, annotation? }`.
-- Public C callbacks use canonical JSON with required `result` and optional
-  `annotation`.
+| Surface | Managed callback or continuation result |
+| --- | --- |
+| Python | `ToolExecutionResult(result, annotation=None)` |
+| Rust | `ToolExecutionResult { result, annotation }` and its constructors |
+| Go | `ToolExecutionResult { Result, Annotation }` |
+| Node.js | `{ result, annotation? }` |
+| Public C | Canonical JSON with required `result` and optional `annotation` |
 
 Execution intercepts add lifecycle-owned pending marks to that shape:
 
-- Python callbacks return `ToolExecutionInterceptOutcome`.
-- Rust callbacks and native API 1 plugins return
-  `ToolExecutionInterceptOutcome`.
-- Go callbacks return `ToolExecutionInterceptOutcome`.
-- Node.js callbacks return `{ result, annotation?, pendingMarks? }`, where
-  JavaScript pending-mark DTOs use `categoryProfile`.
-- Public C intercept callbacks return canonical JSON with `result`, optional
-  `annotation`, and optional `pending_marks`.
-- `grpc-v1` worker SDKs exchange protobuf `ToolExecutionResult` and
-  `ToolExecutionInterceptOutcome` messages. Their arbitrary JSON fields use
-  lossless protobuf `JsonValue` wrappers.
+| Surface | Execution-intercept outcome |
+| --- | --- |
+| Python | `ToolExecutionInterceptOutcome` |
+| Rust and native API 1 | `ToolExecutionInterceptOutcome` |
+| Go | `ToolExecutionInterceptOutcome` |
+| Node.js | `{ result, annotation?, pendingMarks? }`; JavaScript pending-mark DTOs use `categoryProfile` |
+| Public C | Canonical JSON with `result`, optional `annotation`, and optional `pending_marks` |
+| `grpc-v1` worker SDKs | Protobuf `ToolExecutionResult` and `ToolExecutionInterceptOutcome`; arbitrary JSON fields use lossless `JsonValue` wrappers |
 
 Canonical JSON uses `annotation`, `pending_marks`, and `category_profile`
 across bindings.
@@ -147,8 +145,8 @@ Rebuild native plugins and workers against the same NeMo Relay release that
 hosts them. For binding-specific examples, refer to the
 [Migration Guides](/reference/migration-guides#return-canonical-tool-execution-results).
 
-## Related Topics
-
-- [LLM Request Intercept Outcomes](/reference/llm-request-intercept-outcomes)
-- [Add Middleware](/instrument-applications/advanced-guide)
-- [gRPC Worker Protocol Overview](/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol)
+LLM request intercepts use a different outcome because they must preserve an
+annotated request and codec authority. That contract is described in [LLM
+Request Intercept Outcomes](/reference/llm-request-intercept-outcomes). Worker
+authors can trace both outcome envelopes through the [grpc-v1 protocol
+reference](/build-plugins/workers/grpc-v1-protocol).

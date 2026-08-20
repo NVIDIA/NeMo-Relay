@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Registration converts a valid component document into owned runtime behavior. The
 example installs only the feature groups whose `enabled` values are true and reads
-[priority and `break_chain`](/build-plugins/plugin-context) directly from
+[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) directly from
 configuration. It never calls a process-global middleware registrar from inside the
 plugin.
 
@@ -24,10 +24,11 @@ The following examples register a component-owned callback through `PluginContex
 <Tab title="Python" language="python">
 ```python
 def register(self, plugin_config, context):
+    tag = plugin_config["tag"]
     context.register_event_metadata_injector(
-        "deployment-metadata",
+        "component-metadata",
         10,
-        lambda event: {"deployment.zone": plugin_config["zone"]},
+        lambda event: {"example.plugin.tag": tag},
     )
 ```
 
@@ -39,8 +40,8 @@ registrations.
 <Tab title="Node.js" language="node">
 ```js
 register(pluginConfig, context) {
-  context.registerEventMetadataInjector('deployment-metadata', 10, () => ({
-    'deployment.zone': pluginConfig.zone,
+  context.registerEventMetadataInjector('component-metadata', 10, () => ({
+    'example.plugin.tag': pluginConfig.tag,
   }));
 }
 ```

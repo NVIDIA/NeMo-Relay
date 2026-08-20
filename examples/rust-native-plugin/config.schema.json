@@ -1,50 +1,134 @@
 {
   "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Rust Native Policy Example",
+  "title": "Rust Native Documentation Plugin",
+  "description": "Configures the observation, request policy, execution, runtime, and SDK executor groups demonstrated by the native example.",
   "type": "object",
   "additionalProperties": false,
-  "x-nemo-relay-order": [
-    "tag",
-    "block_tools",
-    "block_llms",
-    "emit_isolated_scope",
-    "executor"
-  ],
+  "x-nemo-relay-order": ["tag", "observe", "requests", "execution", "runtime", "executor"],
   "properties": {
     "tag": {
-      "title": "Event tag",
-      "description": "Tag added to events emitted by the example plugin.",
+      "description": "Non-empty label attached to plugin-created metadata and runtime events.",
       "type": "string",
-      "default": "rust-native-example"
+      "minLength": 1,
+      "default": "documentation"
     },
-    "block_tools": {
-      "title": "Block tool calls",
-      "description": "Reject tool calls through the example conditional guardrail.",
-      "type": "boolean",
-      "default": false
+    "observe": {
+      "description": "Controls the subscriber and observability-only event, tool, and LLM sanitizers.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Registers the subscriber and event, tool, and LLM observability sanitizers.",
+          "type": "boolean",
+          "default": true
+        },
+        "redact_keys": {
+          "description": "Object keys whose observability values are replaced recursively.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "default": ["secret"]
+        }
+      }
     },
-    "block_llms": {
-      "title": "Block LLM calls",
-      "description": "Reject LLM calls through the example conditional guardrail.",
-      "type": "boolean",
-      "default": false
+    "requests": {
+      "description": "Controls tool and model blocking plus real request rewriting.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Registers tool and model policy plus request-rewriting middleware.",
+          "type": "boolean",
+          "default": true
+        },
+        "mode": {
+          "description": "Blocks configured tool and model names in enforce mode; permits them in observe mode.",
+          "type": "string",
+          "enum": ["observe", "enforce"],
+          "default": "enforce"
+        },
+        "blocked_tools": {
+          "description": "Exact tool names rejected in enforce mode.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["dangerous_tool"]
+        },
+        "blocked_models": {
+          "description": "Exact model names rejected in enforce mode.",
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["restricted-model"]
+        },
+        "header_name": {
+          "description": "Header name added to the real LLM request.",
+          "type": "string",
+          "minLength": 1,
+          "default": "x-nemo-relay-plugin"
+        },
+        "header_value": {
+          "description": "Header value added to the real LLM request.",
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation"
+        },
+        "priority": {
+          "description": "Priority for the tool and LLM request intercepts.",
+          "type": "integer",
+          "default": 20
+        },
+        "break_chain": {
+          "description": "Stops later request intercepts after this component rewrites a request.",
+          "type": "boolean",
+          "default": false
+        }
+      }
     },
-    "emit_isolated_scope": {
-      "title": "Emit isolated scope",
-      "description": "Emit the example plugin's isolated scope and mark events.",
-      "type": "boolean",
-      "default": true
+    "execution": {
+      "description": "Controls tool, unary LLM, and streaming LLM continuation wrappers.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Registers tool, unary LLM, and streaming LLM execution intercepts.",
+          "type": "boolean",
+          "default": true
+        },
+        "priority": {
+          "description": "Priority for all three execution intercepts.",
+          "type": "integer",
+          "default": 30
+        },
+        "emit_pending_marks": {
+          "description": "Adds Relay-owned pending marks to tool execution and LLM request outcomes.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "runtime": {
+      "description": "Controls host runtime marks, child scopes, and isolated scope-stack demonstration.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "emit_marks": {
+          "description": "Emits a host-runtime mark during the tool request intercept.",
+          "type": "boolean",
+          "default": true
+        },
+        "emit_isolated_scope": {
+          "description": "Creates, binds, and drops an isolated scope stack during the tool request intercept.",
+          "type": "boolean",
+          "default": true
+        }
+      }
     },
     "executor": {
-      "title": "Typed middleware executor",
-      "description": "SDK-owned Tokio executor settings for this configured component.",
+      "description": "SDK-owned Tokio executor settings for this configured native component.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "worker_threads": {
-          "title": "Worker threads",
-          "description": "Positive number of Tokio worker threads. Defaults to 2.",
+          "description": "Positive number of executor workers. The example defaults to two.",
           "type": "integer",
           "minimum": 1,
           "default": 2

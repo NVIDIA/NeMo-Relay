@@ -119,6 +119,20 @@ redirects:
 # Build plugin guides
 - source: /nemo/relay/build-plugins/basic-guide
   destination: /nemo/relay/build-plugins/language-binding/about
+- source: /nemo/relay/build-plugins/dynamic-plugins/about
+  destination: /nemo/relay/build-plugins/package-discoverable-plugins
+- source: /nemo/relay/build-plugins/dynamic-plugins/native-dynamic/about
+  destination: /nemo/relay/build-plugins/native/about
+- source: /nemo/relay/build-plugins/dynamic-plugins/native-dynamic/rust-native-plugin-example
+  destination: /nemo/relay/build-plugins/native/build-and-package
+- source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/about
+  destination: /nemo/relay/build-plugins/workers/about
+- source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/python/about
+  destination: /nemo/relay/build-plugins/workers/python
+- source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/rust/about
+  destination: /nemo/relay/build-plugins/workers/rust
+- source: /nemo/relay/build-plugins/dynamic-plugins/grpc-worker/grpc-worker-protocol
+  destination: /nemo/relay/build-plugins/workers/grpc-v1-protocol
 
 # CLI guides
 - source: /nemo/relay/nemo-relay-cli/cursor
