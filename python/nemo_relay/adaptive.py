@@ -565,6 +565,7 @@ __all__ = [
     "ConfigReport",
     "ComponentSpec",
     "ResponseCacheConfig",
+    "ResponseCacheKeyStrategy",
     "StateConfig",
     "TelemetryConfig",
     "ToolCacheConfig",
