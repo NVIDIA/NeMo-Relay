@@ -3569,6 +3569,46 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
 }
 
 #[test]
+fn typed_export_activation_policy_round_trips_deny_and_error() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut ctx = test_context(&host.v3.v1);
+
+    ctx.register_export_activation_policy(|request| async move {
+        assert_eq!(request.target_kind, ExportActivationTargetKind::AtifS3);
+        assert_eq!(request.config, json!({"enabled": false}));
+        Ok(ExportActivationDecision::Deny)
+    })
+    .unwrap();
+    ctx.register_export_activation_policy(|_| async move { Err("policy failed".into()) })
+        .unwrap();
+
+    let deny = take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy);
+    let result = invoke_async_registration(
+        &host,
+        &deny,
+        json!({"target_kind": "atif_s3", "config": {"enabled": false}}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result, json!("deny"));
+    unsafe { deny.free() };
+
+    let failure =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy);
+    let error = invoke_async_registration(
+        &host,
+        &failure,
+        json!({"target_kind": "otlp_trace", "config": null}),
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, "policy failed");
+    unsafe { failure.free() };
+    assert_eq!(live_host_strings(), 0);
+}
+
+#[test]
 fn typed_async_llm_sanitize_context_decodes_oci_genai_builtin_identity() {
     let _guard = begin_test();
     let host = test_host_v4();
