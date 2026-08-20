@@ -64,6 +64,7 @@ An event sanitizer must await child tasks whose emissions belong to its
 reserved FIFO position. Relay cancels detached async sanitizer tasks after the
 sanitizer returns. Detached blocking work runs without that sanitizer
 publication context and must not emit events for the completed publication.
+</Warning>
 
 An execution intercept may invoke the `next` continuation supplied to that
 callback. This is the only supported way for an intercept to enter the
@@ -82,7 +83,6 @@ application-owned `result` and an optional opaque `annotation`. A forwarding
 intercept must preserve both fields in its `ToolExecutionInterceptOutcome` or
 deliberately replace or remove the annotation. Relay retains pending marks
 separately from this application-visible result.
-</Warning>
 
 ## Registration Levels
 
