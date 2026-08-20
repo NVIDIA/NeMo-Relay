@@ -221,7 +221,7 @@ func TestEventMetadataInjectorRegistrationErrorsReleaseCallbacks(t *testing.T) {
 	if err := RegisterEventMetadataInjector(eventMetadataDuplicateInjector, 0, callback); err != nil {
 		t.Fatal(err)
 	}
-	if err := RegisterEventMetadataInjector(eventMetadataDuplicateInjector, 0, callback); err == nil {
+	if RegisterEventMetadataInjector(eventMetadataDuplicateInjector, 0, callback) == nil {
 		t.Fatal("expected duplicate event metadata injector registration to fail")
 	}
 	if registeredClosureCount() != baseline+1 {
