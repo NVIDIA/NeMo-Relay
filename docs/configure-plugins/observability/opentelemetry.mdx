@@ -91,6 +91,7 @@ type = "gen_ai"
 endpoint = "http://localhost:4318/v1/traces"
 transport = "http_binary"
 service_name = "agent-service"
+promote_metadata_prefixes = ["app."]
 max_queue_size = 4096
 max_export_batch_size = 512
 scheduled_delay_millis = 1000
@@ -145,13 +146,53 @@ to the other exporters.
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
 
-Metadata promotion preserves the original Event metadata and does not replace
-attributes produced by a trace projection or `attribute_mappings`. Relay omits
-selected keys in namespaces owned by Relay or supported semantic projections:
+## Event Metadata Promotion
+
+Set `promote_metadata_prefixes` on a trace endpoint to copy selected keys from
+the final sanitized Event metadata into that endpoint's OpenTelemetry output.
+The setting defaults to an empty list, so Relay does not promote metadata unless
+you configure at least one prefix.
+
+| Behavior | Contract |
+|---|---|
+| Promotion prefixes | ASCII letters, numbers, underscores, and hyphens in nonempty segments separated by single dots, with an optional trailing dot. Matching is literal and case-sensitive. |
+| Supported values | Strings, booleans, signed 64-bit integers, floating-point numbers, empty arrays, and homogeneous arrays containing one supported primitive type. |
+| Rejected values | Nulls, objects, nested arrays, mixed-type arrays, and integers outside the signed 64-bit range. |
+| Scope lifecycle | A Scope-end key is authoritative when Relay constructs the final span. When Scope-end omits the key, the Scope-start value remains. |
+| OpenTelemetry collisions | Projection-owned attributes always win. For `full` and `openinference`, configured attribute-mapping aliases also win over promoted metadata. |
+
+For example, `"app."`, `"app_"`, and `"app-"` are valid literal prefixes.
+Leading or repeated dots, whitespace, other punctuation, and glob expressions
+such as `"app.*"` are rejected.
+
+Matching is case-sensitive and compares the beginning of each key literally.
+Relay does not infer a dot or metadata-key segment boundary. For example,
+`"app."` selects `app.name` and `app.version`, but not `app_name`. The broader
+`"app"` prefix selects all three keys.
+Configure the narrowest prefix that selects the metadata you intend to export.
+
+Scope-start and Scope-end are separate Event records. When Scope-end completes
+the span, a metadata key present on that Event replaces the corresponding
+promoted Scope-start value. Mark metadata is promoted to the attributes of the
+projected span event or tool span. The `gen_ai` projection continues to omit
+Marks.
+
+Promotion supports strings, booleans, signed 64-bit integers, floating-point
+numbers, empty arrays, and homogeneous arrays of those primitive types. Relay
+omits rejected values and records a bounded runtime diagnostic containing the
+key and reason, but it does not record the rejected value or stop trace export.
+
+Projection-owned attributes take precedence over promoted metadata with the
+same key. For `full` and `openinference`, configured attribute-mapping aliases
+also take precedence. Relay also omits selected
+keys in namespaces owned by Relay or supported semantic projections:
 `nemo_relay.`, `gen_ai.`, `error.`, `exception.`, `input.`, `output.`, `llm.`,
 `openinference.`, `server.`, `service.`, `session.`, `tool.`, `tool_call.`, and
-`user.`. Relay also omits the bare `metadata` key. Rejected values produce a
+`user.`. Relay omits the bare `metadata` key as well. Rejected keys produce a
 rate-limited operational diagnostic without dropping the Event or span.
+
+Promotion does not modify the Event or ATOF payload. Use `resource_attributes`
+instead for static values that must be attached to every span from an endpoint.
 
 ## Log and Metric Endpoint Resolution
 
