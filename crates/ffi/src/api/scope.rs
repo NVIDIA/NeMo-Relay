@@ -2,14 +2,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
-    FfiScopeHandle, NemoRelayScopeType, NemoRelayStatus, ScopeAttributes, c_char,
-    c_str_to_opt_json, c_str_to_string, clear_last_error, core_scope_api, set_last_error,
-    status_from_error, unix_micros_to_opt_timestamp,
+    FfiScopeHandle, NemoRelayLogSeverity, NemoRelayMetricMeasurement, NemoRelayScopeType,
+    NemoRelayStatus, ScopeAttributes, c_char, c_str_to_opt_json, c_str_to_string, clear_last_error,
+    core_scope_api, set_last_error, status_from_error, unix_micros_to_opt_timestamp,
 };
+use crate::types::{NEMO_RELAY_METRIC_KIND_UNSPECIFIED, NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED};
+use crate::types::{log_severity_from_ffi, metric_kind_from_ffi, metric_value_type_from_ffi};
 
 // ---------------------------------------------------------------------------
 // Scope / handle operations
 // ---------------------------------------------------------------------------
+
+fn set_metric_discriminator_error(
+    index: usize,
+    field: &str,
+    value: i32,
+    unspecified: i32,
+    expected: &str,
+) {
+    if value == unspecified {
+        set_last_error(&format!(
+            "measurements[{index}].{field} is unspecified; set one of {expected}"
+        ));
+    } else {
+        set_last_error(&format!(
+            "measurements[{index}].{field} has invalid value {value}"
+        ));
+    }
+}
 
 /// Retrieve the current scope handle from the thread-local scope stack.
 ///
@@ -222,6 +242,42 @@ pub unsafe extern "C" fn nemo_relay_event(
     metadata_json: *const c_char,
     timestamp_unix_micros: *const i64,
 ) -> NemoRelayStatus {
+    unsafe {
+        nemo_relay_event_v2(
+            name,
+            parent,
+            data_json,
+            std::ptr::null(),
+            metadata_json,
+            std::ptr::null(),
+            timestamp_unix_micros,
+        )
+    }
+}
+
+/// Emit a named lifecycle event with optional data schema and log severity.
+///
+/// This is the additive form of [`nemo_relay_event`]. The legacy function
+/// remains ABI-compatible and behaves as if both new arguments were null.
+///
+/// # Parameters
+/// - `data_schema_json`: Optional `{"name":"...","version":"..."}` JSON.
+/// - `severity`: Optional typed telemetry-log severity.
+///
+/// # Safety
+/// The pointer requirements are the same as [`nemo_relay_event`]. Optional
+/// pointers may be null and otherwise must remain valid for the call.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn nemo_relay_event_v2(
+    name: *const c_char,
+    parent: *const FfiScopeHandle,
+    data_json: *const c_char,
+    data_schema_json: *const c_char,
+    metadata_json: *const c_char,
+    severity: *const NemoRelayLogSeverity,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
     clear_last_error();
     let name = match c_str_to_string(name) {
         Ok(s) => s,
@@ -236,9 +292,30 @@ pub unsafe extern "C" fn nemo_relay_event(
         Some(d) => d,
         None => return NemoRelayStatus::InvalidJson,
     };
+    let data_schema = match c_str_to_opt_json(data_schema_json) {
+        Some(Some(value)) => match serde_json::from_value(value) {
+            Ok(schema) => Some(schema),
+            Err(error) => {
+                set_last_error(&format!("invalid data_schema JSON: {error}"));
+                return NemoRelayStatus::InvalidJson;
+            }
+        },
+        Some(None) => None,
+        None => return NemoRelayStatus::InvalidJson,
+    };
     let metadata = match c_str_to_opt_json(metadata_json) {
         Some(m) => m,
         None => return NemoRelayStatus::InvalidJson,
+    };
+    let severity = if severity.is_null() {
+        None
+    } else {
+        let raw_severity = unsafe { *severity };
+        let Some(severity) = log_severity_from_ffi(raw_severity) else {
+            set_last_error(&format!("severity has invalid value {raw_severity}"));
+            return NemoRelayStatus::InvalidArg;
+        };
+        Some(severity)
     };
     let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
         Some(v) => v,
@@ -250,11 +327,234 @@ pub unsafe extern "C" fn nemo_relay_event(
             .name(&name)
             .parent_opt(parent_ref)
             .data_opt(data)
+            .data_schema_opt(data_schema)
             .metadata_opt(metadata)
+            .severity_opt(severity)
             .timestamp_opt(timestamp)
             .build(),
     ) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(e) => status_from_error(&e),
+    }
+}
+
+/// Emit an atomic metric measurement mark from canonical JSON.
+///
+/// `measurements_json` must be a nonempty JSON array using Relay's canonical
+/// `MetricMeasurement` shape. Relay validates the complete array before
+/// emitting the metric mark.
+///
+/// # Safety
+/// `name` and `measurements_json` must be valid non-null C strings. Optional
+/// pointers may be null and otherwise must remain valid for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_metric_json(
+    name: *const c_char,
+    parent: *const FfiScopeHandle,
+    measurements_json: *const c_char,
+    metadata_json: *const c_char,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    let parent_ref = if parent.is_null() {
+        None
+    } else {
+        Some(&unsafe { &*parent }.0)
+    };
+    let Some(measurements_json) = c_str_to_opt_json(measurements_json) else {
+        return NemoRelayStatus::InvalidJson;
+    };
+    let Some(measurements_json) = measurements_json else {
+        set_last_error("measurements_json is required");
+        return NemoRelayStatus::NullPointer;
+    };
+    let measurements = match serde_json::from_value(measurements_json) {
+        Ok(measurements) => measurements,
+        Err(error) => {
+            set_last_error(&format!("invalid metric measurements JSON: {error}"));
+            return NemoRelayStatus::InvalidJson;
+        }
+    };
+    let metadata = match c_str_to_opt_json(metadata_json) {
+        Some(metadata) => metadata,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
+        Some(timestamp) => timestamp,
+        None => return NemoRelayStatus::InvalidArg,
+    };
+
+    match core_scope_api::metric(
+        core_scope_api::EmitMetricEventParams::builder()
+            .name(&name)
+            .measurements(measurements)
+            .parent_opt(parent_ref)
+            .metadata_opt(metadata)
+            .timestamp_opt(timestamp)
+            .build(),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
+    }
+}
+
+/// Emit an atomic metric measurement mark from typed C measurements.
+///
+/// `measurements` must reference `measurements_len` initialized entries. Each
+/// measurement's `value_type` selects the corresponding numeric value field.
+/// Relay validates the complete array before emitting any recording operation.
+/// Relay does not retain `measurements`, their strings, or histogram boundaries;
+/// caller-owned storage need only remain valid until this function returns.
+///
+/// # Safety
+/// `name` must be a valid non-null C string. `measurements` must be non-null
+/// and valid for `measurements_len` reads when the length is nonzero. Every
+/// measurement name must be a valid C string; optional strings and JSON must
+/// be valid when non-null. A null `boundaries` pointer with zero length leaves
+/// boundaries unspecified, while a non-null pointer with zero length requests
+/// an explicit empty boundary list. For nonzero lengths, `boundaries` must
+/// reference `boundaries_len` doubles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_metric(
+    name: *const c_char,
+    parent: *const FfiScopeHandle,
+    measurements: *const NemoRelayMetricMeasurement,
+    measurements_len: usize,
+    metadata_json: *const c_char,
+    timestamp_unix_micros: *const i64,
+) -> NemoRelayStatus {
+    clear_last_error();
+    let name = match c_str_to_string(name) {
+        Ok(name) => name,
+        Err(status) => return status,
+    };
+    if measurements_len > 0 && measurements.is_null() {
+        set_last_error("measurements pointer is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let raw_measurements = if measurements_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(measurements, measurements_len) }
+    };
+    let mut typed_measurements = Vec::with_capacity(raw_measurements.len());
+    for (index, measurement) in raw_measurements.iter().enumerate() {
+        let measurement_name = match c_str_to_string(measurement.name) {
+            Ok(name) => name,
+            Err(status) => {
+                set_last_error(&format!("measurements[{index}].name is invalid"));
+                return status;
+            }
+        };
+        let Some(kind) = metric_kind_from_ffi(measurement.kind) else {
+            set_metric_discriminator_error(
+                index,
+                "kind",
+                measurement.kind,
+                NEMO_RELAY_METRIC_KIND_UNSPECIFIED,
+                "NEMO_RELAY_METRIC_KIND_COUNTER, NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER, NEMO_RELAY_METRIC_KIND_GAUGE, or NEMO_RELAY_METRIC_KIND_HISTOGRAM",
+            );
+            return NemoRelayStatus::InvalidArg;
+        };
+        let Some(value_type) = metric_value_type_from_ffi(measurement.value_type) else {
+            set_metric_discriminator_error(
+                index,
+                "value_type",
+                measurement.value_type,
+                NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED,
+                "NEMO_RELAY_METRIC_VALUE_TYPE_U64, NEMO_RELAY_METRIC_VALUE_TYPE_I64, or NEMO_RELAY_METRIC_VALUE_TYPE_F64",
+            );
+            return NemoRelayStatus::InvalidArg;
+        };
+        let value = match value_type {
+            nemo_relay::api::event::MetricValueType::U64 => {
+                serde_json::Value::from(measurement.u64_value)
+            }
+            nemo_relay::api::event::MetricValueType::I64 => {
+                serde_json::Value::from(measurement.i64_value)
+            }
+            nemo_relay::api::event::MetricValueType::F64 => {
+                let Some(number) = serde_json::Number::from_f64(measurement.f64_value) else {
+                    set_last_error(&format!("measurements[{index}].f64_value must be finite"));
+                    return NemoRelayStatus::InvalidArg;
+                };
+                serde_json::Value::Number(number)
+            }
+        };
+        let unit = if measurement.unit.is_null() {
+            None
+        } else {
+            match c_str_to_string(measurement.unit) {
+                Ok(value) => Some(value),
+                Err(status) => return status,
+            }
+        };
+        let description = if measurement.description.is_null() {
+            None
+        } else {
+            match c_str_to_string(measurement.description) {
+                Ok(value) => Some(value),
+                Err(status) => return status,
+            }
+        };
+        let attributes = match c_str_to_opt_json(measurement.attributes_json) {
+            Some(value) => value,
+            None => return NemoRelayStatus::InvalidJson,
+        };
+        if measurement.boundaries_len > 0 && measurement.boundaries.is_null() {
+            set_last_error(&format!("measurements[{index}].boundaries pointer is null"));
+            return NemoRelayStatus::NullPointer;
+        }
+        let boundaries = if measurement.boundaries.is_null() {
+            None
+        } else if measurement.boundaries_len == 0 {
+            Some(Vec::new())
+        } else {
+            Some(
+                unsafe {
+                    std::slice::from_raw_parts(measurement.boundaries, measurement.boundaries_len)
+                }
+                .to_vec(),
+            )
+        };
+        typed_measurements.push(nemo_relay::api::event::MetricMeasurement {
+            name: measurement_name,
+            kind,
+            value_type,
+            value,
+            unit,
+            description,
+            attributes,
+            boundaries,
+        });
+    }
+    let parent_ref = if parent.is_null() {
+        None
+    } else {
+        Some(&unsafe { &*parent }.0)
+    };
+    let metadata = match c_str_to_opt_json(metadata_json) {
+        Some(metadata) => metadata,
+        None => return NemoRelayStatus::InvalidJson,
+    };
+    let timestamp = match unix_micros_to_opt_timestamp(timestamp_unix_micros) {
+        Some(timestamp) => timestamp,
+        None => return NemoRelayStatus::InvalidArg,
+    };
+    match core_scope_api::metric(
+        core_scope_api::EmitMetricEventParams::builder()
+            .name(&name)
+            .measurements(typed_measurements)
+            .parent_opt(parent_ref)
+            .metadata_opt(metadata)
+            .timestamp_opt(timestamp)
+            .build(),
+    ) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_error(&error),
     }
 }

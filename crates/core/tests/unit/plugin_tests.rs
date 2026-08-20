@@ -4,6 +4,7 @@
 //! Unit tests for plugin in the NeMo Relay core crate.
 
 use super::*;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -11,6 +12,7 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::json;
 use tokio::sync::Notify;
 
+use crate::api::event::{BaseEvent, Event, MarkEvent};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::llm::{llm_conditional_execution, llm_request_intercepts};
 use crate::api::runtime::global_context;
@@ -39,6 +41,7 @@ struct BackgroundTaskPlugin {
 }
 struct PanickingPlugin;
 struct FailingDeregisterPlugin;
+struct EventMetadataPlugin;
 struct PluginMutationOwnerCleanup;
 
 impl Drop for PluginMutationOwnerCleanup {
@@ -102,6 +105,39 @@ fn observability_destination_document(destination: &str) -> Json {
     })
 }
 
+#[test]
+fn plugin_configuration_helpers_preserve_defaults_and_error_detection() {
+    let component = PluginComponentSpec::new("coverage.plugin");
+    assert_eq!(component.kind, "coverage.plugin");
+    assert!(component.enabled);
+    assert!(component.config.is_empty());
+
+    let empty = ConfigReport::default();
+    assert!(!empty.has_errors());
+    let error = ConfigReport {
+        diagnostics: vec![ConfigDiagnostic {
+            level: DiagnosticLevel::Error,
+            code: "coverage.error".into(),
+            component: None,
+            field: None,
+            message: "expected".into(),
+        }],
+        runtime_diagnostics: vec![],
+    };
+    assert!(error.has_errors());
+    assert!(matches!(
+        apply_global_config_policy(
+            ConfigPolicy::default(),
+            &ConfigPolicy {
+                unknown_component: UnsupportedBehavior::Error,
+                ..ConfigPolicy::default()
+            }
+        )
+        .unknown_component,
+        UnsupportedBehavior::Error
+    ));
+}
+
 fn programmatic_observability_config(config: Json) -> PluginConfig {
     serde_json::from_value(json!({
         "components": [{"kind": "observability", "config": config}]
@@ -139,6 +175,40 @@ impl Plugin for TestPlugin {
                         request.headers.insert("x-plugin".into(), json!(true));
                         Ok(LlmRequestInterceptOutcome::new(request, annotated))
                     })
+                }),
+            )
+        })
+    }
+}
+
+impl Plugin for EventMetadataPlugin {
+    fn plugin_kind(&self) -> &str {
+        "event-metadata.plugin"
+    }
+
+    fn validate(&self, _plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        Vec::new()
+    }
+
+    fn register<'a>(
+        &'a self,
+        plugin_config: &Map<String, Json>,
+        ctx: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        let configured = plugin_config
+            .get("metadata")
+            .and_then(Json::as_object)
+            .expect("test plugin metadata must be an object")
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<BTreeMap<_, _>>();
+        Box::pin(async move {
+            ctx.register_event_metadata_injector(
+                "configured-metadata",
+                10,
+                Arc::new(move |_| {
+                    let additions = configured.clone();
+                    Box::pin(async move { Ok(additions) })
                 }),
             )
         })
@@ -511,6 +581,7 @@ fn reset_global() {
     let _ = deregister_plugin("background.task.plugin");
     let _ = deregister_plugin("panicking.plugin");
     let _ = deregister_plugin("failing.deregister.plugin");
+    let _ = deregister_plugin("event-metadata.plugin");
 }
 
 #[test]
@@ -602,7 +673,13 @@ fn test_layer_config_concatenates_nested_observability_lists() {
                     "sinks": [{"type": "file", "output_directory": "/system"}]
                 },
                 "opentelemetry": {
-                    "endpoints": [{"type": "full", "endpoint": "http://system:4318/v1/traces"}]
+                    "endpoints": [{"type": "full", "endpoint": "http://system:4318/v1/traces"}],
+                    "logs": {
+                        "endpoints": [{"endpoint": "http://system:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "endpoints": [{"endpoint": "http://system:4318/v1/metrics"}]
+                    }
                 },
                 "atif": {
                     "storage": [{"type": "http", "endpoint": "http://system/trajectory"}]
@@ -624,7 +701,13 @@ fn test_layer_config_concatenates_nested_observability_lists() {
                     "endpoints": [
                         {"type": "gen_ai", "endpoint": "http://user:4318/v1/traces"},
                         {"type": "openinference", "endpoint": "http://user:4319/v1/traces"}
-                    ]
+                    ],
+                    "logs": {
+                        "endpoints": [{"endpoint": "http://user:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "endpoints": [{"endpoint": "http://user:4318/v1/metrics"}]
+                    }
                 },
                 "atif": {
                     "storage": [{"type": "http", "endpoint": "http://user/trajectory"}]
@@ -656,6 +739,20 @@ fn test_layer_config_concatenates_nested_observability_lists() {
         ])
     );
     assert_eq!(
+        config["opentelemetry"]["logs"]["endpoints"],
+        json!([
+            {"endpoint": "http://user:4318/v1/logs"},
+            {"endpoint": "http://system:4318/v1/logs"}
+        ])
+    );
+    assert_eq!(
+        config["opentelemetry"]["metrics"]["endpoints"],
+        json!([
+            {"endpoint": "http://user:4318/v1/metrics"},
+            {"endpoint": "http://system:4318/v1/metrics"}
+        ])
+    );
+    assert_eq!(
         config["atif"]["storage"],
         json!([
             {"type": "http", "endpoint": "http://user/trajectory"},
@@ -670,13 +767,65 @@ fn test_layer_config_concatenates_nested_observability_lists() {
 }
 
 #[test]
+fn test_layer_config_preserves_signal_endpoint_option_semantics() {
+    let lower = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "opentelemetry": {
+                    "logs": {
+                        "enabled": true,
+                        "endpoints": [{"endpoint": "http://system:4318/v1/logs"}]
+                    },
+                    "metrics": {
+                        "enabled": true,
+                        "endpoints": [{"endpoint": "http://system:4318/v1/metrics"}]
+                    }
+                }
+            }
+        }]
+    });
+    let higher = json!({
+        "components": [{
+            "kind": "observability",
+            "config": {
+                "opentelemetry": {
+                    "logs": {"minimum_severity": "warn"},
+                    "metrics": {"endpoints": []}
+                }
+            }
+        }]
+    });
+
+    let mut merged = lower;
+    layer_config(&mut merged, higher);
+    let opentelemetry = &merged["components"][0]["config"]["opentelemetry"];
+
+    assert_eq!(
+        opentelemetry["logs"]["endpoints"],
+        json!([{"endpoint": "http://system:4318/v1/logs"}]),
+        "an omitted higher-precedence list preserves the explicit lower-precedence list"
+    );
+    assert_eq!(opentelemetry["logs"]["minimum_severity"], json!("warn"));
+    assert_eq!(
+        opentelemetry["metrics"]["endpoints"],
+        json!([]),
+        "an explicit empty higher-precedence list remains explicit and empty"
+    );
+}
+
+#[test]
 fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins() {
     let mut merged = json!({
         "components": [{
             "kind": "third.party",
             "config": {
                 "atof": {"sinks": ["base"]},
-                "opentelemetry": {"endpoints": ["base"]},
+                "opentelemetry": {
+                    "endpoints": ["base"],
+                    "logs": {"endpoints": ["base"]},
+                    "metrics": {"endpoints": ["base"]}
+                },
                 "atif": {"storage": ["base"]}
             }
         }]
@@ -688,7 +837,11 @@ fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins
                 "kind": "third.party",
                 "config": {
                     "atof": {"sinks": ["overlay"]},
-                    "opentelemetry": {"endpoints": ["overlay"]},
+                    "opentelemetry": {
+                        "endpoints": ["overlay"],
+                        "logs": {"endpoints": ["overlay"]},
+                        "metrics": {"endpoints": ["overlay"]}
+                    },
                     "atif": {"storage": ["overlay"]}
                 }
             }]
@@ -698,6 +851,14 @@ fn test_layer_config_replaces_observability_named_nested_lists_for_other_plugins
     let config = &merged["components"][0]["config"];
     assert_eq!(config["atof"]["sinks"], json!(["overlay"]));
     assert_eq!(config["opentelemetry"]["endpoints"], json!(["overlay"]));
+    assert_eq!(
+        config["opentelemetry"]["logs"]["endpoints"],
+        json!(["overlay"])
+    );
+    assert_eq!(
+        config["opentelemetry"]["metrics"]["endpoints"],
+        json!(["overlay"])
+    );
     assert_eq!(config["atif"]["storage"], json!(["overlay"]));
 }
 
@@ -875,6 +1036,58 @@ fn test_initialize_plugins_registers_and_clears_components() {
     reset_global();
 }
 
+#[test]
+fn test_plugin_configuration_registers_event_metadata_injector() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    register_plugin(Arc::new(EventMetadataPlugin)).unwrap();
+
+    let mut component = PluginComponentSpec::new("event-metadata.plugin");
+    component.config = serde_json::from_value(json!({
+        "metadata": {"nv.test.plugin_config": "configured"}
+    }))
+    .unwrap();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime
+        .block_on(initialize_plugins_exact(PluginConfig {
+            components: vec![component],
+            ..PluginConfig::default()
+        }))
+        .unwrap();
+
+    let callback = {
+        let context = global_context();
+        let state = context.read().unwrap();
+        let injectors = state.event_metadata_injectors.sorted_values();
+        assert_eq!(injectors.len(), 1);
+        Arc::clone(&injectors[0].payload)
+    };
+    let event = Arc::new(Event::Mark(MarkEvent::new(
+        BaseEvent::builder().name("plugin-configured-mark").build(),
+        None,
+        None,
+    )));
+    let additions = runtime.block_on(callback(event)).unwrap();
+    assert_eq!(
+        additions.get("nv.test.plugin_config"),
+        Some(&json!("configured"))
+    );
+
+    clear_plugin_configuration().unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_metadata_injectors
+            .sorted_values()
+            .is_empty()
+    );
+    assert!(deregister_plugin("event-metadata.plugin"));
+    reset_global();
+}
 #[test]
 fn test_validate_plugin_config_honors_policy_and_duplicate_singletons() {
     let _guard = lock_runtime_owner();
@@ -1130,6 +1343,12 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
     let mut ctx = PluginRegistrationContext::with_namespace("demo::");
     ctx.register_subscriber("subscriber", Arc::new(|_event| {}))
         .unwrap();
+    ctx.register_event_metadata_injector(
+        "event-metadata",
+        1,
+        Arc::new(|_| Box::pin(async { Ok(BTreeMap::new()) })),
+    )
+    .unwrap();
     ctx.register_tool_request_intercept(
         "tool-request",
         1,
@@ -1180,6 +1399,7 @@ fn test_plugin_registration_context_covers_all_registration_helpers() {
         names,
         vec![
             "demo::subscriber",
+            "demo::event-metadata",
             "demo::tool-request",
             "demo::tool-exec",
             "demo::llm-request",
@@ -1257,6 +1477,14 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
             ..PluginConfig::default()
         }))
         .unwrap();
+    record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+        code: "atif.remote_delivery_failed".into(),
+        component: "observability".into(),
+        field: Some("storage[0]".into()),
+        message: "HTTP 500".into(),
+        session_id: Some("session-123".into()),
+        count: 1,
+    });
 
     let err = runtime
         .block_on(initialize_plugins_exact(PluginConfig {
@@ -1274,6 +1502,19 @@ fn test_initialize_plugins_restores_previous_configuration_after_failed_replacem
     assert_eq!(RESTORE_FAIL_REGISTRATIONS.load(Ordering::SeqCst), 1);
     let restored_report = active_plugin_report().expect("previous config should be restored");
     assert!(restored_report.diagnostics.is_empty());
+    assert_eq!(restored_report.runtime_diagnostics.len(), 1);
+    let restored = &restored_report.runtime_diagnostics[0];
+    assert_eq!(restored.code, "atif.remote_delivery_failed");
+    assert_eq!(restored.component, "observability");
+    assert_eq!(restored.field.as_deref(), Some("storage[0]"));
+    assert_eq!(restored.message, "HTTP 500");
+    assert_eq!(restored.session_id.as_deref(), Some("session-123"));
+    assert_eq!(restored.count, 1);
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].code, "atif.remote_delivery_failed");
+    assert_eq!(diagnostics[0].message, "HTTP 500");
+    assert_eq!(diagnostics[0].count, 1);
     let names = recorded_names().lock().unwrap().clone();
     assert_eq!(
         names,
@@ -1608,6 +1849,96 @@ fn test_teardown_runtime_diagnostics_remain_in_the_plugin_report() {
 
     clear_plugin_configuration_inner();
     assert!(active_plugin_report().is_none());
+    reset_global();
+}
+
+#[test]
+fn dynamic_plugin_runtime_diagnostics_are_active_only_and_aggregated_by_code() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+
+    for diagnostic in [
+        RuntimeDiagnostic {
+            code: "zeta".into(),
+            component: "observability".into(),
+            field: None,
+            message: "first zeta".into(),
+            session_id: None,
+            count: 2,
+        },
+        RuntimeDiagnostic {
+            code: "alpha".into(),
+            component: "observability".into(),
+            field: Some("logs[0]".into()),
+            message: "alpha".into(),
+            session_id: None,
+            count: 1,
+        },
+        RuntimeDiagnostic {
+            code: "zeta".into(),
+            component: "observability".into(),
+            field: Some("metrics[0]".into()),
+            message: "latest zeta".into(),
+            session_id: None,
+            count: u64::MAX,
+        },
+    ] {
+        record_active_plugin_runtime_diagnostic(diagnostic);
+    }
+
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .map(|diagnostic| (
+                diagnostic.code.as_str(),
+                diagnostic.message.as_str(),
+                diagnostic.count
+            ))
+            .collect::<Vec<_>>(),
+        vec![("alpha", "alpha", 1), ("zeta", "latest zeta", u64::MAX)]
+    );
+
+    clear_plugin_configuration_inner();
+    assert!(active_runtime_diagnostics_snapshot().is_empty());
+    reset_global();
+}
+
+#[test]
+fn dynamic_plugin_runtime_diagnostics_snapshot_is_bounded() {
+    let _guard = lock_runtime_owner();
+    reset_global();
+    store_active_plugin_configuration(PluginConfig::default(), ConfigReport::default(), vec![])
+        .unwrap();
+
+    for index in 0..=MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS {
+        record_active_plugin_runtime_diagnostic(RuntimeDiagnostic {
+            code: format!("diagnostic.{index:02}"),
+            component: "observability".into(),
+            field: None,
+            message: "runtime diagnostic".into(),
+            session_id: None,
+            count: 1,
+        });
+    }
+
+    let diagnostics = active_runtime_diagnostics_snapshot();
+    assert_eq!(diagnostics.len(), MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS);
+    assert_eq!(
+        diagnostics
+            .first()
+            .map(|diagnostic| diagnostic.code.as_str()),
+        Some("diagnostic.00")
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "diagnostic.32")
+    );
+
+    clear_plugin_configuration_inner();
     reset_global();
 }
 

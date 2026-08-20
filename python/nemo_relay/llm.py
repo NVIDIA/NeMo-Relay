@@ -171,6 +171,8 @@ def call_end(
         this call. Codec failures retain their documented fallback behavior.
         ``response_codec`` and ``annotated_response`` enrich observability
         output only and do not rewrite the caller-owned response.
+        When model pricing is configured, Relay estimates missing cost when the
+        response annotation contains matching model and token usage data.
         ``timestamp`` must be a timezone-aware ``datetime``; strings and naive
         datetimes are rejected.
     """

@@ -3,7 +3,7 @@
 
 //! gRPC worker dynamic plugin loader and host-side proxy adapter.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -20,18 +20,23 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, GuardrailResult, HandshakeRequest, HealthRequest,
-    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmCodecDecodeRequest,
-    LlmCodecDecodeResponse, LlmCodecEncodeRequest, LlmCodecIdentity as ProtoLlmCodecIdentity,
-    LlmCodecKind, LlmInvocation, LlmNextRequest,
+    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
+    GetRuntimeDiagnosticsResponse, GuardrailResult, HandshakeRequest, HandshakeResponse,
+    HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
+    LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest,
+    LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
     PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
+    Registration, RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext,
+    ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
-use semver::{Version, VersionReq};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+};
 use serde_json::{Map, Value as Json};
 use sha2::{Digest, Sha256};
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -58,13 +63,13 @@ use tokio_stream::wrappers::UnixListenerStream;
 #[cfg(unix)]
 use tower::service_fn;
 
-use crate::api::event::{Event, EventSanitizeFields};
+use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use crate::api::runtime::{
-    EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmCodecIdentity, LlmExecutionNextFn, LlmJsonStream,
     LlmSanitizeRequestContext, LlmSanitizeResponseContext, LlmStreamExecutionNextFn,
     MiddlewareContinuationContext, ToolExecutionNextFn, current_scope_stack, with_scope_stack,
 };
@@ -72,22 +77,24 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeAttributes, ScopeHandle, ScopeType,
     event as emit_scope_mark, pop_scope, push_scope,
 };
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::{FlowError, Result as FlowResult};
 use crate::plugin::{
     ConfigDiagnostic, DiagnosticLevel, Plugin, PluginError, PluginRegistrationContext,
-    deregister_plugin_registration_checked, register_plugin_tracked,
+    active_runtime_diagnostics_snapshot, deregister_plugin_registration_checked,
+    register_plugin_tracked,
 };
 
 use super::{
     DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
-    validate_annotated_request_consumer_compatibility,
+    validate_annotated_request_consumer_compatibility, validate_dynamic_plugin_relay_compatibility,
 };
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
+const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -564,19 +571,7 @@ fn load_one_worker_plugin(
     )
     .map_err(|err| PluginError::RegistrationFailed(format!("worker handshake failed: {err}")))?;
     let handshake = handshake.into_inner();
-    if handshake.plugin_id != spec.plugin_id || handshake.plugin_kind != spec.plugin_id {
-        return Err(PluginError::InvalidConfig(format!(
-            "worker plugin returned id '{}' kind '{}' but manifest id is '{}'",
-            handshake.plugin_id, handshake.plugin_kind, spec.plugin_id
-        )));
-    }
-    if handshake.worker_protocol != WORKER_PROTOCOL_GRPC_V1 {
-        let message = format!(
-            "unsupported worker_protocol '{}'",
-            handshake.worker_protocol
-        );
-        return Err(PluginError::InvalidConfig(message));
-    }
+    validate_worker_handshake(&spec.plugin_id, &handshake)?;
 
     let config = Json::Object(spec.config.clone());
     let validate = block_on_runtime(
@@ -1070,6 +1065,12 @@ impl WorkerPluginInstance {
                 RegistrationSurface::Subscriber => {
                     self.install_subscriber_registration(ctx, &registration.local_name)?
                 }
+                RegistrationSurface::EventMetadataInjector => self
+                    .install_event_metadata_injector_registration(
+                        ctx,
+                        &registration.local_name,
+                        registration.priority,
+                    )?,
                 RegistrationSurface::MarkSanitizeGuardrail
                 | RegistrationSurface::ScopeSanitizeStartGuardrail
                 | RegistrationSurface::ScopeSanitizeEndGuardrail => self
@@ -1120,6 +1121,26 @@ impl WorkerPluginInstance {
                 }
             }),
         )
+    }
+
+    fn install_event_metadata_injector_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        name: &str,
+        priority: i32,
+    ) -> crate::plugin::Result<()> {
+        let instance = Arc::new(self.clone_for_callback());
+        let callback_name = name.to_owned();
+        let callback: EventMetadataInjectorFn = Arc::new(move |event| {
+            let instance = instance.clone();
+            let callback_name = callback_name.clone();
+            Box::pin(async move {
+                instance
+                    .invoke_event_metadata_injector(&callback_name, &event)
+                    .await
+            })
+        });
+        ctx.register_event_metadata_injector(name, priority, callback)
     }
 
     fn install_event_sanitize_registration(
@@ -1504,6 +1525,26 @@ impl WorkerPluginCallback {
         }
     }
 
+    async fn invoke_event_metadata_injector(
+        &self,
+        registration_name: &str,
+        event: &Event,
+    ) -> FlowResult<BTreeMap<String, Json>> {
+        let request = self.base_request(
+            registration_name,
+            RegistrationSurface::EventMetadataInjector,
+            None,
+            Some(invoke_request_payload_event(event)),
+        );
+        let value = json_from_invoke_response(self.invoke_async(request).await?)?;
+        let additions = serde_json::from_value::<BTreeMap<String, Json>>(value).map_err(|err| {
+            FlowError::Internal(format!(
+                "worker returned invalid Event metadata additions: {err}"
+            ))
+        })?;
+        Ok(additions)
+    }
+
     async fn invoke_event_sanitize(
         &self,
         registration_name: &str,
@@ -1575,15 +1616,10 @@ impl WorkerPluginCallback {
         let response = self.invoke_async(request).await?;
         match response.result {
             Some(invoke_response_result::Result::ToolExecution(result)) => {
-                let outcome =
-                    required_envelope(result.outcome, "tool execution intercept outcome")?;
-                if outcome.schema != "nemo.relay.ToolExecutionInterceptOutcome@1" {
-                    return Err(FlowError::Internal(format!(
-                        "worker returned unsupported tool execution intercept outcome schema: {}",
-                        outcome.schema
-                    )));
-                }
-                decode_json_envelope(&outcome).map_err(|err| {
+                let outcome = result.outcome.ok_or_else(|| {
+                    FlowError::Internal("worker tool execution intercept outcome is missing".into())
+                })?;
+                tool_execution_intercept_outcome_from_proto(outcome).map_err(|err| {
                     FlowError::Internal(format!(
                         "worker returned invalid tool execution intercept outcome: {err}"
                     ))
@@ -2487,19 +2523,54 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
         &self,
         request: Request<EmitMarkRequest>,
     ) -> Result<Response<HostAck>, Status> {
-        let request = request.into_inner();
-        self.state
-            .authorize(&request.activation_id, &request.auth_token)?;
-        let result = self.with_stack(request.scope.as_ref(), || {
+        let EmitMarkRequest {
+            activation_id,
+            auth_token,
+            scope,
+            name,
+            data,
+            metadata,
+            data_schema,
+            severity,
+        } = request.into_inner();
+        self.state.authorize(&activation_id, &auth_token)?;
+        let data_schema = optional_typed_envelope::<DataSchema>(
+            data_schema,
+            "mark data_schema",
+            DATA_SCHEMA_SCHEMA,
+        );
+        let severity = optional_log_severity(&severity);
+        let result = self.with_stack(scope.as_ref(), || {
             emit_scope_mark(
                 EmitMarkEventParams::builder()
-                    .name(&request.name)
-                    .data_opt(optional_envelope_to_json(request.data)?)
-                    .metadata_opt(optional_envelope_to_json(request.metadata)?)
+                    .name(&name)
+                    .data_opt(optional_envelope_to_json(data)?)
+                    .metadata_opt(optional_envelope_to_json(metadata)?)
+                    .data_schema_opt(data_schema?)
+                    .severity_opt(severity?)
                     .build(),
             )
         });
         Ok(Response::new(host_ack(result)))
+    }
+
+    async fn get_runtime_diagnostics(
+        &self,
+        request: Request<GetRuntimeDiagnosticsRequest>,
+    ) -> Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        Ok(Response::new(GetRuntimeDiagnosticsResponse {
+            entries: active_runtime_diagnostics_snapshot()
+                .into_iter()
+                .map(|diagnostic| ProtoRuntimeDiagnostic {
+                    code: diagnostic.code,
+                    message: diagnostic.message,
+                    count: diagnostic.count,
+                })
+                .collect(),
+        }))
     }
 
     async fn push_scope(
@@ -2636,7 +2707,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
     async fn tool_next(
         &self,
         request: Request<ToolNextRequest>,
-    ) -> Result<Response<JsonResult>, Status> {
+    ) -> Result<Response<ToolExecutionResultResponse>, Status> {
         let request = request.into_inner();
         self.state
             .authorize(&request.activation_id, &request.auth_token)?;
@@ -2660,7 +2731,7 @@ impl RelayHostRuntime for WorkerHostRuntimeService {
                     panic_payload_message(payload.as_ref())
                 )))
             });
-        Ok(Response::new(json_result(result)))
+        Ok(Response::new(tool_execution_result_response(result)))
     }
 
     async fn llm_next(
@@ -3047,6 +3118,35 @@ fn optional_envelope_to_json(value: Option<JsonEnvelope>) -> FlowResult<Option<J
         .transpose()
 }
 
+fn optional_typed_envelope<T: serde::de::DeserializeOwned>(
+    value: Option<JsonEnvelope>,
+    field: &str,
+    expected_schema: &str,
+) -> FlowResult<Option<T>> {
+    value
+        .map(|value| {
+            if value.schema != expected_schema {
+                return Err(FlowError::InvalidArgument(format!(
+                    "{field} has schema {:?}; expected {expected_schema:?}",
+                    value.schema
+                )));
+            }
+            decode_json_envelope::<T>(&value).map_err(|err| {
+                FlowError::InvalidArgument(format!("{field} has an invalid value: {err}"))
+            })
+        })
+        .transpose()
+}
+
+fn optional_log_severity(value: &str) -> FlowResult<Option<LogSeverity>> {
+    if value.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_value(Json::String(value.to_owned()))
+        .map(Some)
+        .map_err(|err| FlowError::InvalidArgument(format!("mark severity is invalid: {err}")))
+}
+
 fn host_ack(result: FlowResult<()>) -> HostAck {
     match result {
         Ok(()) => HostAck {
@@ -3084,6 +3184,77 @@ fn typed_json_result<T: serde::Serialize>(schema: &str, result: FlowResult<T>) -
             error: Some(flow_error_to_worker(err)),
         },
     }
+}
+
+fn tool_execution_result_response(
+    result: FlowResult<ToolExecutionResult>,
+) -> ToolExecutionResultResponse {
+    match result {
+        Ok(value) => match tool_execution_result_to_proto(value) {
+            Ok(value) => ToolExecutionResultResponse {
+                value: Some(value),
+                error: None,
+            },
+            Err(err) => ToolExecutionResultResponse {
+                value: None,
+                error: Some(flow_error_to_worker(FlowError::Internal(format!(
+                    "failed to encode tool execution result: {err}"
+                )))),
+            },
+        },
+        Err(err) => ToolExecutionResultResponse {
+            value: None,
+            error: Some(flow_error_to_worker(err)),
+        },
+    }
+}
+
+fn tool_execution_result_to_proto(
+    value: ToolExecutionResult,
+) -> std::result::Result<ProtoToolExecutionResult, serde_json::Error> {
+    Ok(ProtoToolExecutionResult {
+        result: Some(json_value(&value.result)?),
+        annotation: value
+            .annotation
+            .as_ref()
+            .filter(|value| !value.is_null())
+            .map(json_value)
+            .transpose()?,
+    })
+}
+
+fn tool_execution_intercept_outcome_from_proto(
+    value: ProtoToolExecutionInterceptOutcome,
+) -> FlowResult<ToolExecutionInterceptOutcome> {
+    let result = value.result.ok_or_else(|| {
+        FlowError::Internal("worker tool execution intercept outcome result is missing".into())
+    })?;
+    let result = decode_json_value(&result).map_err(|err| {
+        FlowError::Internal(format!("invalid worker tool execution result JSON: {err}"))
+    })?;
+    let annotation = value
+        .annotation
+        .as_ref()
+        .map(decode_json_value)
+        .transpose()
+        .map_err(|err| {
+            FlowError::Internal(format!(
+                "invalid worker tool execution annotation JSON: {err}"
+            ))
+        })?
+        .filter(|value: &Json| !value.is_null());
+    let pending_marks = value
+        .pending_marks
+        .as_ref()
+        .map(decode_json_value)
+        .transpose()
+        .map_err(|err| FlowError::Internal(format!("invalid worker pending marks JSON: {err}")))?
+        .unwrap_or_default();
+    Ok(ToolExecutionInterceptOutcome {
+        result,
+        annotation,
+        pending_marks,
+    })
 }
 
 fn flow_error_to_worker(err: FlowError) -> WorkerError {
@@ -3185,23 +3356,27 @@ fn worker_error_diagnostic(plugin_kind: &str, code: &str, message: &str) -> Conf
     }
 }
 
-fn validate_relay_compatibility(relay: Option<&str>) -> crate::plugin::Result<()> {
-    let relay = relay
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| PluginError::InvalidConfig("compat.relay is required".into()))?;
-    let req = VersionReq::parse(relay).map_err(|err| {
-        PluginError::InvalidConfig(format!("invalid compat.relay version requirement: {err}"))
-    })?;
-    let version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .map_err(|err| PluginError::Internal(format!("failed to parse host version: {err}")))?;
-    if req.matches(&version) {
-        Ok(())
-    } else {
-        Err(PluginError::InvalidConfig(format!(
-            "worker plugin requires relay '{relay}' but host version is {version}"
-        )))
+fn validate_worker_handshake(
+    expected_plugin_id: &str,
+    handshake: &HandshakeResponse,
+) -> crate::plugin::Result<()> {
+    if handshake.plugin_id != expected_plugin_id || handshake.plugin_kind != expected_plugin_id {
+        return Err(PluginError::InvalidConfig(format!(
+            "worker plugin returned id '{}' kind '{}' but manifest id is '{}'",
+            handshake.plugin_id, handshake.plugin_kind, expected_plugin_id
+        )));
     }
+    if handshake.worker_protocol != WORKER_PROTOCOL_GRPC_V1 {
+        return Err(PluginError::InvalidConfig(format!(
+            "unsupported worker_protocol '{}'",
+            handshake.worker_protocol
+        )));
+    }
+    Ok(())
+}
+
+fn validate_relay_compatibility(relay: Option<&str>) -> crate::plugin::Result<()> {
+    validate_dynamic_plugin_relay_compatibility(relay, "worker")
 }
 
 fn resolve_manifest_relative_path(manifest_path: &Path, value: &str) -> PathBuf {

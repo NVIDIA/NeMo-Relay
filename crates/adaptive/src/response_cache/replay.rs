@@ -80,6 +80,11 @@ fn synthesize_replay_chunks(aggregate: &Json) -> Option<Vec<Json>> {
         ProviderSurface::AnthropicMessages => synthesize_anthropic_chunks(aggregate),
         ProviderSurface::OpenAIChat => synthesize_chat_chunks(aggregate),
         ProviderSurface::OpenAIResponses => synthesize_responses_chunks(aggregate),
+        // OCI GenAI streaming events are ChatResult-shaped deltas; the OCI
+        // stream collector accepts a full `chatResponse` aggregate as a single
+        // native chunk. `replay_is_lossy` still re-aggregates it and rejects
+        // shapes the streaming collector cannot preserve exactly.
+        ProviderSurface::OCIGenAI => vec![aggregate.clone()],
         // Gemini streaming events are GenerateContentResponse objects; a stored
         // aggregate is a valid single native chunk. `replay_is_lossy` still
         // re-aggregates it and rejects shapes the streaming collector cannot

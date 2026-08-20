@@ -22,7 +22,10 @@ use crate::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
-use crate::api::tool::{ToolCallEndParams, ToolCallParams, tool_call, tool_call_end};
+use crate::api::tool::{
+    ToolCallEndParams, ToolCallExecuteParams, ToolCallParams, ToolExecutionResult, tool_call,
+    tool_call_end, tool_call_execute,
+};
 use crate::codec::openai_chat::OpenAIChatCodec;
 use crate::codec::openai_responses::OpenAIResponsesCodec;
 use crate::codec::request::AnnotatedLlmRequest;
@@ -200,6 +203,27 @@ fn builtin_backend_config_default_matches_documented_action_default() {
     assert!(config.target_paths.is_empty());
     assert!(config.pattern.is_none());
     assert!(config.detector.is_none());
+}
+
+#[test]
+fn component_spec_and_plugin_contract_preserve_the_public_configuration_shape() {
+    let config = PiiRedactionConfig::default();
+    let component = ComponentSpec::new(config.clone());
+    assert!(component.enabled);
+    assert_eq!(component.config.mode, "builtin");
+
+    let registered: PluginComponentSpec = component.into();
+    assert_eq!(registered.kind, PII_REDACTION_PLUGIN_KIND);
+    assert!(registered.enabled);
+    assert!(registered.config.get("mode").is_none());
+
+    let plugin = PiiRedactionPlugin;
+    assert_eq!(plugin.plugin_kind(), PII_REDACTION_PLUGIN_KIND);
+    assert!(!plugin.allows_multiple_components());
+    assert_eq!(
+        plugin.validate(&Map::from_iter([("input".into(), json!("invalid"))]))[0].code,
+        "pii_redaction.invalid_plugin_config"
+    );
 }
 
 #[test]
@@ -418,6 +442,49 @@ async fn normalized_llm_paths_use_the_active_codec_and_fail_closed_for_unknown_c
         .expect("sanitizer callback must succeed")
         .is_none(),
         "a normalized-path policy must omit a runtime codec until it has a compatible projection"
+    );
+}
+
+#[tokio::test]
+async fn normalized_llm_response_paths_use_the_active_oci_genai_codec_identity() {
+    let backend = crate::builtin::CompiledBuiltinBackend::new(
+        BuiltinBackendConfig {
+            action: "regex_replace".to_string(),
+            pattern: Some("sk-[A-Za-z0-9_-]+".to_string()),
+            replacement: Some("[REDACTED]".to_string()),
+            target_paths: vec!["/message".to_string()],
+            ..BuiltinBackendConfig::default()
+        },
+        None,
+    )
+    .unwrap();
+    let sanitize_response = crate::builtin::llm_sanitize_response_callback(backend);
+
+    let sanitized = sanitize_response(
+        json!({
+            "modelId": "meta.llama-3.3-70b-instruct",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "ASSISTANT",
+                        "content": [{"type": "TEXT", "text": "sk-oci-secret"}]
+                    },
+                    "finishReason": "stop"
+                }]
+            }
+        }),
+        LlmSanitizeResponseContext::with_identity(LlmCodecIdentity::BuiltIn(
+            BuiltinLlmCodec::OCIGenAI,
+        )),
+    )
+    .await
+    .expect("sanitizer callback must succeed")
+    .expect("the active OCI GenAI codec identity must retain the payload");
+    assert_eq!(
+        sanitized["chatResponse"]["choices"][0]["message"]["content"][0]["text"],
+        json!("[REDACTED]")
     );
 }
 
@@ -2630,12 +2697,15 @@ fn builtin_backend_sanitizes_tool_start_and_end_payloads_with_preorder_targets()
     tool_call_end(
         ToolCallEndParams::builder()
             .handle(&handle)
-            .result(json!({
-                "result": {
-                    "secret": "sk-final",
-                    "public": "ok"
-                }
-            }))
+            .execution_result(
+                json!({
+                    "result": {
+                        "secret": "sk-final",
+                        "public": "ok"
+                    }
+                })
+                .into(),
+            )
             .metadata(json!({"reviewer": "sk-universal-metadata"}))
             .build(),
     )
@@ -2713,12 +2783,15 @@ fn builtin_remove_deletes_object_fields_and_nulls_array_or_root_targets() {
     tool_call_end(
         ToolCallEndParams::builder()
             .handle(&handle)
-            .result(json!({
-                "result": {
-                    "token": "drop-me",
-                    "public": "ok"
-                }
-            }))
+            .execution_result(
+                json!({
+                    "result": {
+                        "token": "drop-me",
+                        "public": "ok"
+                    }
+                })
+                .into(),
+            )
             .build(),
     )
     .unwrap();
@@ -2882,10 +2955,13 @@ fn builtin_redact_replaces_matching_tool_payload_substrings_with_default_token()
     tool_call_end(
         ToolCallEndParams::builder()
             .handle(&handle)
-            .result(json!({
-                "result": secret,
-                "nested": {"token": secret}
-            }))
+            .execution_result(
+                json!({
+                    "result": secret,
+                    "nested": {"token": secret}
+                })
+                .into(),
+            )
             .build(),
     )
     .unwrap();
@@ -2949,12 +3025,15 @@ fn builtin_mask_preserves_configured_prefix_and_suffix() {
     tool_call_end(
         ToolCallEndParams::builder()
             .handle(&handle)
-            .result(json!({
-                "result": {
-                    "token": "9876543210",
-                    "public": "ok"
-                }
-            }))
+            .execution_result(
+                json!({
+                    "result": {
+                        "token": "9876543210",
+                        "public": "ok"
+                    }
+                })
+                .into(),
+            )
             .build(),
     )
     .unwrap();
@@ -4161,12 +4240,15 @@ fn builtin_mask_with_detector_sanitizes_tool_output_payloads() {
     tool_call_end(
         ToolCallEndParams::builder()
             .handle(&handle)
-            .result(json!({
-                "result": {
-                    "contact": "alice@example.com",
-                    "public": "ok"
-                }
-            }))
+            .execution_result(
+                json!({
+                    "result": {
+                        "contact": "alice@example.com",
+                        "public": "ok"
+                    }
+                })
+                .into(),
+            )
             .build(),
     )
     .unwrap();
@@ -4184,6 +4266,182 @@ fn builtin_mask_with_detector_sanitizes_tool_output_payloads() {
     );
 
     deregister_subscriber("pii-redaction-tool-output-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_tool_output_sanitizes_annotation_as_an_independent_json_boundary() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_input": false,
+        "tool_output": true,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "target_paths": ["/contact"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-tool-annotation-mask-events");
+    let execution_result = futures::executor::block_on(tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("lookup")
+            .args(json!({"query": "alice"}))
+            .func(Arc::new(|_args| {
+                Box::pin(async {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({
+                            "contact": "alice@example.com",
+                            "outside": "alice@example.com"
+                        }),
+                        json!({
+                            "contact": "alice@example.com",
+                            "outside": "alice@example.com"
+                        }),
+                    ))
+                })
+            }))
+            .build(),
+    ))
+    .unwrap();
+    assert_eq!(
+        execution_result,
+        ToolExecutionResult::annotated(
+            json!({
+                "contact": "alice@example.com",
+                "outside": "alice@example.com"
+            }),
+            json!({
+                "contact": "alice@example.com",
+                "outside": "alice@example.com"
+            }),
+        )
+    );
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert_eq!(
+        captured_events[1].output(),
+        Some(&json!({
+            "contact": "a****@example.com",
+            "outside": "alice@example.com"
+        }))
+    );
+    assert_eq!(
+        captured_events[1].tool_result_annotation().unwrap(),
+        json!({
+            "contact": "a****@example.com",
+            "outside": "alice@example.com"
+        })
+    );
+
+    deregister_subscriber("pii-redaction-tool-annotation-mask-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_disabled_tool_output_preserves_tool_result_annotation() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": true,
+        "tool_input": false,
+        "tool_output": false,
+        "builtin": {
+            "action": "mask",
+            "detector": "email",
+            "target_paths": ["/contact"]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-disabled-tool-annotation-events");
+    let handle = tool_call(
+        ToolCallParams::builder()
+            .name("lookup")
+            .args(json!({"query": "alice"}))
+            .build(),
+    )
+    .unwrap();
+    let annotation = json!({"contact": "alice@example.com"});
+    tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(&handle)
+            .execution_result(ToolExecutionResult::annotated(
+                json!({"contact": "alice@example.com"}),
+                annotation.clone(),
+            ))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert_eq!(
+        captured_events[1].tool_result_annotation().unwrap(),
+        annotation
+    );
+
+    deregister_subscriber("pii-redaction-disabled-tool-annotation-events").unwrap();
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn builtin_root_remove_drops_tool_result_annotation() {
+    let _guard = crate::plugins::pii_redaction::test_mutex().lock().unwrap();
+    reset_runtime();
+    setup_isolated_thread();
+
+    futures::executor::block_on(initialize_plugins(plugin_config(json!({
+        "mode": "builtin",
+        "input": false,
+        "output": false,
+        "tool_input": false,
+        "tool_output": true,
+        "builtin": {
+            "action": "remove",
+            "target_paths": [""]
+        }
+    }))))
+    .unwrap();
+
+    let events = capture_events("pii-redaction-remove-tool-annotation-events");
+    let handle = tool_call(
+        ToolCallParams::builder()
+            .name("lookup")
+            .args(json!({"query": "alice"}))
+            .tool_call_id("provider-call-123")
+            .build(),
+    )
+    .unwrap();
+    tool_call_end(
+        ToolCallEndParams::builder()
+            .handle(&handle)
+            .execution_result(ToolExecutionResult::annotated(
+                json!({"contact": "alice@example.com"}),
+                json!({"contact": "alice@example.com"}),
+            ))
+            .build(),
+    )
+    .unwrap();
+
+    let captured_events = captured_events_snapshot(&events);
+    assert_eq!(captured_events.len(), 2);
+    assert_eq!(captured_events[1].tool_call_id(), Some("provider-call-123"));
+    assert!(captured_events[1].tool_result_annotation().is_none());
+
+    deregister_subscriber("pii-redaction-remove-tool-annotation-events").unwrap();
     clear_plugin_configuration().unwrap();
 }
 

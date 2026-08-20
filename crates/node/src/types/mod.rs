@@ -13,10 +13,16 @@ use nemo_relay::api::runtime::{ScopeStackHandle, create_scope_stack};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use nemo_relay::api::event::Event;
+use nemo_relay::api::event::{
+    DataSchema as CoreDataSchema, Event, LogSeverity as CoreLogSeverity,
+    MetricKind as CoreMetricKind, MetricMeasurement as CoreMetricMeasurement,
+    MetricValueType as CoreMetricValueType,
+};
 use nemo_relay::api::llm::{LlmHandle as CoreLlmHandle, LlmRequest as CoreLlmRequest};
 use nemo_relay::api::scope::{ScopeHandle as CoreScopeHandle, ScopeType as CoreScopeType};
-use nemo_relay::api::tool::ToolHandle as CoreToolHandle;
+use nemo_relay::api::tool::{
+    ToolExecutionResult as CoreToolExecutionResult, ToolHandle as CoreToolHandle,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 
@@ -87,9 +93,160 @@ impl From<CoreScopeType> for ScopeType {
     }
 }
 
+/// Severity attached to a mark projected as an OpenTelemetry log.
+#[napi]
+pub enum LogSeverity {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl From<LogSeverity> for CoreLogSeverity {
+    fn from(value: LogSeverity) -> Self {
+        match value {
+            LogSeverity::Trace => Self::Trace,
+            LogSeverity::Debug => Self::Debug,
+            LogSeverity::Info => Self::Info,
+            LogSeverity::Warn => Self::Warn,
+            LogSeverity::Error => Self::Error,
+        }
+    }
+}
+
+/// OpenTelemetry instrument kind recorded by a metric measurement.
+#[napi]
+pub enum MetricKind {
+    Counter,
+    UpDownCounter,
+    Gauge,
+    Histogram,
+}
+
+impl From<MetricKind> for CoreMetricKind {
+    fn from(value: MetricKind) -> Self {
+        match value {
+            MetricKind::Counter => Self::Counter,
+            MetricKind::UpDownCounter => Self::UpDownCounter,
+            MetricKind::Gauge => Self::Gauge,
+            MetricKind::Histogram => Self::Histogram,
+        }
+    }
+}
+
+/// Explicit numeric representation used by a metric measurement.
+#[napi]
+pub enum MetricValueType {
+    U64,
+    I64,
+    F64,
+}
+
+/// Preferred aggregation temporality for OTLP metric export.
+#[napi]
+pub enum MetricTemporality {
+    Cumulative,
+    Delta,
+    LowMemory,
+}
+
+impl From<MetricTemporality> for nemo_relay::observability::otel_metrics::MetricTemporality {
+    fn from(value: MetricTemporality) -> Self {
+        match value {
+            MetricTemporality::Cumulative => Self::Cumulative,
+            MetricTemporality::Delta => Self::Delta,
+            MetricTemporality::LowMemory => Self::LowMemory,
+        }
+    }
+}
+
+impl From<MetricValueType> for CoreMetricValueType {
+    fn from(value: MetricValueType) -> Self {
+        match value {
+            MetricValueType::U64 => Self::U64,
+            MetricValueType::I64 => Self::I64,
+            MetricValueType::F64 => Self::F64,
+        }
+    }
+}
+
+/// Schema identifier attached to an event's opaque data payload.
+#[napi(object)]
+pub struct DataSchema {
+    pub name: String,
+    pub version: String,
+}
+
+impl From<DataSchema> for CoreDataSchema {
+    fn from(value: DataSchema) -> Self {
+        Self {
+            name: value.name,
+            version: value.version,
+        }
+    }
+}
+
+/// One typed recording operation emitted by `metric`.
+#[napi(object)]
+pub struct MetricMeasurement {
+    pub name: String,
+    pub kind: MetricKind,
+    pub value_type: MetricValueType,
+    #[napi(ts_type = "number")]
+    pub value: Json,
+    pub unit: Option<String>,
+    pub description: Option<String>,
+    pub attributes: Option<Json>,
+    pub boundaries: Option<Vec<f64>>,
+}
+
+impl From<MetricMeasurement> for CoreMetricMeasurement {
+    fn from(value: MetricMeasurement) -> Self {
+        Self {
+            name: value.name,
+            kind: value.kind.into(),
+            value_type: value.value_type.into(),
+            value: value.value,
+            unit: value.unit,
+            description: value.description,
+            attributes: value.attributes,
+            boundaries: value.boundaries,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Handle wrappers
 // ---------------------------------------------------------------------------
+
+/// Canonical application-visible result of tool execution.
+///
+/// `result` is application-owned JSON. `annotation` is optional opaque adjacent
+/// metadata that Relay transports without interpretation.
+#[napi(object)]
+pub struct ToolExecutionResult {
+    pub result: Json,
+    pub annotation: Option<Json>,
+}
+
+impl From<ToolExecutionResult> for CoreToolExecutionResult {
+    fn from(value: ToolExecutionResult) -> Self {
+        Self {
+            result: value.result,
+            annotation: value.annotation.filter(|annotation| !annotation.is_null()),
+        }
+    }
+}
+
+impl From<CoreToolExecutionResult> for ToolExecutionResult {
+    fn from(value: CoreToolExecutionResult) -> Self {
+        Self {
+            result: value.result,
+            annotation: value.annotation,
+        }
+    }
+}
 
 /// Handle to an isolated scope stack for per-request/per-task isolation.
 #[napi]
@@ -559,6 +716,65 @@ impl AnthropicMessagesCodec {
             inner_codec: std::sync::Arc::new(nemo_relay::codec::anthropic::AnthropicMessagesCodec),
             inner_response_codec: std::sync::Arc::new(
                 nemo_relay::codec::anthropic::AnthropicMessagesCodec,
+            ),
+        }
+    }
+
+    /// Decode an opaque LLM request into structured form.
+    #[napi]
+    pub fn decode(&self, request: Json) -> napi::Result<Json> {
+        let llm_req: CoreLlmRequest = serde_json::from_value(request)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let annotated = self
+            .inner_codec
+            .decode(&llm_req)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Encode structured changes back into an opaque LLM request.
+    #[napi]
+    pub fn encode(&self, annotated: Json, original: Json) -> napi::Result<Json> {
+        let ann: AnnotatedLlmRequest = serde_json::from_value(annotated)
+            .map_err(|e| napi::Error::from_reason(format!("invalid AnnotatedLlmRequest: {e}")))?;
+        let orig: CoreLlmRequest = serde_json::from_value(original)
+            .map_err(|e| napi::Error::from_reason(format!("invalid LlmRequest: {e}")))?;
+        let result = self
+            .inner_codec
+            .encode(&ann, &orig)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&result).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+
+    /// Decode a raw LLM response into structured form.
+    #[napi(js_name = "decodeResponse")]
+    pub fn decode_response(&self, response: Json) -> napi::Result<Json> {
+        let annotated = self
+            .inner_response_codec
+            .decode_response(&response)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        serde_json::to_value(&annotated).map_err(|e| napi::Error::from_reason(e.to_string()))
+    }
+}
+
+/// Built-in codec for the OCI Generative AI chat API.
+///
+/// Implements both request codec (decode/encode) and response codec
+/// (decodeResponse). Construct with `new OCIGenAIChatCodec()`.
+#[napi(js_name = "OCIGenAIChatCodec")]
+pub struct OCIGenAIChatCodec {
+    pub(crate) inner_codec: std::sync::Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: std::sync::Arc<dyn LlmResponseCodec>,
+}
+
+#[napi]
+impl OCIGenAIChatCodec {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner_codec: std::sync::Arc::new(nemo_relay::codec::oci_genai::OCIGenAIChatCodec),
+            inner_response_codec: std::sync::Arc::new(
+                nemo_relay::codec::oci_genai::OCIGenAIChatCodec,
             ),
         }
     }

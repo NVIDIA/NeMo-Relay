@@ -308,9 +308,9 @@ the rest of the documentation can use them consistently.
 
 **Model Pricing**
 : Model pricing is the built-in `pricing` plugin component that loads catalog
-  sources and annotates managed LLM responses with cost estimates when model and
-  token data are available. The component resolves configured sources through a
-  pricing resolver chain.
+  sources and annotates managed or manually observed LLM responses with cost
+  estimates when model and token data are available. The component resolves
+  configured sources through a pricing resolver chain.
 
 ## N
 
@@ -321,9 +321,10 @@ the rest of the documentation can use them consistently.
   Dynamic Plugins](/build-plugins/dynamic-plugins/native-dynamic/about).
 
 **NeMo Guardrails**
-: NeMo Guardrails is the built-in `nemo_guardrails` plugin component for
-  first-party guardrail policy around managed tool and LLM execution. It
-  supports remote Guardrails-service and Python-backed local backends.
+: NeMo Guardrails is the deprecated built-in `nemo_guardrails` plugin component
+  for first-party guardrail policy around managed tool and LLM execution. It
+  supports remote Guardrails-service and Python-backed local backends and is
+  scheduled for removal in NeMo Relay 0.9.
 
 **Next Function**
 : The next function is the continuation passed to an execution intercept. The
@@ -517,6 +518,13 @@ the rest of the documentation can use them consistently.
 : A tool call is an instrumented invocation of a named tool or function-like
   operation. Managed tool calls emit start and end events, run tool middleware,
   and can carry an optional provider-specific `tool_call_id`.
+
+**Tool Execution Result**
+: A tool execution result is the canonical `{result, annotation?}` value
+  returned by managed tool callbacks, execution-intercept continuations, and
+  execute helpers. `result` is the application-owned payload. `annotation` is
+  optional opaque JSON metadata that Relay transports without interpreting its
+  schema.
 
 **Tool Parallelism**
 : Tool parallelism is adaptive guidance about which tool calls can run

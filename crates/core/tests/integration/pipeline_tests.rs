@@ -17,7 +17,8 @@ use serde_json::json;
 
 use nemo_relay::api::event::{Event, PendingMarkSpec, ScopeCategory};
 use nemo_relay::api::llm::{
-    LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
+    LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call,
+    llm_call_end, llm_call_execute, llm_stream_call_execute,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::optimization::record_llm_optimization_contribution;
@@ -34,6 +35,7 @@ use nemo_relay::api::runtime::{create_scope_stack, set_thread_scope_stack};
 use nemo_relay::api::scope::{EmitMarkEventParams, ScopeType, event};
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::codec::anthropic::AnthropicMessagesCodec;
+use nemo_relay::codec::oci_genai::OCIGenAIChatCodec;
 use nemo_relay::codec::openai_chat::OpenAIChatCodec;
 use nemo_relay::codec::optimization::{
     LlmOptimizationContribution, LlmOptimizationKind, LlmOptimizationModel,
@@ -499,7 +501,16 @@ async fn anthropic_issue_501_round_trips_and_applies_annotated_edits() {
     )
     .await
     .unwrap();
-    assert_eq!(unchanged_capture.lock().unwrap().as_ref(), Some(&original));
+    let mut unchanged = unchanged_capture.lock().unwrap().clone().unwrap();
+    let unchanged_traceparent = unchanged
+        .headers
+        .remove("traceparent")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("managed LLM requests must include traceparent");
+    assert!(unchanged_traceparent.starts_with("00-"));
+    assert!(unchanged_traceparent.ends_with("-01"));
+    assert_eq!(unchanged_traceparent.len(), 55);
+    assert_eq!(unchanged, original);
 
     register_llm_request_intercept(
         "issue_501_annotated_edit",
@@ -543,7 +554,15 @@ async fn anthropic_issue_501_round_trips_and_applies_annotated_edits() {
     .await
     .unwrap();
 
-    let edited = edited_capture.lock().unwrap().clone().unwrap();
+    let mut edited = edited_capture.lock().unwrap().clone().unwrap();
+    let edited_traceparent = edited
+        .headers
+        .remove("traceparent")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .expect("managed LLM requests must include traceparent");
+    assert!(edited_traceparent.starts_with("00-"));
+    assert!(edited_traceparent.ends_with("-01"));
+    assert_eq!(edited_traceparent.len(), 55);
     let mut expected = original;
     expected.content["system"][0]["text"] = json!("Edited without dropping cache metadata.");
     expected
@@ -1385,6 +1404,67 @@ impl LlmResponseCodec for FailingResponseCodec {
     }
 }
 
+#[test]
+fn test_manual_llm_responses_receive_estimated_cost() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    let _pricing_guard = ResetPricingResolverGuard;
+    reset_global();
+    setup_isolated_thread();
+    install_mock_response_pricing();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "manual_response_pricing_sub",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
+    let response = json!({"ok": true});
+    for supply_annotation in [false, true] {
+        let handle = llm_call(
+            LlmCallParams::builder()
+                .name("openai")
+                .request(&request)
+                .build(),
+        )
+        .unwrap();
+        let annotated_response = supply_annotation
+            .then(|| Arc::new(MockResponseCodec.decode_response(&response).unwrap()));
+        let response_codec =
+            (!supply_annotation).then(|| Arc::new(MockResponseCodec) as Arc<dyn LlmResponseCodec>);
+        llm_call_end(
+            LlmCallEndParams::builder()
+                .handle(&handle)
+                .response(response.clone())
+                .annotated_response_opt(annotated_response)
+                .response_codec_opt(response_codec)
+                .build(),
+        )
+        .unwrap();
+    }
+
+    let captured = captured_events_snapshot(&events);
+    let end_events = captured
+        .iter()
+        .filter(|event| is_scope_event(event, ScopeType::Llm, ScopeCategory::End))
+        .collect::<Vec<_>>();
+    assert_eq!(end_events.len(), 2);
+    for event in end_events {
+        assert_eq!(
+            event
+                .annotated_response()
+                .and_then(|response| response.usage.as_ref())
+                .and_then(|usage| usage.cost.as_ref())
+                .and_then(|cost| cost.total),
+            Some(0.000_435)
+        );
+    }
+
+    deregister_subscriber("manual_response_pricing_sub").unwrap();
+}
+
 #[tokio::test]
 async fn test_response_codec_populates_annotated_response() {
     let _lock = TEST_MUTEX.lock().unwrap();
@@ -1437,6 +1517,90 @@ async fn test_response_codec_populates_annotated_response() {
     );
 
     deregister_subscriber("resp_codec_sub").unwrap();
+}
+
+#[tokio::test]
+async fn test_oci_genai_response_codec_populates_annotated_response() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    reset_global();
+    setup_isolated_thread();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ec = events.clone();
+    register_subscriber(
+        "oci_resp_codec_sub",
+        Arc::new(move |e: &Event| {
+            ec.lock().unwrap().push(e.clone());
+        }),
+    )
+    .unwrap();
+
+    // Shape observed from a live OCI Generative AI GENERIC tool-call response.
+    let func: LlmExecutionNextFn = Arc::new(|_req| {
+        Box::pin(async move {
+            Ok(json!({
+                "modelId": "meta.llama-4-maverick-17b-128e-instruct-fp8",
+                "modelVersion": "1.0.0",
+                "chatResponse": {
+                    "apiFormat": "GENERIC",
+                    "choices": [{
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "toolCalls": [{
+                                "type": "FUNCTION",
+                                "id": "chatcmpl-tool-bda9d62eab5cea3c",
+                                "name": "get_weather",
+                                "arguments": "{\"city\": \"Paris\"}"
+                            }]
+                        },
+                        "finishReason": "tool_calls"
+                    }],
+                    "usage": {"promptTokens": 627, "completionTokens": 13, "totalTokens": 640}
+                }
+            }))
+        })
+    });
+    let response_codec: Arc<dyn LlmResponseCodec> = Arc::new(OCIGenAIChatCodec);
+
+    let _result = llm_call_execute(
+        LlmCallExecuteParams::builder()
+            .name("oci_genai")
+            .request(make_llm_request(
+                json!({"messages": [{"role": "USER", "content": [{"type": "TEXT", "text": "hi"}]}]}),
+            ))
+            .func(func)
+            .response_codec(response_codec)
+            .build(),
+    )
+    .await
+    .unwrap();
+
+    let captured = captured_events_snapshot(&events);
+    let end_event = captured
+        .iter()
+        .find(|e| is_scope_event(e, ScopeType::Llm, ScopeCategory::End))
+        .expect("expected LlmEnd event");
+
+    let annotated = end_event
+        .annotated_response()
+        .expect("annotated_response should be Some when the OCI codec is active");
+    assert_eq!(
+        annotated.model.as_deref(),
+        Some("meta.llama-4-maverick-17b-128e-instruct-fp8")
+    );
+    assert_eq!(annotated.finish_reason, Some(FinishReason::ToolUse));
+    assert_eq!(annotated.message, None);
+    let tool_calls = annotated.tool_calls.as_ref().expect("tool calls decoded");
+    assert_eq!(tool_calls.len(), 1);
+    assert_eq!(tool_calls[0].name, "get_weather");
+    assert_eq!(tool_calls[0].arguments, json!({"city": "Paris"}));
+    let usage = annotated.usage.as_ref().expect("usage decoded");
+    assert_eq!(usage.prompt_tokens, Some(627));
+    assert_eq!(usage.completion_tokens, Some(13));
+    assert_eq!(usage.total_tokens, Some(640));
+
+    deregister_subscriber("oci_resp_codec_sub").unwrap();
 }
 
 #[tokio::test]

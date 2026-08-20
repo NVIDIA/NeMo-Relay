@@ -70,8 +70,16 @@ Use the following prefixes for branch names:
 
 | Prefix | Purpose |
 |--------|---------|
+| `build/` | Build or dependency configuration changes |
+| `chore/` | Routine maintenance changes |
+| `ci/` | Continuous integration changes |
 | `feat/` | New features or capabilities |
 | `fix/` | Bug fixes |
+| `enh/` | Product improvements |
+| `perf/` | Performance improvements |
+| `revert/` | Reverts of prior changes |
+| `skills/` | Agent skill changes |
+| `style/` | Non-functional formatting or style changes |
 | `docs/` | Documentation-only changes |
 | `test/` | Test additions or modifications |
 | `refactor/` | Code restructuring without behavior changes |

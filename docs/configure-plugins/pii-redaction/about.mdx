@@ -102,6 +102,11 @@ The current backend boundary is intentional:
   their corresponding lifecycle events. Tool and LLM primary data and typed
   profiles remain on their specialized sanitizer paths to avoid applying the
   same mask or hash twice.
+- For built-in action policies, including detector-backed policies,
+  `tool_output` sanitizes the emitted `ToolExecutionResult.result` and
+  `ToolExecutionResult.annotation` as independent JSON documents. The
+  annotation is sanitized at scope end without changing the other typed tool
+  profile fields.
 
 ## Observability Boundary
 

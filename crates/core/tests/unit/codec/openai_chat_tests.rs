@@ -176,6 +176,87 @@ fn test_decode_response_provider_reported_cost() {
 }
 
 #[test]
+fn test_decode_response_openrouter_scalar_provider_reported_cost() {
+    let codec = OpenAIChatCodec;
+    let response = json!({
+        "id": "gen-openrouter-cost",
+        "object": "chat.completion",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "provider": "Nvidia",
+        "choices": [{
+            "message": {"role": "assistant", "content": "ok"},
+            "finish_reason": "stop"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "cost": 0,
+            "cost_details": {"upstream_inference_cost": 0}
+        }
+    });
+
+    let resp = codec.decode_response(&response).unwrap();
+    let cost = resp.usage.unwrap().cost.unwrap();
+
+    assert_eq!(cost.total, Some(0.0));
+    assert_eq!(cost.currency, "USD");
+    assert_eq!(cost.source, CostSource::ProviderReported);
+}
+
+#[test]
+fn test_decode_response_scalar_provider_reported_cost_honors_cost_usd_precedence() {
+    let codec = OpenAIChatCodec;
+    let scalar_response = json!({"usage": {"cost": 0.0123}});
+    let scalar_cost = codec
+        .decode_response(&scalar_response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert_eq!(scalar_cost.total, Some(0.0123));
+    assert_eq!(scalar_cost.source, CostSource::ProviderReported);
+
+    let conflicting_response = json!({"usage": {"cost_usd": 0.0456, "cost": 0.0123}});
+    let conflicting_cost = codec
+        .decode_response(&conflicting_response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert_eq!(conflicting_cost.total, Some(0.0456));
+    assert_eq!(conflicting_cost.source, CostSource::ProviderReported);
+
+    let conflicting_detailed_response = json!({
+        "usage": {
+            "cost_usd": 0.0456,
+            "cost": {
+                "total": 0.0123,
+                "input": 0.004,
+                "output": 0.0083
+            }
+        }
+    });
+    let conflicting_detailed_cost = codec
+        .decode_response(&conflicting_detailed_response)
+        .unwrap()
+        .usage
+        .unwrap()
+        .cost
+        .unwrap();
+
+    assert_eq!(conflicting_detailed_cost.total, Some(0.0456));
+    assert_eq!(
+        conflicting_detailed_cost.source,
+        CostSource::ProviderReported
+    );
+}
+
+#[test]
 fn test_decode_response_finish_reason_stop() {
     let codec = OpenAIChatCodec;
     let response = json!({
@@ -1808,4 +1889,26 @@ fn openai_chat_helpers_cover_provider_edge_values() {
         assert!(codec.decode(&make_request(invalid_request)).is_err());
     }
     assert!(OpenAIChatStreamingCodec::default().finalizer()().is_object());
+}
+
+#[test]
+fn openai_chat_streaming_codec_keeps_sparse_choice_frames_replayable() {
+    // A provider can terminate or truncate a stream after declaring a choice
+    // index but before sending its delta. Response-cache must still be able to
+    // assemble a safe buffered body instead of panicking or inventing content.
+    let codec = OpenAIChatStreamingCodec::default();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({"choices": [{"index": 2}]})).unwrap();
+
+    let assembled = finalizer();
+    assert_eq!(
+        assembled["choices"],
+        json!([{
+            "index": 2,
+            "message": {"role": "assistant", "content": null},
+            "finish_reason": null,
+        }])
+    );
 }

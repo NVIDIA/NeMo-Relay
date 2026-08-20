@@ -44,7 +44,7 @@ test('manual lifecycle APIs accept optional timestamp arguments', async () => {
   const scope = pushScope('node_ts_scope', ScopeType.Agent, null, null, null, null, null, timestamps[0]);
   event('node_ts_mark', scope, null, null, timestamps[1]);
   const tool = toolCall('node_ts_tool', { x: 1 }, null, null, null, null, null, timestamps[2]);
-  toolCallEnd(tool, { ok: true }, null, null, timestamps[3]);
+  toolCallEnd(tool, { result: { ok: true } }, null, null, timestamps[3]);
   const llm = llmCall(
     'node_ts_llm',
     { headers: {}, content: { messages: [], model: 'test-model' } },
@@ -107,11 +107,11 @@ test('manual lifecycle APIs reject invalid timestamp microseconds', () => {
       const tool = toolCall('node_bad_ts_tool', { x: 1 });
       try {
         assert.throws(
-          () => toolCallEnd(tool, { ok: true }, null, null, badTimestamp),
+          () => toolCallEnd(tool, { result: { ok: true } }, null, null, badTimestamp),
           /safe integer number of Unix microseconds/,
         );
       } finally {
-        toolCallEnd(tool, { ok: true });
+        toolCallEnd(tool, { result: { ok: true } });
       }
 
       assert.throws(

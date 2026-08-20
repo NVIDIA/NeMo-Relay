@@ -1,21 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use futures::StreamExt;
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, EventSanitizeFields,
-    Json, LlmJsonStream, LlmRequest, LlmRequestInterceptOutcome, NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncMiddlewareCb,
-    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncStream,
-    NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3, NemoRelayNativePluginContext,
-    NemoRelayNativePluginV1, NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus,
-    PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
-    ToolExecutionInterceptOutcome,
+    Json, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, MetricKind,
+    MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION,
+    NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+    NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
+    NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
+    NemoRelayNativeHostApiV4, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
+    NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec,
+    PluginContext, PluginRuntime, ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct FixtureNativePlugin;
 
@@ -29,6 +34,10 @@ pub extern "C" fn nemo_relay_fixture_async_pending_entered() -> bool {
 impl NativePlugin for FixtureNativePlugin {
     fn plugin_kind(&self) -> &str {
         "fixture_native"
+    }
+
+    fn executor_config(&self) -> NativeExecutorConfig {
+        NativeExecutorConfig { worker_threads: 3 }
     }
 
     fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
@@ -50,60 +59,113 @@ impl NativePlugin for FixtureNativePlugin {
 
     fn register(
         &mut self,
-        _plugin_config: &Map<String, Json>,
+        plugin_config: &Map<String, Json>,
         ctx: &mut PluginContext<'_>,
     ) -> nemo_relay_plugin::Result<()> {
+        let event_metadata_injector_error = plugin_config
+            .get("event_metadata_injector_error")
+            .and_then(Json::as_bool)
+            .unwrap_or(false);
+        ctx.register_event_metadata_injector(
+            "fixture_event_metadata_injector",
+            0,
+            move |event| async move {
+                if event_metadata_injector_error {
+                    return Err("fixture Event metadata injector error requested".into());
+                }
+                let mut additions = BTreeMap::new();
+                if event
+                    .name()
+                    .starts_with("external-plugin-event-metadata-injection")
+                {
+                    additions.insert(
+                        "external.injector.transport".into(),
+                        json!("native_dynamic_rust"),
+                    );
+                }
+                Ok(additions)
+            },
+        )?;
+        if plugin_config
+            .get("event_metadata_injector_only")
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
         let runtime = ctx.runtime();
         ctx.register_subscriber("fixture_subscriber", {
             let runtime = runtime.clone();
             move |event| subscriber_mark(&runtime, event)
         })?;
-        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| {
-            mark_event_fields(fields, "native_plugin_mark")
+        ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| async move {
+            Ok(mark_event_fields(fields, "native_plugin_mark"))
         })?;
         ctx.register_scope_sanitize_start_guardrail(
             "fixture_scope_start_sanitize",
             0,
-            |_, fields| mark_event_fields(fields, "native_plugin_scope_start"),
+            |_, fields| async move { Ok(mark_event_fields(fields, "native_plugin_scope_start")) },
         )?;
-        ctx.register_scope_sanitize_end_guardrail("fixture_scope_end_sanitize", 0, |_, fields| {
-            mark_event_fields(fields, "native_plugin_scope_end")
-        })?;
+        ctx.register_scope_sanitize_end_guardrail(
+            "fixture_scope_end_sanitize",
+            0,
+            |_, fields| async move { Ok(mark_event_fields(fields, "native_plugin_scope_end")) },
+        )?;
 
         ctx.register_tool_sanitize_request_guardrail(
             "fixture_tool_sanitize_request",
             0,
-            |_name, args| mark_json(args, "native_plugin_tool_sanitize_request"),
+            |_name, args| async move { Ok(mark_json(args, "native_plugin_tool_sanitize_request")) },
         )?;
         ctx.register_tool_sanitize_response_guardrail(
             "fixture_tool_sanitize_response",
             0,
-            |_name, result| mark_json(result, "native_plugin_tool_sanitize_response"),
+            |_name, result| async move {
+                Ok(mark_json(result, "native_plugin_tool_sanitize_response"))
+            },
         )?;
         ctx.register_tool_conditional_execution_guardrail(
             "fixture_tool_conditional",
             0,
-            |_name, _args| Ok(None),
+            |_name, _args| async move { Ok(None) },
         )?;
         ctx.register_tool_request_intercept("fixture_rewrite_args", 0, false, {
             let runtime = runtime.clone();
             move |_name, args| {
-                emit_runtime_events(&runtime)?;
-                Ok(mark_json(args, "native_plugin"))
+                let runtime = runtime.clone();
+                async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    let (mut writer, mut reader) = tokio::io::duplex(8);
+                    writer
+                        .write_all(b"async")
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    let mut readiness = [0_u8; 5];
+                    reader
+                        .read_exact(&mut readiness)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    emit_runtime_events(&runtime)?;
+                    Ok(mark_json(args, "native_plugin"))
+                }
             }
         })?;
         ctx.register_tool_execution_intercept("fixture_tool_execution", 0, {
             let runtime = runtime.clone();
             move |_name, args, next| {
-                let args = mark_json(args, "native_plugin_tool_execution_request");
-                let result = if args
-                    .get("use_isolated_next")
-                    .and_then(Json::as_bool)
-                    .unwrap_or(false)
-                {
-                    let isolated = runtime.create_scope_stack()?;
-                    let mut result = None;
-                    isolated.with_current(|| {
+                let runtime = runtime.clone();
+                async move {
+                    let args = mark_json(args, "native_plugin_tool_execution_request");
+                    let result = if args
+                        .get("use_isolated_next")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false)
+                    {
+                        let isolated = runtime.create_scope_stack()?;
+                        let previous = runtime.capture_scope_stack_thread()?;
+                        if isolated.set_thread() != NemoRelayStatus::Ok {
+                            return Err("failed to install isolated scope stack".into());
+                        }
                         let mut scope = runtime.scope(
                             "fixture.native.isolated.next",
                             ScopeType::Custom,
@@ -111,56 +173,90 @@ impl NativePlugin for FixtureNativePlugin {
                             None,
                             Some(&Json::String("isolated-next-input".into())),
                         )?;
-                        result = Some(next.call(args)?);
-                        scope.close(Some(&Json::String("isolated-next-output".into())), None)
-                    })?;
-                    result.ok_or_else(|| "isolated next did not produce a result".to_string())?
-                } else {
-                    next.call(args)?
-                };
-                let result = mark_json(result, "native_plugin_tool_execution");
-                Ok(
-                    ToolExecutionInterceptOutcome::new(result).with_pending_mark(
-                        PendingMarkSpec::builder()
-                            .name("fixture.native.tool_execution.mark")
-                            .category(EventCategory::custom())
-                            .category_profile(CategoryProfile {
-                                subtype: Some("fixture.native.tool_execution".into()),
-                                ..CategoryProfile::default()
-                            })
-                            .data(json!({ "source": "native_tool_execution" }))
-                            .metadata(json!({ "fixture": true }))
-                            .build(),
-                    ),
-                )
+                        let call_result = next.call(args).await;
+                        let close_result =
+                            scope.close(Some(&Json::String("isolated-next-output".into())), None);
+                        if previous.restore() != NemoRelayStatus::Ok {
+                            return Err("failed to restore callback scope stack".into());
+                        }
+                        close_result?;
+                        call_result?
+                    } else if args
+                        .get("use_concurrent_next")
+                        .and_then(Json::as_bool)
+                        .unwrap_or(false)
+                    {
+                        let first_next = next.clone();
+                        let (first, second) =
+                            tokio::join!(first_next.call(args.clone()), next.call(args),);
+                        let result = first?;
+                        second?;
+                        result
+                    } else {
+                        next.call(args).await?
+                    };
+                    let mut result = result;
+                    result.result = mark_json(result.result, "native_plugin_tool_execution");
+                    Ok(
+                        ToolExecutionInterceptOutcome::from(result).with_pending_mark(
+                            PendingMarkSpec::builder()
+                                .name("fixture.native.tool_execution.mark")
+                                .category(EventCategory::custom())
+                                .category_profile(CategoryProfile {
+                                    subtype: Some("fixture.native.tool_execution".into()),
+                                    ..CategoryProfile::default()
+                                })
+                                .data(json!({ "source": "native_tool_execution" }))
+                                .metadata(json!({ "fixture": true }))
+                                .build(),
+                        ),
+                    )
+                }
             }
         })?;
 
         ctx.register_llm_sanitize_request_guardrail(
             "fixture_llm_sanitize_request",
             0,
-            |request, _context| {
-                Some(mark_llm_request(
+            |request, context| async move {
+                let request = if let Some(codec) = context.resolve_codec() {
+                    let annotated = codec.decode(&request)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    codec.encode(&annotated, &request)?
+                } else {
+                    request
+                };
+                Ok(Some(mark_llm_request(
                     request,
                     "native_plugin_llm_sanitize_request",
-                ))
+                )))
             },
         )?;
         ctx.register_llm_sanitize_response_guardrail(
             "fixture_llm_sanitize_response",
             0,
-            |response, _context| Some(mark_json(response, "native_plugin_llm_sanitize_response")),
+            |response, context| async move {
+                if let Some(codec) = context.resolve_codec() {
+                    codec.decode(&response)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    codec.decode(&response)?;
+                }
+                Ok(Some(mark_json(
+                    response,
+                    "native_plugin_llm_sanitize_response",
+                )))
+            },
         )?;
         ctx.register_llm_conditional_execution_guardrail(
             "fixture_llm_conditional",
             0,
-            |_request| Ok(None),
+            |_request| async move { Ok(None) },
         )?;
         ctx.register_llm_request_intercept(
             "fixture_llm_request_intercept",
             0,
             false,
-            |_name, request, annotated| {
+            |_name, request, annotated| async move {
                 Ok(LlmRequestInterceptOutcome::new(
                     mark_llm_request(request, "native_plugin_llm_request_intercept"),
                     annotated,
@@ -182,23 +278,27 @@ impl NativePlugin for FixtureNativePlugin {
         ctx.register_llm_execution_intercept(
             "fixture_llm_execution",
             0,
-            |_name, request, next| {
-                let response = next.call(mark_llm_request(
-                    request,
-                    "native_plugin_llm_execution_request",
-                ))?;
+            |_name, request, next| async move {
+                let response = next
+                    .call(mark_llm_request(
+                        request,
+                        "native_plugin_llm_execution_request",
+                    ))
+                    .await?;
                 Ok(mark_json(response, "native_plugin_llm_execution"))
             },
         )?;
         ctx.register_llm_stream_execution_intercept(
             "fixture_llm_stream_execution",
             0,
-            |_name, request, next| {
-                let stream = next.call(mark_llm_request(
-                    request,
-                    "native_plugin_llm_stream_execution_request",
-                ))?;
-                let stream: LlmJsonStream = Box::new(stream.map(|chunk| {
+            |_name, request, next| async move {
+                let stream = next
+                    .call(mark_llm_request(
+                        request,
+                        "native_plugin_llm_stream_execution_request",
+                    ))
+                    .await?;
+                let stream: LlmJsonAsyncStream = Box::pin(stream.map(|chunk| {
                     chunk.map(|chunk| mark_json(chunk, "native_plugin_llm_stream_execution"))
                 }));
                 Ok(stream)
@@ -232,6 +332,18 @@ fn emit_runtime_events(runtime: &PluginRuntime) -> nemo_relay_plugin::Result<()>
     runtime.emit_mark(
         "fixture.native.mark",
         Some(&Json::String("current".into())),
+        None,
+    )?;
+    runtime.emit_metric(
+        "fixture.native.metric",
+        vec![
+            MetricMeasurement::builder()
+                .name("fixture.native.count")
+                .kind(MetricKind::Counter)
+                .value_type(MetricValueType::U64)
+                .value(json!(1))
+                .build(),
+        ],
         None,
     )?;
     let scope = runtime.push_scope(
@@ -297,6 +409,98 @@ fn mark_json(mut value: Json, key: &str) -> Json {
 }
 
 nemo_relay_plugin::nemo_relay_plugin!(nemo_relay_fixture_native_plugin, || FixtureNativePlugin);
+
+unsafe extern "C" fn fixture_compat_register(
+    _user_data: *mut c_void,
+    _plugin_config_json: *const NemoRelayNativeString,
+    _ctx: *mut NemoRelayNativePluginContext,
+) -> NemoRelayStatus {
+    NemoRelayStatus::Ok
+}
+
+/// Raw ABI-v3 entry used to verify host fallback for already-built plugins.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v3(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+            std::mem::size_of::<NemoRelayNativeHostApiV3>(),
+            b"fixture_native_v3",
+        )
+    }
+}
+
+/// Raw ABI-v2 entry used to verify host fallback for already-built plugins.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v2(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+            std::mem::size_of::<NemoRelayNativeHostApiV1>(),
+            b"fixture_native_v2",
+        )
+    }
+}
+
+/// Raw ABI-v4 entry used to verify the final current table.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_native_plugin_v4(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    unsafe {
+        fixture_compat_entry(
+            host,
+            out,
+            NEMO_RELAY_NATIVE_ABI_VERSION,
+            std::mem::size_of::<NemoRelayNativeHostApiV4>(),
+            b"fixture_native_v4",
+        )
+    }
+}
+
+unsafe fn fixture_compat_entry(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+    expected_version: u32,
+    minimum_size: usize,
+    kind: &[u8],
+) -> NemoRelayStatus {
+    if host.is_null() || out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let host = unsafe { &*host };
+    if host.abi_version != expected_version || host.struct_size < minimum_size {
+        return NemoRelayStatus::InvalidArg;
+    }
+    let mut plugin_kind = ptr::null_mut();
+    let status = unsafe { (host.string_new)(kind.as_ptr(), kind.len(), &mut plugin_kind) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    unsafe {
+        *out = NemoRelayNativePluginV1 {
+            struct_size: std::mem::size_of::<NemoRelayNativePluginV1>(),
+            plugin_kind,
+            allows_multiple_components: false,
+            user_data: ptr::null_mut(),
+            validate: None,
+            register: Some(fixture_compat_register),
+            drop: None,
+        };
+    }
+    NemoRelayStatus::Ok
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_async_entry(
@@ -446,6 +650,29 @@ pub unsafe extern "C" fn nemo_relay_fixture_tool_outcome_errors(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_fixture_abi_v2_api1(
+    host: *const NemoRelayNativeHostApiV1,
+    out: *mut NemoRelayNativePluginV1,
+) -> NemoRelayStatus {
+    if host.is_null() || out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    if unsafe { (*host).abi_version } != NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY {
+        return NemoRelayStatus::InvalidArg;
+    }
+    unsafe {
+        write_raw_descriptor(
+            host,
+            out,
+            "fixture_native",
+            None,
+            None,
+            Some(raw_register_canonical_tool_outcome),
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_fixture_event_sanitize_errors(
     host: *const NemoRelayNativeHostApiV1,
     out: *mut NemoRelayNativePluginV1,
@@ -562,6 +789,32 @@ unsafe extern "C" fn raw_register_tool_outcome_errors(
             name,
             0,
             raw_tool_outcome_callback,
+            user_data,
+            None,
+        )
+    };
+    unsafe { (host.string_free)(name) };
+    status
+}
+
+unsafe extern "C" fn raw_register_canonical_tool_outcome(
+    user_data: *mut c_void,
+    _plugin_config_json: *const NemoRelayNativeString,
+    ctx: *mut NemoRelayNativePluginContext,
+) -> NemoRelayStatus {
+    let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let name = unsafe { raw_host_string(host, "fixture_abi_v2_api1") };
+    if name.is_null() {
+        return NemoRelayStatus::Internal;
+    }
+    let status = unsafe {
+        (host.plugin_context_register_tool_execution_intercept)(
+            ctx,
+            name,
+            0,
+            raw_canonical_tool_outcome_callback,
             user_data,
             None,
         )
@@ -1084,9 +1337,9 @@ unsafe fn reject_async_completion(
 unsafe extern "C" fn raw_tool_outcome_callback(
     user_data: *mut c_void,
     name: *const NemoRelayNativeString,
-    _args_json: *const NemoRelayNativeString,
-    _next_fn: NemoRelayNativeToolNextFn,
-    _next_ctx: *mut c_void,
+    args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
     out_outcome_json: *mut *mut NemoRelayNativeString,
 ) -> NemoRelayStatus {
     if out_outcome_json.is_null() {
@@ -1116,15 +1369,79 @@ unsafe extern "C" fn raw_tool_outcome_callback(
             NemoRelayStatus::Internal
         }
         _ => {
-            unsafe {
-                *out_outcome_json = raw_host_string(
-                    host,
-                    r#"{"result":{"raw_tool_outcome":true},"pending_marks":[]}"#,
-                );
+            let mut next_result = ptr::null_mut();
+            let status = unsafe { next_fn(args_json, next_ctx, &mut next_result) };
+            if status != NemoRelayStatus::Ok {
+                return status;
             }
+            let encoded = unsafe { raw_host_string_value(host, next_result) };
+            unsafe { (host.string_free)(next_result) };
+            let Some(encoded) = encoded else {
+                return NemoRelayStatus::InvalidUtf8;
+            };
+            let Ok(downstream) = serde_json::from_str::<Json>(&encoded) else {
+                return NemoRelayStatus::InvalidArg;
+            };
+            let Ok(encoded) = serde_json::to_string(&json!({
+                "result": {
+                    "raw_tool_outcome": true,
+                    "downstream": downstream,
+                },
+                "pending_marks": [],
+            })) else {
+                return NemoRelayStatus::Internal;
+            };
+            let output = unsafe { raw_host_string(host, &encoded) };
+            if output.is_null() {
+                return NemoRelayStatus::Internal;
+            }
+            unsafe { *out_outcome_json = output };
             NemoRelayStatus::Ok
         }
     }
+}
+
+unsafe extern "C" fn raw_canonical_tool_outcome_callback(
+    user_data: *mut c_void,
+    _name: *const NemoRelayNativeString,
+    args_json: *const NemoRelayNativeString,
+    next_fn: NemoRelayNativeToolNextFn,
+    next_ctx: *mut c_void,
+    out_outcome_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_outcome_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out_outcome_json = ptr::null_mut() };
+    let Some(host) = (unsafe { raw_host_from_user_data(user_data) }) else {
+        return NemoRelayStatus::NullPointer;
+    };
+    let mut next_result = ptr::null_mut();
+    let status = unsafe { next_fn(args_json, next_ctx, &mut next_result) };
+    if status != NemoRelayStatus::Ok {
+        return status;
+    }
+    let encoded = unsafe { raw_host_string_value(host, next_result) };
+    unsafe { (host.string_free)(next_result) };
+    let Some(encoded) = encoded else {
+        return NemoRelayStatus::InvalidUtf8;
+    };
+    let Ok(mut outcome) = serde_json::from_str::<Json>(&encoded) else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    let Some(outcome) = outcome.as_object_mut() else {
+        return NemoRelayStatus::InvalidArg;
+    };
+    outcome.insert("pending_marks".into(), Json::Array(Vec::new()));
+    let Ok(encoded) = serde_json::to_string(&outcome) else {
+        return NemoRelayStatus::Internal;
+    };
+    let output = unsafe { raw_host_string(host, &encoded) };
+    if output.is_null() {
+        return NemoRelayStatus::Internal;
+    }
+    unsafe { *out_outcome_json = output };
+    NemoRelayStatus::Ok
 }
 
 unsafe extern "C" fn raw_event_sanitize_error_callback(

@@ -285,6 +285,14 @@ Relay context is distinct from W3C propagation. An integration may carry
 `traceparent` and `tracestate` alongside Relay's JSON context when it needs to
 preserve OpenTelemetry sampling or vendor state.
 
+For outbound-only W3C propagation, use `capture_traceparent()` to obtain the
+current Relay traceparent directly, or convert a rooted `PropagationContext`
+with `PropagationContext::to_traceparent` (and the equivalent binding methods).
+Rootless contexts cannot be converted because they intentionally start a new
+local OpenTelemetry trace. Managed LLM execution automatically adds one
+runtime-owned `traceparent` header to the provider request; a standalone
+request-intercept call adds it only when a real Relay trace context exists.
+
 Use the binding's JSON helpers at the transport boundary: Rust
 `PropagationContext::to_json` and `PropagationContext::from_json`, Python
 `context.to_json()` and `PropagationContext.from_json(...)`, Go

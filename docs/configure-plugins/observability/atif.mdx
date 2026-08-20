@@ -28,7 +28,7 @@ kind = "observability"
 enabled = true
 
 [components.config]
-version = 3
+version = 4
 
 [components.config.atif]
 enabled = true
@@ -293,6 +293,10 @@ meaning of scope parentage, event UUIDs, codec annotations, and exporter-local
 lineage rules without becoming the source of truth for runtime ownership,
 middleware ordering, or provider payload decoding.
 
+When a successful tool result carries an opaque annotation, the corresponding
+ATIF observation result stores it at `extra.tool_result_annotation`. ATIF
+preserves the JSON value without interpreting application-defined keys.
+
 ## Plugin Configuration
 
 Use plugin configuration when the application should let NeMo Relay own the ATIF
@@ -353,20 +357,20 @@ const observability = require("nemo-relay-node/observability");
 
 void (async () => {
   await plugin.initialize({
-  version: 1,
-  components: [
-    observability.ComponentSpec({
-  version: 3,
-      atif: observability.atifConfig({
-        enabled: true,
-        agent_name: "Planner",
-        agent_version: "1.0.0",
-        model_name: "unknown",
-        output_directory: "logs",
-        filename_template: "trajectory-{session_id}.json",
+    version: 1,
+    components: [
+      observability.ComponentSpec({
+        version: 4,
+        atif: observability.atifConfig({
+          enabled: true,
+          agent_name: "Planner",
+          agent_version: "1.0.0",
+          model_name: "unknown",
+          output_directory: "logs",
+          filename_template: "trajectory-{session_id}.json",
+        }),
       }),
-    }),
-  ],
+    ],
   });
 
   try {

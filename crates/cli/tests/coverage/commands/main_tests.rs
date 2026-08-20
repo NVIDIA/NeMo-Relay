@@ -337,6 +337,17 @@ fn doctor_rejects_conflicting_agent_and_plugin_targets() {
 }
 
 #[test]
+fn doctor_rejects_install_dir_without_plugin_target() {
+    let error =
+        Cli::try_parse_from(["nemo-relay", "doctor", "--install-dir", "/tmp/plugins"]).unwrap_err();
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert!(error.to_string().contains("--plugin"));
+}
+
+#[test]
 fn doctor_accepts_offline_flag() {
     let cli = Cli::try_parse_from(["nemo-relay", "doctor", "--offline"]).unwrap();
     match cli.command {
@@ -534,6 +545,54 @@ async fn run_command_dispatches_safe_plugin_and_install_paths() {
             .unwrap(),
         ExitCode::SUCCESS
     );
+}
+
+#[tokio::test]
+async fn run_command_install_requires_a_valid_bootstrap_key_except_dry_runs() {
+    let temp = tempfile::tempdir().unwrap();
+    let _env = EnvScope::hermetic(&temp);
+    let install_dir = temp.path().join("plugin-install");
+    let install_dir_arg = install_dir.to_string_lossy().to_string();
+    let key_path = temp
+        .path()
+        .join("xdg/nemo-relay/bootstrap/fingerprint-hmac.key");
+    std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
+    std::fs::write(&key_path, [0_u8; 31]).unwrap();
+
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "install",
+        "codex",
+        "--install-dir",
+        install_dir_arg.as_str(),
+        "--skip-doctor",
+    ])
+    .unwrap();
+    let error = run_command(cli.command.unwrap(), &cli.server, None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("bootstrap HMAC key"));
+    assert!(error.contains("invalid length 31"));
+    assert!(!install_dir.exists());
+
+    let cli = Cli::try_parse_from([
+        "nemo-relay",
+        "install",
+        "codex",
+        "--install-dir",
+        install_dir_arg.as_str(),
+        "--dry-run",
+        "--skip-doctor",
+    ])
+    .unwrap();
+    assert_eq!(
+        run_command(cli.command.unwrap(), &cli.server, None)
+            .await
+            .unwrap(),
+        ExitCode::SUCCESS
+    );
+    assert_eq!(std::fs::read(key_path).unwrap(), [0_u8; 31]);
 }
 
 #[test]

@@ -103,7 +103,11 @@ async def test_fork_asyncio_context_isolates_siblings_and_preserves_parentage():
         assert marker.get() == "parent"
         with nemo_relay.scope.scope(name, nemo_relay.ScopeType.Function) as handle:
             await asyncio.sleep(delay)
-            result = await nemo_relay.tools.execute("forked-tool", {"name": name}, lambda args: args)
+            result = await nemo_relay.tools.execute(
+                "forked-tool",
+                {"name": name},
+                lambda args: nemo_relay.ToolExecutionResult(args),
+            )
             return handle, result, nemo_relay.get_scope_stack()
 
     with nemo_relay.scope.scope("fork-parent", nemo_relay.ScopeType.Agent) as parent:
@@ -129,8 +133,8 @@ async def test_fork_asyncio_context_isolates_siblings_and_preserves_parentage():
     assert first_stack is not second_stack
     assert first_stack is not parent_stack
     assert second_stack is not parent_stack
-    assert first_result == {"name": "first"}
-    assert second_result == {"name": "second"}
+    assert first_result.result == {"name": "first"}
+    assert second_result.result == {"name": "second"}
 
 
 def test_use_scope_stack_restores_a_previously_bound_native_stack(restore_native_scope_stack):
@@ -243,12 +247,12 @@ def test_concurrent_tool_lifecycle_uses_owning_task_stack(subscribed_events):
 
                 manual_handle = nemo_relay.tools.call(f"manual-tool-{owner}", args)
                 await asyncio.sleep(0)
-                nemo_relay.tools.call_end(manual_handle, {"owner": owner})
+                nemo_relay.tools.call_end(manual_handle, nemo_relay.ToolExecutionResult({"owner": owner}))
 
                 result = await nemo_relay.tools.execute(
                     f"managed-tool-{owner}",
                     {"owner": owner},
-                    lambda managed_args: managed_args,
+                    lambda managed_args: nemo_relay.ToolExecutionResult(managed_args),
                 )
                 return handle.uuid, result
         finally:
@@ -261,7 +265,7 @@ def test_concurrent_tool_lifecycle_uses_owning_task_stack(subscribed_events):
     nemo_relay.subscribers.flush()
 
     for owner, (scope_uuid, result) in zip(("agent-a", "agent-b"), results, strict=True):
-        assert result == {"owner": owner, "intercepted_by": owner}
+        assert result.result == {"owner": owner, "intercepted_by": owner}
         for tool_name in (f"manual-tool-{owner}", f"managed-tool-{owner}"):
             tool_events = [
                 event

@@ -35,13 +35,10 @@ navigation:
         title: "Adaptive"
         title-source: frontmatter
       - folder: ./configure-plugins/nemo-guardrails
-        title: "NeMo Guardrails"
+        title: "NeMo Guardrails (Deprecated)"
         title-source: frontmatter
       - folder: ./configure-plugins/pii-redaction
         title: "PII Redaction"
-        title-source: frontmatter
-      - folder: ./configure-plugins/switchyard
-        title: "Switchyard (Deprecated)"
         title-source: frontmatter
       - page: "Model Pricing"
         path: ./configure-plugins/model-pricing.mdx

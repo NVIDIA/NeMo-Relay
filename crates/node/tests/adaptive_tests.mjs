@@ -80,6 +80,50 @@ describe('core plugins', () => {
     }
   });
 
+  it('validates a registered JS plugin during asynchronous initialization', async () => {
+    const pluginKind = `node.test.async_validate.${Date.now()}`;
+    const config = {
+      version: 1,
+      components: [plugin.ComponentSpec(pluginKind, { marker: 'validated' })],
+    };
+    let validateCalls = 0;
+    let registerCalls = 0;
+
+    plugin.register(pluginKind, {
+      validate(pluginConfig) {
+        validateCalls += 1;
+        assert.equal(pluginConfig.marker, 'validated');
+        return [];
+      },
+      register(pluginConfig, context) {
+        registerCalls += 1;
+        context.registerToolRequestIntercept('marker', 1, false, (_name, args) => ({
+          ...args,
+          marker: pluginConfig.marker,
+        }));
+      },
+    });
+
+    try {
+      assert.deepEqual(plugin.validate(config).diagnostics, []);
+      assert.deepEqual((await plugin.initialize(config)).diagnostics, []);
+      assert.equal(validateCalls, 2);
+      assert.equal(registerCalls, 1);
+      assert.deepEqual(await lib.toolCallExecute('validated_plugin_tool', {}, (args) => ({ result: args })), {
+        result: { marker: 'validated' },
+      });
+
+      plugin.clear();
+      assert.equal(plugin.deregister(pluginKind), true);
+      assert.deepEqual(await lib.toolCallExecute('cleared_plugin_tool', {}, (args) => ({ result: args })), {
+        result: {},
+      });
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+    }
+  });
+
   it('treats implicit undefined plugin validation as no diagnostics', () => {
     const pluginKind = `node.test.validate_undefined.${Date.now()}`;
 
@@ -96,6 +140,36 @@ describe('core plugins', () => {
       assert.deepEqual(report.diagnostics, []);
     } finally {
       assert.equal(plugin.deregister(pluginKind), true);
+    }
+  });
+
+  it('reports throwing async plugin validation without terminating Node', async () => {
+    const pluginKind = `node.test.async_validate_throw.${Date.now()}`;
+    plugin.register(pluginKind, {
+      validate() {
+        throw new Error('plugin validation boom');
+      },
+      register() {
+        assert.fail('registration must not run after validation fails');
+      },
+    });
+
+    try {
+      const config = {
+        version: 1,
+        components: [plugin.ComponentSpec(pluginKind, {})],
+      };
+      await assert.rejects(() => plugin.initialize(config), /plugin validation boom/);
+      const report = plugin.validate(config);
+      assert.equal(report.diagnostics.length, 1);
+      assert.equal(report.diagnostics[0].code, 'plugin.validate_failed');
+      assert.match(report.diagnostics[0].message, /plugin validation boom/);
+      assert.deepEqual(await lib.toolCallExecute('validation_error_survives', {}, (args) => ({ result: args })), {
+        result: {},
+      });
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
     }
   });
 
@@ -192,7 +266,7 @@ describe('core plugins', () => {
       });
       assert.deepEqual(report.diagnostics, []);
       await assert.rejects(
-        () => lib.toolCallExecute('plugin_request_throw', {}, () => ({ should_not: 'run' })),
+        () => lib.toolCallExecute('plugin_request_throw', {}, () => ({ result: { should_not: 'run' } })),
         /plugin request intercept boom/i,
       );
     } finally {
@@ -214,16 +288,20 @@ describe('core plugins', () => {
 
     plugin.register(pluginKind, {
       register(_config, context) {
-        context.registerToolExecutionIntercept('target', 100, async (args, next) => ({
-          result: {
-            ...(await next(args)),
-            snapshotted: true,
-          },
-        }));
+        context.registerToolExecutionIntercept('target', 100, async (args, next) => {
+          const downstream = await next(args);
+          return {
+            result: {
+              ...downstream.result,
+              snapshotted: true,
+            },
+            ...(downstream.annotation == null ? {} : { annotation: downstream.annotation }),
+          };
+        });
         context.registerToolExecutionIntercept('blocker', -100, async (args, next) => {
           blockerEntered();
           await release;
-          return { result: await next(args) };
+          return await next(args);
         });
       },
     });
@@ -245,14 +323,16 @@ describe('core plugins', () => {
         ],
       });
       const execution = lib.toolCallExecute('plugin_snapshot_tool', {}, () => ({
-        downstream: true,
+        result: { downstream: true },
       }));
       await entered;
       plugin.clear();
       releaseBlocker();
       assert.deepEqual(await execution, {
-        downstream: true,
-        snapshotted: true,
+        result: {
+          downstream: true,
+          snapshotted: true,
+        },
       });
     } finally {
       releaseBlocker();
@@ -328,6 +408,28 @@ describe('adaptive helpers', () => {
         header_allowlist: [],
         backend: adaptive.inMemoryBackend(),
       },
+    });
+  });
+
+  it('serializes nested tool-cache config', () => {
+    const spec = adaptive.ComponentSpec({
+      version: 1,
+      responseCache: {
+        tools: {
+          enabled: true,
+          cacheErrors: true,
+          default: { ttlSeconds: 30, bypassRate: 0.1, argSkip: ['trace'] },
+          classes: { readOnly: { cacheable: true, toolVersion: 'class-v1', members: ['search'] } },
+          overrides: { search: { toolVersion: 'v1', argSkip: ['requestId'] } },
+        },
+      },
+    });
+    assert.deepEqual(spec.config.response_cache.tools, {
+      enabled: true,
+      cache_errors: true,
+      default: { ttl_seconds: 30, bypass_rate: 0.1, arg_skip: ['trace'] },
+      classes: { readOnly: { cacheable: true, tool_version: 'class-v1', members: ['search'] } },
+      overrides: { search: { tool_version: 'v1', arg_skip: ['requestId'] } },
     });
   });
 

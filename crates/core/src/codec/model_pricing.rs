@@ -80,6 +80,7 @@ pub enum PricingCatalogError {
 
 /// Collection of model pricing entries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PricingCatalog {
     /// Catalog schema version.
     pub version: u32,
@@ -151,7 +152,7 @@ pub struct PricingConfig {
 
 /// Declarative model pricing source supported by Relay configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 pub enum PricingSourceConfig {
     /// Inline catalog entries from project, user, system, or plugin config.
     Inline {
@@ -262,6 +263,7 @@ impl PricingResolver {
 
 /// Per-token model pricing expressed in USD per one million tokens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelPricing {
     /// Provider that owns this model pricing entry.
     pub provider: String,
@@ -327,13 +329,16 @@ impl ModelPricing {
             .cache_write_per_million
             .and_then(|price| cost_component_if_nonzero(cache_write_tokens, price));
 
-        let total: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
+        let has_unpriced_nonzero_usage = (cache_read_tokens > 0
+            && rates.cache_read_per_million.is_none())
+            || (cache_write_tokens > 0 && rates.cache_write_per_million.is_none());
+        let component_sum: f64 = [input_cost, output_cost, cache_read_cost, cache_write_cost]
             .into_iter()
             .flatten()
             .sum();
 
         Some(CostEstimate {
-            total: Some(round_cost_amount(total)),
+            total: (!has_unpriced_nonzero_usage).then_some(round_cost_amount(component_sum)),
             currency: self.currency.clone(),
             input: input_cost,
             output: output_cost,
@@ -421,6 +426,7 @@ pub enum PricingUnit {
 
 /// Token rates expressed as USD per one million tokens.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenPricingRates {
     /// Uncached prompt/input token price.
     pub input_per_million: f64,
@@ -466,7 +472,7 @@ impl TokenPricingRates {
 
 /// Data-driven token rate schedule for model pricing with request thresholds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "snake_case")]
 pub enum TokenRateSchedule {
     /// Selects one full-request rate tier based on prompt/input tokens.
     PromptTokenThreshold {
@@ -523,6 +529,7 @@ pub enum RateScheduleApplication {
 
 /// A model pricing tier selected by prompt/input token count.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenRateTier {
     /// Inclusive lower bound for prompt tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -562,6 +569,7 @@ impl TokenRateTier {
 
 /// Prompt-cache accounting rules for a model pricing entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromptCachePricing {
     /// Whether cache-read tokens are included in `prompt_tokens`.
     pub read_accounting: CacheReadAccounting,

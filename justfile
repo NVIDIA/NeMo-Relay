@@ -15,6 +15,8 @@ ref_name := ""
 linux_glibc_version := "2.17"
 # Supported Node package platform key. CI sets this from its package matrix.
 node_platform := ""
+node_target := ""
+node_build_strategy := "native"
 
 bash_helpers := '''
 set -euo pipefail
@@ -483,7 +485,6 @@ local_dependencies = (
     "nemo-relay-plugin",
     "nemo-relay-adaptive",
     "nemo-relay-pii-redaction",
-    "nemo-relay-switchyard",
     "nemo-relay-ffi",
     "nemo-relay-cli",
 )
@@ -773,7 +774,6 @@ published_cargo_packages() {
         nemo-relay \
         nemo-relay-adaptive \
         nemo-relay-pii-redaction \
-        nemo-relay-switchyard \
         nemo-relay-ffi \
         nemo-relay-cli
 }
@@ -1063,6 +1063,25 @@ check-python-worker-proto:
     }
     assert pb.SUBSCRIBER == 1
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
+    tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
+    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
+    runtime_diagnostics = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["GetRuntimeDiagnostics"]
+    assert runtime_diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
+    assert runtime_diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
+    runtime_diagnostic = pb.RuntimeDiagnostic.DESCRIPTOR.fields_by_name
+    assert runtime_diagnostic["code"].number == 1
+    assert runtime_diagnostic["message"].number == 2
+    assert runtime_diagnostic["count"].number == 3
+    runtime_diagnostics_response = pb.GetRuntimeDiagnosticsResponse.DESCRIPTOR.fields_by_name
+    assert runtime_diagnostics_response["entries"].number == 1
+    emit_mark = pb.EmitMarkRequest.DESCRIPTOR.fields_by_name
+    assert emit_mark["data_schema"].number == 7
+    assert emit_mark["severity"].number == 8
+    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
+    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
+    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
     PY
 
 generate-test-plugin-lockfiles:
@@ -1421,7 +1440,7 @@ test-python-langchain:
     {{ bash_helpers }}
     pytest_cmd=(pytest)
     cd "$NEMO_RELAY_REPO_ROOT"
-    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langgraph --extra deepagents
+    uv sync --inexact --no-install-project --no-install-package nemo-relay --extra langchain --extra langchain-nvidia --extra langgraph --extra deepagents
     activate_project_venv
     export_uv_python_runtime
     python_executable="$(project_python_executable)"
@@ -1638,11 +1657,6 @@ package-rust:
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
                 ;;
-            nemo-relay-switchyard)
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
-                cargo_package_config+=(--config 'patch.crates-io.nemo-relay-plugin.path="crates/plugin"')
-                ;;
             nemo-relay-ffi|nemo-relay-cli)
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay-types.path="crates/types"')
                 cargo_package_config+=(--config 'patch.crates-io.nemo-relay.path="crates/core"')
@@ -1673,6 +1687,8 @@ package-node:
     # If `ref_name` is set, write it as the exact package version before packing.
     linux_glibc_version="{{ linux_glibc_version }}"
     node_platform="{{ node_platform }}"
+    node_target="{{ node_target }}"
+    node_build_strategy="{{ node_build_strategy }}"
     python_executable="python"
     if ! command -v "$python_executable" >/dev/null 2>&1; then
         python_executable="python3"
@@ -1693,14 +1709,26 @@ package-node:
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
     fi
-    build_args=(build)
-    if is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
+    build_args=(build --)
+    if [[ -n "$node_target" ]]; then
+        build_args+=(--target "$node_target")
+    fi
+    if [[ "$node_build_strategy" == "zig" ]]; then
         # Zig is provided by the uv.lock `ziglang` entry; keep any explicit CI
         # Zig version pin aligned with that lockfile version.
         uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
         activate_project_venv
         prepend_ziglang_to_path "$(project_python_executable)"
-        build_args+=(-- --zig --zig-abi-suffix "$linux_glibc_version")
+        build_args+=(--zig)
+        if [[ "$node_target" == *-unknown-linux-gnu ]]; then
+            build_args+=(--zig-abi-suffix "$linux_glibc_version")
+        fi
+    elif is_true "{{ ci }}" && [[ "$(uname -s)" == "Linux" ]]; then
+        # Preserve the local CI-style build behavior when no cross target is set.
+        uv sync --inexact --no-install-project --no-install-package nemo-relay --no-default-groups --group dev
+        activate_project_venv
+        prepend_ziglang_to_path "$(project_python_executable)"
+        build_args+=(--zig --zig-abi-suffix "$linux_glibc_version")
     fi
     npm install --workspace=nemo-relay-node --ignore-scripts
     npm run --workspace=nemo-relay-node "${build_args[@]}"

@@ -25,17 +25,22 @@ grpc = pytest.importorskip("grpc")
 
 from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
+    DataSchema,
     DiagnosticLevel,
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
     LlmSanitizeRequestContext,
     LlmSanitizeResponseContext,
+    LogSeverity,
     PendingMarkSpec,
     PluginContext,
     PluginRuntime,
+    RuntimeDiagnostic,
+    RuntimeDiagnostics,
     ScopeType,
     ToolExecutionInterceptOutcome,
+    ToolExecutionResult,
     ToolNext,
     WorkerPlugin,
     WorkerSdkError,
@@ -48,14 +53,17 @@ from nemo_relay_plugin._api import (  # noqa: E402
     JSON_SCHEMA,
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
-    TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA,
     WORKER_PROTOCOL,
     _announced_worker_endpoint,
+    _decode_json_value,
     _decode_required_envelope,
     _grpc_target,
     _json_envelope,
+    _json_value,
     _open_host_channel,
     _required_env,
+    _tool_execution_intercept_outcome_to_proto,
+    _tool_execution_result_from_proto,
     _unlink_unix_socket,
     _WorkerService,
     _write_endpoint_file,
@@ -78,6 +86,160 @@ def optimization_contribution_fixture_fixture() -> Json:
         / "llm_optimization_contribution_v1.json"
     )
     return json.loads(fixture_path.read_text(encoding="utf-8"))
+
+
+def test_tool_execution_result_and_outcome_preserve_optional_annotation():
+    result = ToolExecutionResult(result={"ok": True}, annotation={"source": "worker"})
+    assert result.to_json() == {
+        "result": {"ok": True},
+        "annotation": {"source": "worker"},
+    }
+    assert ToolExecutionResult.from_json(result.to_json()) == result
+    null_result = ToolExecutionResult.from_json({"result": {"ok": True}, "annotation": None})
+    assert null_result.annotation is None
+    assert null_result.to_json() == {"result": {"ok": True}}
+    assert ToolExecutionResult(result=None).to_json() == {"result": None}
+    assert ToolExecutionInterceptOutcome(result={"ok": True}).to_json() == {
+        "result": {"ok": True},
+        "pending_marks": [],
+    }
+    positional_marks = [PendingMarkSpec("worker.positional-mark")]
+    positional_outcome = ToolExecutionInterceptOutcome({"ok": True}, positional_marks)
+    assert positional_outcome.pending_marks == positional_marks
+    assert positional_outcome.annotation is None
+    null_outcome = ToolExecutionInterceptOutcome(result={"ok": True}, annotation=None)
+    assert null_outcome.annotation is None
+    assert null_outcome.to_json() == {"result": {"ok": True}, "pending_marks": []}
+    with pytest.raises(WorkerSdkError, match="result field"):
+        ToolExecutionResult.from_json({"annotation": {"source": "worker"}})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "relay",
+        [1, "two", None, {"nested": False}],
+        {"content": [{"type": "text", "text": "ok"}], "structuredContent": {"count": 2}},
+    ],
+)
+def test_tool_execution_result_proto_preserves_arbitrary_json(value: Json):
+    decoded = _tool_execution_result_from_proto(pb.ToolExecutionResult(result=_json_value(value)))
+
+    assert decoded == ToolExecutionResult(result=value)
+
+
+def test_tool_execution_result_proto_normalizes_null_annotation():
+    decoded = _tool_execution_result_from_proto(
+        pb.ToolExecutionResult(
+            result=_json_value({"ok": True}),
+            annotation=_json_value(None),
+        )
+    )
+
+    assert decoded.annotation is None
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_message"),
+    [
+        (pb.ToolExecutionResult(), "missing result"),
+        (pb.ToolExecutionResult(result=pb.JsonValue()), "result contains invalid JSON"),
+        (pb.ToolExecutionResult(result=pb.JsonValue(json=b"{")), "result contains invalid JSON"),
+        (
+            pb.ToolExecutionResult(
+                result=_json_value({"ok": True}),
+                annotation=pb.JsonValue(json=b"not-json"),
+            ),
+            "annotation contains invalid JSON",
+        ),
+    ],
+)
+def test_tool_execution_result_proto_rejects_missing_or_malformed_fields(message: Any, expected_message: str):
+    with pytest.raises(WorkerSdkError, match=expected_message):
+        _tool_execution_result_from_proto(message)
+
+
+def test_tool_execution_outcome_proto_preserves_annotation_and_pending_marks():
+    message = _tool_execution_intercept_outcome_to_proto(
+        ToolExecutionInterceptOutcome(
+            result=[{"text": "ok"}, None],
+            annotation={"source": ["worker", 1]},
+            pending_marks=[
+                PendingMarkSpec(
+                    "worker.mark",
+                    category="tool",
+                    category_profile={"subtype": "checkpoint", "nested": {"ok": True}},
+                    data=False,
+                    metadata=0,
+                )
+            ],
+        )
+    )
+
+    assert _decode_json_value(message.result, "result") == [{"text": "ok"}, None]
+    assert _decode_json_value(message.annotation, "annotation") == {"source": ["worker", 1]}
+    assert _decode_json_value(message.pending_marks, "pending marks") == [
+        {
+            "name": "worker.mark",
+            "category": "tool",
+            "category_profile": {"subtype": "checkpoint", "nested": {"ok": True}},
+            "data": False,
+            "metadata": 0,
+            "data_schema": None,
+            "severity": None,
+        }
+    ]
+
+
+def test_tool_execution_outcome_proto_omits_null_annotation_and_optional_mark_fields():
+    message = _tool_execution_intercept_outcome_to_proto(
+        ToolExecutionInterceptOutcome(result=None, pending_marks=[PendingMarkSpec("worker.mark")], annotation=None)
+    )
+
+    assert message.HasField("result")
+    assert _decode_json_value(message.result, "result") is None
+    assert not message.HasField("annotation")
+    assert message.HasField("pending_marks")
+    assert _decode_json_value(message.pending_marks, "pending marks") == [
+        {
+            "name": "worker.mark",
+            "category": None,
+            "category_profile": None,
+            "data": None,
+            "metadata": None,
+            "data_schema": None,
+            "severity": None,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_message"),
+    [
+        (
+            ToolExecutionInterceptOutcome(result={}, pending_marks=[cast(Any, {"name": "not-a-spec"})]),
+            "must contain PendingMarkSpec",
+        ),
+        (
+            ToolExecutionInterceptOutcome(result={}, pending_marks=[PendingMarkSpec(cast(Any, 1))]),
+            "pending mark name must be a string",
+        ),
+        (
+            ToolExecutionInterceptOutcome(
+                result={},
+                pending_marks=[PendingMarkSpec("worker.mark", category=cast(Any, 1))],
+            ),
+            "pending mark category must be a string or None",
+        ),
+    ],
+)
+def test_tool_execution_outcome_proto_rejects_malformed_pending_marks(
+    outcome: ToolExecutionInterceptOutcome,
+    expected_message: str,
+):
+    with pytest.raises(WorkerSdkError, match=expected_message):
+        _tool_execution_intercept_outcome_to_proto(outcome)
 
 
 def test_optimization_contribution_fixture_round_trips_losslessly(optimization_contribution_fixture: Json):
@@ -118,6 +280,31 @@ def test_optimization_contribution_omitted_applied_defaults_consistently():
     assert decoded.applied is False
     assert direct.to_json()["applied"] is False
     assert decoded.to_json()["applied"] is False
+
+
+def test_pending_mark_spec_serializes_telemetry_fields():
+    mark = PendingMarkSpec(
+        "worker.telemetry",
+        data={"measurements": []},
+        data_schema={"name": "nemo.relay.metric_measurements", "version": "1"},
+        severity="warning",
+    )
+
+    assert mark.to_json() == {
+        "name": "worker.telemetry",
+        "category": None,
+        "category_profile": None,
+        "data": {"measurements": []},
+        "data_schema": {
+            "name": "nemo.relay.metric_measurements",
+            "version": "1",
+        },
+        "metadata": None,
+        "severity": "warn",
+    }
+
+    with pytest.raises(ValueError, match="invalid log severity"):
+        PendingMarkSpec("worker.invalid", severity="fatal").to_json()
 
 
 def test_optimization_contribution_preserves_future_quality_strings():
@@ -198,6 +385,15 @@ class RecordingHostStub:
         self.requests.append(request)
         return self._host_ack("EmitMark")
 
+    async def GetRuntimeDiagnostics(self, request: Any) -> Any:
+        self.requests.append(request)
+        return pb.GetRuntimeDiagnosticsResponse(
+            entries=[
+                pb.RuntimeDiagnostic(code="alpha", message="first", count=1),
+                pb.RuntimeDiagnostic(code="zeta", message="latest", count=3),
+            ]
+        )
+
     async def CreateScopeStack(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("CreateScopeStack") == "error":
@@ -220,10 +416,38 @@ class RecordingHostStub:
 
     async def ToolNext(self, request: Any) -> Any:
         self.requests.append(request)
-        if self.failures.get("ToolNext") == "error":
-            return pb.JsonResult(error=_worker_error("ToolNext failed"))
+        failure = self.failures.get("ToolNext")
+        if failure == "error":
+            return pb.ToolExecutionResultResponse(error=_worker_error("ToolNext failed"))
+        if failure == "empty":
+            return pb.ToolExecutionResultResponse()
+        if failure == "missing_result":
+            return pb.ToolExecutionResultResponse(
+                value=pb.ToolExecutionResult(annotation=_json_value({"source": "host"}))
+            )
+        if failure == "malformed_result":
+            return pb.ToolExecutionResultResponse(value=pb.ToolExecutionResult(result=pb.JsonValue(json=b"not-json")))
+        if failure == "malformed_annotation":
+            return pb.ToolExecutionResultResponse(
+                value=pb.ToolExecutionResult(
+                    result=_json_value({"ok": True}),
+                    annotation=pb.JsonValue(json=b"not-json"),
+                )
+            )
+        if failure == "null_annotation":
+            return pb.ToolExecutionResultResponse(
+                value=pb.ToolExecutionResult(
+                    result=_json_value({"ok": True}),
+                    annotation=_json_value(None),
+                )
+            )
         value = json.loads(request.value.json.decode("utf-8"))
-        return pb.JsonResult(value=_json_envelope(JSON_SCHEMA, {"next_tool": value}))
+        return pb.ToolExecutionResultResponse(
+            value=pb.ToolExecutionResult(
+                result=_json_value({"next_tool": value}),
+                annotation=_json_value({"source": "host"}),
+            )
+        )
 
     async def LlmNext(self, request: Any) -> Any:
         self.requests.append(request)
@@ -308,6 +532,9 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def subscriber(event: Json) -> None:
             await ctx.runtime.emit_mark("tests.subscriber", event)
 
+        async def event_metadata(event: Json) -> dict[str, Json]:
+            return {"worker.event_name": event["name"]}
+
         async def mark_sanitize(event: Json, fields: Json) -> Json:
             return {**fields, "data": {"sanitized": f"mark:{event['name']}"}, "metadata": None}
 
@@ -330,7 +557,8 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def tool_execution(name: str, value: Json, next_call: ToolNext) -> ToolExecutionInterceptOutcome:
             result = await next_call.call(_tag(value, f"execute_{name}"))
             return ToolExecutionInterceptOutcome(
-                result=_tag(result, "tool_execution"),
+                result=_tag(result.result, "tool_execution"),
+                annotation=result.annotation,
                 pending_marks=[PendingMarkSpec("worker.tool.execution")],
             )
 
@@ -364,6 +592,7 @@ class AllSurfacesPlugin(WorkerPlugin):
                 yield _tag(chunk, "llm_stream_execution")
 
         ctx.register_subscriber("subscriber", subscriber)
+        ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
         ctx.register_scope_sanitize_end_guardrail("scope_end_sanitize", scope_end_sanitize, priority=3)
@@ -391,6 +620,7 @@ def service_fixture(host_stub: RecordingHostStub) -> _WorkerService:
 
 
 def test_generated_proto_matches_worker_contract():
+    assert WORKER_PROTOCOL == "grpc-v1"
     methods = {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods}
     assert methods == {
         "Handshake",
@@ -406,12 +636,33 @@ def test_generated_proto_matches_worker_contract():
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["activation_id"].number == 1
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
     assert pb.SUBSCRIBER == 1
+    assert pb.EVENT_METADATA_INJECTOR == 2
     assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
     assert pb.SCOPE_SANITIZE_START_GUARDRAIL == 31
     assert pb.SCOPE_SANITIZE_END_GUARDRAIL == 32
     assert pb.CUSTOM == 10
+
+    host_runtime = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"]
+    diagnostics = host_runtime.methods_by_name["GetRuntimeDiagnostics"]
+    assert diagnostics.input_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsRequest"
+    assert diagnostics.output_type.full_name == "nemo.relay.worker.v1.GetRuntimeDiagnosticsResponse"
+    tool_next = host_runtime.methods_by_name["ToolNext"]
+    assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"
+    tool_result = pb.ToolExecutionResult.DESCRIPTOR.fields_by_name
+    assert tool_result["result"].number == 1
+    assert tool_result["result"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    assert tool_result["annotation"].number == 2
+    assert tool_result["annotation"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    tool_outcome = pb.ToolExecutionInterceptOutcome.DESCRIPTOR.fields_by_name
+    assert tool_outcome["result"].number == 1
+    assert tool_outcome["annotation"].number == 2
+    assert tool_outcome["pending_marks"].number == 3
+    assert tool_outcome["pending_marks"].message_type.full_name == "nemo.relay.worker.v1.JsonValue"
+    outcome = pb.ToolExecutionInterceptResult.DESCRIPTOR.fields_by_name["outcome"]
+    assert outcome.number == 1
+    assert outcome.message_type.full_name == "nemo.relay.worker.v1.ToolExecutionInterceptOutcome"
 
 
 async def test_health_handshake_validate_register_and_all_surfaces(service: _WorkerService):
@@ -449,6 +700,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     ]
     assert registrations == [
         ("subscriber", pb.SUBSCRIBER, 0, False),
+        ("event_metadata", pb.EVENT_METADATA_INJECTOR, 1, False),
         ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
         ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
         ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
@@ -1200,6 +1452,18 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
 
             ctx.register_tool_request_intercept("fail", fail)
 
+    class FailingEventMetadataPlugin(WorkerPlugin):
+        plugin_id = "tests.failing_event_metadata"
+
+        def register(self, ctx: PluginContext, config: Json) -> None:
+            del config
+
+            def fail(event: Json) -> dict[str, Json]:
+                del event
+                raise RuntimeError("event metadata boom")
+
+            ctx.register_event_metadata_injector("fail", fail)
+
     validate_service = _service(FailingValidatePlugin(), RecordingHostStub())
     validate = await validate_service.Validate(
         _validate_request(plugin_id="tests.failing_validate"),
@@ -1221,6 +1485,19 @@ async def test_validate_register_and_invoke_callback_errors_are_structured():
     response = await invoke_service.Invoke(_tool_request("fail", pb.TOOL_REQUEST_INTERCEPT, {}), AbortContext())
     assert response.WhichOneof("result") == "error"
     assert "invoke boom" in response.error.message
+
+    event_service = _service(FailingEventMetadataPlugin(), RecordingHostStub())
+    await _register(event_service, plugin_id="tests.failing_event_metadata")
+    event_response = await event_service.Invoke(
+        _invoke_request(
+            "fail",
+            pb.EVENT_METADATA_INJECTOR,
+            event=_json_envelope(EVENT_SCHEMA, {"name": "event"}),
+        ),
+        AbortContext(),
+    )
+    assert event_response.WhichOneof("result") == "error"
+    assert "event metadata boom" in event_response.error.message
 
 
 async def test_register_is_idempotent_and_rejects_changed_component_config():
@@ -1350,6 +1627,17 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     assert mark_request.scope.scope_stack_id == "invoke-stack"
     assert mark_request.scope.parent_scope_id == "parent-scope"
 
+    event_metadata = await service.Invoke(
+        _invoke_request(
+            "event_metadata",
+            pb.EVENT_METADATA_INJECTOR,
+            event=_json_envelope(EVENT_SCHEMA, {"name": "metadata-event"}),
+        ),
+        AbortContext(),
+    )
+    assert event_metadata.WhichOneof("result") == "json"
+    assert _envelope_value(event_metadata.json.value) == {"worker.event_name": "metadata-event"}
+
     tool_sanitize_request = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL)
     assert tool_sanitize_request["tag"] == "sanitize_lookup"
     tool_sanitize_response = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL)
@@ -1366,6 +1654,7 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     tool_execution = await _invoke_tool_execution_async(service, "tool_execution")
     assert tool_execution["result"]["tag"] == "tool_execution"
     assert tool_execution["result"]["next_tool"]["tag"] == "execute_lookup"
+    assert tool_execution["annotation"] == {"source": "host"}
     assert tool_execution["pending_marks"][0]["name"] == "worker.tool.execution"
 
     llm_sanitize_request = await _invoke_json_async(
@@ -1415,7 +1704,9 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
             "category": None,
             "category_profile": None,
             "data": {"source": "python"},
+            "data_schema": None,
             "metadata": None,
+            "severity": None,
         }
     ]
 
@@ -1875,6 +2166,15 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     assert runtime.current_scope_stack_id() is None
     assert runtime.current_parent_scope_id() is None
 
+    diagnostics = await runtime.runtime_diagnostics()
+    assert isinstance(diagnostics, RuntimeDiagnostics)
+    assert diagnostics.entries == (
+        RuntimeDiagnostic(code="alpha", message="first", count=1),
+        RuntimeDiagnostic(code="zeta", message="latest", count=3),
+    )
+    assert diagnostics.get("zeta") == RuntimeDiagnostic(code="zeta", message="latest", count=3)
+    assert diagnostics.get("missing") is None
+
     stack_id = await runtime.create_scope_stack()
     assert stack_id == "stack-1"
     with runtime.bind_scope_stack(stack_id, parent_scope_id="parent-1"):
@@ -1892,10 +2192,28 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
             assert runtime.current_parent_scope_id() is None
         assert runtime.current_scope_stack_id() == stack_id
     assert runtime.current_scope_stack_id() is None
-    assert tool_next["next_tool"]["value"] == 1
+    assert tool_next.result["next_tool"]["value"] == 1
+    assert tool_next.annotation == {"source": "host"}
     assert llm_next["next_llm"]["content"]["prompt"] == "hello"
     assert stream_next[0]["next_stream"]["content"]["prompt"] == "hello"
 
+    await runtime.emit_mark(
+        "telemetry-options",
+        {"measurements": []},
+        data_schema=DataSchema("nemo.relay.metric_measurements", "1"),
+        severity=LogSeverity.WARNING,
+    )
+    await runtime.emit_metric(
+        "telemetry-metric",
+        [
+            {
+                "name": "example.tokens.saved",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 42,
+            }
+        ],
+    )
     await runtime.emit_mark("explicit", scope_stack_id="explicit-stack", parent_scope_id="explicit-parent")
     await runtime.drop_scope_stack(stack_id)
     mark_request = _last_request(host_stub, pb.EmitMarkRequest)
@@ -1904,6 +2222,28 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     push_request = _last_request(host_stub, pb.PushScopeRequest)
     assert push_request.scope.scope_stack_id == "stack-1"
     assert push_request.scope.parent_scope_id == "parent-1"
+
+    telemetry_mark = next(
+        request
+        for request in host_stub.requests
+        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-options"
+    )
+    assert telemetry_mark.data_schema.schema == "nemo.relay.DataSchema@1"
+    assert json.loads(telemetry_mark.data_schema.json) == {
+        "name": "nemo.relay.metric_measurements",
+        "version": "1",
+    }
+    assert telemetry_mark.severity == "warn"
+    metric_mark = next(
+        request
+        for request in host_stub.requests
+        if isinstance(request, pb.EmitMarkRequest) and request.name == "telemetry-metric"
+    )
+    assert json.loads(metric_mark.data.json)["measurements"][0]["value"] == 42
+    assert json.loads(metric_mark.data_schema.json) == {
+        "name": "nemo.relay.metric_measurements",
+        "version": "1",
+    }
 
     override_mark = next(
         request
@@ -1928,6 +2268,12 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("empty-stack", scope_stack_id="")
     with pytest.raises(WorkerSdkError, match="parent_scope_id must not be empty"):
         await runtime.emit_mark("empty-parent", scope_stack_id="stack", parent_scope_id="")
+    with pytest.raises(ValueError, match="invalid log severity"):
+        await runtime.emit_mark("invalid-severity", severity="fatal")
+    with pytest.raises(ValueError, match="exactly name and version"):
+        await runtime.emit_mark("invalid-schema", data_schema={"name": "schema"})
+    with pytest.raises(TypeError, match="measurements must contain mappings"):
+        await runtime.emit_metric("invalid-metric", cast(Any, [42]))
 
 
 async def test_invocation_scope_context_is_isolated_across_concurrent_requests(host_stub: RecordingHostStub):
@@ -2006,6 +2352,24 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
     with pytest.raises(WorkerSdkError, match="host call failed"):
         await runtime.emit_mark("mark")
 
+    class UnimplementedRuntimeDiagnosticsError(Exception):
+        def code(self) -> grpc.StatusCode:
+            return grpc.StatusCode.UNIMPLEMENTED
+
+    class OldHostStub:
+        async def GetRuntimeDiagnostics(self, request: Any) -> Any:
+            del request
+            raise UnimplementedRuntimeDiagnosticsError()
+
+    with mock.patch.object(grpc.aio, "AioRpcError", UnimplementedRuntimeDiagnosticsError):
+        old_host_runtime = PluginRuntime(
+            activation_id=ACTIVATION_ID,
+            auth_token=AUTH_TOKEN,
+            host_stub=OldHostStub(),
+        )
+        with pytest.raises(WorkerSdkError, match="grpc-v1 diagnostics extension"):
+            await old_host_runtime.runtime_diagnostics()
+
     host_stub.failures["CreateScopeStack"] = "error"
     with pytest.raises(WorkerSdkError, match="CreateScopeStack failed"):
         await runtime.create_scope_stack()
@@ -2025,6 +2389,19 @@ async def test_runtime_host_call_error_paths(host_stub: RecordingHostStub):
     host_stub.failures["ToolNext"] = "error"
     with pytest.raises(WorkerSdkError, match="ToolNext failed"):
         await ToolNext(runtime, "tool-next").call({"value": 1})
+
+    for failure, expected_message in (
+        ("empty", "tool execution result is missing"),
+        ("missing_result", "tool execution result is missing result"),
+        ("malformed_result", "tool execution result contains invalid JSON"),
+        ("malformed_annotation", "tool execution result annotation contains invalid JSON"),
+    ):
+        host_stub.failures["ToolNext"] = failure
+        with pytest.raises(WorkerSdkError, match=expected_message):
+            await ToolNext(runtime, "tool-next").call({"value": 1})
+
+    host_stub.failures["ToolNext"] = "null_annotation"
+    assert (await ToolNext(runtime, "tool-next").call({"value": 1})).annotation is None
 
     host_stub.failures["LlmNext"] = "error"
     with pytest.raises(WorkerSdkError, match="LlmNext failed"):
@@ -2674,7 +3051,7 @@ def _handshake_request() -> Any:
     return pb.HandshakeRequest(
         activation_id=ACTIVATION_ID,
         plugin_id="tests.python_worker",
-        relay_version="0.5.0",
+        relay_version="0.8.0",
         worker_protocol=WORKER_PROTOCOL,
         auth_token=AUTH_TOKEN,
         host_endpoint="http://127.0.0.1:9",
@@ -2783,8 +3160,20 @@ async def _invoke_tool_execution_async(
         AbortContext(),
     )
     assert response.WhichOneof("result") == "tool_execution", response
-    assert response.tool_execution.outcome.schema == TOOL_EXECUTION_INTERCEPT_OUTCOME_SCHEMA
-    return _envelope_value(response.tool_execution.outcome)
+    outcome = response.tool_execution.outcome
+    value = {
+        "result": _decode_json_value(outcome.result, "tool execution outcome result"),
+        "pending_marks": (
+            _decode_json_value(outcome.pending_marks, "tool execution outcome pending marks")
+            if outcome.HasField("pending_marks")
+            else []
+        ),
+    }
+    if outcome.HasField("annotation"):
+        annotation = _decode_json_value(outcome.annotation, "tool execution outcome annotation")
+        if annotation is not None:
+            value["annotation"] = annotation
+    return value
 
 
 def _envelope_value(envelope: Any) -> Json:
@@ -2815,6 +3204,7 @@ def _llm_stream_next(runtime: PluginRuntime, request: Json) -> AsyncIterator[Jso
 def _all_expected_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
+        pb.EVENT_METADATA_INJECTOR,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

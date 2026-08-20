@@ -54,14 +54,16 @@ describe('Tool replay', () => {
     });
     assertNoOverclaimedHookMetadata(nf.calls.toolCall[0]?.metadata);
     assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
-      content: 'Tool read_file completed.',
-      openclaw: {
-        toolName: 'read_file',
-        toolCallId: 'tool-call-1',
-        durationMs: 7,
-        hasError: false,
-        stripped: true,
-        resultKeys: ['text'],
+      result: {
+        content: 'Tool read_file completed.',
+        openclaw: {
+          toolName: 'read_file',
+          toolCallId: 'tool-call-1',
+          durationMs: 7,
+          hasError: false,
+          stripped: true,
+          resultKeys: ['text'],
+        },
       },
     });
     assert.equal(nf.calls.toolCallEnd[0]?.data, null);
@@ -100,16 +102,18 @@ describe('Tool replay', () => {
 
     assert.deepEqual(nf.calls.toolCall[0]?.args, { path: '/workspace/file.txt' });
     assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
-      content: 'Tool read_file completed.',
-      openclaw: {
-        toolName: 'read_file',
-        toolCallId: 'tool-call-1',
-        durationMs: 7,
-        hasError: false,
-        stripped: false,
-        resultKeys: ['text'],
+      result: {
+        content: 'Tool read_file completed.',
+        openclaw: {
+          toolName: 'read_file',
+          toolCallId: 'tool-call-1',
+          durationMs: 7,
+          hasError: false,
+          stripped: false,
+          resultKeys: ['text'],
+        },
+        result: { text: 'ok' },
       },
-      result: { text: 'ok' },
     });
     assert.equal(nf.calls.toolCallEnd[0]?.data, null);
   });
@@ -133,14 +137,16 @@ describe('Tool replay', () => {
     );
 
     assert.deepEqual(nf.calls.toolCallEnd[0]?.result, {
-      content: 'Tool noop completed.',
-      openclaw: {
-        toolName: 'noop',
-        toolCallId: 'tool-call-1',
-        hasError: false,
-        stripped: false,
+      result: {
+        content: 'Tool noop completed.',
+        openclaw: {
+          toolName: 'noop',
+          toolCallId: 'tool-call-1',
+          hasError: false,
+          stripped: false,
+        },
+        result: null,
       },
-      result: null,
     });
     assert.equal(nf.calls.toolCallEnd[0]?.data, null);
   });

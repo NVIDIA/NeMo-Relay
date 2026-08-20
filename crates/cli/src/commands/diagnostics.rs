@@ -17,7 +17,7 @@ pub(crate) struct DoctorCommand {
     pub(crate) agent: Option<AgentArg>,
     #[arg(long, value_enum)]
     pub(crate) plugin: Option<InstallTarget>,
-    #[arg(long)]
+    #[arg(long, requires = "plugin")]
     pub(crate) install_dir: Option<PathBuf>,
     #[arg(long)]
     pub(crate) json: bool,

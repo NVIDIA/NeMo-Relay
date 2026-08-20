@@ -84,7 +84,7 @@ pub(crate) async fn passthrough(
 
 /// Exact failure material from one ordinary upstream attempt.
 ///
-/// Retry-aware Switchyard attempts use [`FlowError::Upstream`] for routing.
+/// Retry-aware routing attempts use [`FlowError::Upstream`].
 /// Ordinary attempts keep their original HTTP bytes and multi-value headers so
 /// the selected attempt can be relayed without a shared last-write-wins slot.
 enum CapturedUpstreamFailure {

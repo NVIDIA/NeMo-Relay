@@ -104,6 +104,20 @@ async fn collect_offline_observability(gateway: &GatewayConfig) -> Vec<Check> {
     collect_observability(gateway, DoctorProbeMode::Offline).await
 }
 
+#[test]
+fn doctor_probe_mode_maps_the_cli_offline_flag_without_network_ambiguity() {
+    assert_eq!(
+        DoctorProbeMode::from_offline_flag(false),
+        DoctorProbeMode::Live
+    );
+    assert_eq!(
+        DoctorProbeMode::from_offline_flag(true),
+        DoctorProbeMode::Offline
+    );
+    assert!(!DoctorProbeMode::Live.is_offline());
+    assert!(DoctorProbeMode::Offline.is_offline());
+}
+
 async fn live_observability_http_exporter_checks(config: &serde_json::Value) -> Vec<Check> {
     observability_http_exporter_checks(config, DoctorProbeMode::Live).await
 }
@@ -1434,6 +1448,12 @@ async fn collect_observability_skips_redis_response_cache_probe_offline() {
                                     "url": "redis://127.0.0.1:6379",
                                     "key_prefix": "doctor-test:"
                                 }
+                            },
+                            "tools": {
+                                "enabled": true,
+                                "overrides": {
+                                    "docs_*": { "cacheable": true }
+                                }
                             }
                         }
                     }
@@ -1453,6 +1473,16 @@ async fn collect_observability_skips_redis_response_cache_probe_offline() {
     assert_eq!(
         cache.details,
         "configured; live redis backend probe skipped (--offline)"
+    );
+    let tools = checks
+        .iter()
+        .find(|check| check.name == "Response cache (tools)")
+        .expect("a Response cache (tools) check should be present");
+    assert_eq!(tools.status, Status::Info, "checks: {checks:?}");
+    assert!(
+        tools.details.contains("on") && tools.details.contains("1 cacheable override"),
+        "details: {}",
+        tools.details
     );
 }
 
@@ -1588,6 +1618,50 @@ async fn collect_observability_reports_response_cache_fail_when_config_invalid()
     assert!(
         !cache.details.contains("reachable"),
         "must not claim reachable for an invalid config"
+    );
+}
+
+#[tokio::test]
+async fn collect_observability_reports_tool_cache_surface_for_cacheable_overrides() {
+    let gateway = GatewayConfig {
+        plugin_config: Some(serde_json::json!({
+            "version": 1,
+            "components": [
+                {
+                    "kind": "adaptive",
+                    "enabled": true,
+                    "config": {
+                        "response_cache": {
+                            "ttl_seconds": 3600,
+                            "namespace": "doctor-tool-cache-test",
+                            "backend": { "kind": "in_memory" },
+                            "tools": {
+                                "enabled": true,
+                                "overrides": {
+                                    "docs_*": { "cacheable": true }
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        })),
+        ..GatewayConfig::default()
+    };
+
+    let checks = collect_live_observability(&gateway).await;
+
+    let tools = checks
+        .iter()
+        .find(|check| check.name == "Response cache (tools)")
+        .expect("a tool-surface check should be present when tools.enabled");
+    assert_eq!(tools.status, Status::Info, "checks: {checks:?}");
+    assert!(
+        tools.details.contains("on")
+            && tools.details.contains("0 cacheable class")
+            && tools.details.contains("1 cacheable override"),
+        "details: {}",
+        tools.details
     );
 }
 
@@ -2382,4 +2456,57 @@ fn format_agents_json_matches_doctor_agents_shape() {
     assert_eq!(parsed[0]["command"], "claude");
     assert_eq!(parsed[0]["version"], "2.1.4");
     assert_eq!(parsed[0]["path"], "/opt/homebrew/bin/claude");
+}
+
+#[test]
+fn doctor_agent_status_helpers_cover_readiness_and_version_outcomes() {
+    assert_eq!(
+        agent_command_status(Some(std::path::Path::new("/bin/codex")), false, true),
+        Status::Warn
+    );
+    assert_eq!(
+        agent_command_status(Some(std::path::Path::new("/bin/codex")), true, false),
+        Status::Pass
+    );
+    assert_eq!(agent_command_status(None, true, false), Status::Fail);
+    assert_eq!(agent_command_status(None, false, true), Status::Fail);
+    assert_eq!(agent_command_status(None, false, false), Status::Info);
+    assert_eq!(
+        combine_status(Status::Pass, Status::Fail, false),
+        Status::Fail
+    );
+    assert_eq!(
+        combine_status(Status::Warn, Status::Pass, false),
+        Status::Warn
+    );
+    assert_eq!(
+        combine_status(Status::Pass, Status::Warn, true),
+        Status::Warn
+    );
+    assert_eq!(
+        combine_status(Status::Pass, Status::Warn, false),
+        Status::Pass
+    );
+
+    let details = agent_details(false, true, None, "codex", "hooks unavailable".into());
+    assert_eq!(details[0], "not configured; first run will launch setup");
+    assert!(
+        details
+            .iter()
+            .any(|detail| detail.contains("command `codex` not found"))
+    );
+    assert!(details.iter().any(|detail| detail == "hooks unavailable"));
+
+    let mut status = Status::Pass;
+    let mut details = Vec::new();
+    apply_agent_version_status(
+        CodingAgent::Codex,
+        None,
+        true,
+        true,
+        &mut status,
+        &mut details,
+    );
+    assert_eq!(status, Status::Fail);
+    assert!(details[0].contains("could not determine version"));
 }

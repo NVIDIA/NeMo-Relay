@@ -349,7 +349,7 @@ describe('event sanitizer registries', () => {
     try {
       lib.event('queued-managed-blocker', null, { raw: true });
       await entered;
-      const execution = lib.toolCallExecute('queued-managed-tool', {}, (args) => args);
+      const execution = lib.toolCallExecute('queued-managed-tool', {}, (args) => ({ result: args }));
       const executionState = await Promise.race([
         execution.then(() => 'executed'),
         new Promise((resolve) => setTimeout(() => resolve('blocked'), 250)),
@@ -410,7 +410,7 @@ describe('event sanitizer registries', () => {
       metadata: { background: true },
     }));
     try {
-      await lib.toolCallExecute('background-tool', { raw: true }, (args) => args);
+      await lib.toolCallExecute('background-tool', { raw: true }, (args) => ({ result: args }));
       await lib.flushSubscribers();
       await waitFor(events, 2);
     } finally {
@@ -443,7 +443,7 @@ describe('event sanitizer registries', () => {
         }));
         lib.registerScopeSanitizeStartGuardrail(name, 0, sanitizer);
         try {
-          await lib.toolCallExecute(name, { kept: kind }, (args) => args);
+          await lib.toolCallExecute(name, { kept: kind }, (args) => ({ result: args }));
           await lib.flushSubscribers();
           await waitFor(events, (Object.keys(invalidResults).indexOf(kind) + 1) * 2);
         } finally {
@@ -474,7 +474,7 @@ describe('event sanitizer registries', () => {
       throw new Error('background sanitizer boom');
     });
     try {
-      await lib.toolCallExecute('background-throw-tool', { kept: true }, (args) => args);
+      await lib.toolCallExecute('background-throw-tool', { kept: true }, (args) => ({ result: args }));
       await lib.flushSubscribers();
       await waitFor(events, 2);
       const start = events.find(

@@ -18,11 +18,12 @@ service PluginWorker {
 
 service RelayHostRuntime {
   rpc EmitMark(EmitMarkRequest) returns (HostAck);
+  rpc GetRuntimeDiagnostics(GetRuntimeDiagnosticsRequest) returns (GetRuntimeDiagnosticsResponse);
   rpc PushScope(PushScopeRequest) returns (PushScopeResponse);
   rpc PopScope(PopScopeRequest) returns (HostAck);
   rpc CreateScopeStack(CreateScopeStackRequest) returns (CreateScopeStackResponse);
   rpc DropScopeStack(DropScopeStackRequest) returns (HostAck);
-  rpc ToolNext(ToolNextRequest) returns (JsonResult);
+  rpc ToolNext(ToolNextRequest) returns (ToolExecutionResultResponse);
   rpc LlmNext(LlmNextRequest) returns (JsonResult);
   rpc LlmStreamNext(LlmStreamNextRequest) returns (stream StreamChunk);
   rpc DecodeLlmCodecRequest(LlmCodecDecodeRequest) returns (JsonResult);
@@ -35,9 +36,15 @@ message JsonEnvelope {
   bytes json = 2;
 }
 
+// A lossless JSON value. The bytes MUST contain exactly one JSON value.
+message JsonValue {
+  bytes json = 1;
+}
+
 enum RegistrationSurface {
   REGISTRATION_SURFACE_UNSPECIFIED = 0;
   SUBSCRIBER = 1;
+  EVENT_METADATA_INJECTOR = 2;
   TOOL_SANITIZE_REQUEST_GUARDRAIL = 10;
   TOOL_SANITIZE_RESPONSE_GUARDRAIL = 11;
   TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
@@ -213,6 +220,27 @@ message JsonResult {
   WorkerError error = 2;
 }
 
+message ToolExecutionResultResponse {
+  ToolExecutionResult value = 1;
+  WorkerError error = 2;
+}
+
+message ToolExecutionResult {
+  // Required. Application-owned tool result.
+  JsonValue result = 1;
+  // Optional opaque metadata. JSON null MUST be treated as absent.
+  JsonValue annotation = 2;
+}
+
+message ToolExecutionInterceptOutcome {
+  // Required. Application-owned tool result.
+  JsonValue result = 1;
+  // Optional opaque metadata. JSON null MUST be treated as absent.
+  JsonValue annotation = 2;
+  // Optional Relay-owned pending-mark array. An absent value means no marks.
+  JsonValue pending_marks = 3;
+}
+
 message GuardrailResult {
   string block_reason = 1;
 }
@@ -222,7 +250,8 @@ message LlmRequestInterceptResult {
 }
 
 message ToolExecutionInterceptResult {
-  JsonEnvelope outcome = 1;
+  // Required.
+  ToolExecutionInterceptOutcome outcome = 1;
 }
 
 message StreamChunk {
@@ -255,6 +284,21 @@ message HostAck {
   WorkerError error = 2;
 }
 
+message GetRuntimeDiagnosticsRequest {
+  string activation_id = 1;
+  string auth_token = 2;
+}
+
+message RuntimeDiagnostic {
+  string code = 1;
+  string message = 2;
+  uint64 count = 3;
+}
+
+message GetRuntimeDiagnosticsResponse {
+  repeated RuntimeDiagnostic entries = 1;
+}
+
 message WorkerError {
   string code = 1;
   string message = 2;
@@ -273,6 +317,8 @@ message EmitMarkRequest {
   string name = 4;
   JsonEnvelope data = 5;
   JsonEnvelope metadata = 6;
+  JsonEnvelope data_schema = 7;
+  string severity = 8;
 }
 
 message PushScopeRequest {

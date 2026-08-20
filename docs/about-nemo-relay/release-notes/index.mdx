@@ -27,11 +27,53 @@ Relay](/about-nemo-relay/overview).
 
 ## Release 0.8
 
-NVIDIA NeMo Relay 0.8 release notes are in preparation.
+NeMo Relay 0.8 changes the typed native Rust SDK's guardrail, sanitizer, and
+intercept callbacks to return futures. The SDK runs these futures on one
+plugin-owned Tokio executor and provides async, cloneable unary and streaming
+continuations. This is a source-breaking change for typed native Rust plugins;
+rebuild them with `nemo-relay-plugin` 0.8.0 and declare
+`compat.relay = ">=0.8.0,<1.0"`.
+
+Native ABI v4 is current for Relay 0.8. It includes typed asynchronous
+middleware operations such as completion-scoped codecs and pull-based LLM
+stream continuations, then appends `emit_mark_v2` for typed data-schema and log
+severity options. Relay still accepts existing raw ABI v2 and v3 binaries, and
+native subscribers remain synchronous. Follow the [native Rust migration
+guide](/reference/migration-guides#upgrade-native-rust-plugins-to-nemo-relay-08)
+for callback, executor, and mark-option changes.
+
+Managed and manual tool execution now uses the canonical
+`ToolExecutionResult` shape across Rust, Python, Node.js, Go, the public C
+surface, native plugins, and `grpc-v1` workers. The required `result` remains
+application-owned, while an optional opaque `annotation` travels beside it and
+is projected consistently into sanitized observability.
 
 ### Highlights
 
-- _Highlights will be added for the 0.8 release._
+The following updates expand native Rust plugin capabilities:
+
+- Typed native Rust middleware can await Tokio timers, I/O, codecs, unary
+  continuations, and downstream LLM streams on an SDK-owned executor.
+- Native ABI v4 provides completion-scoped codec operations, pull-based LLM
+  stream continuations, and appended `emit_mark_v2` support for typed data
+  schemas and log severity.
+- Tool callbacks and execution-intercept continuations share one canonical
+  result contract with an optional opaque annotation.
+- ATOF, ATIF, and the `full` and `openinference` OpenTelemetry projections
+  preserve sanitized tool result annotations without flattening their
+  application-defined schemas.
+- Managed tool execution accepts an optional provider- or harness-supplied
+  tool-call ID and preserves it on the matching start and end events across
+  success, error, and cancellation paths.
+
+### OpenTelemetry Logs and Metrics
+
+- Independent OTLP log and metric pipelines are available alongside trace
+  export. Observability configuration version 4 derives log and metric
+  destinations from a trace endpoint when their endpoint lists are omitted.
+- Rust, Python, Node.js, and the experimental C FFI expose typed mark
+  schema and severity options plus metric helpers. Direct subscribers and
+  native and worker plugin SDKs expose bounded runtime diagnostics snapshots.
 
 ### Support Matrix and Compatibility Updates
 
@@ -45,6 +87,21 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
 
 ### Breaking Changes
 
+- Typed native Rust middleware callbacks now return futures and receive owned
+  arguments. Native subscribers and raw synchronous ABI entry points are
+  unchanged.
+- Managed tool callbacks, execution-intercept continuations, execute-helper
+  returns, and manual tool end APIs now use `ToolExecutionResult` instead of a
+  raw JSON result. Applications that need the original business payload must
+  read its `result` field. Refer to the
+  [tool result migration guide](/reference/migration-guides#return-canonical-tool-execution-results).
+- Relay 0.8 resets native API 1 and the `grpc-v1` tool-result contract to the
+  canonical `ToolExecutionResult` shape. Rebuild every native and worker plugin
+  and declare a `compat.relay` range that excludes Relay versions before 0.8.
+  The native ABI v4 table remains unchanged. The worker package and RPC method
+  names remain `nemo.relay.worker.v1`, but the `ToolNext` response and
+  tool-execution outcome field now use structured protobuf messages. Regenerate
+  custom worker bindings before rebuilding.
 - Repository-local `.nemo-relay/config.toml`, `plugins.toml`, and
   `.dynamic-plugins.json` files are no longer discovered or activated. Runtime
   resolution is explicit-or-user followed by higher-precedence system policy.
@@ -55,22 +112,28 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
 - `nemo-relay doctor` reports ignored ancestor project configuration as
   warning-only migration diagnostics. Relay does not automatically move,
   rewrite, or delete those legacy files.
-
-Refer to [Migration Guides](/reference/migration-guides#move-project-configuration-to-a-supported-location)
-for destination paths and explicit-file alternatives.
-
-### Fixed Known Issues in 0.8
-
-- _Fixed issues will be added for the 0.8 release._
-
-### Breaking Changes in 0.8
-
 - Removed Hermes-specific support from the NeMo Relay CLI, including the
   `hermes` shortcut, `run --agent hermes`, and Hermes-specific install,
   uninstall, doctor, configuration, MCP selection, and `/hooks/hermes` paths.
   NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay
   plugin configurations. No separate observability plugin or Relay CLI setup is
   required.
+- Removed the experimental, service-backed Switchyard integration, including
+  the `nemo-relay-switchyard` crate, CLI `switchyard` feature, built-in
+  `switchyard` component, and service examples. Switchyard 0.3.0 will distribute
+  and document the Switchyard-owned dynamic plugin. Refer to the
+  [Switchyard migration guide](/reference/migration-guides#migrate-to-the-switchyard-owned-dynamic-plugin).
+
+Refer to [Migration Guides](/reference/migration-guides#move-project-configuration-to-a-supported-location)
+for destination paths and explicit-file alternatives.
+
+### Fixed Known Issues in 0.8
+
+- Restored a trailing `/` on an OTLP/HTTP trace endpoint as an explicit
+  root-path destination. A bare HTTP authority still defaults to
+  `/v1/traces`; when version 4 implicitly derives log or metric destinations
+  from either form, it uses `/v1/logs` or `/v1/metrics` respectively. Explicit
+  trace, log, and metric endpoint paths remain unchanged.
 
 ## Known Issues in 0.8
 
@@ -88,14 +151,16 @@ for destination paths and explicit-file alternatives.
 - Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
   delegated-task payloads that Relay cannot decrypt or reliably link.
 - The Node.js binding and package workflows require Node.js 24 or later.
-- The deprecated Switchyard plugin is experimental, excluded from default CLI
-  builds, and requires a separately managed compatible service and a named
-  authenticated ATOF HTTP stream sink. It is scheduled for removal in 0.8.
 - OpenClaw has public hook-backed telemetry. Its security and optimization
   coverage is partial because it does not own a managed execution path.
-- The NeMo Guardrails remote backend inherits its configured service's
-  availability, latency, and policy behavior. The local backend requires Python
-  3.11 or later and `nemoguardrails==0.22.0`.
+- The built-in `nemo_guardrails` plugin is deprecated and scheduled for removal
+  in NeMo Relay 0.9. It remains available in 0.8: the remote backend inherits
+  its configured service's availability, latency, and policy behavior, and the
+  local backend requires Python 3.11 or later and `nemoguardrails==0.22.0`. A
+  replacement is not included in 0.8 and will target 0.9 or later. Removal will
+  include the built-in component kind, the public
+  `nemo_relay::plugins::nemo_guardrails` Rust module, its CLI editor entry, and
+  the `guardrails-remote` Cargo feature.
 - The PII redaction plugin currently supports its deterministic local backend;
   local-model backend configuration is reserved for future work.
 - Pricing and optimization estimates depend on model names, token data, pricing

@@ -3,7 +3,8 @@
 
 //! Optional observability integrations for NeMo Relay Core.
 
-use crate::api::event::EventNormalizationExt;
+use crate::api::event::{EventNormalizationExt, is_valid_event_metadata_attribute_key};
+use crate::codec::response::{AnnotatedLlmResponse, ApiSpecificResponse, Usage};
 use serde::{Deserialize, Serialize};
 
 /// Copies a projected OTLP attribute to a second attribute name.
@@ -43,7 +44,65 @@ pub(crate) mod manual;
 pub(crate) mod openinference;
 pub mod otel;
 mod otel_genai;
+pub mod otel_logs;
+pub mod otel_metrics;
+mod otel_signal;
 pub mod plugin_component;
+
+pub use otel_signal::{OpenTelemetryRuntimeDiagnostic, OpenTelemetryRuntimeDiagnostics};
+
+/// Return the provider-independent input total used by semantic observability
+/// projections. Anthropic reports uncached, cache-read, and cache-creation
+/// input tokens separately, while providers such as OpenAI include cache reads
+/// in their prompt count.
+pub(crate) fn input_tokens_including_cache(
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+    usage: &Usage,
+) -> Option<u64> {
+    let prompt_tokens = usage.prompt_tokens?;
+    if !uses_separate_anthropic_cache_tokens(provider, response) {
+        return Some(prompt_tokens);
+    }
+    [usage.cache_read_tokens, usage.cache_write_tokens]
+        .into_iter()
+        .flatten()
+        .try_fold(prompt_tokens, u64::checked_add)
+}
+
+/// Return the provider-independent prompt-plus-completion total used by
+/// semantic observability projections.
+pub(crate) fn total_tokens_including_cache(
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+    usage: &Usage,
+) -> Option<u64> {
+    if !uses_separate_anthropic_cache_tokens(provider, response) {
+        return usage.total_tokens;
+    }
+    match (
+        input_tokens_including_cache(provider, response, usage),
+        usage.completion_tokens,
+    ) {
+        (Some(input), Some(output)) => input.checked_add(output),
+        _ => usage.total_tokens,
+    }
+}
+
+fn uses_separate_anthropic_cache_tokens(
+    provider: Option<&str>,
+    response: Option<&AnnotatedLlmResponse>,
+) -> bool {
+    response.is_some_and(|response| {
+        matches!(
+            response.api_specific.as_ref(),
+            Some(ApiSpecificResponse::AnthropicMessages { .. })
+        )
+    }) || provider.is_some_and(|provider| {
+        let provider = provider.to_ascii_lowercase();
+        provider.starts_with("anthropic") || provider.starts_with("claude")
+    })
+}
 
 /// Export representation for point-in-time mark events.
 ///
@@ -95,6 +154,21 @@ pub(crate) fn relay_span_id(uuid: uuid::Uuid) -> opentelemetry::trace::SpanId {
     let mut bytes = [0; 8];
     bytes.copy_from_slice(&uuid.as_bytes()[8..]);
     opentelemetry::trace::SpanId::from_bytes(bytes)
+}
+
+/// Format a W3C traceparent from Relay's deterministic trace and span IDs.
+pub(crate) fn format_traceparent(trace_uuid: uuid::Uuid, span_uuid: uuid::Uuid) -> String {
+    let trace_id = trace_uuid
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let span_id = &span_uuid.as_bytes()[8..];
+    let span_id = span_id
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("00-{trace_id}-{span_id}-01")
 }
 
 pub(crate) fn push_common_optimization_attributes(
@@ -262,6 +336,44 @@ pub fn validate_attribute_mappings(
     Ok(())
 }
 
+/// Validates literal Event metadata prefixes promoted to OTLP attributes.
+pub fn validate_metadata_promotion_prefixes(
+    prefixes: &[String],
+) -> std::result::Result<(), String> {
+    let mut unique = std::collections::HashSet::new();
+    for prefix in prefixes {
+        if is_blank_attribute_mapping_name(prefix) {
+            return Err("metadata promotion prefix must not be blank".to_string());
+        }
+        if prefix.trim() != prefix {
+            return Err(format!(
+                "metadata promotion prefix {prefix:?} must not have surrounding whitespace"
+            ));
+        }
+        if prefix.contains(['*', '?', '[', ']']) {
+            return Err(format!(
+                "metadata promotion prefix {prefix:?} must be a literal prefix, not a glob"
+            ));
+        }
+        if !is_valid_metadata_promotion_prefix(prefix) {
+            return Err(format!(
+                "metadata promotion prefix {prefix:?} must contain letter, number, underscore, or hyphen segments separated by single dots, with an optional trailing dot"
+            ));
+        }
+        if !unique.insert(prefix.as_str()) {
+            return Err(format!(
+                "metadata promotion prefix {prefix:?} is duplicated"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn is_valid_metadata_promotion_prefix(prefix: &str) -> bool {
+    let key = prefix.strip_suffix('.').unwrap_or(prefix);
+    is_valid_event_metadata_attribute_key(key)
+}
+
 fn is_blank_attribute_mapping_name(value: &str) -> bool {
     value.chars().all(|character| {
         character.is_whitespace()
@@ -293,6 +405,36 @@ pub(crate) fn push_top_level_json_attributes(
         }
         value => push_top_level_json_value(attributes, prefix, value),
     }
+}
+
+/// Project an opaque tool-result annotation as one JSON-valued attribute.
+///
+/// The annotation is deliberately not flattened because its schema belongs to
+/// the application rather than Relay.
+pub(crate) fn push_tool_result_annotation_attribute(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    event: &crate::api::event::Event,
+) {
+    if event.scope_category() != Some(crate::api::event::ScopeCategory::End)
+        || event.category() != Some(&crate::api::event::EventCategory::tool())
+    {
+        return;
+    }
+    let Some(annotation) = tool_result_annotation(event) else {
+        return;
+    };
+    if let Ok(value) = serde_json::to_string(&annotation) {
+        attributes.push(opentelemetry::KeyValue::new(
+            "nemo_relay.tool.result.annotation",
+            value,
+        ));
+    }
+}
+
+pub(crate) fn tool_result_annotation(
+    event: &crate::api::event::Event,
+) -> Option<crate::json::Json> {
+    event.tool_result_annotation()
 }
 
 /// Adds canonical session-correlation attributes from event metadata and the
@@ -381,6 +523,184 @@ fn push_top_level_json_value(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MetadataPromotionIssue {
+    pub(crate) key: String,
+    pub(crate) reason: &'static str,
+}
+
+const RESERVED_OTEL_ATTRIBUTE_NAMESPACES: &[&str] = &[
+    "error.",
+    "exception.",
+    "gen_ai.",
+    "input.",
+    "llm.",
+    "nemo_relay.",
+    "openinference.",
+    "output.",
+    "server.",
+    "service.",
+    "session.",
+    "tool.",
+    "tool_call.",
+    "user.",
+];
+
+fn is_reserved_otel_attribute_key(key: &str) -> bool {
+    key == "metadata"
+        || RESERVED_OTEL_ATTRIBUTE_NAMESPACES
+            .iter()
+            .any(|namespace| key.starts_with(namespace))
+}
+
+/// Copies selected top-level Event metadata entries to typed OTLP attributes.
+///
+/// Existing projection-owned attributes always win. Metadata is read without
+/// modification, and unsupported values are returned to the caller for
+/// bounded runtime diagnostics.
+pub(crate) fn promote_event_metadata_attributes(
+    attributes: &mut Vec<opentelemetry::KeyValue>,
+    event: &crate::api::event::Event,
+    prefixes: &[String],
+    protected_keys: &std::collections::HashSet<String>,
+) -> Vec<MetadataPromotionIssue> {
+    if prefixes.is_empty() {
+        return Vec::new();
+    }
+    let Some(metadata) = event.metadata().and_then(crate::json::Json::as_object) else {
+        return Vec::new();
+    };
+    let mut existing_keys = attributes
+        .iter()
+        .map(|attribute| attribute.key.as_str().to_string())
+        .chain(protected_keys.iter().cloned())
+        .collect::<std::collections::HashSet<_>>();
+    let mut issues = Vec::new();
+    for (key, value) in metadata {
+        if !prefixes.iter().any(|prefix| key.starts_with(prefix)) {
+            continue;
+        }
+        if is_reserved_otel_attribute_key(key) {
+            issues.push(MetadataPromotionIssue {
+                key: key.clone(),
+                reason: "attribute key is reserved by Relay or an OpenTelemetry projection",
+            });
+            continue;
+        }
+        if existing_keys.contains(key) {
+            continue;
+        }
+        match metadata_value_to_otel(value) {
+            Ok(value) => {
+                attributes.push(opentelemetry::KeyValue::new(key.clone(), value));
+                existing_keys.insert(key.clone());
+            }
+            Err(reason) => issues.push(MetadataPromotionIssue {
+                key: key.clone(),
+                reason,
+            }),
+        }
+    }
+    issues
+}
+
+fn metadata_value_to_otel(
+    value: &crate::json::Json,
+) -> std::result::Result<opentelemetry::Value, &'static str> {
+    use opentelemetry::Value;
+
+    match value {
+        crate::json::Json::String(value) => Ok(Value::String(value.clone().into())),
+        crate::json::Json::Bool(value) => Ok(Value::Bool(*value)),
+        crate::json::Json::Number(value) => metadata_number_to_otel(value),
+        crate::json::Json::Array(values) => metadata_array_to_otel(values),
+        crate::json::Json::Null => Err("null values are not OTLP attributes"),
+        crate::json::Json::Object(_) => Err("object values are not supported"),
+    }
+}
+
+fn metadata_number_to_otel(
+    value: &serde_json::Number,
+) -> std::result::Result<opentelemetry::Value, &'static str> {
+    use opentelemetry::Value;
+
+    if let Some(value) = value.as_i64() {
+        return Ok(Value::I64(value));
+    }
+    if let Some(value) = value.as_u64() {
+        return i64::try_from(value)
+            .map(Value::I64)
+            .map_err(|_| "unsigned integer is larger than OTLP i64");
+    }
+    value
+        .as_f64()
+        .map(Value::F64)
+        .ok_or("number is not representable as an OTLP attribute")
+}
+
+fn metadata_array_to_otel(
+    values: &[crate::json::Json],
+) -> std::result::Result<opentelemetry::Value, &'static str> {
+    use opentelemetry::{Array, Value};
+
+    let Some(first) = values.first() else {
+        return Ok(Value::Array(Array::String(Vec::new())));
+    };
+    match first {
+        crate::json::Json::String(_) => values
+            .iter()
+            .map(|value| value.as_str().map(|value| value.to_string().into()))
+            .collect::<Option<Vec<_>>>()
+            .map(|values| Value::Array(Array::String(values)))
+            .ok_or("array values must have one primitive type"),
+        crate::json::Json::Bool(_) => values
+            .iter()
+            .map(crate::json::Json::as_bool)
+            .collect::<Option<Vec<_>>>()
+            .map(|values| Value::Array(Array::Bool(values)))
+            .ok_or("array values must have one primitive type"),
+        crate::json::Json::Number(_) => metadata_number_array_to_otel(values),
+        crate::json::Json::Null => Err("arrays of null are not OTLP attributes"),
+        crate::json::Json::Array(_) | crate::json::Json::Object(_) => {
+            Err("nested arrays and objects are not supported")
+        }
+    }
+}
+
+fn metadata_number_array_to_otel(
+    values: &[crate::json::Json],
+) -> std::result::Result<opentelemetry::Value, &'static str> {
+    use opentelemetry::{Array, Value};
+
+    let numbers = values
+        .iter()
+        .map(crate::json::Json::as_number)
+        .collect::<Option<Vec<_>>>()
+        .ok_or("array values must have one primitive type")?;
+    let integers = numbers
+        .iter()
+        .map(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        })
+        .collect::<Option<Vec<_>>>();
+    if let Some(values) = integers {
+        return Ok(Value::Array(Array::I64(values)));
+    }
+    if numbers
+        .iter()
+        .any(|value| value.as_u64().is_some_and(|value| value > i64::MAX as u64))
+    {
+        return Err("array contains an unsigned integer larger than OTLP i64");
+    }
+    numbers
+        .iter()
+        .map(|value| value.as_f64())
+        .collect::<Option<Vec<_>>>()
+        .map(|values| Value::Array(Array::F64(values)))
+        .ok_or("number array is not representable as an OTLP attribute")
+}
 pub(crate) fn apply_attribute_mappings(
     attributes: &mut Vec<opentelemetry::KeyValue>,
     mappings: &[OtlpAttributeMapping],

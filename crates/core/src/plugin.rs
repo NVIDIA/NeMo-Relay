@@ -10,7 +10,7 @@
 //! - rollback bookkeeping for registrations created during plugin setup
 
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -23,13 +23,14 @@ use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
 use crate::api::registry::{
-    deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
-    deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
-    deregister_llm_sanitize_response_guardrail, deregister_llm_stream_execution_intercept,
-    deregister_mark_sanitize_guardrail, deregister_scope_sanitize_end_guardrail,
-    deregister_scope_sanitize_start_guardrail, deregister_tool_conditional_execution_guardrail,
-    deregister_tool_execution_intercept, deregister_tool_request_intercept,
-    deregister_tool_sanitize_request_guardrail, deregister_tool_sanitize_response_guardrail,
+    deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
+    deregister_llm_execution_intercept, deregister_llm_request_intercept,
+    deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
+    deregister_llm_stream_execution_intercept, deregister_mark_sanitize_guardrail,
+    deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
+    deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
+    deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_event_metadata_injector,
     register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
     register_llm_request_intercept, register_llm_sanitize_request_guardrail,
     register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
@@ -39,9 +40,9 @@ use crate::api::registry::{
     register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
 };
 use crate::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
-    LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
-    ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn,
+    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
+    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
@@ -218,6 +219,16 @@ pub struct RuntimeDiagnostic {
     /// Number of failures aggregated into this entry.
     pub count: u64,
 }
+
+/// Read-only projection of runtime diagnostics exposed to dynamic plugins.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct RuntimeDiagnosticsSnapshotEntry {
+    pub(crate) code: String,
+    pub(crate) message: String,
+    pub(crate) count: u64,
+}
+
+const MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS: usize = 32;
 
 impl ConfigReport {
     /// Returns `true` when the report contains at least one error diagnostic.
@@ -445,6 +456,34 @@ impl PluginRegistrationContext {
         Ok(())
     }
 
+    /// Registers an Event metadata injector and records its rollback closure.
+    pub fn register_event_metadata_injector(
+        &mut self,
+        name: &str,
+        priority: i32,
+        callback: EventMetadataInjectorFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_event_metadata_injector(&qualified_name, priority, callback).map_err(|err| {
+            PluginError::RegistrationFailed(format!("event metadata injector: {err}"))
+        })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_event_metadata_injector(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "event metadata injector deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
     /// Registers a mark event sanitizer and records its rollback closure.
     pub fn register_mark_sanitize_guardrail(
         &mut self,
@@ -1025,6 +1064,10 @@ fn register_plugin_with_owner(
 ///
 /// Built-in plugins are available to validation and initialization without a
 /// binding or application-specific registration call.
+#[allow(
+    deprecated,
+    reason = "the host must register the built-in Guardrails plugin until its scheduled removal"
+)]
 pub fn ensure_builtin_plugins_registered() -> Result<()> {
     let all_registered = {
         let guard = PLUGIN_HANDLERS.read().map_err(|err| {
@@ -1278,7 +1321,9 @@ fn merge_plugin_components(left: &mut Json, right: Json) {
 ///
 /// Direct list fields in a component's `config` object concatenate with
 /// higher-precedence entries first. Declared observability collections do the
-/// same; deeper implementation-specific lists retain replacement semantics.
+/// same, except that an explicit empty log or metric endpoint list clears the
+/// lower-precedence list so it remains distinguishable from an omitted list.
+/// Deeper implementation-specific lists retain replacement semantics.
 fn merge_plugin_component(existing: &mut Json, higher_priority: Json) {
     let is_observability = component_kind(&higher_priority).or_else(|| component_kind(existing))
         == Some("observability");
@@ -1330,8 +1375,14 @@ fn merge_plugin_config_value(
         (Json::Array(lower_priority), Json::Array(mut higher_priority))
             if plugin_config_list_concatenates(path, is_observability) =>
         {
-            higher_priority.append(lower_priority);
-            *lower_priority = higher_priority;
+            if higher_priority.is_empty()
+                && plugin_config_empty_list_replaces(path, is_observability)
+            {
+                lower_priority.clear();
+            } else {
+                higher_priority.append(lower_priority);
+                *lower_priority = higher_priority;
+            }
         }
         (lower_priority, higher_priority) => *lower_priority = higher_priority,
     }
@@ -1340,13 +1391,30 @@ fn merge_plugin_config_value(
 fn plugin_config_list_concatenates(path: &[String], is_observability: bool) -> bool {
     path.len() == 1
         || (is_observability
-            && matches!(
+            && (matches!(
                 path,
                 [section, field]
                     if (section == "atof" && field == "sinks")
-                        || (section == "opentelemetry" && field == "endpoints")
+                        || (section == "opentelemetry" && matches!(field.as_str(), "traces" | "endpoints"))
                         || (section == "atif" && field == "storage")
-            ))
+            ) || matches!(
+                path,
+                [section, signal, field]
+                    if section == "opentelemetry"
+                        && matches!(signal.as_str(), "logs" | "metrics")
+                        && field == "endpoints"
+            )))
+}
+
+fn plugin_config_empty_list_replaces(path: &[String], is_observability: bool) -> bool {
+    is_observability
+        && matches!(
+            path,
+            [section, signal, field]
+                if section == "opentelemetry"
+                    && matches!(signal.as_str(), "logs" | "metrics")
+                    && field == "endpoints"
+        )
 }
 
 /// Recursively merges `right` into a `left` JSON object; arrays and scalars are replaced.
@@ -1655,6 +1723,7 @@ fn install_previous_configuration_for_teardown(
     *guard = Some(ActivePluginConfiguration {
         config: previous_state.config.clone(),
         report: previous_state.report.clone(),
+        runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
         registrations: Vec::new(),
     });
     Ok(())
@@ -1723,9 +1792,10 @@ async fn restore_previous_plugin_configuration(
     .await
     {
         Ok(registrations) => {
-            store_active_plugin_configuration(
+            store_active_plugin_configuration_with_runtime_diagnostics(
                 previous_state.config,
                 previous_state.report,
+                previous_state.runtime_diagnostics,
                 registrations,
             )?;
             log::warn!(
@@ -2422,6 +2492,19 @@ pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     let Some(state) = guard.as_mut() else {
         return;
     };
+    if let Some(existing) = state.runtime_diagnostics.get_mut(&diagnostic.code) {
+        existing.message = diagnostic.message.clone();
+        existing.count = existing.count.saturating_add(diagnostic.count);
+    } else if state.runtime_diagnostics.len() < MAX_DYNAMIC_PLUGIN_RUNTIME_DIAGNOSTICS {
+        state.runtime_diagnostics.insert(
+            diagnostic.code.clone(),
+            RuntimeDiagnosticsSnapshotEntry {
+                code: diagnostic.code.clone(),
+                message: diagnostic.message.clone(),
+                count: diagnostic.count,
+            },
+        );
+    }
     if let Some(existing) = state
         .report
         .runtime_diagnostics
@@ -2434,10 +2517,23 @@ pub fn record_active_plugin_runtime_diagnostic(diagnostic: RuntimeDiagnostic) {
     {
         existing.message = diagnostic.message;
         existing.session_id = diagnostic.session_id;
-        existing.count += 1;
+        existing.count = existing.count.saturating_add(diagnostic.count);
     } else {
         state.report.runtime_diagnostics.push(diagnostic);
     }
+}
+
+/// Return a bounded, active-only runtime-diagnostics snapshot for dynamic plugins.
+pub(crate) fn active_runtime_diagnostics_snapshot() -> Vec<RuntimeDiagnosticsSnapshotEntry> {
+    ACTIVE_PLUGIN_CONFIGURATION
+        .lock()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()
+                .map(|state| state.runtime_diagnostics.values().cloned().collect())
+        })
+        .unwrap_or_default()
 }
 
 /// Rolls back registrations in reverse order, ignoring rollback failures.
@@ -2508,6 +2604,7 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
 struct ActivePluginConfiguration {
     config: PluginConfig,
     report: ConfigReport,
+    runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
 }
 
@@ -2630,12 +2727,27 @@ fn store_active_plugin_configuration(
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
 ) -> Result<()> {
+    store_active_plugin_configuration_with_runtime_diagnostics(
+        config,
+        report,
+        BTreeMap::new(),
+        registrations,
+    )
+}
+
+fn store_active_plugin_configuration_with_runtime_diagnostics(
+    config: PluginConfig,
+    report: ConfigReport,
+    runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
+    registrations: Vec<PluginRegistration>,
+) -> Result<()> {
     let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
         PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
     })?;
     *guard = Some(ActivePluginConfiguration {
         config,
         report,
+        runtime_diagnostics,
         registrations,
     });
     if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {

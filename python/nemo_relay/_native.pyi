@@ -24,13 +24,14 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from datetime import datetime
-from typing import ClassVar, Literal, Optional, TypeAlias, TypedDict
+from typing import ClassVar, Generic, Literal, Optional, TypeAlias, TypedDict, TypeVar
 
 _JsonPrimitive: TypeAlias = str | int | float | bool | None
 _JsonValue: TypeAlias = _JsonPrimitive | list["_JsonValue"] | dict[str, "_JsonValue"]
 _JsonObject: TypeAlias = dict[str, _JsonValue]
 _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
+_TToolResult = TypeVar("_TToolResult")
 
 def _shutdown_default_logging() -> None: ...
 
@@ -38,6 +39,10 @@ class _EventSanitizeFields(TypedDict):
     data: _Json | None
     category_profile: _JsonObject | None
     metadata: _Json | None
+
+class _DataSchema(TypedDict):
+    name: str
+    version: str
 
 _ToolSanitizeGuardrail: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, _Json], Optional[str] | Awaitable[Optional[str]]]
@@ -56,7 +61,7 @@ _EventSanitizeGuardrail: TypeAlias = Callable[
 _LlmConditionalExecutionGuardrail: TypeAlias = Callable[["LLMRequest"], Optional[str] | Awaitable[Optional[str]]]
 _ToolRequestIntercept: TypeAlias = Callable[[str, _Json], _Json | Awaitable[_Json]]
 _ToolExecutionIntercept: TypeAlias = Callable[
-    [str, _Json, Callable[[_Json], Awaitable[_Json]]],
+    [str, _Json, Callable[[_Json], Awaitable["ToolExecutionResult[_Json]"]]],
     "ToolExecutionInterceptOutcome | Awaitable[ToolExecutionInterceptOutcome]",
 ]
 _LlmRequestIntercept: TypeAlias = Callable[
@@ -277,6 +282,61 @@ class ScopeType:
     Unknown: ScopeType
     """Unknown or unspecified scope type."""
 
+class LogSeverity:
+    """Typed severity attached to marks exported as OpenTelemetry logs."""
+
+    Trace: ClassVar[LogSeverity]
+    Debug: ClassVar[LogSeverity]
+    Info: ClassVar[LogSeverity]
+    Warn: ClassVar[LogSeverity]
+    Error: ClassVar[LogSeverity]
+
+class MetricKind:
+    """OpenTelemetry instrument kind recorded by a metric measurement."""
+
+    Counter: ClassVar[MetricKind]
+    UpDownCounter: ClassVar[MetricKind]
+    Gauge: ClassVar[MetricKind]
+    Histogram: ClassVar[MetricKind]
+
+class MetricValueType:
+    """Explicit numeric representation used by a metric measurement."""
+
+    U64: ClassVar[MetricValueType]
+    I64: ClassVar[MetricValueType]
+    F64: ClassVar[MetricValueType]
+
+class MetricMeasurement:
+    """One typed recording operation emitted by ``scope.metric``."""
+
+    def __init__(
+        self,
+        name: str,
+        kind: MetricKind,
+        value_type: MetricValueType,
+        value: int | float,
+        unit: str | None = ...,
+        description: str | None = ...,
+        attributes: Mapping[str, _JsonValue] | None = ...,
+        boundaries: Sequence[float] | None = ...,
+    ) -> None: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def kind(self) -> MetricKind: ...
+    @property
+    def value_type(self) -> MetricValueType: ...
+    @property
+    def value(self) -> int | float: ...
+    @property
+    def unit(self) -> str | None: ...
+    @property
+    def description(self) -> str | None: ...
+    @property
+    def attributes(self) -> _JsonObject | None: ...
+    @property
+    def boundaries(self) -> list[float] | None: ...
+
 class ScopeHandle:
     """An active execution scope in the scope stack.
 
@@ -439,6 +499,8 @@ class PendingMarkSpec:
         category_profile: Optional[_Json] = ...,
         data: Optional[_Json] = ...,
         metadata: Optional[_Json] = ...,
+        data_schema: Optional[_DataSchema] = ...,
+        severity: Optional[LogSeverity] = ...,
     ) -> None: ...
     @property
     def name(self) -> str: ...
@@ -449,7 +511,11 @@ class PendingMarkSpec:
     @property
     def data(self) -> Optional[_Json]: ...
     @property
+    def data_schema(self) -> Optional[_DataSchema]: ...
+    @property
     def metadata(self) -> Optional[_Json]: ...
+    @property
+    def severity(self) -> Optional[LogSeverity]: ...
 
 class LLMRequestInterceptOutcome:
     """Canonical result returned by an LLM request intercept."""
@@ -471,10 +537,22 @@ class LLMRequestInterceptOutcome:
         """Return ordered plugin-neutral optimization contribution objects."""
         ...
 
+class ToolExecutionResult(Generic[_TToolResult]):
+    """Canonical application-visible result of tool execution.
+
+    ``result`` is owned by the application. ``annotation`` is an optional opaque
+    adjacent metadata value that Relay transports without interpretation.
+    """
+    def __init__(self, result: _TToolResult, annotation: _Json | None = ...) -> None: ...
+    @property
+    def result(self) -> _TToolResult: ...
+    @property
+    def annotation(self) -> _Json | None: ...
+
 class ToolExecutionInterceptOutcome:
     """Canonical result returned by a tool execution intercept.
 
-    ``result`` is passed to the remaining middleware and application.
+    ``result`` and ``annotation`` are passed to the remaining middleware and application.
     ``pending_marks`` are Relay-owned lifecycle metadata emitted after the
     tool-end event and are not included in the application-visible result.
     """
@@ -482,9 +560,13 @@ class ToolExecutionInterceptOutcome:
         self,
         result: _Json,
         pending_marks: list[PendingMarkSpec] = ...,
+        *,
+        annotation: _Json | None = ...,
     ) -> None: ...
     @property
     def result(self) -> _Json: ...
+    @property
+    def annotation(self) -> _Json | None: ...
     @property
     def pending_marks(self) -> list[PendingMarkSpec]: ...
 
@@ -753,7 +835,7 @@ class ScopeEvent:
         """Return category-specific profile data, if any."""
         ...
     @property
-    def data_schema(self) -> Optional[_JsonObject]:
+    def data_schema(self) -> Optional[_DataSchema]:
         """Return a schema descriptor for ``data``, if one is present."""
         ...
     @property
@@ -815,6 +897,10 @@ class MarkEvent:
         """Return metadata attached to the event, if any."""
         ...
     @property
+    def severity(self) -> Optional[LogSeverity]:
+        """Return the typed log severity, if one is present."""
+        ...
+    @property
     def category(self) -> Optional[str]:
         """Return the semantic mark category, if present."""
         ...
@@ -823,7 +909,7 @@ class MarkEvent:
         """Return category-specific profile data, if any."""
         ...
     @property
-    def data_schema(self) -> Optional[_JsonObject]:
+    def data_schema(self) -> Optional[_DataSchema]:
         """Return a schema descriptor for ``data``, if one is present."""
         ...
     def to_dict(self) -> _JsonObject:
@@ -1031,6 +1117,7 @@ class OpenTelemetryConfig:
     timeout_millis: int
     mark_projection: Literal["inherit", "event", "tool"]
     mark_exclude_names: list[str]
+    promote_metadata_prefixes: list[str]
 
     def __init__(
         self,
@@ -1096,6 +1183,107 @@ class OpenTelemetrySubscriber:
     def shutdown(self) -> None:
         """Shut down native OpenTelemetry resources."""
         ...
+    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics:
+        """Return a bounded snapshot of exporter and event-processing diagnostics."""
+        ...
+
+class OpenTelemetryRuntimeDiagnostic:
+    """One bounded runtime diagnostic from an OpenTelemetry subscriber."""
+
+    @property
+    def code(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+    @property
+    def count(self) -> int: ...
+
+class OpenTelemetryRuntimeDiagnostics:
+    """Bounded snapshot of runtime diagnostics from an OpenTelemetry subscriber."""
+
+    @property
+    def entries(self) -> list[OpenTelemetryRuntimeDiagnostic]: ...
+    def get(self, code: str) -> OpenTelemetryRuntimeDiagnostic | None: ...
+
+class OpenTelemetryLogConfig:
+    """Mutable configuration for ``OpenTelemetryLogSubscriber``."""
+
+    transport: Literal["http_binary", "grpc"]
+    endpoint: str
+    service_name: str
+    service_namespace: str | None
+    service_version: str | None
+    instrumentation_scope: str
+    timeout_millis: int
+    minimum_severity: LogSeverity
+    max_queue_size: int
+    max_export_batch_size: int
+    scheduled_delay_millis: int
+
+    def __init__(self, endpoint: str) -> None: ...
+    @property
+    def headers(self) -> dict[str, str]: ...
+    @headers.setter
+    def headers(self, value: dict[str, str]) -> None: ...
+    @property
+    def resource_attributes(self) -> dict[str, str]: ...
+    @resource_attributes.setter
+    def resource_attributes(self, value: dict[str, str]) -> None: ...
+    def set_header(self, key: str, value: str) -> None: ...
+    def set_resource_attribute(self, key: str, value: str) -> None: ...
+
+class OpenTelemetryLogSubscriber:
+    """Subscriber that exports severity-tagged marks through OTLP logs."""
+
+    def __init__(self, config: OpenTelemetryLogConfig) -> None: ...
+    def register(self, name: str) -> None: ...
+    def deregister(self, name: str) -> bool: ...
+    def force_flush(self) -> None: ...
+    def shutdown(self) -> None: ...
+    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics: ...
+
+class MetricTemporality:
+    """Preferred aggregation temporality for OTLP metric export."""
+
+    Cumulative: ClassVar[MetricTemporality]
+    Delta: ClassVar[MetricTemporality]
+    LowMemory: ClassVar[MetricTemporality]
+
+class OpenTelemetryMetricConfig:
+    """Mutable configuration for ``OpenTelemetryMetricSubscriber``."""
+
+    transport: Literal["http_binary", "grpc"]
+    endpoint: str
+    service_name: str
+    service_namespace: str | None
+    service_version: str | None
+    instrumentation_scope: str
+    timeout_millis: int
+    export_interval_millis: int
+    temporality: MetricTemporality
+    max_instruments: int
+    cardinality_limit: int
+
+    def __init__(self, endpoint: str) -> None: ...
+    @property
+    def headers(self) -> dict[str, str]: ...
+    @headers.setter
+    def headers(self, value: dict[str, str]) -> None: ...
+    @property
+    def resource_attributes(self) -> dict[str, str]: ...
+    @resource_attributes.setter
+    def resource_attributes(self, value: dict[str, str]) -> None: ...
+    def set_header(self, key: str, value: str) -> None: ...
+    def set_resource_attribute(self, key: str, value: str) -> None: ...
+
+class OpenTelemetryMetricSubscriber:
+    """Subscriber that records metric marks and exports them through OTLP metrics."""
+
+    def __init__(self, config: OpenTelemetryMetricConfig) -> None: ...
+    def register(self, name: str) -> None: ...
+    def deregister(self, name: str) -> bool: ...
+    def force_flush(self) -> None: ...
+    def shutdown(self) -> None: ...
+    def runtime_diagnostics(self) -> OpenTelemetryRuntimeDiagnostics: ...
 
 class OpenAIChatCodec:
     """Built-in codec for OpenAI Chat Completions requests and responses.
@@ -1155,6 +1343,26 @@ class AnthropicMessagesCodec:
         ...
     def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
         """Decode an Anthropic response into a normalized response view."""
+        ...
+
+class OCIGenAIChatCodec:
+    """Built-in codec for OCI Generative AI chat requests and responses.
+
+    Summary:
+        Native codec bridge for OCI Generative AI chat payloads.
+    """
+
+    def __init__(self) -> None:
+        """Create an OCI Generative AI chat codec."""
+        ...
+    def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
+        """Decode an OCI GenAI chat request into a normalized request view."""
+        ...
+    def encode(self, annotated: AnnotatedLLMRequest, original: LLMRequest) -> LLMRequest:
+        """Encode a normalized request back into OCI GenAI chat shape."""
+        ...
+    def decode_response(self, response: _Json) -> AnnotatedLLMResponse:
+        """Decode an OCI GenAI chat response into a normalized response view."""
         ...
 
 class GeminiGenerateContentCodec:
@@ -1293,6 +1501,9 @@ class PropagationContext:
     def to_json(self) -> str:
         """Serialize this context to the Relay JSON wire format."""
         ...
+    def to_traceparent(self) -> str:
+        """Convert this rooted context to a W3C traceparent value."""
+        ...
     @staticmethod
     def from_json(value: str) -> PropagationContext:
         """Deserialize and validate a Relay JSON wire context."""
@@ -1300,6 +1511,7 @@ class PropagationContext:
 
 def capture_propagation_context() -> PropagationContext: ...
 def capture_propagation_context_with_root(root_uuid: str | None) -> PropagationContext: ...
+def capture_traceparent() -> str: ...
 def create_scope_stack_from_propagation(context: PropagationContext) -> ScopeStack: ...
 
 class _ThreadScopeStackBinding: ...
@@ -1410,7 +1622,9 @@ def event(
     *,
     handle: ScopeHandle | None = None,
     data: _Json | None = None,
+    data_schema: _DataSchema | None = None,
     metadata: _Json | None = None,
+    severity: LogSeverity | None = None,
     timestamp: datetime | None = None,
 ) -> None:
     """Emit a point-in-time mark event.
@@ -1420,7 +1634,9 @@ def event(
         handle: Optional parent scope handle. When omitted, the current
             top-of-stack scope becomes the parent.
         data: Optional JSON data payload recorded on the mark event.
+        data_schema: Optional name and version identifying the data schema.
         metadata: Optional JSON metadata payload recorded on the mark event.
+        severity: Optional typed severity used by OpenTelemetry log export.
         timestamp: Optional timezone-aware datetime recorded on the mark event.
             When omitted, the current runtime time is used.
 
@@ -1431,6 +1647,17 @@ def event(
         Raises for invalid JSON payloads, invalid timestamp types, or naive
         datetimes.
     """
+    ...
+
+def metric(
+    name: str,
+    measurements: list[MetricMeasurement],
+    *,
+    handle: ScopeHandle | None = None,
+    metadata: _Json | None = None,
+    timestamp: datetime | None = None,
+) -> None:
+    """Emit an atomic, validated group of metric recording operations."""
     ...
 
 def tool_call(
@@ -1470,7 +1697,7 @@ def tool_call(
 
 def tool_call_end(
     handle: ToolHandle,
-    result: _Json,
+    result: ToolExecutionResult[_Json],
     *,
     data: _Json | None = None,
     metadata: _Json | None = None,
@@ -1480,8 +1707,9 @@ def tool_call_end(
 
     Args:
         handle: Tool handle returned by ``tool_call``.
-        result: JSON-compatible tool result recorded on the end event after
-            sanitize-response guardrails unless it sanitizes to JSON null.
+        result: Canonical tool result. Its ``result`` is recorded on the end
+            event after sanitize-response guardrails, and its opaque
+            ``annotation`` is recorded in the tool category profile.
         data: Optional JSON payload used when the sanitized result is JSON null.
         metadata: Optional JSON metadata recorded on the end event.
         timestamp: Optional timezone-aware datetime recorded on the end event.
@@ -1499,19 +1727,29 @@ def tool_call_end(
 def tool_call_execute(
     name: str,
     args: _Json,
-    func: Callable[[_Json], Awaitable[_Json]],
-    **kwargs: object,
-) -> Awaitable[_Json]:
+    func: Callable[[_Json], ToolExecutionResult[_Json] | Awaitable[ToolExecutionResult[_Json]]],
+    *,
+    handle: ScopeHandle | None = None,
+    attributes: ToolAttributes | None = None,
+    data: _Json | None = None,
+    metadata: _Json | None = None,
+    tool_call_id: str | None = None,
+) -> Awaitable[ToolExecutionResult[_Json]]:
     """Execute a tool through the managed native middleware pipeline.
 
     Args:
         name: Tool name.
         args: Initial JSON-compatible tool arguments.
-        func: Awaitable tool implementation called with final arguments.
-        **kwargs: Optional parent handle, attributes, data, and metadata.
+        func: Synchronous or asynchronous tool implementation called with final
+            arguments. It must return ``ToolExecutionResult``.
+        handle: Optional parent scope handle.
+        attributes: Optional tool attribute bitflags.
+        data: Optional JSON application payload stored on the managed handle.
+        metadata: Optional JSON metadata recorded on emitted events.
+        tool_call_id: Optional provider-specific tool-call correlation ID.
 
     Returns:
-        Awaitable that resolves to the JSON-compatible tool result.
+        Awaitable that resolves to the canonical tool result.
 
     Exceptional flow:
         Conditional guardrails may reject execution. Callback and native errors
@@ -1883,8 +2121,8 @@ def register_tool_execution_intercept(name: str, priority: int, callable: _ToolE
         priority: Execution order; lower values run first.
         callable: Middleware callback returning
             ``ToolExecutionInterceptOutcome``. It may call or short-circuit
-            ``next``; ``next`` resolves to the raw downstream result while
-            Relay retains downstream pending marks.
+            ``next``; ``next`` resolves to the canonical downstream
+            ``ToolExecutionResult`` while Relay retains downstream pending marks.
 
     Returns:
         ``None``.
@@ -2133,8 +2371,8 @@ def scope_register_tool_execution_intercept(
         priority: Execution order; lower values run first.
         callable: Middleware callback returning
             ``ToolExecutionInterceptOutcome`` while the owning scope is active.
-            Its ``next`` continuation resolves to the raw downstream result
-            while Relay retains downstream pending marks.
+            Its ``next`` continuation resolves to the canonical downstream
+            ``ToolExecutionResult`` while Relay retains downstream pending marks.
 
     Returns:
         ``None``.

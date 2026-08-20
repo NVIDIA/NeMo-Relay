@@ -4,11 +4,12 @@
 //! Asynchronous subscriber delivery for native targets.
 
 use crate::api::event::{Event, EventSanitizeFields};
-use crate::api::registry::Guardrail;
+use crate::api::registry::{EventMetadataInjector, Guardrail};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, NemoRelayContextState, ScopeStackHandle,
 };
-use crate::error::Result;
+use crate::api::shared::snapshot_event_metadata_injectors;
+use crate::error::{FlowError, Result};
 use std::any::Any;
 use std::cell::RefCell;
 use std::future::Future;
@@ -82,6 +83,37 @@ pub(crate) type EventTransformFn = Box<
     dyn FnOnce(Event) -> Pin<Box<dyn Future<Output = Event> + Send + 'static>> + Send + 'static,
 >;
 
+/// Completion receipt for one queued subscriber delivery.
+///
+/// Unlike [`flush_subscribers`], this receipt waits only for sanitizer and
+/// subscriber processing of the event that created it. Events queued later are
+/// not part of the wait.
+#[doc(hidden)]
+pub struct SubscriberDelivery {
+    completion: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl SubscriberDelivery {
+    fn completed() -> Self {
+        let (completion_tx, completion) = tokio::sync::oneshot::channel();
+        let _ = completion_tx.send(());
+        Self { completion }
+    }
+
+    /// Wait until this event's subscriber delivery is complete.
+    ///
+    /// Do not call this from a subscriber, event-sanitizer, guardrail, or
+    /// intercept callback. The dispatcher signals completion on its own
+    /// thread, so waiting there creates a wait cycle.
+    pub async fn wait(self) -> Result<()> {
+        self.completion.await.map_err(|error| {
+            FlowError::Internal(format!(
+                "subscriber delivery completion channel closed: {error}"
+            ))
+        })
+    }
+}
+
 mod native {
     use std::cell::{Cell, RefCell};
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -103,11 +135,13 @@ mod native {
         Deliver {
             event: Box<Event>,
             transform: Option<EventTransformFn>,
+            injectors: Vec<EventMetadataInjector>,
             sanitizers: Vec<Guardrail<EventSanitizeFn>>,
             subscribers: Vec<EventSubscriberFn>,
             scope_stack: ScopeStackHandle,
             publication_context: Option<PublicationContext>,
             lineage: Option<PublicationPermit>,
+            completion: Option<tokio::sync::oneshot::Sender<()>>,
         },
         Flush {
             done: Sender<()>,
@@ -176,7 +210,10 @@ mod native {
             Self::new(Some(Vec::new()))
         }
 
-        fn push(&self, message: DispatcherMessage) -> std::result::Result<(), DispatcherMessage> {
+        fn push(
+            &self,
+            message: DispatcherMessage,
+        ) -> std::result::Result<(), Box<DispatcherMessage>> {
             let mut messages = self
                 .messages
                 .lock()
@@ -186,7 +223,7 @@ mod native {
                     messages.push(message);
                     Ok(())
                 }
-                None => Err(message),
+                None => Err(Box::new(message)),
             }
         }
 
@@ -481,11 +518,13 @@ mod native {
         let message = DispatcherMessage::Deliver {
             event: Box::new(event.clone()),
             transform: None,
+            injectors: snapshot_event_metadata_injectors(&scope_stack),
             sanitizers: Vec::new(),
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         send_dispatch_message(message)
     }
@@ -502,16 +541,54 @@ mod native {
         let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
             return false;
         };
+        let injectors = snapshot_event_metadata_injectors(&scope_stack);
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: None,
+            injectors,
             sanitizers,
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         enqueue_dispatch_message(message)
+    }
+
+    pub(super) fn dispatch_sanitized_event_with_delivery(
+        event: Event,
+        sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+        subscribers: &[EventSubscriberFn],
+        scope_stack: ScopeStackHandle,
+    ) -> Result<SubscriberDelivery> {
+        if subscribers.is_empty() {
+            return Ok(SubscriberDelivery::completed());
+        }
+        let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
+            return Err(FlowError::Internal(
+                "failed to snapshot scope stack for subscriber delivery".into(),
+            ));
+        };
+        let injectors = snapshot_event_metadata_injectors(&scope_stack);
+        let (completion_tx, completion) = tokio::sync::oneshot::channel();
+        let message = DispatcherMessage::Deliver {
+            event: Box::new(event),
+            transform: None,
+            injectors,
+            sanitizers,
+            subscribers: subscribers.to_vec(),
+            scope_stack,
+            publication_context: current_publication_context(),
+            lineage: None,
+            completion: Some(completion_tx),
+        };
+        if !enqueue_dispatch_message(message) {
+            return Err(FlowError::Internal(
+                "failed to queue tracked subscriber delivery".into(),
+            ));
+        }
+        Ok(SubscriberDelivery { completion })
     }
 
     pub(super) fn dispatch_reserved_sanitized_event(
@@ -526,14 +603,17 @@ mod native {
         let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
             return false;
         };
+        let injectors = snapshot_event_metadata_injectors(&scope_stack);
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: None,
+            injectors,
             sanitizers,
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         enqueue_dispatch_message(message)
     }
@@ -548,14 +628,17 @@ mod native {
         let Some(scope_stack) = immutable_scope_stack(&scope_stack) else {
             return false;
         };
+        let injectors = snapshot_event_metadata_injectors(&scope_stack);
         let message = DispatcherMessage::Deliver {
             event: Box::new(event),
             transform: Some(transform),
+            injectors,
             sanitizers,
             subscribers: subscribers.to_vec(),
             scope_stack,
             publication_context: current_publication_context(),
             lineage: None,
+            completion: None,
         };
         enqueue_dispatch_message(message)
     }
@@ -748,7 +831,7 @@ mod native {
         let message = if let Ok(buffer) = ASYNC_PUBLICATION_BUFFER.try_with(Clone::clone) {
             match buffer.push(message) {
                 Ok(()) => return true,
-                Err(message) => message,
+                Err(message) => *message,
             }
         } else {
             message
@@ -758,7 +841,7 @@ mod native {
         {
             match buffer.push(message) {
                 Ok(()) => return true,
-                Err(message) => message,
+                Err(message) => *message,
             }
         } else {
             message
@@ -879,16 +962,19 @@ mod native {
             DispatcherMessage::Deliver {
                 event,
                 transform,
+                injectors,
                 sanitizers,
                 subscribers,
                 scope_stack,
                 publication_context,
                 lineage: permit,
+                completion,
             } => {
                 let nested_publications = with_publication_lineage(Arc::clone(&lineage), || {
                     deliver_event(
                         event,
                         transform,
+                        injectors,
                         sanitizers,
                         subscribers,
                         scope_stack,
@@ -898,6 +984,9 @@ mod native {
                 drop(permit);
                 for publication in nested_publications {
                     handle_message(publication, state, Some(&lineage));
+                }
+                if let Some(completion) = completion {
+                    let _ = completion.send(());
                 }
             }
             DispatcherMessage::Barrier {
@@ -921,6 +1010,7 @@ mod native {
     fn deliver_event(
         event: Box<Event>,
         transform: Option<EventTransformFn>,
+        injectors: Vec<EventMetadataInjector>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         subscribers: Vec<EventSubscriberFn>,
         scope_stack: ScopeStackHandle,
@@ -929,8 +1019,13 @@ mod native {
         let previous_scope_stack = capture_thread_scope_stack();
         set_thread_scope_stack(scope_stack);
         let _dispatch_guard = DispatchGuard::enter();
-        let (event, nested_publications) =
-            sanitize_event_snapshot(*event, transform, sanitizers, publication_context);
+        let (event, nested_publications) = sanitize_event_snapshot(
+            *event,
+            transform,
+            injectors,
+            sanitizers,
+            publication_context,
+        );
         if let Some(event) = event {
             for subscriber in subscribers {
                 if catch_unwind(AssertUnwindSafe(|| subscriber(&event))).is_err() {
@@ -965,13 +1060,66 @@ mod native {
         (output, buffer.take())
     }
 
-    /// Apply a transform and sanitizers on the dispatcher thread. A transform
-    /// failure drops the event because it may be responsible for inserting the
-    /// sanitized payload. A sanitizer failure clears mutable observability
-    /// fields before publication.
+    fn inject_event_metadata_snapshot(
+        event: Event,
+        injectors: Vec<EventMetadataInjector>,
+        publication_context: Option<PublicationContext>,
+    ) -> (Event, Vec<DispatcherMessage>) {
+        if injectors.is_empty() {
+            return (event, Vec::new());
+        }
+
+        let state = process_state();
+        let runtime = match build_sanitizer_invocation_runtime() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                if !state
+                    .sanitizer_runtime_failure_logged
+                    .swap(true, Ordering::AcqRel)
+                {
+                    log::error!(
+                        target: "nemo_relay.runtime",
+                        event = "event_middleware_runtime_failed";
+                        "Event middleware runtime failed: {error}"
+                    );
+                }
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_metadata_injector_runtime_failed";
+                    "Event metadata injectors could not run; continuing without injection"
+                );
+                return (event, Vec::new());
+            }
+        };
+
+        let fallback = event.clone();
+        let (injected, nested_publications) = run_with_nested_publication_buffer(
+            &runtime,
+            publication_context,
+            NemoRelayContextState::event_metadata_injection_snapshot_chain(event, &injectors),
+        );
+        runtime.shutdown_background();
+        match injected {
+            Ok(event) => (event, nested_publications),
+            Err(_) => {
+                log::error!(
+                    target: "nemo_relay.runtime",
+                    event = "event_metadata_injector_chain_panicked";
+                    "Event metadata injector chain panicked; continuing without injection"
+                );
+                (fallback, nested_publications)
+            }
+        }
+    }
+
+    /// Apply a transform, metadata injectors, and sanitizers on the dispatcher
+    /// thread. A transform failure drops the event because it may be responsible
+    /// for inserting the sanitized payload. Injector failures preserve the
+    /// original Event. A sanitizer failure clears mutable observability fields.
     pub(super) fn sanitize_event_snapshot(
         event: Event,
         transform: Option<EventTransformFn>,
+        injectors: Vec<EventMetadataInjector>,
         sanitizers: Vec<Guardrail<EventSanitizeFn>>,
         publication_context: Option<PublicationContext>,
     ) -> (Option<Event>, Vec<DispatcherMessage>) {
@@ -1019,8 +1167,11 @@ mod native {
             }
             None => (event, Vec::new()),
         };
+        let (injected, injector_publications) =
+            inject_event_metadata_snapshot(transformed, injectors, publication_context.clone());
+        nested_publications.extend(injector_publications);
         if sanitizers.is_empty() {
-            return (Some(transformed), nested_publications);
+            return (Some(injected), nested_publications);
         }
         let runtime = match build_sanitizer_invocation_runtime() {
             Ok(runtime) => runtime,
@@ -1040,16 +1191,16 @@ mod native {
                     event = "event_sanitizer_runtime_failed";
                     "Event sanitizers could not run; clearing observability fields before publication"
                 );
-                let mut cleared = transformed;
+                let mut cleared = injected;
                 cleared.apply_sanitize_fields(EventSanitizeFields::default());
                 return (Some(cleared), nested_publications);
             }
         };
-        let fallback = transformed.clone();
+        let fallback = injected.clone();
         let (sanitized, sanitizer_publications) = run_with_nested_publication_buffer(
             &runtime,
             publication_context,
-            NemoRelayContextState::event_sanitize_snapshot_chain(transformed, &sanitizers),
+            NemoRelayContextState::event_sanitize_snapshot_chain(injected, &sanitizers),
         );
         runtime.shutdown_background();
         nested_publications.extend(sanitizer_publications);
@@ -1180,6 +1331,15 @@ pub(crate) fn dispatch_sanitized_event(
     scope_stack: ScopeStackHandle,
 ) -> bool {
     native::dispatch_sanitized_event(event, sanitizers, subscribers, scope_stack)
+}
+
+pub(crate) fn dispatch_sanitized_event_with_delivery(
+    event: Event,
+    sanitizers: Vec<Guardrail<EventSanitizeFn>>,
+    subscribers: &[EventSubscriberFn],
+    scope_stack: ScopeStackHandle,
+) -> Result<SubscriberDelivery> {
+    native::dispatch_sanitized_event_with_delivery(event, sanitizers, subscribers, scope_stack)
 }
 
 /// Publish a stream-finalization event at its reserved FIFO position.

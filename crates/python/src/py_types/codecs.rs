@@ -1016,6 +1016,71 @@ impl PyAnthropicMessagesCodec {
     }
 }
 
+/// Built-in codec for the OCI Generative AI chat API.
+///
+/// Implements both ``LlmCodec`` (decode/encode for requests) and
+/// ``LlmResponseCodec`` (decode_response for responses).
+///
+/// Example:
+/// ```python
+/// from nemo_relay.codecs import OCIGenAIChatCodec
+/// codec = OCIGenAIChatCodec()
+/// annotated_req = codec.decode(request)
+/// annotated_resp = codec.decode_response(response)
+/// ```
+#[pyclass(name = "OCIGenAIChatCodec")]
+pub struct PyOCIGenAIChatCodec {
+    pub(crate) inner_codec: Arc<dyn LlmCodec>,
+    pub(crate) inner_response_codec: Arc<dyn LlmResponseCodec>,
+}
+
+#[pymethods]
+impl PyOCIGenAIChatCodec {
+    #[new]
+    pub(crate) fn new() -> Self {
+        Self {
+            inner_codec: Arc::new(nemo_relay::codec::oci_genai::OCIGenAIChatCodec),
+            inner_response_codec: Arc::new(nemo_relay::codec::oci_genai::OCIGenAIChatCodec),
+        }
+    }
+
+    /// Parse an opaque ``LlmRequest`` into a structured ``AnnotatedLLMRequest``.
+    pub(crate) fn decode(&self, request: &PyLLMRequest) -> PyResult<PyAnnotatedLLMRequest> {
+        self.inner_codec
+            .decode(&request.inner)
+            .map(|r| PyAnnotatedLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Merge structured changes back into the opaque request.
+    pub(crate) fn encode(
+        &self,
+        annotated: &PyAnnotatedLLMRequest,
+        original: &PyLLMRequest,
+    ) -> PyResult<PyLLMRequest> {
+        self.inner_codec
+            .encode(&annotated.inner, &original.inner)
+            .map(|r| PyLLMRequest { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Parse a raw JSON response into a structured ``AnnotatedLLMResponse``.
+    pub(crate) fn decode_response(
+        &self,
+        response: &Bound<'_, PyAny>,
+    ) -> PyResult<PyAnnotatedLLMResponse> {
+        let json = py_to_json(response)?;
+        self.inner_response_codec
+            .decode_response(&json)
+            .map(|r| PyAnnotatedLLMResponse { inner: r })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    pub(crate) fn __repr__(&self) -> &'static str {
+        "<OCIGenAIChatCodec>"
+    }
+}
+
 /// Built-in codec for the Gemini generateContent API.
 ///
 /// Implements both ``LlmCodec`` (decode/encode for requests) and

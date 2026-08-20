@@ -12,6 +12,7 @@ use std::future::Future;
 use std::panic::resume_unwind;
 use std::sync::Arc;
 
+use nemo_relay::api::event::DataSchema;
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::LlmAttributes;
 use nemo_relay::api::registry as core_registry_api;
@@ -26,6 +27,7 @@ use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
     capture_propagation_context_with_root as capture_propagation_context_with_root_handle,
     capture_thread_scope_stack as capture_thread_scope_stack_handle,
+    capture_traceparent as capture_traceparent_handle,
     create_scope_stack as create_scope_stack_handle,
     create_scope_stack_from_propagation as create_scope_stack_from_propagation_handle,
     current_scope_stack as current_scope_stack_handle,
@@ -50,9 +52,10 @@ use crate::convert::{json_to_py, opt_py_to_json, opt_py_to_timestamp, py_to_json
 use crate::py_callable;
 use crate::py_types::{
     PyAnnotatedLLMResponse, PyAnthropicMessagesCodec, PyGeminiGenerateContentCodec,
-    PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream, PyOpenAIChatCodec,
-    PyOpenAIResponsesCodec, PyPropagationContext, PyScopeAttributes, PyScopeHandle, PyScopeStack,
-    PyScopeType, PyThreadScopeStackBinding, PyToolAttributes, PyToolHandle,
+    PyLLMAttributes, PyLLMHandle, PyLLMRequest, PyLlmStream, PyLogSeverity, PyMetricMeasurement,
+    PyOCIGenAIChatCodec, PyOpenAIChatCodec, PyOpenAIResponsesCodec, PyPropagationContext,
+    PyScopeAttributes, PyScopeHandle, PyScopeStack, PyScopeType, PyThreadScopeStackBinding,
+    PyToolAttributes, PyToolExecutionResult, PyToolHandle,
 };
 
 pub(crate) type RustJsonStream = LlmJsonStream;
@@ -60,6 +63,15 @@ pub(crate) type RustJsonStream = LlmJsonStream;
 /// Convert an [`FlowError`] into a Python `RuntimeError`.
 fn to_py_err(e: FlowError) -> PyErr {
     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+}
+
+fn metric_to_py_err(error: FlowError) -> PyErr {
+    match error {
+        FlowError::InvalidArgument(_) => {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(error.to_string())
+        }
+        other => to_py_err(other),
+    }
 }
 
 #[pyfunction(name = "_shutdown_default_logging")]
@@ -258,6 +270,9 @@ fn py_llm_response_codec(
         if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
             return Some(builtin.inner_response_codec.clone());
         }
+        if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyOCIGenAIChatCodec>>() {
+            return Some(builtin.inner_response_codec.clone());
+        }
         if let Ok(builtin) = c.extract::<pyo3::PyRef<'_, PyGeminiGenerateContentCodec>>() {
             return Some(builtin.inner_response_codec.clone());
         }
@@ -280,6 +295,9 @@ fn py_llm_codec(codec: Option<&Bound<'_, PyAny>>) -> Option<Arc<dyn LlmCodec>> {
             return Some(builtin.inner_codec.clone());
         }
         if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyAnthropicMessagesCodec>>() {
+            return Some(builtin.inner_codec.clone());
+        }
+        if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyOCIGenAIChatCodec>>() {
             return Some(builtin.inner_codec.clone());
         }
         if let Ok(builtin) = codec.extract::<pyo3::PyRef<'_, PyGeminiGenerateContentCodec>>() {
@@ -383,6 +401,12 @@ pub fn capture_propagation_context_with_root(
     capture_propagation_context_with_root_handle(root_uuid)
         .map(|inner| PyPropagationContext { inner })
         .map_err(to_py_err)
+}
+
+/// Capture the current Relay context as a W3C ``traceparent`` value.
+#[pyfunction]
+pub fn capture_traceparent() -> PyResult<String> {
+    capture_traceparent_handle().map_err(to_py_err)
 }
 
 /// Create an isolated scope stack seeded from a received propagation context.
@@ -602,7 +626,9 @@ fn pop_scope(
 ///     name: Event name.
 ///     handle: Optional parent scope handle. Defaults to current top of stack.
 ///     data: Optional JSON-serializable application data.
+///     data_schema: Optional object with string ``name`` and ``version`` fields.
 ///     metadata: Optional JSON-serializable metadata.
+///     severity: Optional typed severity used by OpenTelemetry log export.
 ///     timestamp: Optional timezone-aware ``datetime.datetime`` for the emitted mark event.
 ///         When omitted, the current runtime time is used.
 ///
@@ -616,18 +642,32 @@ fn pop_scope(
     *,
 	    handle: "ScopeHandle | None"=None,
 	    data: "object | None"=None,
+	    data_schema: "dict[str, str] | None"=None,
 	    metadata: "object | None"=None,
+	    severity: "LogSeverity | None"=None,
 	    timestamp: "datetime.datetime | None"=None
-) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+) -> "None", text_signature = "(name: str, *, handle: ScopeHandle | None = None, data: object | None = None, data_schema: dict[str, str] | None = None, metadata: object | None = None, severity: LogSeverity | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn event(
     _py: Python<'_>,
     name: &str,
     handle: Option<PyScopeHandle>,
     data: Option<&Bound<'_, PyAny>>,
+    data_schema: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
+    severity: Option<PyLogSeverity>,
     timestamp: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
     let data = opt_py_to_json(data)?;
+    let data_schema = data_schema
+        .map(py_to_json)
+        .transpose()?
+        .map(serde_json::from_value::<DataSchema>)
+        .transpose()
+        .map_err(|error| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "data_schema must contain string name and version fields: {error}"
+            ))
+        })?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
     with_python_publication_context(|| {
@@ -636,12 +676,52 @@ fn event(
                 .name(name)
                 .parent_opt(handle.as_ref().map(|h| &h.inner))
                 .data_opt(data)
+                .data_schema_opt(data_schema)
                 .metadata_opt(metadata)
+                .severity_opt(severity.map(Into::into))
                 .timestamp_opt(timestamp)
                 .build(),
         )
     })
     .map_err(to_py_err)
+}
+
+/// Emit one validated metric mark under the current or specified scope.
+#[pyfunction]
+#[pyo3(signature = (
+    name: "str",
+    measurements: "list[MetricMeasurement]",
+    *,
+    handle: "ScopeHandle | None"=None,
+    metadata: "object | None"=None,
+    timestamp: "datetime.datetime | None"=None
+) -> "None", text_signature = "(name: str, measurements: list[MetricMeasurement], *, handle: ScopeHandle | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+fn metric(
+    name: &str,
+    measurements: Vec<PyMetricMeasurement>,
+    handle: Option<PyScopeHandle>,
+    metadata: Option<&Bound<'_, PyAny>>,
+    timestamp: Option<&Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let metadata = opt_py_to_json(metadata)?;
+    let timestamp = opt_py_to_timestamp(timestamp)?;
+    with_python_publication_context(|| {
+        core_scope_api::metric(
+            core_scope_api::EmitMetricEventParams::builder()
+                .name(name)
+                .measurements(
+                    measurements
+                        .into_iter()
+                        .map(|measurement| measurement.inner)
+                        .collect(),
+                )
+                .parent_opt(handle.as_ref().map(|h| &h.inner))
+                .metadata_opt(metadata)
+                .timestamp_opt(timestamp)
+                .build(),
+        )
+    })
+    .map_err(metric_to_py_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -743,21 +823,21 @@ fn tool_call(
 #[pyfunction]
 #[pyo3(signature = (
     handle: "ToolHandle",
-    result: "object",
+    result: "ToolExecutionResult",
 	    *,
 	    data: "object | None"=None,
 	    metadata: "object | None"=None,
 	    timestamp: "datetime.datetime | None"=None
-) -> "None", text_signature = "(handle: ToolHandle, result: object, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
+) -> "None", text_signature = "(handle: ToolHandle, result: ToolExecutionResult, *, data: object | None = None, metadata: object | None = None, timestamp: datetime.datetime | None = None) -> None")]
 fn tool_call_end(
-    _py: Python<'_>,
+    py: Python<'_>,
     handle: &PyToolHandle,
-    result: &Bound<'_, PyAny>,
+    result: PyToolExecutionResult,
     data: Option<&Bound<'_, PyAny>>,
     metadata: Option<&Bound<'_, PyAny>>,
     timestamp: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<()> {
-    let result_json = py_to_json(result)?;
+    let execution_result = result.to_inner(py)?;
     let data = opt_py_to_json(data)?;
     let metadata = opt_py_to_json(metadata)?;
     let timestamp = opt_py_to_timestamp(timestamp)?;
@@ -765,7 +845,7 @@ fn tool_call_end(
         core_tool_api::tool_call_end(
             core_tool_api::ToolCallEndParams::builder()
                 .handle(&handle.inner)
-                .result(result_json)
+                .execution_result(execution_result)
                 .data_opt(data)
                 .metadata_opt(metadata)
                 .timestamp_opt(timestamp)
@@ -787,13 +867,14 @@ fn tool_call_end(
 /// Args:
 ///     name: Tool name.
 ///     args: JSON-serializable tool arguments.
-///     func: An async callable ``(args) -> result`` that performs the tool work.
+///     func: An async callable ``(args) -> ToolExecutionResult`` that performs the tool work.
 ///     handle: Optional parent scope handle.
 ///     attributes: Optional ``ToolAttributes`` bitflags.
 ///     data: Optional JSON-serializable application data.
 ///     metadata: Optional JSON-serializable metadata.
 ///         End events receive ``otel.status_code = "OK"`` on success, or
 ///         ``otel.status_code = "ERROR"`` and ``otel.status_description`` on error.
+///     tool_call_id: Optional provider-specific tool-call correlation ID.
 /// Returns:
 ///     An awaitable that resolves to the tool result after execution
 ///     intercepts. Sanitize guardrails do not rewrite the value returned to
@@ -807,8 +888,9 @@ fn tool_call_end(
     handle: "ScopeHandle | None"=None,
     attributes: "ToolAttributes | None"=None,
     data: "object | None"=None,
-    metadata: "object | None"=None
-) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None) -> object")]
+    metadata: "object | None"=None,
+    tool_call_id: "str | None"=None
+) -> "object", text_signature = "(name: str, args: object, func: object, *, handle: ScopeHandle | None = None, attributes: ToolAttributes | None = None, data: object | None = None, metadata: object | None = None, tool_call_id: str | None = None) -> object")]
 #[allow(clippy::too_many_arguments)]
 fn tool_call_execute<'py>(
     py: Python<'py>,
@@ -819,6 +901,7 @@ fn tool_call_execute<'py>(
     attributes: Option<PyToolAttributes>,
     data: Option<&Bound<'py, PyAny>>,
     metadata: Option<&Bound<'py, PyAny>>,
+    tool_call_id: Option<String>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let args_json = py_to_json(args)?;
     let attrs = attributes
@@ -848,11 +931,15 @@ fn tool_call_execute<'py>(
                             .attributes(attrs)
                             .data_opt(data_json)
                             .metadata_opt(metadata_json)
+                            .tool_call_id_opt(tool_call_id)
                             .build(),
                     )
                     .await
                     .map_err(to_py_err)?;
-                    Python::attach(|py| json_to_py(py, &result))
+                    Python::attach(|py| {
+                        Py::new(py, PyToolExecutionResult::from_inner(py, result)?)
+                            .map(Py::into_any)
+                    })
                 }),
             ),
         )
@@ -2101,6 +2188,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context, m)?)?;
     m.add_function(wrap_pyfunction!(capture_propagation_context_with_root, m)?)?;
+    m.add_function(wrap_pyfunction!(capture_traceparent, m)?)?;
     m.add_function(wrap_pyfunction!(create_scope_stack_from_propagation, m)?)?;
     m.add_function(wrap_pyfunction!(set_thread_scope_stack, m)?)?;
     m.add_function(wrap_pyfunction!(capture_thread_scope_stack, m)?)?;
@@ -2113,6 +2201,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(push_scope, m)?)?;
     m.add_function(wrap_pyfunction!(pop_scope, m)?)?;
     m.add_function(wrap_pyfunction!(event, m)?)?;
+    m.add_function(wrap_pyfunction!(metric, m)?)?;
 
     // Tool lifecycle
     m.add_function(wrap_pyfunction!(tool_call, m)?)?;

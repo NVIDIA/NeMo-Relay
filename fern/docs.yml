@@ -22,6 +22,10 @@ redirects:
 - source: /nemo/relay/about-nemo-relay/concepts/framework-integrations
   destination: /nemo/relay/integrate-into-frameworks/about
 
+# Migration relocations
+- source: /nemo/relay/configure-plugins/switchyard/about
+  destination: /nemo/relay/reference/migration-guides#migrate-to-the-switchyard-owned-dynamic-plugin
+
 # Release notes
 - source: /nemo/relay/about-nemo-relay/release-notes/related-topics
   destination: /nemo/relay/about-nemo-relay/release-notes

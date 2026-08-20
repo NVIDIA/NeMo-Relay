@@ -8,19 +8,28 @@ use std::path::Path;
 use nemo_relay::config_editor::{EditorConfig, EditorFieldKind, EditorFieldSpec};
 use nemo_relay::observability::plugin_component::{OBSERVABILITY_PLUGIN_KIND, ObservabilityConfig};
 use nemo_relay::plugin::{PluginComponentSpec, PluginConfig};
-use nemo_relay::plugins::nemo_guardrails::component::{
-    NEMO_GUARDRAILS_PLUGIN_KIND, NeMoGuardrailsConfig,
-};
 use nemo_relay_adaptive::AdaptiveConfig;
 use nemo_relay_adaptive::plugin_component::ADAPTIVE_PLUGIN_KIND;
 use nemo_relay_pii_redaction::component::{PII_REDACTION_PLUGIN_KIND, PiiRedactionConfig};
-#[cfg(feature = "switchyard")]
-use nemo_relay_switchyard::{SWITCHYARD_PLUGIN_KIND, SwitchyardConfig};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
 use crate::error::CliError;
+
+#[allow(
+    deprecated,
+    reason = "the CLI must edit existing Guardrails configuration until the built-in plugin is removed"
+)]
+mod guardrails_compat {
+    pub(super) type Config = nemo_relay::plugins::nemo_guardrails::component::NeMoGuardrailsConfig;
+    pub(super) const PLUGIN_KIND: &str =
+        nemo_relay::plugins::nemo_guardrails::component::NEMO_GUARDRAILS_PLUGIN_KIND;
+}
+
+use guardrails_compat::{
+    Config as NeMoGuardrailsConfig, PLUGIN_KIND as NEMO_GUARDRAILS_PLUGIN_KIND,
+};
 
 pub(super) const POLICY_SECTION: &str = "policy";
 
@@ -40,8 +49,6 @@ pub(super) enum EditableComponent {
     Adaptive(Box<ComponentEditorState<AdaptiveConfig>>),
     NemoGuardrails(Box<ComponentEditorState<NeMoGuardrailsConfig>>),
     PiiRedaction(Box<ComponentEditorState<PiiRedactionConfig>>),
-    #[cfg(feature = "switchyard")]
-    Switchyard(Box<ComponentEditorState<SwitchyardConfig>>),
 }
 
 impl EditableComponent {
@@ -49,10 +56,8 @@ impl EditableComponent {
         match self {
             Self::Observability(_) => "Observability",
             Self::Adaptive(_) => "Adaptive",
-            Self::NemoGuardrails(_) => "NeMo Guardrails",
+            Self::NemoGuardrails(_) => "NeMo Guardrails (Deprecated)",
             Self::PiiRedaction(_) => "PII Redaction",
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(_) => "Switchyard Decision API",
         }
     }
 
@@ -62,8 +67,6 @@ impl EditableComponent {
             Self::Adaptive(_) => AdaptiveConfig::editor_schema().fields,
             Self::NemoGuardrails(_) => NeMoGuardrailsConfig::editor_schema().fields,
             Self::PiiRedaction(_) => PiiRedactionConfig::editor_schema().fields,
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(_) => SwitchyardConfig::editor_schema().fields,
         }
     }
 
@@ -73,8 +76,6 @@ impl EditableComponent {
             Self::Adaptive(state) => state.enabled,
             Self::NemoGuardrails(state) => state.enabled,
             Self::PiiRedaction(state) => state.enabled,
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => state.enabled,
         }
     }
 
@@ -84,8 +85,6 @@ impl EditableComponent {
             Self::Adaptive(state) => state.toggle_enabled(),
             Self::NemoGuardrails(state) => state.toggle_enabled(),
             Self::PiiRedaction(state) => state.toggle_enabled(),
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => state.toggle_enabled(),
         }
     }
 
@@ -95,8 +94,6 @@ impl EditableComponent {
             Self::Adaptive(state) => state.set_enabled(enabled),
             Self::NemoGuardrails(state) => state.set_enabled(enabled),
             Self::PiiRedaction(state) => state.set_enabled(enabled),
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => state.set_enabled(enabled),
         }
     }
 
@@ -106,8 +103,6 @@ impl EditableComponent {
             Self::Adaptive(state) => state.reset_enabled(),
             Self::NemoGuardrails(state) => state.reset_enabled(),
             Self::PiiRedaction(state) => state.reset_enabled(),
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => state.reset_enabled(),
         }
     }
 
@@ -117,8 +112,6 @@ impl EditableComponent {
             Self::Adaptive(state) => adaptive_summary(state),
             Self::NemoGuardrails(state) => nemo_guardrails_summary(state),
             Self::PiiRedaction(state) => pii_redaction_summary(state),
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => switchyard_summary(state),
         }
     }
 
@@ -130,10 +123,6 @@ impl EditableComponent {
                 config_field_configured(&state.config, field).unwrap_or(false)
             }
             Self::PiiRedaction(state) => {
-                config_field_configured(&state.config, field).unwrap_or(false)
-            }
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => {
                 config_field_configured(&state.config, field).unwrap_or(false)
             }
         }
@@ -154,11 +143,6 @@ impl EditableComponent {
                 state.mark_config_touched();
             }
             Self::PiiRedaction(state) => {
-                reset_config_field(&mut state.config, field)?;
-                state.mark_config_touched();
-            }
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => {
                 reset_config_field(&mut state.config, field)?;
                 state.mark_config_touched();
             }
@@ -187,11 +171,6 @@ impl EditableComponent {
                 remove_struct_field(&mut state.config, field.name)?;
                 state.mark_config_touched();
             }
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => {
-                remove_struct_field(&mut state.config, field.name)?;
-                state.mark_config_touched();
-            }
         }
         Ok(true)
     }
@@ -202,8 +181,6 @@ impl EditableComponent {
             Self::Adaptive(state) => store_adaptive_state(config, state),
             Self::NemoGuardrails(state) => store_nemo_guardrails_state(config, state),
             Self::PiiRedaction(state) => store_pii_redaction_state(config, state),
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(state) => store_switchyard_state(config, state),
         }
     }
 }
@@ -233,14 +210,6 @@ pub(super) fn editable_components(
         EditableComponent::NemoGuardrails(Box::new(component_nemo_guardrails_state(config)?)),
         EditableComponent::PiiRedaction(Box::new(component_pii_redaction_state(config)?)),
     ];
-    #[cfg(feature = "switchyard")]
-    let components = {
-        let mut components = components;
-        components.push(EditableComponent::Switchyard(Box::new(
-            component_switchyard_state(config)?,
-        )));
-        components
-    };
     Ok(components)
 }
 
@@ -446,13 +415,6 @@ pub(super) fn component_pii_redaction_state(
     component_editor_state(config, PII_REDACTION_PLUGIN_KIND, false)
 }
 
-#[cfg(feature = "switchyard")]
-pub(super) fn component_switchyard_state(
-    config: &PluginConfig,
-) -> Result<ComponentEditorState<SwitchyardConfig>, CliError> {
-    component_editor_state(config, SWITCHYARD_PLUGIN_KIND, false)
-}
-
 pub(super) fn store_observability_state(
     config: &mut PluginConfig,
     state: &ComponentEditorState<ObservabilityConfig>,
@@ -512,23 +474,6 @@ pub(super) fn store_pii_redaction_state(
             state.enabled,
             pii_redaction_config_map(&state.config)?,
             merge_pii_redaction_editor_config,
-        );
-    }
-    Ok(())
-}
-
-#[cfg(feature = "switchyard")]
-pub(super) fn store_switchyard_state(
-    config: &mut PluginConfig,
-    state: &ComponentEditorState<SwitchyardConfig>,
-) -> Result<(), CliError> {
-    if state.should_store(state.config_touched || switchyard_configured(&state.config)) {
-        store_component_editor_config(
-            config,
-            SWITCHYARD_PLUGIN_KIND,
-            state.enabled,
-            switchyard_config_map(&state.config)?,
-            merge_switchyard_editor_config,
         );
     }
     Ok(())
@@ -882,24 +827,6 @@ pub(super) fn pii_redaction_config_map(
     }
 }
 
-#[cfg(feature = "switchyard")]
-pub(super) fn switchyard_config_map(
-    config: &SwitchyardConfig,
-) -> Result<Map<String, Value>, CliError> {
-    let value = serde_json::to_value(config).map_err(serde_error)?;
-    match value {
-        Value::Object(mut map) => {
-            if is_version_one(map.get("version")) {
-                map.remove("version");
-            }
-            Ok(map)
-        }
-        _ => Err(CliError::Config(
-            "switchyard config must serialize to an object".into(),
-        )),
-    }
-}
-
 pub(super) fn merge_observability_editor_config(
     existing: &mut Map<String, Value>,
     edited: Map<String, Value>,
@@ -957,22 +884,6 @@ pub(super) fn merge_pii_redaction_editor_config(
     );
 }
 
-#[cfg(feature = "switchyard")]
-pub(super) fn merge_switchyard_editor_config(
-    existing: &mut Map<String, Value>,
-    edited: Map<String, Value>,
-) {
-    if is_version_one(existing.get("version")) {
-        existing.remove("version");
-    }
-    merge_known_editor_object(
-        existing,
-        edited,
-        &nested_editor_keys(SwitchyardConfig::editor_schema()),
-        SwitchyardConfig::editor_schema(),
-    );
-}
-
 fn is_version_one(value: Option<&Value>) -> bool {
     value.and_then(Value::as_u64) == Some(1)
 }
@@ -1009,14 +920,7 @@ pub(super) fn merge_known_editor_object(
 }
 
 pub(super) fn observability_editor_fields_with_version() -> Vec<&'static str> {
-    let mut keys = vec!["version"];
-    keys.extend(
-        ObservabilityConfig::editor_schema()
-            .fields
-            .iter()
-            .map(|field| field.name),
-    );
-    keys
+    nested_editor_keys(ObservabilityConfig::editor_schema())
 }
 
 pub(super) fn nested_editor_keys(
@@ -1169,25 +1073,5 @@ pub(super) fn pii_redaction_summary(state: &ComponentEditorState<PiiRedactionCon
         } else {
             configured_fields.join(", ")
         }
-    )
-}
-
-#[cfg(feature = "switchyard")]
-pub(super) fn switchyard_configured(config: &SwitchyardConfig) -> bool {
-    !config.decision_profile_id.is_empty() || !config.targets.is_empty()
-}
-
-#[cfg(feature = "switchyard")]
-pub(super) fn switchyard_summary(state: &ComponentEditorState<SwitchyardConfig>) -> String {
-    let profile = if state.config.decision_profile_id.is_empty() {
-        "unconfigured"
-    } else {
-        state.config.decision_profile_id.as_str()
-    };
-    format!(
-        "component {}, profile {}, targets {}",
-        if state.enabled { "enabled" } else { "disabled" },
-        profile,
-        state.config.targets.len()
     )
 }

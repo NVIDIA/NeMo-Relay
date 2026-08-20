@@ -9,6 +9,11 @@ This example shows a trusted in-process Rust dynamic plugin using the
 high-level `nemo-relay-plugin` SDK. It builds as a `cdylib`, exports a stable
 native ABI entry symbol, validates JSON config, registers middleware and
 subscribers, emits runtime marks/scopes, and creates an isolated scope stack.
+Typed middleware returns futures driven by the SDK-owned Tokio executor; the
+subscriber remains synchronous. The middleware demonstrates timers, async I/O,
+codec use across an await, concurrent opt-in `next` calls, and stream
+transformation. Set `native_concurrent_next` to `true` in an LLM request's
+content to exercise the concurrent continuation path.
 
 The example intentionally depends on `nemo-relay-plugin`, not on the host
 `nemo-relay` runtime crate. Rust DTOs stay inside the plugin crate; the
@@ -66,12 +71,17 @@ tag = "demo"
 block_tools = false
 block_llms = false
 emit_isolated_scope = true
+
+[plugins.dynamic.config.executor]
+worker_threads = 4
 ```
 
 The manifest declares the `config_schema` capability and references
 `config.schema.json`. After adding the plugin, use the editor for the same
 configuration target (`--user`, `--project`, or `--global`) to configure the
-fields without loading the native library:
+fields without loading the native library. Schemas with
+`additionalProperties: false` must include the SDK-owned `executor` object and
+its positive `worker_threads` field whenever the plugin uses typed middleware:
 
 ```bash
 nemo-relay plugins edit

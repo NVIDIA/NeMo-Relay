@@ -7,11 +7,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from nemo_relay_plugin import ConfigDiagnostic, DiagnosticLevel, Json, PluginContext, WorkerPlugin, serve_plugin
+from nemo_relay_plugin import (
+    ConfigDiagnostic,
+    DiagnosticLevel,
+    Json,
+    PendingMarkSpec,
+    PluginContext,
+    ToolExecutionInterceptOutcome,
+    ToolNext,
+    WorkerPlugin,
+    serve_plugin,
+)
 
 
 class ExamplePythonWorker(WorkerPlugin):
-    """Small worker plugin that tags tool request JSON and emits a host mark."""
+    """Small worker plugin that tags tool requests and execution results."""
 
     plugin_id = "examples.python_grpc_worker"
 
@@ -56,6 +66,13 @@ class ExamplePythonWorker(WorkerPlugin):
         if not isinstance(tag, str):
             raise TypeError("tag must be a string")
 
+        async def inject_event_metadata(event: Any) -> dict[str, Json]:
+            if config.get("event_metadata_injector_error") is True:
+                raise RuntimeError("Python Event metadata injector error requested")
+            if str(event.get("name", "")).startswith("external-plugin-event-metadata-injection"):
+                return {"external.injector.transport": "python_grpc_worker"}
+            return {}
+
         async def tag_tool_request(tool_name: str, args: Json) -> Json:
             tagged_args = _tag_json(args, tag)
             await ctx.runtime.emit_mark(
@@ -64,7 +81,31 @@ class ExamplePythonWorker(WorkerPlugin):
             )
             return tagged_args
 
+        async def tag_tool_execution(
+            tool_name: str,
+            args: Json,
+            next_call: ToolNext,
+        ) -> ToolExecutionInterceptOutcome:
+            result = await next_call.call(args)
+            return ToolExecutionInterceptOutcome(
+                result=_tag_json(result.result, tag),
+                annotation={
+                    "upstream": result.annotation,
+                    "worker": {"tool_name": tool_name, "tag": tag},
+                },
+                pending_marks=[
+                    PendingMarkSpec(
+                        "examples.python_grpc_worker.tool_execution",
+                        data={"tool_name": tool_name, "tag": tag},
+                    )
+                ],
+            )
+
+        ctx.register_event_metadata_injector("example_event_metadata_injector", inject_event_metadata)
+        if config.get("event_metadata_injector_only") is True:
+            return
         ctx.register_tool_request_intercept("tag_tool_request", tag_tool_request)
+        ctx.register_tool_execution_intercept("tag_tool_execution", tag_tool_execution)
 
 
 def _tag_json(value: Json, tag: str) -> Json:

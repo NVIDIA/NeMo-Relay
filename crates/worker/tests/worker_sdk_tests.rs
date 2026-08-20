@@ -3,6 +3,7 @@
 
 //! End-to-end coverage for the Rust gRPC worker SDK service.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
@@ -19,7 +20,8 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, Json, JsonStream, LlmNext, LlmRequest, LlmStreamNext,
+    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, Json, JsonStream, LlmNext,
+    LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
     PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
     WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
     serve_plugin_arc_with_config,
@@ -30,13 +32,18 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, HandshakeRequest, HealthRequest, HostAck,
-    InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest,
-    LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest,
-    RegistrationSurface, ScopeContext, ShutdownRequest, StreamChunk, ToolInvocation,
+    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
+    GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest, HostAck, InvokeRequest,
+    InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest, LlmStreamNextRequest,
+    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegistrationSurface,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
+    ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
+    ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
 };
-use nemo_relay_worker_proto::{WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, json_envelope};
+use nemo_relay_worker_proto::{
+    WORKER_PROTOCOL_GRPC_V1, decode_json_envelope, decode_json_value, json_envelope, json_value,
+};
 use serde_json::json;
 #[cfg(unix)]
 use tokio::net::{UnixListener, UnixStream};
@@ -74,7 +81,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
+            relay_version: "0.8.0".into(),
             worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: "bad-token".into(),
             host_endpoint: "http://127.0.0.1:9".into(),
@@ -87,7 +94,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: "wrong-activation".into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
+            relay_version: "0.8.0".into(),
             worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
@@ -100,7 +107,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .handshake(Request::new(HandshakeRequest {
             activation_id: ACTIVATION_ID.into(),
             plugin_id: PLUGIN_ID.into(),
-            relay_version: "0.5.0".into(),
+            relay_version: "0.8.0".into(),
             worker_protocol: WORKER_PROTOCOL_GRPC_V1.into(),
             auth_token: AUTH_TOKEN.into(),
             host_endpoint: "http://127.0.0.1:9".into(),
@@ -109,10 +116,16 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
         .expect("handshake succeeds")
         .into_inner();
     assert_eq!(handshake.plugin_id, PLUGIN_ID);
+    assert_eq!(handshake.worker_protocol, WORKER_PROTOCOL_GRPC_V1);
     assert!(
         handshake
             .supported_surfaces
             .contains(&(RegistrationSurface::LlmStreamExecutionIntercept as i32))
+    );
+    assert!(
+        handshake
+            .supported_surfaces
+            .contains(&(RegistrationSurface::EventMetadataInjector as i32))
     );
 
     let bad_health = client
@@ -200,7 +213,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 21);
+    assert_eq!(registrations.len(), 22);
     for local_name in [
         "llm-sanitize-request",
         "llm-sanitize-response",
@@ -525,6 +538,13 @@ async fn worker_service_invokes_every_registration_surface() {
         ["subscriber-event"]
     );
 
+    let metadata = invoke_json(
+        &mut client,
+        event_invoke_surface("event-metadata", RegistrationSurface::EventMetadataInjector),
+    )
+    .await;
+    assert_eq!(metadata, json!({"worker.event_name": "subscriber-event"}));
+
     let mark_fields = invoke_json(
         &mut client,
         event_invoke_surface("event-sanitize", RegistrationSurface::MarkSanitizeGuardrail),
@@ -611,7 +631,14 @@ async fn worker_service_invokes_every_registration_surface() {
     )
     .await;
     assert_eq!(tool_outcome.pending_marks.len(), 1);
-    assert_eq!(tool_outcome.pending_marks[0].name, "worker.tool.execution");
+    assert_eq!(
+        tool_outcome.pending_marks[0],
+        PendingMarkSpec::builder()
+            .name("worker.tool.execution")
+            .data(json!({"checkpoint": true}))
+            .build()
+    );
+    assert_eq!(tool_outcome.annotation, Some(json!({"source": "host"})));
     let tool_exec = tool_outcome.result;
     assert_json_field(tool_exec.clone(), "next", "tool");
     assert_json_field(tool_exec, "phase", "tool_exec");
@@ -777,6 +804,7 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(stream_auth.code(), tonic::Code::PermissionDenied);
 
     let calls = host.calls();
+    assert!(calls.contains(&"runtime_diagnostics".into()));
     assert!(calls.contains(&"mark:tool-exec:stack-1:parent-1".into()));
     assert!(calls.contains(&"create_scope_stack".into()));
     assert!(calls.contains(&"mark:tool-exec-isolated:isolated-stack:".into()));
@@ -793,6 +821,49 @@ async fn worker_service_invokes_every_registration_surface() {
     assert!(calls.contains(&"mark:stream-poll:stack-1:parent-1".into()));
     assert!(calls.contains(&"push:scope-agent:explicit-stack:".into()));
     assert!(calls.contains(&"push:scope-unknown:explicit-stack:".into()));
+    let telemetry_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-telemetry")
+        .expect("extended mark request");
+    assert_eq!(telemetry_mark.severity, "warn");
+    let data_schema = telemetry_mark.data_schema.expect("mark data schema");
+    assert_eq!(data_schema.schema, "nemo.relay.DataSchema@1");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&data_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
+    let metric_mark = host
+        .marks()
+        .into_iter()
+        .find(|request| request.name == "tool-exec-metric")
+        .expect("metric mark request");
+    let metric_schema = metric_mark.data_schema.expect("metric data schema");
+    assert_eq!(
+        decode_json_envelope::<DataSchema>(&metric_schema).unwrap(),
+        DataSchema::builder()
+            .name("nemo.relay.metric_measurements")
+            .version("1")
+            .build()
+    );
+    assert_eq!(
+        decode_json_envelope::<Json>(&metric_mark.data.expect("metric data")).unwrap(),
+        json!({
+            "measurements": [{
+                "name": "worker.requests",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 1,
+                "unit": null,
+                "description": null,
+                "attributes": null,
+                "boundaries": null
+            }]
+        })
+    );
 
     worker_handle.abort();
     host_handle.abort();
@@ -1429,6 +1500,13 @@ async fn worker_service_propagates_host_runtime_errors() {
     for (failures, expected) in [
         (
             MockHostFailures {
+                runtime_diagnostics_unimplemented: true,
+                ..Default::default()
+            },
+            "runtime diagnostics require a Relay host with the grpc-v1 diagnostics extension",
+        ),
+        (
+            MockHostFailures {
                 emit_mark: HostFailure::WorkerError,
                 ..Default::default()
             },
@@ -1475,6 +1553,13 @@ async fn worker_service_propagates_host_runtime_errors() {
                 ..Default::default()
             },
             "tool next failed",
+        ),
+        (
+            MockHostFailures {
+                tool_next_missing_result: true,
+                ..Default::default()
+            },
+            "tool execution result.result is missing",
         ),
     ] {
         host.set_failures(failures);
@@ -1742,6 +1827,12 @@ impl WorkerPlugin for SurfacePlugin {
                 .expect("events lock")
                 .push(event.name().into());
         });
+        ctx.register_event_metadata_injector("event-metadata", 1, |event| async move {
+            Ok(BTreeMap::from([(
+                "worker.event_name".into(),
+                json!(event.name()),
+            )]))
+        });
         ctx.register_mark_sanitize_guardrail("event-sanitize", 1, |event, mut fields| {
             let event_name = event.name().to_owned();
             async move {
@@ -1794,7 +1885,49 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_tool_execution_intercept("tool-exec", 1, move |_, value, next: ToolNext| {
             let runtime = tool_runtime.clone();
             async move {
+                let diagnostics = runtime.runtime_diagnostics().await?;
+                if diagnostics
+                    .get("otel.metric_mark_invalid")
+                    .map(|diagnostic| diagnostic.count)
+                    != Some(3)
+                {
+                    return Err(WorkerSdkError::Callback(
+                        "runtime diagnostics response did not contain the expected entry".into(),
+                    ));
+                }
                 runtime.emit_mark("tool-exec", None, None).await?;
+                runtime
+                    .emit_mark_with_options(
+                        "tool-exec-telemetry",
+                        Some(json!({"measurements": []})),
+                        None,
+                        EmitMarkOptions {
+                            data_schema: Some(
+                                DataSchema::builder()
+                                    .name("nemo.relay.metric_measurements")
+                                    .version("1")
+                                    .build(),
+                            ),
+                            severity: Some(LogSeverity::Warn),
+                        },
+                    )
+                    .await?;
+                runtime
+                    .emit_metric(
+                        "tool-exec-metric",
+                        vec![MetricMeasurement {
+                            name: "worker.requests".into(),
+                            kind: MetricKind::Counter,
+                            value_type: MetricValueType::U64,
+                            value: json!(1),
+                            unit: None,
+                            description: None,
+                            attributes: None,
+                            boundaries: None,
+                        }],
+                        None,
+                    )
+                    .await?;
                 let stack_id = runtime.create_scope_stack().await?;
                 let isolated_runtime = runtime.clone();
                 runtime
@@ -1810,17 +1943,16 @@ impl WorkerPlugin for SurfacePlugin {
                     .await?;
                 runtime.pop_scope(&handle, None, None).await?;
                 runtime.drop_scope_stack(&stack_id).await?;
-                let next_value = next.call(value).await?;
-                Ok(ToolExecutionInterceptOutcome::new(set_json_field(
-                    next_value,
-                    "phase",
-                    "tool_exec",
-                ))
-                .with_pending_mark(
-                    PendingMarkSpec::builder()
-                        .name("worker.tool.execution")
-                        .build(),
-                ))
+                let mut next_value = next.call(value).await?;
+                next_value.result = set_json_field(next_value.result, "phase", "tool_exec");
+                Ok(
+                    ToolExecutionInterceptOutcome::from(next_value).with_pending_mark(
+                        PendingMarkSpec::builder()
+                            .name("worker.tool.execution")
+                            .data(json!({"checkpoint": true}))
+                            .build(),
+                    ),
+                )
             }
         });
         let scope_runtime = runtime.clone();
@@ -2012,12 +2144,14 @@ enum MockStreamMode {
 
 #[derive(Clone, Copy, Default)]
 struct MockHostFailures {
+    runtime_diagnostics_unimplemented: bool,
     emit_mark: HostFailure,
     create_scope_stack: bool,
     push_scope: bool,
     pop_scope: HostFailure,
     drop_scope_stack: HostFailure,
     tool_next: bool,
+    tool_next_missing_result: bool,
     llm_next: bool,
     llm_stream_mode: MockStreamMode,
     codec_request_decode: bool,
@@ -2028,6 +2162,7 @@ struct MockHostFailures {
 #[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
+    marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
 }
 
@@ -2038,6 +2173,10 @@ impl MockHost {
 
     fn record(&self, call: impl Into<String>) {
         self.calls.lock().expect("calls lock").push(call.into());
+    }
+
+    fn marks(&self) -> Vec<EmitMarkRequest> {
+        self.marks.lock().expect("marks lock").clone()
     }
 
     fn failures(&self) -> MockHostFailures {
@@ -2051,12 +2190,32 @@ impl MockHost {
 
 #[tonic::async_trait]
 impl RelayHostRuntime for MockHost {
+    async fn get_runtime_diagnostics(
+        &self,
+        request: Request<GetRuntimeDiagnosticsRequest>,
+    ) -> std::result::Result<Response<GetRuntimeDiagnosticsResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        self.record("runtime_diagnostics");
+        if self.failures().runtime_diagnostics_unimplemented {
+            return Err(Status::unimplemented("runtime diagnostics are unavailable"));
+        }
+        Ok(Response::new(GetRuntimeDiagnosticsResponse {
+            entries: vec![ProtoRuntimeDiagnostic {
+                code: "otel.metric_mark_invalid".into(),
+                message: "metric mark has an unsupported value".into(),
+                count: 3,
+            }],
+        }))
+    }
+
     async fn emit_mark(
         &self,
         request: Request<EmitMarkRequest>,
     ) -> std::result::Result<Response<HostAck>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.marks.lock().expect("marks lock").push(request.clone());
         let scope = request.scope.expect("scope context");
         self.record(format!(
             "mark:{}:{}:{}",
@@ -2166,18 +2325,31 @@ impl RelayHostRuntime for MockHost {
     async fn tool_next(
         &self,
         request: Request<ToolNextRequest>,
-    ) -> std::result::Result<Response<JsonResult>, Status> {
+    ) -> std::result::Result<Response<ToolExecutionResultResponse>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
         self.record(format!("tool_next:{}", request.continuation_id));
         if self.failures().tool_next {
-            return Ok(Response::new(JsonResult {
+            return Ok(Response::new(ToolExecutionResultResponse {
                 value: None,
                 error: Some(worker_error("tool next failed")),
             }));
         }
-        Ok(Response::new(JsonResult {
-            value: Some(json_env(json!({"next": "tool"}))),
+        let value = if self.failures().tool_next_missing_result {
+            ProtoToolExecutionResult {
+                result: None,
+                annotation: None,
+            }
+        } else {
+            ProtoToolExecutionResult {
+                result: Some(json_value(&json!({"next": "tool"})).expect("encode tool result")),
+                annotation: Some(
+                    json_value(&json!({"source": "host"})).expect("encode annotation"),
+                ),
+            }
+        };
+        Ok(Response::new(ToolExecutionResultResponse {
+            value: Some(value),
             error: None,
         }))
     }
@@ -2730,11 +2902,7 @@ async fn invoke_json(client: &mut PluginWorkerClient<Channel>, request: InvokeRe
             decode_json_envelope(&result.value.expect("json value")).expect("decode JSON result")
         }
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
-            decode_json_envelope::<ToolExecutionInterceptOutcome>(
-                &result.outcome.expect("tool execution outcome"),
-            )
-            .expect("decode tool execution outcome")
-            .result
+            decode_tool_execution_outcome(result.outcome.expect("tool execution outcome")).result
         }
         other => panic!("unexpected invoke result: {other:?}"),
     }
@@ -2752,10 +2920,32 @@ async fn invoke_tool_execution(
     match response.result.expect("invoke result") {
         nemo_relay_worker_proto::v1::invoke_response::Result::ToolExecution(result) => {
             let outcome = result.outcome.expect("tool execution outcome");
-            assert_eq!(outcome.schema, "nemo.relay.ToolExecutionInterceptOutcome@1");
-            decode_json_envelope(&outcome).expect("decode tool execution outcome")
+            decode_tool_execution_outcome(outcome)
         }
         other => panic!("unexpected invoke result: {other:?}"),
+    }
+}
+
+fn decode_tool_execution_outcome(
+    outcome: ProtoToolExecutionInterceptOutcome,
+) -> ToolExecutionInterceptOutcome {
+    ToolExecutionInterceptOutcome {
+        result: decode_json_value(outcome.result.as_ref().expect("tool execution result"))
+            .expect("decode tool execution result"),
+        annotation: outcome
+            .annotation
+            .as_ref()
+            .map(decode_json_value)
+            .transpose()
+            .expect("decode tool execution annotation")
+            .filter(|value: &Json| !value.is_null()),
+        pending_marks: outcome
+            .pending_marks
+            .as_ref()
+            .map(decode_json_value)
+            .transpose()
+            .expect("decode pending marks")
+            .unwrap_or_default(),
     }
 }
 

@@ -14,6 +14,8 @@
 //! skip-list drops volatile/identity fields, tool-call IDs are normalized, and
 //! only allowlisted headers plus Relay-owned routing partitions fold in.
 
+use std::collections::BTreeSet;
+
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::resolve::{
@@ -23,13 +25,14 @@ use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::ResponseCacheConfig;
+use crate::response_cache::mark::CacheReason;
 use crate::response_cache::store::CACHE_SCHEMA_VERSION;
 
 /// Top-level request-body keys that never affect the answer and are always
 /// dropped before fingerprinting (IDs, routing, bookkeeping, streaming flag).
 pub const DEFAULT_SKIP_KEYS: &[&str] = &["stream", "user", "metadata", "store"];
 
-/// Relay-owned Switchyard backend partition. It is always keyed and never
+/// Relay-owned routing backend partition. It is always keyed and never
 /// depends on the user-configured header allowlist.
 const INTERNAL_DISPATCH_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
@@ -40,7 +43,7 @@ pub enum KeyOutcome {
     Key(String),
     /// The request is intentionally not cacheable; the reason is a short,
     /// stable label suitable for telemetry.
-    Bypass(&'static str),
+    Bypass(CacheReason),
 }
 
 /// Derives the cache key for a request, or decides it must bypass the cache.
@@ -74,9 +77,10 @@ pub fn build_cache_key(
         normalize_tool_call_ids(object);
     }
 
-    let headers = cache_key_headers(&request.headers, &config.header_allowlist);
+    let header_allowlist = normalized_header_allowlist(&config.header_allowlist);
+    let headers = cache_key_headers(&request.headers, &header_allowlist);
 
-    let key_doc = json!({
+    let mut key_doc = json!({
         "v": CACHE_SCHEMA_VERSION,
         "ns": config.namespace,
         "provider": provider,
@@ -86,19 +90,28 @@ pub fn build_cache_key(
         "body": body,
         "headers": headers,
     });
+    // Preserve the original v1 key document for the default empty policy. A
+    // non-empty policy intentionally partitions entries from older policy
+    // configurations, including requests where the allowlisted header is absent.
+    if !header_allowlist.is_empty() {
+        key_doc
+            .as_object_mut()
+            .expect("cache key document is an object")
+            .insert("header_allowlist".to_string(), json!(header_allowlist));
+    }
     if contains_unrepresentable_int(&key_doc) {
-        return KeyOutcome::Bypass("unrepresentable_number");
+        return KeyOutcome::Bypass(CacheReason::UnrepresentableNumber);
     }
 
     match fingerprint(&key_doc) {
         Some(key) => KeyOutcome::Key(key),
-        None => KeyOutcome::Bypass("canonicalization_failed"),
+        None => KeyOutcome::Bypass(CacheReason::CanonicalizationFailed),
     }
 }
 
-fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Option<&'static str> {
+fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Option<CacheReason> {
     if request.content.is_null() {
-        return Some("unparseable_body");
+        return Some(CacheReason::UnparseableBody);
     }
     if let Some(reason) = request
         .content
@@ -109,21 +122,21 @@ fn cache_bypass_reason(request: &LlmRequest, config: &ResponseCacheConfig) -> Op
     }
     (!config.cache_nondeterministic
         && request_temperature(&request.content).is_none_or(|temperature| temperature > 0.0))
-    .then_some("nondeterministic_temperature")
+    .then_some(CacheReason::NondeterministicTemperature)
 }
 
-fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<&'static str> {
+fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<CacheReason> {
     if object
         .get("store")
         .is_some_and(|value| !matches!(value, Json::Bool(false) | Json::Null))
     {
-        return Some("stateful_store");
+        return Some(CacheReason::StatefulStore);
     }
     if object.contains_key("previous_response_id") {
-        return Some("stateful_previous_response_id");
+        return Some(CacheReason::StatefulPreviousResponseId);
     }
     if object.contains_key("conversation") || object.contains_key("container") {
-        return Some("stateful_conversation");
+        return Some(CacheReason::StatefulConversation);
     }
     let responses_surface = object.contains_key("input")
         || object.contains_key("instructions")
@@ -131,7 +144,7 @@ fn stateful_request_bypass_reason(object: &Map<String, Json>) -> Option<&'static
     let explicitly_stateless = object
         .get("store")
         .is_some_and(|store| store == &Json::Bool(false));
-    (responses_surface && !explicitly_stateless).then_some("stateful_store")
+    (responses_surface && !explicitly_stateless).then_some(CacheReason::StatefulStore)
 }
 
 /// Preserves which OpenAI Chat token-cap field the caller sent.
@@ -208,6 +221,47 @@ impl std::io::Write for HashWriter<'_> {
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+/// Builds a tool-result key from its name, version, canonicalized arguments,
+/// and the effective cache policies.
+pub fn build_tool_cache_key(
+    namespace: &str,
+    tool_name: &str,
+    tool_version: Option<&str>,
+    args: &Json,
+    arg_skip: &[String],
+    cache_errors: bool,
+) -> KeyOutcome {
+    let arg_skip = normalized_arg_skip(arg_skip);
+    let mut args = args.clone();
+    if !arg_skip.is_empty()
+        && let Some(object) = args.as_object_mut()
+    {
+        for key in &arg_skip {
+            object.remove(key);
+        }
+    }
+
+    if contains_unrepresentable_int(&args) {
+        return KeyOutcome::Bypass(CacheReason::UnrepresentableNumber);
+    }
+
+    let key_doc = json!({
+        "v": CACHE_SCHEMA_VERSION,
+        "surface": "tool_result",
+        "ns": namespace,
+        "tool": tool_name,
+        "tool_version": tool_version,
+        "arg_skip": arg_skip,
+        "cache_errors": cache_errors,
+        "args": args,
+    });
+
+    match fingerprint(&key_doc) {
+        Some(key) => KeyOutcome::Key(key),
+        None => KeyOutcome::Bypass(CacheReason::CanonicalizationFailed),
     }
 }
 
@@ -338,6 +392,12 @@ fn lossy_request_shape(surface: ProviderSurface, content: &Json) -> bool {
                     .is_some_and(|blocks| blocks.iter().any(lossy_system_block))
         }
         ProviderSurface::OpenAIResponses => false,
+        // OCI GenAI requests carry an envelope (`compartmentId`, `servingMode`)
+        // whose unmodeled fields the decode does not preserve in `extra`, and
+        // the generic scalar checks above target OpenAI-shaped keys rather
+        // than OCI camelCase. Keep OCI raw-keyed — a fallback only ever costs
+        // a miss.
+        ProviderSurface::OCIGenAI => true,
         ProviderSurface::GeminiGenerateContent => {
             object
                 .get("generationConfig")
@@ -555,8 +615,28 @@ fn allowlisted_headers(headers: &Map<String, Json>, allowlist: &[String]) -> Map
     kept
 }
 
+/// Normalizes case-insensitive header policy names before keying them.
+fn normalized_header_allowlist(allowlist: &[String]) -> Vec<String> {
+    allowlist
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Normalizes the case-sensitive tool argument keys dropped before keying.
+fn normalized_arg_skip(arg_skip: &[String]) -> Vec<String> {
+    arg_skip
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// Builds the key's header partition from configured headers plus the
-/// Relay-owned Switchyard backend ID.
+/// Relay-owned routing backend ID.
 fn cache_key_headers(headers: &Map<String, Json>, allowlist: &[String]) -> Map<String, Json> {
     let mut kept = allowlisted_headers(headers, allowlist);
     for (header_name, value) in headers {

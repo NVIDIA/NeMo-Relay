@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::registry::{ExecutionIntercept, Guardrail, Intercept};
+use crate::api::registry::{EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept};
 use crate::api::runtime::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn,
     LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn,
@@ -25,6 +25,8 @@ use crate::registry::SortedRegistry;
 /// tool or LLM call executed inside that scope.
 #[derive(Clone)]
 pub(crate) struct ScopeLocalRegistries {
+    /// Event metadata injectors applied before Event sanitizers.
+    pub(crate) event_metadata_injectors: SortedRegistry<EventMetadataInjector>,
     /// Mark event field sanitizers.
     pub(crate) mark_sanitize_guardrails: SortedRegistry<Guardrail<EventSanitizeFn>>,
     /// Scope-start event field sanitizers.
@@ -66,6 +68,7 @@ impl ScopeLocalRegistries {
     /// intercepts, or subscribers.
     pub(crate) fn new() -> Self {
         Self {
+            event_metadata_injectors: SortedRegistry::new(),
             mark_sanitize_guardrails: SortedRegistry::new(),
             scope_sanitize_start_guardrails: SortedRegistry::new(),
             scope_sanitize_end_guardrails: SortedRegistry::new(),
@@ -83,6 +86,24 @@ impl ScopeLocalRegistries {
             event_subscribers: HashMap::new(),
         }
     }
+}
+
+/// Merge global and scope-local Event metadata injectors by ascending priority.
+pub(crate) fn merge_event_metadata_injector_entries<'a>(
+    global: &'a SortedRegistry<EventMetadataInjector>,
+    scope_locals: &'a [&'a SortedRegistry<EventMetadataInjector>],
+) -> Vec<&'a EventMetadataInjector> {
+    let mut all = Vec::new();
+    all.extend(global.sorted_values());
+    for registry in scope_locals {
+        all.extend(registry.sorted_values());
+    }
+    all.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    all
 }
 
 impl Default for ScopeLocalRegistries {

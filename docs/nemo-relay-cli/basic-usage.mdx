@@ -26,6 +26,13 @@ the payload in a shared gateway envelope.
   Claude-compatible fields such as `continue` and permission decisions when the
   hook event supports them.
 
+When a hook closes a turn, subagent, or session scope, Relay returns the hook
+response after subscribers finish processing that scope-end event. This makes
+synchronous outputs such as the final ATIF trajectory visible at the hook
+boundary without draining subscriber work queued later by another session.
+Full gateway shutdown uses a process-wide flush after closing all remaining
+sessions and before clearing plugins.
+
 The adapters preserve vendor fields such as session IDs, working directories,
 transcript paths, model names, tool payloads, shell payloads, MCP payloads, file
 payloads, user identity, and subagent metadata in NeMo Relay event metadata.
@@ -320,10 +327,10 @@ Model pricing is configured with the same `plugins.toml` discovery path as
 Observability. The configured sources apply to transparent agent runs,
 standalone gateway runs, and evals or custom agents that initialize the same
 gateway plugin config. Framework integrations, harnesses, and custom hosts do
-not need their own model pricing logic when they emit managed LLM calls with
-response codecs: Relay attaches cost to the annotated response when the
-provider reports cost or when a configured model pricing source matches the
-response model and token usage.
+not need their own model pricing logic when they emit managed LLM calls or
+manual lifecycle events with normalized response annotations: Relay attaches
+cost to the annotated response when the provider reports cost or when a
+configured model pricing source matches the response model and token usage.
 
 Create a Relay model pricing catalog JSON file:
 
@@ -379,6 +386,14 @@ nemo-relay model-pricing resolve gpt-4o-mini \
 `model-pricing resolve` prints the source that won, the matched provider/model,
 and an estimated total when token counts are supplied. Use it to debug
 overlapping system, explicit, and user model pricing sources.
+
+Relay now treats missing rates for nonzero cache usage as unknown totals, not
+free usage. If a response reports nonzero cache-read or cache-write tokens and
+the matching catalog omits `cache_read_per_million` or
+`cache_write_per_million`, Relay omits the aggregate total instead of
+undercounting it. Set either rate to `0.0` when that category is intentionally
+free. Catalogs that define only input and output rates therefore emit no total
+for responses that report cached tokens.
 
 Run doctor to validate the active model pricing sources alongside exporter
 checks:

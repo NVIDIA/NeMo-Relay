@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use nemo_relay::api::runtime::{
-    PropagationContext, ScopeStack, TASK_SCOPE_STACK, create_scope_stack,
+    PropagationContext, ScopeStack, TASK_SCOPE_STACK, capture_traceparent, create_scope_stack,
     create_scope_stack_from_propagation, current_scope_stack, fork_scope_stack,
     propagate_scope_to_thread, scope_stack_active, set_thread_scope_stack, sync_thread_scope_stack,
     task_scope_push, task_scope_remove, task_scope_top, with_scope_stack,
@@ -143,6 +143,35 @@ fn test_propagation_context_json_round_trips_and_validates_input() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn test_rooted_propagation_context_formats_traceparent() {
+    let root_uuid = Uuid::from_u128(0x00112233445566778899aabbccddeeff);
+    let parent_uuid = Uuid::from_u128(0xffeeddccbbaa99887766554433221100);
+    let context = PropagationContext {
+        version: PropagationContext::VERSION,
+        root_uuid: Some(root_uuid),
+        parent_uuid,
+    };
+    assert_eq!(
+        context.to_traceparent().unwrap(),
+        "00-00112233445566778899aabbccddeeff-7766554433221100-01"
+    );
+    assert!(
+        PropagationContext {
+            root_uuid: None,
+            ..context
+        }
+        .to_traceparent()
+        .is_err()
+    );
+}
+
+#[test]
+fn test_capture_traceparent_requires_an_emitted_scope() {
+    set_thread_scope_stack(create_scope_stack());
+    assert!(capture_traceparent().is_err());
 }
 
 #[test]

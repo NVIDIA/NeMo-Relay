@@ -1,6 +1,6 @@
 ---
 title: "Model Pricing"
-description: "Configure file and inline pricing catalogs for managed LLM cost estimates."
+description: "Configure file and inline pricing catalogs for LLM cost estimates."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -8,8 +8,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use the built-in `pricing` component to configure model pricing catalogs for
-cost estimates on managed LLM responses. Relay leaves cost absent when no
-configured source matches the provider, model, and token usage.
+cost estimates on managed or manually observed LLM responses. Manual lifecycle
+end events must supply a response codec or normalized response annotation with
+model and token usage. Relay leaves cost absent when no configured source
+matches the provider, model, and token usage.
 
 ## Configuration
 
@@ -55,6 +57,12 @@ read_accounting = "included_in_prompt_tokens"
 Use `type = "file"` with a JSON catalog path or `type = "inline"` with the
 catalog in `plugins.toml`. Relay checks sources and catalog entries in listed
 order, and it uses the first entry that matches the provider and model.
+
+Relay publishes a numeric total only when every nonzero usage category has a
+configured rate. If a response reports nonzero cache-read or cache-write usage
+and the matching catalog entry omits `cache_read_per_million` or
+`cache_write_per_million`, Relay keeps the priced components but omits the
+aggregate total. Set a rate to `0.0` when a category is intentionally free.
 
 When Relay merges explicit-or-user and system configuration files, it prepends
 higher-priority `sources` instead of replacing lower-priority sources. The

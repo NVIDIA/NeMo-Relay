@@ -875,12 +875,12 @@ async def run_case():
     seen_tool_args = []
     async def tool_impl(args):
         seen_tool_args.append(args)
-        return {{"raw": True}}
+        return nemo_relay.ToolExecutionResult({{"raw": True}})
 
     tool_result = await nemo_relay.tools.execute("weather_lookup", {{"city": "Phoenix"}}, tool_impl)
     return {{
         "llm_result": llm_result,
-        "tool_result": tool_result,
+        "tool_result": tool_result.result,
         "seen_request_messages": seen_request_messages,
         "seen_tool_args": seen_tool_args,
     }}

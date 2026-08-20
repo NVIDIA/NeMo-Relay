@@ -17,15 +17,20 @@ from nemo_relay import (
     LLMHandle,
     LLMRequest,
     LLMRequestInterceptOutcome,
+    LogSeverity,
     PendingMarkSpec,
+    PropagationContext,
     ScopeEvent,
     ScopeType,
     capture_propagation_context,
+    capture_traceparent,
+    create_scope_stack_from_propagation,
     guardrails,
     intercepts,
     llm,
     scope,
     subscribers,
+    use_scope_stack,
 )
 from nemo_relay.codecs import OpenAIChatCodec
 
@@ -302,6 +307,7 @@ class TestLLMGuardrails:
                 codec=codec,
                 response_codec=codec,
             )
+            await subscribers.flush_async()
         finally:
             guardrails.deregister_llm_sanitize_request("py_llm_builtin_context_request")
             guardrails.deregister_llm_sanitize_response("py_llm_builtin_context_response")
@@ -533,7 +539,12 @@ class TestLLMIntercepts:
         assert intercepts.deregister_llm_request("py_llm_req")
 
     def test_request_intercepts_direct(self):
-        pending_mark = PendingMarkSpec("request.direct", data={"source": "python"})
+        pending_mark = PendingMarkSpec(
+            "request.direct",
+            data={"source": "python"},
+            data_schema={"name": "example.pending", "version": "1"},
+            severity=LogSeverity.Info,
+        )
 
         def intercept_fn(name, request, annotated):
             content = request.content
@@ -552,6 +563,8 @@ class TestLLMIntercepts:
         assert len(transformed.pending_marks) == 1
         assert transformed.pending_marks[0].name == pending_mark.name
         assert transformed.pending_marks[0].data == pending_mark.data
+        assert transformed.pending_marks[0].data_schema == pending_mark.data_schema
+        assert transformed.pending_marks[0].severity == LogSeverity.Info
 
     def test_request_intercept_raises_on_exception(self):
         intercepts.register_llm_request(
@@ -606,6 +619,58 @@ class TestLLMIntercepts:
 
 
 class TestLLMInterceptsAsync:
+    async def test_execution_callback_capture_traceparent_matches_llm_scope(self):
+        events = []
+        observed = []
+        subscribers.register("py_llm_capture_traceparent", events.append)
+
+        async def execution_intercept(_name, request, next_handler):
+            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            return await next_handler(request)
+
+        async def provider(_request):
+            observed.append((capture_propagation_context().parent_uuid, capture_traceparent()))
+            return {"ok": True}
+
+        try:
+            intercepts.register_llm_execution("py_llm_capture_traceparent", 10, execution_intercept)
+            assert await llm.execute("py_llm_capture_traceparent", make_request(), provider) == {"ok": True}
+            await subscribers.flush_async()
+            start = _llm_event(events, "py_llm_capture_traceparent", "start")
+            expected = f"00-{start.uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [(start.uuid, expected), (start.uuid, expected)]
+        finally:
+            intercepts.deregister_llm_execution("py_llm_capture_traceparent")
+            subscribers.deregister("py_llm_capture_traceparent")
+
+    async def test_execution_callback_capture_traceparent_preserves_imported_root(self):
+        root_uuid = "018f13f0-7c1a-7a80-8000-000000000701"
+        parent_uuid = "018f13f0-7c1a-7a80-8000-000000000702"
+        stack = create_scope_stack_from_propagation(PropagationContext(parent_uuid, root_uuid))
+        events = []
+        observed = []
+        subscribers.register("py_llm_capture_propagated_trace_root", events.append)
+
+        async def execution_intercept(_name, request, next_handler):
+            observed.append(capture_traceparent())
+            return await next_handler(request)
+
+        async def provider(_request):
+            observed.append(capture_traceparent())
+            return {"ok": True}
+
+        try:
+            intercepts.register_llm_execution("py_llm_capture_propagated_trace_root", 10, execution_intercept)
+            with use_scope_stack(stack):
+                assert await llm.execute("py_llm_propagated_trace_root", make_request(), provider) == {"ok": True}
+            await subscribers.flush_async()
+            start = _llm_event(events, "py_llm_propagated_trace_root", "start")
+            expected = f"00-{root_uuid.replace('-', '')}-{start.uuid.replace('-', '')[-16:]}-01"
+            assert observed == [expected, expected]
+        finally:
+            intercepts.deregister_llm_execution("py_llm_capture_propagated_trace_root")
+            subscribers.deregister("py_llm_capture_propagated_trace_root")
+
     async def test_cancelling_execute_cancels_pending_execution_intercept(self):
         started = asyncio.Event()
         release = asyncio.Event()

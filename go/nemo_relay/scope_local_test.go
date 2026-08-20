@@ -59,7 +59,7 @@ func assertCapturedScopeLocalEventHasBoolFlag(t *testing.T, events []scopeLocalC
 
 func executeScopeLocalToolPassthrough(name, payload string) error {
 	_, err := ToolCallExecute(name, json.RawMessage(payload),
-		func(args json.RawMessage) (json.RawMessage, error) { return args, nil },
+		func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil },
 	)
 	return err
 }
@@ -90,6 +90,9 @@ func assertScopeLocalCallbackDeregisters(
 	if err := runBefore(); err != nil {
 		t.Fatalf("%s before deregister failed: %v", label, err)
 	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(scopeLocalFlushSubscribersFailed, err)
+	}
 	if *calls != 1 {
 		t.Fatalf("expected %s callback once, got %d", label, *calls)
 	}
@@ -98,6 +101,9 @@ func assertScopeLocalCallbackDeregisters(
 	}
 	if err := runAfter(); err != nil {
 		t.Fatalf("%s after deregister failed: %v", label, err)
+	}
+	if err := FlushSubscribers(); err != nil {
+		t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 	}
 	if *calls != 1 {
 		t.Fatalf("%s callback still fired after deregister: %d", label, *calls)
@@ -160,9 +166,11 @@ func runScopeLocalTaggedToolCall( // NOSONAR(S107)
 			*errOut = err
 			return
 		}
-		*result, *errOut = ToolCallExecute(callName, json.RawMessage(`{"source": "`+source+`"}`), func(args json.RawMessage) (json.RawMessage, error) {
-			return args, nil
+		executionResult, err := ToolCallExecute(callName, json.RawMessage(`{"source": "`+source+`"}`), func(args json.RawMessage) (ToolExecutionResult, error) {
+			return toolExecutionResult(args), nil
 		})
+		*result = executionResult.Result
+		*errOut = err
 	})
 }
 
@@ -233,8 +241,8 @@ func TestScopeLocalToolSanitizeRequestGuardrail(t *testing.T) {
 		}
 
 		_, err = ToolCallExecute("scope_guarded_tool", json.RawMessage(`{"value": 42}`),
-			func(args json.RawMessage) (json.RawMessage, error) {
-				return args, nil
+			func(args json.RawMessage) (ToolExecutionResult, error) {
+				return toolExecutionResult(args), nil
 			},
 		)
 		if err != nil {
@@ -298,8 +306,8 @@ func TestScopeLocalToolSanitizeResponseGuardrail(t *testing.T) {
 		}
 
 		_, err = ToolCallExecute("resp_tool", json.RawMessage(`{}`),
-			func(args json.RawMessage) (json.RawMessage, error) {
-				return json.RawMessage(`{"output": "data"}`), nil
+			func(args json.RawMessage) (ToolExecutionResult, error) {
+				return toolExecutionResult(json.RawMessage(`{"output": "data"}`)), nil
 			},
 		)
 		if err != nil {
@@ -340,8 +348,8 @@ func TestScopeLocalToolConditionalExecutionGuardrail(t *testing.T) {
 		}
 
 		_, err = ToolCallExecute("cond_tool", json.RawMessage(`{}`),
-			func(args json.RawMessage) (json.RawMessage, error) {
-				return json.RawMessage(`{"should": "not reach"}`), nil
+			func(args json.RawMessage) (ToolExecutionResult, error) {
+				return toolExecutionResult(json.RawMessage(`{"should": "not reach"}`)), nil
 			},
 		)
 		if err == nil {
@@ -384,12 +392,12 @@ func TestScopeLocalGuardrailCleanupOnPop(t *testing.T) {
 		if err != nil {
 			t.Fatalf("PopScope failed: %v", err)
 		}
-		result, err := ToolCallExecute("after_pop_tool", json.RawMessage(`{"original": true}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		result, err := ToolCallExecute("after_pop_tool", json.RawMessage(`{"original": true}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		var output map[string]interface{}
-		json.Unmarshal(result, &output)
+		json.Unmarshal(result.Result, &output)
 		if _, present := output["from_popped_scope"]; present {
 			t.Fatal("scope-local guardrail should have been cleaned up on pop, but it still ran")
 		}
@@ -423,12 +431,12 @@ func TestScopeLocalInterceptCleanupOnPop(t *testing.T) {
 			t.Fatalf(scopeLocalRegisterToolRequestInterceptFailed, err)
 		}
 		PopScope(handle)
-		result, err := ToolCallExecute("after_intercept_pop", json.RawMessage(`{"check": true}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		result, err := ToolCallExecute("after_intercept_pop", json.RawMessage(`{"check": true}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		var output map[string]interface{}
-		json.Unmarshal(result, &output)
+		json.Unmarshal(result.Result, &output)
 		if _, present := output["from_popped_intercept"]; present {
 			t.Fatal("scope-local intercept should have been cleaned up on pop")
 		}
@@ -509,9 +517,12 @@ func TestPriorityMergeGlobalAndScopeLocal(t *testing.T) {
 		if err != nil {
 			t.Fatalf(scopeLocalRegisterToolSanitizeRequestGuardrail, err)
 		}
-		_, err = ToolCallExecute("priority_tool", json.RawMessage(`{"input": true}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		_, err = ToolCallExecute("priority_tool", json.RawMessage(`{"input": true}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -560,9 +571,12 @@ func TestPriorityMergeGlobalBeforeScopeLocal(t *testing.T) {
 		if err != nil {
 			t.Fatalf(scopeLocalRegisterToolSanitizeRequestGuardrail, err)
 		}
-		_, err = ToolCallExecute("order_tool", json.RawMessage(`{}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		_, err = ToolCallExecute("order_tool", json.RawMessage(`{}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf(scopeLocalFlushSubscribersFailed, err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -617,7 +631,7 @@ func TestScopeLocalConditionalGuardrailIsolation(t *testing.T) {
 	defer stack2.Close()
 	var wg sync.WaitGroup
 	var err1, err2 error
-	var result2 json.RawMessage
+	var result2 ToolExecutionResult
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
@@ -634,7 +648,9 @@ func TestScopeLocalConditionalGuardrailIsolation(t *testing.T) {
 				t.Errorf(scopeLocalRegisterFailed, err)
 				return
 			}
-			_, err1 = ToolCallExecute("blocked_tool", json.RawMessage(`{}`), func(args json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"reached": true}`), nil })
+			_, err1 = ToolCallExecute("blocked_tool", json.RawMessage(`{}`), func(args json.RawMessage) (ToolExecutionResult, error) {
+				return toolExecutionResult(json.RawMessage(`{"reached": true}`)), nil
+			})
 		})
 	}()
 	go func() {
@@ -646,7 +662,7 @@ func TestScopeLocalConditionalGuardrailIsolation(t *testing.T) {
 				return
 			}
 			defer PopScope(handle)
-			result2, err2 = ToolCallExecute("allowed_tool", json.RawMessage(`{"ok": true}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+			result2, err2 = ToolCallExecute("allowed_tool", json.RawMessage(`{"ok": true}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		})
 	}()
 	wg.Wait()
@@ -660,7 +676,7 @@ func TestScopeLocalConditionalGuardrailIsolation(t *testing.T) {
 		t.Fatalf("goroutine 2 should succeed, got: %v", err2)
 	}
 	var out2 map[string]interface{}
-	json.Unmarshal(result2, &out2)
+	json.Unmarshal(result2.Result, &out2)
 	if out2["ok"] != true {
 		t.Fatalf("goroutine 2 expected ok=true, got %v", out2)
 	}
@@ -686,12 +702,12 @@ func TestScopeLocalToolRequestIntercept(t *testing.T) {
 		if err != nil {
 			t.Fatalf(scopeLocalRegisterToolRequestInterceptFailed, err)
 		}
-		result, err := ToolCallExecute("intercepted_tool", json.RawMessage(`{"data": 1}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		result, err := ToolCallExecute("intercepted_tool", json.RawMessage(`{"data": 1}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		var output map[string]interface{}
-		json.Unmarshal(result, &output)
+		json.Unmarshal(result.Result, &output)
 		if output["scope_intercepted"] != true {
 			t.Fatalf("expected scope_intercepted=true, got %v", output)
 		}
@@ -702,33 +718,46 @@ func TestScopeLocalToolExecutionIntercept(t *testing.T) {
 	stack, _ := NewScopeStack()
 	defer stack.Close()
 	stack.Run(func() {
+		const annotationSource = "scope-local-callback"
 		handle, _ := PushScope("exec_intercept_scope", ScopeTypeAgent)
 		defer PopScope(handle)
-		err := ScopeRegisterToolExecutionIntercept(handle.UUID(), "scope_exec_int", 1, func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+		err := ScopeRegisterToolExecutionIntercept(handle.UUID(), "scope_exec_int", 1, func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 			result, err := next(args)
 			if err != nil {
 				return ToolExecutionInterceptOutcome{}, err
 			}
 			var m map[string]interface{}
-			json.Unmarshal(result, &m)
+			json.Unmarshal(result.Result, &m)
 			m["exec_intercepted"] = true
 			out, _ := json.Marshal(m)
-			return ToolExecutionInterceptOutcome{Result: out}, nil
+			return ToolExecutionInterceptOutcome{Result: out, Annotation: result.Annotation}, nil
 		})
 		if err != nil {
 			t.Fatalf("ScopeRegisterToolExecutionIntercept failed: %v", err)
 		}
-		result, err := ToolCallExecute("exec_int_tool", json.RawMessage(`{}`), func(args json.RawMessage) (json.RawMessage, error) { return json.RawMessage(`{"original": true}`), nil })
+		result, err := ToolCallExecute("exec_int_tool", json.RawMessage(`{}`), func(args json.RawMessage) (ToolExecutionResult, error) {
+			return ToolExecutionResult{
+				Result:     json.RawMessage(`{"original": true}`),
+				Annotation: json.RawMessage(`{"source":"` + annotationSource + `"}`),
+			}, nil
+		})
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		var output map[string]interface{}
-		json.Unmarshal(result, &output)
+		json.Unmarshal(result.Result, &output)
 		if output["original"] != true {
 			t.Fatal("expected original=true")
 		}
 		if output["exec_intercepted"] != true {
 			t.Fatal("expected exec_intercepted=true")
+		}
+		var annotation map[string]any
+		if err := json.Unmarshal(result.Annotation, &annotation); err != nil {
+			t.Fatalf("decode preserved annotation: %v", err)
+		}
+		if annotation["source"] != annotationSource {
+			t.Fatalf("annotation was not preserved through scope-local intercept: %s", result.Annotation)
 		}
 	})
 }
@@ -787,12 +816,12 @@ func TestScopeLocalExplicitDeregistration(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ScopeDeregisterToolSanitizeRequestGuardrail failed: %v", err)
 		}
-		result, err := ToolCallExecute("after_dereg_tool", json.RawMessage(`{"test": true}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		result, err := ToolCallExecute("after_dereg_tool", json.RawMessage(`{"test": true}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		var output map[string]interface{}
-		json.Unmarshal(result, &output)
+		json.Unmarshal(result.Result, &output)
 		if _, present := output["should_not_appear"]; present {
 			t.Fatal("guardrail should not run after explicit deregistration")
 		}
@@ -839,12 +868,12 @@ func TestScopeLocalInterceptAppliedWithinScope(t *testing.T) {
 		if err != nil {
 			t.Fatalf(scopeLocalRegisterToolRequestInterceptFailed, err)
 		}
-		result, err := ToolCallExecute("intercepted_tool", json.RawMessage(`{"input": 1}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		result, err := ToolCallExecute("intercepted_tool", json.RawMessage(`{"input": 1}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		var output map[string]interface{}
-		json.Unmarshal(result, &output)
+		json.Unmarshal(result.Result, &output)
 		if output["intercepted"] != true {
 			t.Fatal("expected intercepted=true, intercept was not applied within scope")
 		}
@@ -886,12 +915,12 @@ func TestScopeLocalAndGlobalInterceptMerging(t *testing.T) {
 			t.Fatalf(scopeLocalRegisterToolRequestInterceptFailed, err)
 		}
 
-		result, err := ToolCallExecute("merge_tool", json.RawMessage(`{"input": "data"}`), func(args json.RawMessage) (json.RawMessage, error) { return args, nil })
+		result, err := ToolCallExecute("merge_tool", json.RawMessage(`{"input": "data"}`), func(args json.RawMessage) (ToolExecutionResult, error) { return toolExecutionResult(args), nil })
 		if err != nil {
 			t.Fatalf(scopeLocalToolCallExecuteFailed, err)
 		}
 		var output map[string]interface{}
-		json.Unmarshal(result, &output)
+		json.Unmarshal(result.Result, &output)
 		if output["global_applied"] != true {
 			t.Fatal("expected global_applied=true")
 		}
@@ -1041,7 +1070,7 @@ func assertScopeLocalToolWrappersDeregister(t *testing.T, scopeUUID string) {
 		&executionInterceptCalls,
 		func() error {
 			return ScopeRegisterToolExecutionIntercept(scopeUUID, "tool_scope_exec_int", 1,
-				func(args json.RawMessage, next func(json.RawMessage) (json.RawMessage, error)) (ToolExecutionInterceptOutcome, error) {
+				func(args json.RawMessage, next func(json.RawMessage) (ToolExecutionResult, error)) (ToolExecutionInterceptOutcome, error) {
 					executionInterceptCalls++
 					return toolExecutionOutcome(next(args))
 				},

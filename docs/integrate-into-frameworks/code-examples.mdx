@@ -50,6 +50,9 @@ What you lose from managed execution wrappers:
 - Request intercepts and conditional execution must be invoked explicitly if you still need them.
 - Error paths need deliberate end-event or mark-event handling.
 
+Every manual tool end helper accepts the canonical `ToolExecutionResult`; wrap
+the framework's business payload before closing the tool span.
+
 <Tabs>
 <Tab title="Python" language="python">
 ```python
@@ -60,7 +63,7 @@ def framework_tool_started(name: str, args: dict):
     return nemo_relay.tools.call(name, args)
 
 def framework_tool_finished(handle, result: dict) -> None:
-    nemo_relay.tools.call_end(handle, result)
+    nemo_relay.tools.call_end(handle, nemo_relay.ToolExecutionResult(result))
 
 def framework_llm_started(provider: str, payload: dict):
     request = LLMRequest({}, payload)
@@ -80,7 +83,7 @@ export function frameworkToolStarted(name: string, args: unknown) {
 }
 
 export function frameworkToolFinished(handle: unknown, result: unknown): void {
-  toolCallEnd(handle, result, null, null);
+  toolCallEnd(handle, { result }, null, null);
 }
 
 export function frameworkLlmStarted(provider: string, payload: { model?: string }) {
@@ -97,7 +100,9 @@ export function frameworkLlmFinished(handle: unknown, response: unknown): void {
 <Tab title="Rust" language="rust">
 ```rust
 use nemo_relay::api::llm::{llm_call, llm_call_end, LlmCallEndParams, LlmCallParams, LlmRequest};
-use nemo_relay::api::tool::{tool_call, tool_call_end, ToolCallEndParams, ToolCallParams};
+use nemo_relay::api::tool::{
+    tool_call, tool_call_end, ToolCallEndParams, ToolCallParams, ToolExecutionResult,
+};
 use serde_json::{json, Value as Json};
 
 let tool_handle = tool_call(
@@ -109,7 +114,7 @@ let tool_handle = tool_call(
 tool_call_end(
     ToolCallEndParams::builder()
         .handle(&tool_handle)
-        .result(json!({"hits": 2}))
+        .execution_result(ToolExecutionResult::new(json!({"hits": 2})))
         .build(),
 )?;
 

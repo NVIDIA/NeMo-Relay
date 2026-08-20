@@ -22,7 +22,7 @@ from typing import cast
 
 import pytest
 
-from nemo_relay import Json, LLMRequest, llm, plugin, scope, tools
+from nemo_relay import Json, LLMRequest, ToolExecutionResult, llm, plugin, scope, tools
 
 
 @dataclass(frozen=True, slots=True)
@@ -442,16 +442,24 @@ async def test_native_activation_context_owns_callbacks_and_close_is_idempotent(
     assert activation.report == {"diagnostics": []}
 
     async with activation as active:
-        result = await tools.execute("python-native-fixture", {"input": True}, lambda args: {"args": args})
+        result = await tools.execute(
+            "python-native-fixture",
+            {"input": True},
+            lambda args: ToolExecutionResult({"args": args}),
+        )
         assert active is activation
-        assert result["native_plugin_tool_execution"] is True
-        assert result["args"]["native_plugin_tool_execution_request"] is True
+        assert result.result["native_plugin_tool_execution"] is True
+        assert result.result["args"]["native_plugin_tool_execution_request"] is True
 
     assert not activation.is_active
     await activation.close()
-    result = await tools.execute("python-native-after-close", {"input": True}, lambda args: {"args": args})
-    assert "native_plugin_tool_execution" not in result
-    assert result == {"args": {"input": True}}
+    result = await tools.execute(
+        "python-native-after-close",
+        {"input": True},
+        lambda args: ToolExecutionResult({"args": args}),
+    )
+    assert "native_plugin_tool_execution" not in result.result
+    assert result.result == {"args": {"input": True}}
 
 
 async def test_dynamic_activation_layers_plugins_toml_static_components(
@@ -508,9 +516,13 @@ async def test_dynamic_activation_layers_plugins_toml_static_components(
                 }
             ]
         }
-        result = await tools.execute("python-file-static-base", {"input": True}, lambda args: args)
-        assert result["file_static_base"] is True
-        assert result["native_plugin_tool_execution"] is True
+        result = await tools.execute(
+            "python-file-static-base",
+            {"input": True},
+            lambda args: ToolExecutionResult(args),
+        )
+        assert result.result["file_static_base"] is True
+        assert result.result["native_plugin_tool_execution"] is True
     finally:
         if activation is not None:
             await activation.close()
@@ -633,8 +645,12 @@ async def test_native_activation_finalizer_releases_callbacks(native_dynamic_plu
             break
         await asyncio.sleep(0.01)
     assert "fixture_native" not in plugin.list_kinds()
-    result = await tools.execute("python-native-after-finalize", {"input": True}, lambda args: args)
-    assert result == {"input": True}
+    result = await tools.execute(
+        "python-native-after-finalize",
+        {"input": True},
+        lambda args: ToolExecutionResult(args),
+    )
+    assert result.result == {"input": True}
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX worker stop/continue signals")
@@ -702,11 +718,11 @@ async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_
     loop = asyncio.get_running_loop()
     loop_thread = threading.get_ident()
 
-    async def tool_provider(args: Json) -> Json:
+    async def tool_provider(args: Json) -> ToolExecutionResult[Json]:
         assert asyncio.get_running_loop() is loop
         assert threading.get_ident() == loop_thread
         await asyncio.sleep(0)
-        return {"args": args}
+        return ToolExecutionResult({"args": args})
 
     async def llm_provider(request: LLMRequest) -> Json:
         assert asyncio.get_running_loop() is loop
@@ -722,8 +738,8 @@ async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_
 
     try:
         result = await tools.execute("python-worker-fixture", {"input": True}, tool_provider)
-        assert result["worker_plugin_tool_execution"] is True
-        assert result["args"]["worker_plugin_tool_execution_request"] is True
+        assert result.result["worker_plugin_tool_execution"] is True
+        assert result.result["args"]["worker_plugin_tool_execution_request"] is True
 
         llm_result = await llm.execute(
             "python-worker-llm",
@@ -752,5 +768,9 @@ async def test_worker_activation_executes_and_releases_callbacks(worker_dynamic_
         await activation.close()
 
     assert not activation.is_active
-    result = await tools.execute("python-worker-after-close", {"input": True}, lambda args: {"args": args})
-    assert result == {"args": {"input": True}}
+    result = await tools.execute(
+        "python-worker-after-close",
+        {"input": True},
+        lambda args: ToolExecutionResult({"args": args}),
+    )
+    assert result.result == {"args": {"input": True}}

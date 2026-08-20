@@ -5,8 +5,8 @@
 
 use super::*;
 use crate::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    tool_attributes_to_strings,
+    BaseEvent, CategoryProfile, DataSchema, Event, EventCategory, METRIC_DATA_SCHEMA_NAME,
+    METRIC_DATA_SCHEMA_VERSION, MarkEvent, ScopeCategory, ScopeEvent, tool_attributes_to_strings,
 };
 use crate::api::runtime::{
     NemoRelayContextState, PropagationContext, ThreadScopeStackBinding,
@@ -492,6 +492,274 @@ fn rootless_propagation_starts_a_new_otel_trace() {
     assert!(!span.parent_span_is_remote);
 }
 
+#[test]
+fn promotes_final_scope_and_mark_metadata_without_duplicate_span_keys() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "metadata-promotion-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string(), "nemo_relay.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-scope",
+            json!({
+                "nv.source": "start",
+                "nemo_relay.scope_type": "attempted-overwrite"
+            }),
+        ));
+        processor.process(&make_mark_event_with_metadata(
+            Some(uuid),
+            json!({"nv.source": "mark"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-scope",
+            ScopeType::Agent,
+            json!({
+                "nv.source": "end",
+                "nv.completed": true,
+                "nemo_relay.scope_type": "attempted-overwrite"
+            }),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        let span = &spans[0];
+        assert_eq!(
+            span.attributes
+                .iter()
+                .filter(|attribute| attribute.key.as_str() == "nv.source")
+                .count(),
+            1
+        );
+        let attributes = attr_map(&span.attributes);
+        assert_eq!(attributes.get("nv.source"), Some(&"end".to_string()));
+        assert_eq!(attributes.get("nv.completed"), Some(&"true".to_string()));
+        assert_eq!(
+            attributes.get("nemo_relay.scope_type"),
+            Some(&"agent".to_string())
+        );
+        let mark_attributes = attr_map(&span.events.events[0].attributes);
+        assert_eq!(mark_attributes.get("nv.source"), Some(&"mark".to_string()));
+    }
+}
+
+#[test]
+fn promotes_orphan_and_tool_projection_mark_metadata() {
+    for otel_type in [OpenTelemetryType::Full, OpenTelemetryType::OpenInference] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "metadata-promotion-mark-test".into(),
+                otel_type,
+                MarkProjection::Tool,
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let parent_uuid = Uuid::now_v7();
+        processor.process(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .name("metadata.orphan")
+                .metadata(json!({"nv.source": "orphan"}))
+                .build(),
+            None,
+            None,
+        )));
+        processor.process(&make_start_event(
+            parent_uuid,
+            None,
+            "metadata-promotion-parent",
+            ScopeType::Agent,
+            None,
+        ));
+        processor.process(&Event::Mark(MarkEvent::new(
+            BaseEvent::builder()
+                .parent_uuid(parent_uuid)
+                .name("metadata.projected")
+                .metadata(json!({"nv.source": "projected"}))
+                .build(),
+            None,
+            None,
+        )));
+        processor.process(&make_end_event(
+            parent_uuid,
+            None,
+            "metadata-promotion-parent",
+            ScopeType::Agent,
+            None,
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 3);
+        let parent = finished_span_named(&spans, "metadata-promotion-parent");
+        let orphan = finished_span_named(&spans, "mark:metadata.orphan");
+        let projected = finished_span_named(&spans, "mark:metadata.projected");
+        assert!(!attr_map(&parent.attributes).contains_key("nv.source"));
+        assert_eq!(
+            attr_map(&orphan.attributes).get("nv.source"),
+            Some(&"orphan".to_string())
+        );
+        assert_eq!(
+            attr_map(&projected.attributes).get("nv.source"),
+            Some(&"projected".to_string())
+        );
+        assert_eq!(projected.parent_span_id, parent.span_context.span_id());
+    }
+}
+
+#[test]
+fn promotes_final_scope_metadata_across_trace_projections() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "metadata-promotion-projection-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-projection-scope",
+            json!({"nv.source": "start"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "metadata-promotion-projection-scope",
+            ScopeType::Agent,
+            json!({"nv.source": "end"}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            attr_map(&spans[0].attributes).get("nv.source"),
+            Some(&"end".to_string())
+        );
+    }
+}
+
+#[test]
+fn omits_scope_metadata_when_final_value_is_unsupported_across_trace_projections() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "unsupported-final-metadata-promotion-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                runtime_diagnostics.clone(),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "unsupported-final-metadata-promotion-scope",
+            json!({"nv.source": "start"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "unsupported-final-metadata-promotion-scope",
+            ScopeType::Agent,
+            json!({"nv.source": {"unsupported": true}}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert!(!attr_map(&spans[0].attributes).contains_key("nv.source"));
+
+        let diagnostics = runtime_diagnostics.snapshot();
+        let diagnostic = diagnostics
+            .get("otel.metadata_promotion_value_unsupported")
+            .expect("unsupported final metadata diagnostic");
+        assert_eq!(diagnostic.count, 1);
+        assert!(diagnostic.message.contains("nv.source"));
+    }
+}
+
+#[test]
+fn promotes_start_only_scope_metadata_across_trace_projections() {
+    for otel_type in [
+        OpenTelemetryType::Full,
+        OpenTelemetryType::GenAi,
+        OpenTelemetryType::OpenInference,
+    ] {
+        let (provider, exporter) = make_provider();
+        let mut processor =
+            OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+                provider,
+                "start-metadata-promotion-projection-test".into(),
+                otel_type,
+                MarkProjection::default(),
+                default_mark_exclude_names(),
+                Vec::new(),
+                vec!["nv.".to_string()],
+                SignalRuntimeDiagnostics::new(None),
+            );
+        let uuid = Uuid::now_v7();
+        processor.process(&make_start_event_with_metadata(
+            uuid,
+            None,
+            "start-metadata-promotion-projection-scope",
+            json!({"nv.start_only": "configured"}),
+        ));
+        processor.process(&make_end_event_with_metadata(
+            uuid,
+            None,
+            "start-metadata-promotion-projection-scope",
+            ScopeType::Agent,
+            json!({}),
+        ));
+        processor.force_flush().unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(
+            attr_map(&spans[0].attributes).get("nv.start_only"),
+            Some(&"configured".to_string())
+        );
+    }
+}
+
 fn make_start_event_with_metadata(
     uuid: Uuid,
     parent_uuid: Option<Uuid>,
@@ -771,7 +1039,7 @@ fn assert_config_defaults(defaults: &OpenTelemetryConfig) {
 }
 
 #[test]
-fn http_trace_endpoint_resolution_completes_only_bare_http_urls() {
+fn http_trace_endpoint_resolution_preserves_an_explicit_root_path() {
     for (endpoint, expected) in [
         ("http://localhost:4318", "http://localhost:4318/v1/traces"),
         ("http://localhost:4318/", "http://localhost:4318/"),
@@ -782,6 +1050,10 @@ fn http_trace_endpoint_resolution_completes_only_bare_http_urls() {
         (
             "https://collector.example/?tenant=one",
             "https://collector.example/?tenant=one",
+        ),
+        (
+            "https://collector.example/#root",
+            "https://collector.example/#root",
         ),
         (
             "http://localhost:4318/v1/traces",
@@ -932,6 +1204,7 @@ fn mapped_aliases_are_typed_and_cannot_replace_projected_span_fields() {
                 ),
                 crate::observability::OtlpAttributeMapping::new("missing.source", "ignored.alias"),
             ],
+            promote_metadata_prefixes: Vec::new(),
         },
     )
     .unwrap();
@@ -1600,6 +1873,44 @@ fn gen_ai_projection_emits_normalized_response_attributes() {
 }
 
 #[test]
+fn gen_ai_projection_includes_anthropic_cache_tokens_in_input_total() {
+    let event = make_end_event(
+        Uuid::now_v7(),
+        None,
+        "anthropic.messages",
+        ScopeType::Llm,
+        Some(json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 1,
+                "cache_read_input_tokens": 17_980,
+                "cache_creation_input_tokens": 9_421
+            }
+        })),
+    );
+
+    let attributes = attr_map(&crate::observability::otel_genai::end_attributes(&event));
+    assert_eq!(
+        attributes.get("gen_ai.usage.input_tokens"),
+        Some(&"27403".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_read.input_tokens"),
+        Some(&"17980".to_string())
+    );
+    assert_eq!(
+        attributes.get("gen_ai.usage.cache_creation.input_tokens"),
+        Some(&"9421".to_string())
+    );
+}
+
+#[test]
 fn gen_ai_end_projection_preserves_explicit_error_type() {
     let event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
@@ -2217,6 +2528,32 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
             },
             {
                 "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "call-2",
+                    "content": "claude result"
+                }]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-3",
+                        "content": "mixed result"
+                    },
+                    {
+                        "type": "text",
+                        "text": "continue"
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "content": []
+            },
+            {
+                "role": "user",
                 "content": [
                     {
                         "type": "provider_native",
@@ -2270,6 +2607,32 @@ fn gen_ai_projection_covers_message_variants_and_empty_input() {
                     "id": "call-1",
                     "response": "result"
                 }]
+            },
+            {
+                "role": "tool",
+                "parts": [{
+                    "type": "tool_call_response",
+                    "id": "call-2",
+                    "response": "claude result"
+                }]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "tool_call_response",
+                        "id": "call-3",
+                        "response": "mixed result"
+                    },
+                    {
+                        "type": "text",
+                        "content": "continue"
+                    }
+                ]
+            },
+            {
+                "role": "user",
+                "parts": []
             },
             {
                 "role": "user",
@@ -2562,6 +2925,123 @@ fn records_span_start_mark_and_end() {
     assert_eq!(
         attributes.get("nemo_relay.end.output.result"),
         Some(&"ok".to_string())
+    );
+}
+
+#[test]
+fn metric_schema_marks_are_not_projected_to_direct_traces() {
+    let (provider, exporter) = make_provider();
+    let mut processor = OtelEventProcessor::new(provider.clone(), "test-scope".to_string());
+    let root_uuid = Uuid::now_v7();
+
+    processor.process(&make_start_event(
+        root_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        None,
+    ));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("tokens-saved")
+            .data(json!({
+                "measurements": [{
+                    "name": "example.tokens.saved",
+                    "kind": "counter",
+                    "value_type": "u64",
+                    "value": 42
+                }]
+            }))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("future-metric")
+            .data(json!({"measurements": []}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version("999")
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    processor.process(&Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .parent_uuid(root_uuid)
+            .name("invalid-metric")
+            .data(json!({"measurements": []}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    )));
+    processor.process(&make_mark_event(Some(root_uuid), "routing-decision", None));
+    processor.process(&make_end_event(
+        root_uuid,
+        None,
+        "agent",
+        ScopeType::Agent,
+        None,
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].events.events.len(), 1);
+    assert_eq!(spans[0].events.events[0].name.as_ref(), "routing-decision");
+    assert_eq!(processor.invalid_metric_count, 2);
+}
+
+#[test]
+fn direct_trace_subscriber_exposes_runtime_diagnostics() {
+    let (provider, _exporter) = make_provider();
+    let subscriber = OpenTelemetrySubscriber::from_tracer_provider(provider, "diagnostics");
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("invalid-metric")
+            .data(json!({"measurements": []}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version("999")
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+
+    for _ in 0..3 {
+        (subscriber.subscriber())(&event);
+    }
+
+    let diagnostics = subscriber.runtime_diagnostics();
+    let diagnostic = diagnostics
+        .get("otel.metric_mark_invalid")
+        .expect("invalid metric diagnostic");
+    assert_eq!(diagnostic.count, 3);
+    assert!(
+        diagnostic
+            .message
+            .contains("unsupported metric schema version")
     );
 }
 
@@ -3348,7 +3828,11 @@ fn assert_otel_tool_attribute_branches() {
         Some(&"true".to_string())
     );
 
-    let tool_end_attributes = attr_map(&end_attributes(&Event::Scope(ScopeEvent::new(
+    let tool_end_profile = CategoryProfile::builder()
+        .tool_call_id("call-456")
+        .tool_result_annotation(json!({"opaque": {"rank": 1}}))
+        .build();
+    let tool_end_event = Event::Scope(ScopeEvent::new(
         BaseEvent::builder()
             .name("lookup")
             .metadata(json!({"phase": "complete"}))
@@ -3357,12 +3841,37 @@ fn assert_otel_tool_attribute_branches() {
         ScopeCategory::End,
         Vec::new(),
         EventCategory::tool(),
-        Some(CategoryProfile::builder().tool_call_id("call-456").build()),
-    ))));
+        Some(tool_end_profile),
+    ));
+    let tool_end_attributes = attr_map(&end_attributes(&tool_end_event));
     assert_eq!(
         tool_end_attributes.get("nemo_relay.end.data.result"),
         Some(&"true".to_string())
     );
+    assert_eq!(
+        tool_end_attributes.get("nemo_relay.tool.result.annotation"),
+        Some(&r#"{"opaque":{"rank":1}}"#.to_string())
+    );
+
+    let llm_profile = CategoryProfile::builder()
+        .tool_result_annotation(json!({"must_not_project": true}))
+        .build();
+    let llm_end_event = Event::Scope(ScopeEvent::new(
+        BaseEvent::builder().name("chat").build(),
+        ScopeCategory::End,
+        Vec::new(),
+        EventCategory::llm(),
+        Some(llm_profile),
+    ));
+    assert!(
+        !attr_map(&end_attributes(&llm_end_event))
+            .contains_key("nemo_relay.tool.result.annotation")
+    );
+
+    let gen_ai_attributes = attr_map(&crate::observability::otel_genai::end_attributes(
+        &tool_end_event,
+    ));
+    assert!(!gen_ai_attributes.contains_key("nemo_relay.tool.result.annotation"));
 }
 
 fn assert_otel_catalog_cost_branches() {
@@ -3443,6 +3952,39 @@ fn assert_otel_catalog_cost_branches() {
             provider_qualified_cost_attributes.get("nemo_relay.llm.cost.currency"),
             Some(&"USD".to_string())
         );
+    }
+
+    {
+        let _pricing_guard = pricing_test_mutex().lock().unwrap();
+        install_test_pricing("priced-model");
+        let _reset_guard = ResetPricingResolverGuard;
+        let partial_cost_event = make_scope_event_with_profile(
+            ScopeCategory::End,
+            Uuid::now_v7(),
+            None,
+            "test",
+            ScopeType::Llm,
+            Some(json!({"answer": "ok"})),
+            Some(
+                CategoryProfile::builder()
+                    .model_name("priced-model")
+                    .annotated_response(std::sync::Arc::new(AnnotatedLlmResponse {
+                        usage: Some(Usage {
+                            prompt_tokens: Some(1_000),
+                            completion_tokens: Some(500),
+                            total_tokens: Some(1_500),
+                            cache_read_tokens: Some(200),
+                            cache_write_tokens: Some(10),
+                            cost: None,
+                        }),
+                        ..empty_annotated_response()
+                    }))
+                    .build(),
+            ),
+        );
+        let partial_cost_attributes = attr_map(&end_attributes(&partial_cost_event));
+        assert!(!partial_cost_attributes.contains_key("nemo_relay.llm.cost.total"));
+        assert!(!partial_cost_attributes.contains_key("nemo_relay.llm.cost.currency"));
     }
 }
 
@@ -3702,7 +4244,7 @@ fn provider_builders_cover_success_paths() {
             .with_max_queue_size(16)
             .with_max_export_batch_size(4)
             .with_scheduled_delay(Duration::from_millis(10)),
-        None,
+        SignalRuntimeDiagnostics::new(None),
     )
     .unwrap();
     http_provider.force_flush().unwrap();
@@ -3728,10 +4270,12 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
     .unwrap();
 
     let exporter = BlockingSpanExporter::default();
+    let runtime_diagnostics =
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.endpoints[2].endpoint".to_string()));
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
         exporter.clone(),
         "https://collector.example/v1/traces".to_string(),
-        Some("opentelemetry.endpoints[2].endpoint".to_string()),
+        runtime_diagnostics.clone(),
         BatchConfigBuilder::default()
             .with_max_queue_size(1)
             .with_max_export_batch_size(1)
@@ -3772,6 +4316,13 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
             .message
             .contains("https://collector.example/v1/traces")
     );
+    assert_eq!(
+        runtime_diagnostics
+            .snapshot()
+            .get("otel.spans_dropped")
+            .map(|diagnostic| diagnostic.count),
+        Some(2)
+    );
 }
 
 #[test]
@@ -3795,7 +4346,7 @@ fn grpc_metadata_and_runtime_builder_paths_succeed() {
             &OpenTelemetryConfig::grpc("grpc-demo")
                 .with_endpoint("http://127.0.0.1:4317")
                 .with_header("authorization", "Bearer token"),
-            None,
+            SignalRuntimeDiagnostics::new(None),
         )
         .unwrap();
         provider.force_flush().ok();

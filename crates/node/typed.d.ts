@@ -22,6 +22,12 @@ export interface JsonArray extends Array<JsonValue> {}
 /** Any JSON-serializable value accepted by the typed wrapper APIs. */
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
 
+/** Canonical application-visible result of tool execution. */
+export interface ToolExecutionResult<TResult> {
+  result: TResult;
+  annotation?: JsonValue;
+}
+
 /** Canonical JSON shape for an opaque LLM request payload. */
 export interface LlmRequestShape {
   headers: JsonObject;
@@ -121,6 +127,7 @@ export interface TypedToolExecuteOptions {
   attributes?: number | null;
   data?: JsonValue;
   metadata?: JsonValue;
+  toolCallId?: string | null;
 }
 
 /** Options for `typedLlmExecute`. */
@@ -138,15 +145,16 @@ export interface TypedLlmExecuteOptions {
  * Execute a typed tool call through the JSON middleware pipeline.
  *
  * Converts `args` to JSON, runs the native tool execution lifecycle, and
- * decodes the final JSON result back into the caller's typed result shape.
+ * decodes only `result` back into the caller's typed result shape while
+ * preserving `annotation` unchanged.
  *
  * @param name - Tool name.
  * @param args - Typed tool arguments.
  * @param func - The tool implementation.
  * @param argsCodec - Codec for args serialization/deserialization.
  * @param resultCodec - Codec for result serialization/deserialization.
- * @param options - Optional scope handle, attributes, data, metadata.
- * @returns A promise resolving to the decoded typed tool result.
+ * @param options - Optional scope handle, attributes, data, metadata, and toolCallId.
+ * @returns A promise resolving to the decoded typed result and opaque annotation.
  * @remarks The wrapper accepts both synchronous and promise-returning tool
  * implementations; codec failures and native execution errors propagate to the
  * returned promise.
@@ -154,11 +162,11 @@ export interface TypedLlmExecuteOptions {
 export declare function typedToolExecute<TArgs, TResult>(
   name: string,
   args: TArgs,
-  func: (args: TArgs, signal: AbortSignal) => TResult | Promise<TResult>,
+  func: (args: TArgs, signal: AbortSignal) => ToolExecutionResult<TResult> | Promise<ToolExecutionResult<TResult>>,
   argsCodec: Codec<TArgs>,
   resultCodec: Codec<TResult>,
   options?: TypedToolExecuteOptions,
-): Promise<TResult>;
+): Promise<ToolExecutionResult<TResult>>;
 
 /**
  * Execute a typed LLM call through the JSON middleware pipeline.

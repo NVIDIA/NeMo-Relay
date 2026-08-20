@@ -5,6 +5,9 @@
 
 use super::*;
 use crate::acg::canonicalize::{canonicalize_value, sha256_hex};
+use crate::response_cache::mark::CacheReason;
+use sha2::{Digest, Sha256};
+use std::io::Write;
 
 #[test]
 fn fingerprint_matches_canonicalize_then_hash() {
@@ -264,7 +267,7 @@ fn namespace_and_provider_separate_keys() {
 }
 
 #[test]
-fn switchyard_backend_partition_is_keyed_without_allowlisting() {
+fn routing_backend_partition_is_keyed_without_allowlisting() {
     let config = cache_all_config();
     assert!(config.header_allowlist.is_empty());
     let make = |backend: &str| {
@@ -406,14 +409,14 @@ fn stateful_conversation_and_default_store_bypass() {
     }));
     assert_eq!(
         build_cache_key("openai", &with_conversation, &config),
-        KeyOutcome::Bypass("stateful_conversation")
+        KeyOutcome::Bypass(CacheReason::StatefulConversation)
     );
     // Responses persists by default: no explicit `store: false` opt-out
     // means the call is stateful.
     let default_store = request(json!({"model": "gpt-4o", "input": "hello"}));
     assert_eq!(
         build_cache_key("openai", &default_store, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let opted_out = request(json!({"model": "gpt-4o", "input": "hello", "store": false}));
     assert!(matches!(
@@ -428,7 +431,7 @@ fn stateful_conversation_and_default_store_bypass() {
     }));
     assert_eq!(
         build_cache_key("openai", &template, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let template_opted_out = request(json!({
         "model": "gpt-4o",
@@ -447,7 +450,7 @@ fn null_bodies_bypass_the_cache() {
     // request would share one key, so they are never cacheable.
     assert_eq!(
         build_cache_key("openai", &request(Json::Null), &cache_all_config()),
-        KeyOutcome::Bypass("unparseable_body")
+        KeyOutcome::Bypass(CacheReason::UnparseableBody)
     );
 }
 
@@ -472,7 +475,7 @@ fn unrepresentable_integers_bypass_the_cache() {
     for id in [9_007_199_254_740_995_u64, 9_007_199_254_740_996] {
         assert_eq!(
             build_cache_key("anthropic", &make(id), &config),
-            KeyOutcome::Bypass("unrepresentable_number"),
+            KeyOutcome::Bypass(CacheReason::UnrepresentableNumber),
             "id {id} lies beyond 2^53 and must not be trusted in a key"
         );
     }
@@ -514,7 +517,7 @@ fn integers_beyond_u64_bypass_after_parsing_as_f64() {
     for request in [&first, &second] {
         assert_eq!(
             build_cache_key("anthropic", request, &config),
-            KeyOutcome::Bypass("unrepresentable_number")
+            KeyOutcome::Bypass(CacheReason::UnrepresentableNumber)
         );
     }
 }
@@ -525,20 +528,20 @@ fn stateful_responses_calls_bypass() {
     let with_store = request(json!({"model": "m", "messages": [], "store": true}));
     assert_eq!(
         build_cache_key("openai", &with_store, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let with_prev =
         request(json!({"model": "m", "messages": [], "previous_response_id": "resp_1"}));
     assert_eq!(
         build_cache_key("openai", &with_prev, &config),
-        KeyOutcome::Bypass("stateful_previous_response_id")
+        KeyOutcome::Bypass(CacheReason::StatefulPreviousResponseId)
     );
     // A truthy non-boolean `store` must still bypass (it is otherwise stripped
     // from the key), while `store: false` stays cacheable.
     let with_truthy = request(json!({"model": "m", "messages": [], "store": "true"}));
     assert_eq!(
         build_cache_key("openai", &with_truthy, &config),
-        KeyOutcome::Bypass("stateful_store")
+        KeyOutcome::Bypass(CacheReason::StatefulStore)
     );
     let not_stored = request(json!({"model": "m", "messages": [], "store": false}));
     assert!(matches!(
@@ -553,13 +556,13 @@ fn nondeterministic_calls_bypass_only_when_disabled() {
     let skip = ResponseCacheConfig::default();
     assert_eq!(
         build_cache_key("openai", &sampled, &skip),
-        KeyOutcome::Bypass("nondeterministic_temperature")
+        KeyOutcome::Bypass(CacheReason::NondeterministicTemperature)
     );
     // Absent temperature: providers default to positive sampling.
     let absent = request(json!({"model": "m", "messages": []}));
     assert_eq!(
         build_cache_key("openai", &absent, &skip),
-        KeyOutcome::Bypass("nondeterministic_temperature")
+        KeyOutcome::Bypass(CacheReason::NondeterministicTemperature)
     );
     // Explicitly pinned deterministic stays cacheable.
     let pinned = request(json!({"model": "m", "messages": [], "temperature": 0.0}));
@@ -963,5 +966,334 @@ fn null_text_system_block_does_not_collide_with_no_system() {
         key_of("anthropic", &malformed, &config),
         key_of("anthropic", &clean, &config),
         "a null-text system block must not key like an absent system"
+    );
+}
+
+fn tool_key(
+    namespace: &str,
+    tool: &str,
+    version: Option<&str>,
+    args: Json,
+    arg_skip: &[String],
+) -> String {
+    tool_key_with_error_policy(namespace, tool, version, args, arg_skip, false)
+}
+
+fn tool_key_with_error_policy(
+    namespace: &str,
+    tool: &str,
+    version: Option<&str>,
+    args: Json,
+    arg_skip: &[String],
+    cache_errors: bool,
+) -> String {
+    match build_tool_cache_key(namespace, tool, version, &args, arg_skip, cache_errors) {
+        KeyOutcome::Key(key) => key,
+        other => panic!("expected a tool key, got {other:?}"),
+    }
+}
+
+#[test]
+fn same_tool_and_args_yield_the_same_key() {
+    let args = json!({"q": "weather", "units": "metric"});
+    assert_eq!(
+        tool_key("", "get_weather", None, args.clone(), &[]),
+        tool_key(
+            "",
+            "get_weather",
+            None,
+            json!({"units": "metric", "q": "weather"}),
+            &[]
+        )
+    );
+}
+
+#[test]
+fn tool_name_args_namespace_and_version_each_separate_keys() {
+    let base = || json!({"q": "x"});
+    let key = tool_key("", "t", None, base(), &[]);
+    assert_ne!(key, tool_key("", "t", None, json!({"q": "y"}), &[]), "args");
+    assert_ne!(key, tool_key("", "other", None, base(), &[]), "tool name");
+    assert_ne!(key, tool_key("ns", "t", None, base(), &[]), "namespace");
+    assert_ne!(key, tool_key("", "t", Some("v1"), base(), &[]), "version");
+}
+
+#[test]
+fn tool_keys_bypass_unrepresentable_integers() {
+    assert_eq!(
+        build_tool_cache_key(
+            "key-test",
+            "lookup",
+            None,
+            &json!({"id": 18014398509481985_i64}),
+            &[],
+            false,
+        ),
+        KeyOutcome::Bypass(CacheReason::UnrepresentableNumber)
+    );
+}
+
+#[test]
+fn arg_skip_drops_only_the_listed_keys() {
+    let skip = vec!["request_id".to_string()];
+    assert_eq!(
+        tool_key("", "t", None, json!({"q": "x", "request_id": "a"}), &skip),
+        tool_key("", "t", None, json!({"q": "x", "request_id": "b"}), &skip)
+    );
+    assert_ne!(
+        tool_key("", "t", None, json!({"q": "x", "request_id": "a"}), &skip),
+        tool_key("", "t", None, json!({"q": "y", "request_id": "a"}), &skip)
+    );
+}
+
+#[test]
+fn arg_skip_policy_partitions_keys_and_normalizes_order() {
+    let no_skip: Vec<String> = Vec::new();
+    let locale_only = vec!["locale".to_string()];
+    assert_ne!(
+        tool_key("key-test", "lookup", None, json!({"q": "x"}), &no_skip),
+        tool_key("key-test", "lookup", None, json!({"q": "x"}), &locale_only),
+        "a policy change must not reuse an entry even when the newly skipped key is absent"
+    );
+
+    let reordered_and_duplicated = vec![
+        "trace_id".to_string(),
+        "locale".to_string(),
+        "trace_id".to_string(),
+    ];
+    let normalized = vec!["locale".to_string(), "trace_id".to_string()];
+    assert_eq!(
+        tool_key(
+            "key-test",
+            "lookup",
+            None,
+            json!({"q": "x", "locale": "fr", "trace_id": "one"}),
+            &reordered_and_duplicated,
+        ),
+        tool_key(
+            "key-test",
+            "lookup",
+            None,
+            json!({"q": "x", "locale": "de", "trace_id": "two"}),
+            &normalized,
+        ),
+        "equivalent skip policies must keep their intended hit behavior"
+    );
+}
+
+#[test]
+fn cache_error_policy_partitions_tool_keys() {
+    assert_ne!(
+        tool_key_with_error_policy("key-test", "lookup", None, json!({"q": "x"}), &[], false),
+        tool_key_with_error_policy("key-test", "lookup", None, json!({"q": "x"}), &[], true),
+        "an opt-in error-cache entry must not be replayed after the policy is disabled"
+    );
+}
+
+#[test]
+fn header_allowlist_policy_partitions_keys_and_normalizes_case() {
+    let request = request(json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.0,
+    }));
+    let unpartitioned = cache_all_config();
+    let mut tenant_partitioned = cache_all_config();
+    tenant_partitioned.header_allowlist = vec!["X-Tenant".to_string()];
+    let mut duplicate_spelling = cache_all_config();
+    duplicate_spelling.header_allowlist = vec![
+        "x-tenant".to_string(),
+        "X-TENANT".to_string(),
+        "x-tenant".to_string(),
+    ];
+
+    assert_ne!(
+        key_of("openai", &request, &unpartitioned),
+        key_of("openai", &request, &tenant_partitioned),
+        "changing the header policy must partition keys even before a request supplies that header"
+    );
+    assert_eq!(
+        key_of("openai", &request, &tenant_partitioned),
+        key_of("openai", &request, &duplicate_spelling),
+        "case-only and duplicate policy spellings are equivalent"
+    );
+}
+
+#[test]
+fn empty_header_allowlist_preserves_the_v1_key_document() {
+    let request = request(json!("raw prompt"));
+    let legacy_v1_key = fingerprint(&json!({
+        "v": 1,
+        "ns": "key-test",
+        "provider": "custom",
+        "strategy": "exact_request",
+        "codec": null,
+        "openai_chat_token_cap": null,
+        "body": "raw prompt",
+        "headers": {},
+    }))
+    .unwrap();
+
+    assert_eq!(
+        key_of("custom", &request, &cache_all_config()),
+        legacy_v1_key,
+        "the default empty allowlist must keep existing v1 Redis entries reachable"
+    );
+}
+
+#[test]
+fn tool_keys_are_disjoint_from_llm_keys() {
+    let llm = key_of(
+        "openai",
+        &request(json!({"model": "t", "messages": []})),
+        &cache_all_config(),
+    );
+    let tool = tool_key("key-test", "t", None, json!({"messages": []}), &[]);
+    assert_ne!(llm, tool);
+}
+
+#[test]
+fn non_object_request_bodies_stay_raw_and_cacheable() {
+    // Non-object requests have no stateful controls or normalized fields. They
+    // must still receive a deterministic raw-body key instead of being treated
+    // as an unparseable request.
+    let raw = request(json!(["opaque", {"request": "body"}]));
+    assert_eq!(
+        resolved_body("custom-provider", &raw),
+        (raw.content.clone(), None)
+    );
+    assert!(matches!(
+        build_cache_key("custom-provider", &raw, &cache_all_config()),
+        KeyOutcome::Key(_)
+    ));
+}
+
+#[test]
+fn negative_integers_beyond_the_safe_json_range_bypass_tool_keys() {
+    // RFC 8785 canonicalization rounds integers through f64. Negative values
+    // need the same protection as the positive IDs covered above.
+    let too_large = -9_007_199_254_740_993_i64;
+    assert_eq!(
+        build_tool_cache_key("key-test", "lookup", None, &json!(too_large), &[], false),
+        KeyOutcome::Bypass(CacheReason::UnrepresentableNumber)
+    );
+}
+
+#[test]
+fn hash_writer_flushes_after_streaming_canonical_bytes() {
+    let mut hasher = Sha256::new();
+    {
+        let mut writer = HashWriter(&mut hasher);
+        writer.write_all(b"response-cache-key").unwrap();
+        writer.flush().unwrap();
+    }
+
+    assert_eq!(hasher.finalize(), Sha256::digest(b"response-cache-key"));
+}
+
+#[test]
+fn key_headers_match_case_insensitively_and_exclude_unlisted_values() {
+    let mut headers = Map::new();
+    headers.insert("X-Tenant".to_string(), json!("tenant-a"));
+    headers.insert("Authorization".to_string(), json!("secret"));
+
+    let kept = allowlisted_headers(&headers, &["x-tenant".to_string()]);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept.get("x-tenant"), Some(&json!("tenant-a")));
+}
+
+#[test]
+fn tool_id_normalization_skips_nonobjects_and_nonstring_ids() {
+    let mut body = json!({
+        "messages": [
+            null,
+            {"role": "assistant", "tool_calls": [{"id": "call-raw"}, {"id": 7}]},
+            {"role": "tool", "tool_call_id": "call-raw"},
+            {"role": "tool", "tool_call_id": 42}
+        ]
+    });
+
+    normalize_tool_call_ids(body.as_object_mut().unwrap());
+    assert_eq!(
+        body.pointer("/messages/1/tool_calls/0/id"),
+        Some(&json!("tcid_0"))
+    );
+    assert_eq!(body.pointer("/messages/1/tool_calls/1/id"), Some(&json!(7)));
+    assert_eq!(
+        body.pointer("/messages/2/tool_call_id"),
+        Some(&json!("tcid_0"))
+    );
+    assert_eq!(body.pointer("/messages/3/tool_call_id"), Some(&json!(42)));
+}
+
+#[test]
+fn lossy_shape_guards_handle_nonobjects_and_unmodeled_tool_choices() {
+    assert!(
+        !lossy_request_shape(ProviderSurface::OpenAIChat, &json!("opaque body")),
+        "a non-object has no normalized fields to lose"
+    );
+    assert!(
+        lossy_system_block(&json!("not a system block")),
+        "a non-object system block cannot be faithfully normalized"
+    );
+
+    let request = request(json!({
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "look it up"}],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": "lookup", "strict": true}
+        }
+    }));
+    assert_eq!(
+        resolved_body("openai", &request).1,
+        None,
+        "a lossy tool_choice must use the raw request body for its key"
+    );
+}
+
+#[test]
+fn decode_round_trip_guards_fall_back_to_raw_tool_and_message_shapes() {
+    // Anthropic client-tool wire objects serialize differently from the shared
+    // normalized tool representation. Keeping their raw shape in the key is
+    // safer than silently treating a future schema variation as equivalent.
+    let anthropic_tool_request = request(json!({
+        "model": "claude-test",
+        "max_tokens": 16,
+        "system": "Follow the tool contract.",
+        "messages": [{"role": "user", "content": "Look this up."}],
+        "tools": [{
+            "name": "lookup",
+            "description": "Look up a document.",
+            "input_schema": {"type": "object", "properties": {}}
+        }]
+    }));
+    assert!(
+        decode_surface(ProviderSurface::AnthropicMessages, &anthropic_tool_request).is_none(),
+        "a non-round-tripping tool shape must use raw keying"
+    );
+    assert_eq!(
+        resolved_body("anthropic", &anthropic_tool_request),
+        (anthropic_tool_request.content.clone(), None)
+    );
+
+    // Closed message types carry a provider-native value for legacy
+    // `function_call`; its normalized representation is intentionally not a
+    // wire-equivalent message, so it too must keep the raw key shape.
+    let legacy_message_request = request(json!({
+        "model": "gpt-4o",
+        "messages": [{
+            "role": "assistant",
+            "content": null,
+            "function_call": {"name": "lookup", "arguments": "{\"q\":\"docs\"}"}
+        }]
+    }));
+    assert!(
+        decode_surface(ProviderSurface::OpenAIChat, &legacy_message_request).is_none(),
+        "a non-round-tripping message shape must use raw keying"
+    );
+    assert_eq!(
+        resolved_body("openai", &legacy_message_request),
+        (legacy_message_request.content.clone(), None)
     );
 }

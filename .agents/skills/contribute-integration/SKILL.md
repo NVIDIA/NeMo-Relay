@@ -28,6 +28,9 @@ as LangChain, LangGraph, Deep Agents, or OpenClaw through its public APIs.
 
 - [ ] Integration pattern follows `docs/integrate-into-frameworks/adding-scopes.mdx`
 - [ ] Integration uses public framework or plugin APIs
+- [ ] Managed tool adapters return `ToolExecutionResult` to Relay and unwrap
+      `.result` only at the framework boundary; opaque annotations are
+      preserved through forwarding execution intercepts
 - [ ] Relevant integration tests or smoke path pass
 - [ ] Docs updated if activation or usage changed
 

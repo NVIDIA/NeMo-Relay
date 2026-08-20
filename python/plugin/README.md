@@ -21,6 +21,14 @@ dynamic worker plugins. Use it when plugin code should run in its own Python
 process and communicate with Relay through the versioned `grpc-v1` worker
 protocol.
 
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. The
+protocol name remains `grpc-v1`, while generated `ToolNext` responses and tool
+execution outcomes use structural protobuf `ToolExecutionResult` and
+`ToolExecutionInterceptOutcome` messages instead of schema-tagged JSON
+envelopes. Workers and custom bindings built for an earlier Relay release must
+regenerate their protobuf bindings, rebuild with this SDK, and declare a
+`compat.relay` range beginning at `0.8.0` or later.
+
 ## Why Use It?
 
 - **Isolate plugin dependencies**: Run custom policy, middleware, or exporter
@@ -40,6 +48,8 @@ protocol.
   environment.
 - **Typed runtime helpers**: JSON, event, scope, middleware, continuation, and
   diagnostic types shared with Relay.
+- **Canonical tool results**: `ToolNext.call()` returns `ToolExecutionResult`,
+  preserving opaque annotations separately from application result JSON.
 - **Generated transport bindings**: Private protobuf bindings included in built
   wheels; published-wheel installation does not require `protoc` or
   `grpcio-tools`.
@@ -96,6 +106,34 @@ class PolicyPlugin(WorkerPlugin):
 async def main() -> None:
     await serve_plugin(PolicyPlugin())
 ```
+
+Marks can also declare a typed data schema and exported-log severity without
+changing the stable `grpc-v1` protocol identifier:
+
+```python
+from nemo_relay_plugin import DataSchema, LogSeverity
+
+await ctx.runtime.emit_mark(
+    "acme.policy.decision",
+    {"allowed": True},
+    data_schema=DataSchema("acme.policy.decision", "1"),
+    severity=LogSeverity.INFO,
+)
+```
+
+The original positional `emit_mark(name, data, metadata)` form remains
+supported. Relay validates the schema and severity again at the host boundary.
+Use `emit_metric(name, measurements, metadata)` to attach the reserved Relay
+metric schema; authoritative metric validation remains in Relay after mark
+sanitization.
+
+Use `await ctx.runtime.runtime_diagnostics()` in an asynchronous callback to
+read an immutable, host-level `RuntimeDiagnostics` snapshot. Each entry has
+`code`, `message`, and `count`; `entries` is ordered by code and `get(code)`
+looks up one entry. Relay aggregates repeated codes, retains the latest
+message, saturates counts, and caps the snapshot at 32 entries. Entries do not
+identify the emitting plugin. An older host returns gRPC `UNIMPLEMENTED`, which
+the SDK reports as an unsupported-runtime-diagnostics error.
 
 Set `load.entrypoint` to `your_module:main` in `relay-plugin.toml`. Relay
 imports that function and awaits the returned coroutine when it starts the
@@ -161,9 +199,8 @@ cancellation RPC and all other worker RPCs, so offload blocking work and make
 its own cancellation behavior explicit.
 
 `grpc-v1` workers are expected to implement this best-effort cancellation
-contract. Relay remains compatible with older workers that return
-`accepted = false`; in that case it still drops the transport request, but it
-cannot guarantee worker-side interruption.
+contract. When a worker returns `accepted = false`, Relay still drops the
+transport request, but it cannot guarantee worker-side interruption.
 
 Windows ARM64 is not currently supported because `grpcio` does not publish a
 usable wheel for that platform. The NeMo Relay workspace skips installation and

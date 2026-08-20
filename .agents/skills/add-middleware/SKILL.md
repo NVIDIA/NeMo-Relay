@@ -50,6 +50,13 @@ Refer to `docs/about-nemo-relay/concepts/middleware.mdx` for the full diagrams.
   specialized tool or LLM sanitizer (when applicable) -> mark or scope event
   sanitizer -> subscriber and exporter dispatch
 
+Tool execution callbacks and each execution-intercept `next` continuation
+return the canonical `ToolExecutionResult { result, annotation }`. A forwarding
+intercept must preserve both fields in `ToolExecutionInterceptOutcome`; Relay
+retains `pending_marks` separately. Tool sanitize-response guardrails receive
+only `result`. Scope-end event sanitizers govern the annotation after Relay
+projects it to `category_profile.tool_result_annotation`.
+
 ## Core Steps
 
 1. Define or reuse the callback type alias in
@@ -96,6 +103,8 @@ Follow the `add-binding-feature` skill for the cross-binding implementation chec
 - [ ] Callback failure policy, including fail-open behavior when required
 - [ ] Scope-local registration, inheritance, and cleanup on pop
 - [ ] Event payload semantics after middleware mutation
+- [ ] Tool execution result and annotation preservation, replacement, and
+      removal when the middleware touches tool execution
 - [ ] Mark and scope event field semantics, including immutable identity fields
 - [ ] Parity coverage in every affected binding
 

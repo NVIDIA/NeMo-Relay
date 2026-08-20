@@ -148,10 +148,14 @@ pub struct CostEstimate {
 }
 
 impl CostEstimate {
-    /// Returns the explicit total, or the sum of component costs when no total was supplied.
+    /// Returns the explicit total, or for provider-reported costs only, the sum of component
+    /// costs when no total was supplied.
     #[must_use]
     pub fn total_or_component_sum(&self) -> Option<f64> {
         self.total.or_else(|| {
+            if self.source != CostSource::ProviderReported {
+                return None;
+            }
             let (has_component, total) =
                 [self.input, self.output, self.cache_read, self.cache_write]
                     .into_iter()
@@ -330,6 +334,17 @@ pub enum ApiSpecificResponse {
         /// Full content blocks array for direct access.
         #[serde(skip_serializing_if = "Option::is_none")]
         content_blocks: Option<Vec<Json>>,
+    },
+
+    /// OCI Generative AI-specific fields.
+    #[serde(rename = "oci_genai")]
+    OCIGenAI {
+        /// Chat response API format (`GENERIC`, `COHERE`, or `COHEREV2`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        api_format: Option<String>,
+        /// Model version reported on the `ChatResult` envelope.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_version: Option<String>,
     },
 
     /// Gemini generateContent API-specific fields.

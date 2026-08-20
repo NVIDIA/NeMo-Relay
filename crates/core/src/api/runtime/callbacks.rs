@@ -8,6 +8,7 @@
 //! so the runtime can compose tool and LLM middleware consistently across
 //! bindings.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -17,11 +18,12 @@ use tokio_stream::Stream;
 
 use crate::api::event::{Event, EventSanitizeFields};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
-use crate::api::tool::ToolExecutionInterceptOutcome;
+use crate::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use crate::codec::request::AnnotatedLlmRequest;
 use crate::codec::traits::{LlmCodec, LlmResponseCodec};
 use crate::error::Result;
 use crate::json::Json;
+pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
 
 /// Sanitize mutable observability fields on a fully constructed event.
 ///
@@ -32,6 +34,17 @@ pub type EventSanitizeFn = Arc<
             Arc<Event>,
             EventSanitizeFields,
         ) -> Pin<Box<dyn Future<Output = Result<EventSanitizeFields>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Add flat metadata attributes to a fully constructed event.
+///
+/// The callback receives immutable event context and returns dotted metadata
+/// keys to insert. Relay validates the returned keys and values before merging
+/// them, and never overwrites metadata that is already present.
+pub type EventMetadataInjectorFn = Arc<
+    dyn Fn(Arc<Event>) -> Pin<Box<dyn Future<Output = Result<BTreeMap<String, Json>>> + Send>>
         + Send
         + Sync,
 >;
@@ -103,9 +116,9 @@ pub type ToolInterceptFn =
 ///   chain.
 ///
 /// # Returns
-/// A future resolving to the downstream tool result JSON. Pending marks from
-/// downstream intercepts are retained by the runtime and are not exposed
-/// through this continuation.
+/// A future resolving to the downstream tool result and optional opaque
+/// annotation. Pending marks from downstream intercepts are retained by the
+/// runtime and are not exposed through this continuation.
 ///
 /// # Errors
 /// The future resolves to an error when the remaining execution chain fails.
@@ -115,8 +128,9 @@ pub type ToolInterceptFn =
 /// execution-intercept callback is still running. Each invocation receives an
 /// isolated snapshot of the scopes visible when `next` is called. Calls that
 /// remain unfinished or begin after the interceptor settles are rejected.
-pub type ToolExecutionNextFn =
-    Arc<dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<Json>> + Send>> + Send + Sync>;
+pub type ToolExecutionNextFn = Arc<
+    dyn Fn(Json) -> Pin<Box<dyn Future<Output = Result<ToolExecutionResult>> + Send>> + Send + Sync,
+>;
 /// Wrap or replace tool execution.
 ///
 /// A tool execution intercept receives the tool name, the current argument
@@ -150,46 +164,6 @@ pub(crate) type ToolExecutionOutcomeNextFn = Arc<
         + Send
         + Sync,
 >;
-
-/// Relay's built-in LLM codec identities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinLlmCodec {
-    /// OpenAI Chat Completions request and response payloads.
-    OpenAiChat,
-    /// OpenAI Responses request and response payloads.
-    OpenAiResponses,
-    /// Anthropic Messages request and response payloads.
-    AnthropicMessages,
-    /// Gemini generateContent request and response payloads.
-    GeminiGenerateContent,
-}
-
-impl BuiltinLlmCodec {
-    /// Stable identifier used in configuration and language bindings.
-    #[must_use]
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::OpenAiChat => "openai_chat",
-            Self::OpenAiResponses => "openai_responses",
-            Self::AnthropicMessages => "anthropic_messages",
-            Self::GeminiGenerateContent => "gemini_generate_content",
-        }
-    }
-}
-
-/// Per-call LLM codec identity supplied to sanitize guardrails.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum LlmCodecIdentity {
-    /// No codec was active for this payload direction.
-    #[default]
-    None,
-    /// A Relay built-in codec was active.
-    BuiltIn(BuiltinLlmCodec),
-    /// A runtime-registered codec was active, identified by its stable ID.
-    Runtime(String),
-    /// A codec was active but does not expose a registered identity.
-    Opaque,
-}
 
 /// Per-call codec context for LLM request sanitize guardrails.
 ///

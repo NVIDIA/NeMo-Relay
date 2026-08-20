@@ -49,6 +49,7 @@ from nemo_relay._native import (
     AnthropicMessagesCodec,
     GeminiGenerateContentCodec,
     LLMRequest,
+    OCIGenAIChatCodec,
     OpenAIChatCodec,
     OpenAIResponsesCodec,
 )
@@ -165,6 +166,7 @@ __all__ = [
     "GeminiGenerateContentCodec",
     "LlmCodec",
     "LlmResponseCodec",
+    "OCIGenAIChatCodec",
     "OpenAIChatCodec",
     "OpenAIResponsesCodec",
 ]

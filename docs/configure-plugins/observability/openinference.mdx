@@ -16,7 +16,7 @@ Select `openinference` on an endpoint in the `opentelemetry` section:
 
 ```toml
 [components.config]
-version = 3
+version = 4
 
 [components.config.opentelemetry]
 enabled = true
@@ -40,6 +40,12 @@ The endpoint emits the existing OpenInference scope, tool, LLM, and mark
 projection. It supports the `mark_projection`, `mark_exclude_names`, and
 `attribute_mappings` controls on the typed endpoint, retaining the legacy
 behavior.
+
+Normalized tool results emit one `llm.input_messages` entry per result with
+`message.role = "tool"`, `message.tool_call_id`, and `message.content`.
+Anthropic user messages that contain only `tool_result` blocks expand into
+separate entries so parallel tool results retain their original order and
+correlation IDs.
 
 Set `OTEL_AUTHORIZATION` to the complete authorization header value before
 activation. NeMo Relay snapshots the value when the plugin

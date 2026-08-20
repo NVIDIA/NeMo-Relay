@@ -1204,7 +1204,7 @@ async fn registered_remote_tool_input_intercept_rewrites_args_and_skips_output_c
         let seen = Arc::clone(&seen);
         Box::pin(async move {
             *seen.lock().unwrap() = args;
-            Ok(json!({"forecast": "sunny"}))
+            Ok(json!({"forecast": "sunny"}).into())
         })
     });
 
@@ -1219,7 +1219,7 @@ async fn registered_remote_tool_input_intercept_rewrites_args_and_skips_output_c
     .unwrap();
 
     assert_eq!(*callback_args.lock().unwrap(), json!({"city": "Paris"}));
-    assert_eq!(result, json!({"forecast": "sunny"}));
+    assert_eq!(result.result, json!({"forecast": "sunny"}));
 
     crate::plugin::rollback_registrations(&mut registrations);
 }

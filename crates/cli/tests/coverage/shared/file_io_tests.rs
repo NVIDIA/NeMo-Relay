@@ -83,6 +83,59 @@ fn backups_and_snapshots_restore_original_or_missing_files() {
 
 #[cfg(unix)]
 #[test]
+fn snapshot_restore_preserves_symlink_identity_and_target_bytes() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("target.txt");
+    std::fs::write(&target, b"original").unwrap();
+    let path = directory.path().join("linked.txt");
+    symlink(&target, &path).unwrap();
+
+    let snapshot = snapshot_optional_file(&path).unwrap();
+    std::fs::write(&target, b"changed").unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, b"plain file").unwrap();
+    restore_file_snapshot(&snapshot).unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_link(&path).unwrap(), target);
+    assert_eq!(std::fs::read(&target).unwrap(), b"original");
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_restore_recreates_dangling_symlink_and_removes_materialized_target() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("missing-target.txt");
+    let path = directory.path().join("dangling.txt");
+    symlink(&target, &path).unwrap();
+
+    let snapshot = snapshot_optional_file(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::write(&path, b"plain file").unwrap();
+    std::fs::write(&target, b"materialized").unwrap();
+    restore_file_snapshot(&snapshot).unwrap();
+
+    assert!(
+        std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_link(&path).unwrap(), target);
+    assert!(!target.exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn private_atomic_write_ignores_a_permissive_umask() {
     use std::os::unix::fs::PermissionsExt;
 

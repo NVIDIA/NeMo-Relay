@@ -68,8 +68,10 @@ Every event carries a shared envelope:
 
 Scope events add `scope_category`, `category`, `attributes`, and optional
 `category_profile`. Mark events can optionally carry `category` and
-`category_profile`, though the current public mark helpers emit generic marks
-without those optional category fields.
+`category_profile`. Generic mark helpers also accept an optional `data_schema`
+and log `severity`. Relay stores typed severity in sanitizer-visible metadata
+under `nemo_relay.log.severity`; that Relay convention does not add a field to
+the ATOF `0.1` envelope.
 
 Runtime helpers assign timestamps automatically by default. Manual lifecycle
 helpers for scopes, marks, tool calls, and LLM calls also accept an explicit
@@ -131,8 +133,10 @@ Category-specific fields live under `category_profile`. NeMo Relay uses
 `model_name` for LLM events, `tool_call_id` for tool events, and `subtype` for
 custom-category events. LLM codec annotations, when present, are serialized
 under `category_profile.annotated_request` on LLM start events and
-`category_profile.annotated_response` on LLM end events. Unknown profile fields
-are preserved so newer producers can interoperate with older consumers.
+`category_profile.annotated_response` on LLM end events. A successful tool end
+event places its optional opaque result annotation under
+`category_profile.tool_result_annotation`. Unknown profile fields are preserved
+so newer producers can interoperate with older consumers.
 
 ### Annotated Request and Response Data
 
@@ -140,6 +144,14 @@ LLM codecs can enrich LLM events with annotated request and response data. These
 annotations are part of the canonical event JSON under `category_profile` when
 they are present, so ATOF JSONL export and in-process subscriber JSON expose the
 same payload shape. Request annotations use the owning agent's freshness state.
+
+Managed and manual tool execution uses `ToolExecutionResult` to keep the
+application-owned `result` separate from an optional opaque `annotation`.
+Relay records the result as the tool end output and projects a non-null
+annotation into `category_profile.tool_result_annotation`. A tool
+sanitize-response guardrail sanitizes only the result. A scope-end event
+sanitizer can then replace or remove the annotation before subscribers and
+exporters receive the event.
 
 ### Event Handoff
 
@@ -315,7 +327,12 @@ Exporters handle the mark as follows:
 - ATIF omits marks because it models trajectory steps rather than independent
   point-in-time events.
 - The `full` and `openinference` OpenTelemetry projections use their fixed
-  native mark handling. The `gen_ai` projection omits marks.
+  native handling for non-metric marks. The `gen_ai` projection omits marks.
+- The independent OTLP log pipeline exports sanitized non-metric marks. The
+  independent metric pipeline exclusively consumes valid marks with the
+  Relay-owned `nemo.relay.metric_measurements` schema. Invalid reserved metric
+  marks reach no OTLP signal and produce an operational diagnostic. This
+  routing does not define an ATOF-wide metric semantic.
 
 ## How Events Are Produced
 
@@ -326,5 +343,5 @@ the runtime record important state transitions even when there is no full nested
 callback to wrap. Subscriber delivery is downstream from event construction and
 does not block the emitting call on native bindings.
 
-ATOF export writes the raw ATOF event stream. ATIF and the typed
-OpenTelemetry formats are downstream projections over the same events.
+ATOF export writes the raw ATOF event stream. ATIF and OpenTelemetry traces,
+logs, and metrics are downstream projections over the same events.

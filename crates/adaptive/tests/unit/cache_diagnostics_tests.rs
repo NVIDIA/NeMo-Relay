@@ -82,6 +82,7 @@ fn make_hot_cache(stable_prefix_length: Option<usize>) -> HotCache {
                 })
                 .collect(),
             stable_prefix_length,
+            stable_prefix_fingerprint: None,
             total_observations: 4,
         }),
         acg_observation_count: 4,
@@ -230,6 +231,34 @@ fn cache_request_facts_keeps_missing_facts_bounded_when_inputs_are_unavailable()
             .contains(&"stable_prefix_tokens_unavailable".to_string())
     );
     assert_eq!(facts.stable_prefix_tokens, None);
+}
+
+#[test]
+fn cache_request_facts_rejects_a_truncated_stable_prefix() {
+    let hot_cache = make_hot_cache(Some(2));
+    let mut tracker = CacheDiagnosticsTracker::default();
+    let prompt_ir = make_prompt_ir(vec![("system-0", "You are a careful planner", Some(700))]);
+
+    let facts = build_cache_request_facts_from_prompt_ir(
+        CacheFactsBuildInput {
+            agent_id: "agent-1",
+            provider: "openai",
+            model: Some("gpt-4o"),
+            prompt_ir: &prompt_ir,
+            hot_cache: &hot_cache,
+            profile_key: "test-profile",
+            now: sample_timestamp(),
+        },
+        &mut tracker,
+    );
+
+    assert_eq!(facts.stable_prefix_length, 2);
+    assert_eq!(facts.stable_prefix_tokens, None);
+    assert!(
+        facts
+            .missing_facts
+            .contains(&"stable_prefix_tokens_unavailable".to_string())
+    );
 }
 
 #[test]

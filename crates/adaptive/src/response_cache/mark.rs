@@ -17,6 +17,93 @@ use crate::response_cache::store::CacheEntry;
 /// Mark-event name emitted on every cache decision.
 pub const RESPONSE_CACHE_MARK: &str = "response_cache";
 
+/// Outcome of a response-cache lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheMarkStatus {
+    /// The cache was deliberately skipped.
+    Bypass,
+    /// A stored value was reused.
+    Hit,
+    /// No reusable stored value was available.
+    Miss,
+}
+
+impl CacheMarkStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bypass => "bypass",
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+        }
+    }
+}
+
+/// Stable reason for a response-cache bypass or fail-open decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CacheReason {
+    /// The canonical JSON encoder could not derive a fingerprint.
+    CanonicalizationFailed,
+    /// An old cached error result must not be replayed.
+    CachedError,
+    /// The request is not explicitly deterministic.
+    NondeterministicTemperature,
+    /// A stored stream response cannot be replayed faithfully.
+    ReplayLossy,
+    /// The configured sampling rate chose a live call.
+    Sampled,
+    /// The request belongs to an ongoing conversation.
+    StatefulConversation,
+    /// The request references a prior response.
+    StatefulPreviousResponseId,
+    /// The provider persists request state.
+    StatefulStore,
+    /// The cache store failed and execution continued live.
+    StoreError,
+    /// The streaming response has no supported codec.
+    StreamNoCodec,
+    /// The request body cannot be parsed.
+    UnparseableBody,
+    /// Canonical JSON cannot safely represent an integer in the key.
+    UnrepresentableNumber,
+}
+
+impl CacheReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::CanonicalizationFailed => "canonicalization_failed",
+            Self::CachedError => "cached_error",
+            Self::NondeterministicTemperature => "nondeterministic_temperature",
+            Self::ReplayLossy => "replay_lossy",
+            Self::Sampled => "sampled",
+            Self::StatefulConversation => "stateful_conversation",
+            Self::StatefulPreviousResponseId => "stateful_previous_response_id",
+            Self::StatefulStore => "stateful_store",
+            Self::StoreError => "store_error",
+            Self::StreamNoCodec => "stream_no_codec",
+            Self::UnparseableBody => "unparseable_body",
+            Self::UnrepresentableNumber => "unrepresentable_number",
+        }
+    }
+}
+
+/// Execution surface that made a response-cache decision.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CacheSurface {
+    /// An LLM response.
+    Llm,
+    /// A tool result.
+    Tool,
+}
+
+impl CacheSurface {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Llm => "llm",
+            Self::Tool => "tool",
+        }
+    }
+}
+
 /// Pulls saved token count and cost out of a stored entry (the aggregate
 /// response object — buffered and streaming both store this shape).
 ///
@@ -101,32 +188,42 @@ fn probed_savings(entry: &CacheEntry) -> (Option<u64>, Option<f64>) {
 }
 
 pub(crate) struct CacheMark<'a> {
-    status: &'a str,
-    reason: Option<&'a str>,
+    status: CacheMarkStatus,
+    reason: Option<CacheReason>,
+    surface: CacheSurface,
     backend: &'a str,
     key_hash: Option<&'a str>,
     age_ms: Option<u64>,
     ttl_ms: Option<u64>,
     saved_tokens: Option<u64>,
     saved_cost_usd: Option<f64>,
+    saved_invocations: Option<u64>,
 }
 
 impl<'a> CacheMark<'a> {
-    pub(crate) fn new(status: &'a str, backend: &'a str) -> Self {
+    pub(crate) fn new(status: CacheMarkStatus, backend: &'a str) -> Self {
         Self {
             status,
             reason: None,
+            surface: CacheSurface::Llm,
             backend,
             key_hash: None,
             age_ms: None,
             ttl_ms: None,
             saved_tokens: None,
             saved_cost_usd: None,
+            saved_invocations: None,
         }
     }
 
-    pub(crate) fn reason(mut self, reason: &'a str) -> Self {
+    pub(crate) fn reason(mut self, reason: CacheReason) -> Self {
         self.reason = Some(reason);
+        self
+    }
+
+    /// Overrides the cache surface (defaults to [`CacheSurface::Llm`]).
+    pub(crate) fn surface(mut self, surface: CacheSurface) -> Self {
+        self.surface = surface;
         self
     }
 
@@ -150,6 +247,12 @@ impl<'a> CacheMark<'a> {
         self.saved_cost_usd = cost;
         self
     }
+
+    /// Records the number of tool invocations a hit avoided (tool surface).
+    pub(crate) fn saved_invocations(mut self, invocations: u64) -> Self {
+        self.saved_invocations = Some(invocations);
+        self
+    }
 }
 
 /// Emits the `response_cache` mark. Only the key fingerprint is ever recorded —
@@ -158,7 +261,7 @@ pub(crate) fn emit_cache_mark(mark: CacheMark<'_>) {
     let mut metadata = Map::new();
     metadata.insert(
         "nemo_relay.response_cache.surface".to_string(),
-        json!("llm"),
+        json!(mark.surface.as_str()),
     );
     metadata.insert(
         "nemo_relay.response_cache.backend".to_string(),
@@ -167,7 +270,7 @@ pub(crate) fn emit_cache_mark(mark: CacheMark<'_>) {
     if let Some(reason) = mark.reason {
         metadata.insert(
             "nemo_relay.response_cache.reason".to_string(),
-            json!(reason),
+            json!(reason.as_str()),
         );
     }
     if let Some(key_hash) = mark.key_hash {
@@ -200,11 +303,17 @@ pub(crate) fn emit_cache_mark(mark: CacheMark<'_>) {
             json!(saved_cost_usd),
         );
     }
+    if let Some(saved_invocations) = mark.saved_invocations {
+        metadata.insert(
+            "nemo_relay.response_cache.saved_invocations".to_string(),
+            json!(saved_invocations),
+        );
+    }
 
     let _ = event(
         EmitMarkEventParams::builder()
             .name(RESPONSE_CACHE_MARK)
-            .data(json!({ "status": mark.status }))
+            .data(json!({ "status": mark.status.as_str() }))
             .metadata(Json::Object(metadata))
             .build(),
     );

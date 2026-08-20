@@ -48,6 +48,8 @@ impl RequestSurface {
             ProviderSurface::OpenAIChat => Some(Self::OpenAIChat),
             ProviderSurface::OpenAIResponses => Some(Self::OpenAIResponses),
             ProviderSurface::AnthropicMessages => Some(Self::AnthropicMessages),
+            // No semantic ACG applier exists for OCI GenAI request shapes yet.
+            ProviderSurface::OCIGenAI => None,
             // Gemini generateContent ACG request editing is intentionally unsupported.
             ProviderSurface::GeminiGenerateContent => None,
         }

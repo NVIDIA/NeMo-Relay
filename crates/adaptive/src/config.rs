@@ -7,7 +7,7 @@ use nemo_relay::plugin::ConfigPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
-use crate::response_cache::config::{BackendConfig, KEY_STRATEGY_EXACT_REQUEST};
+use crate::response_cache::config::{BackendConfig, KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
 
 /// Canonical config document for the adaptive plugin component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,8 +34,8 @@ pub struct AdaptiveConfig {
     /// Adaptive Cache Governor settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acg: Option<AcgComponentConfig>,
-    /// Opt-in LLM response cache (exact-match). When present, the
-    /// adaptive plugin installs the response-cache execution intercept(s).
+    /// Opt-in exact-match LLM response and tool-result cache. When present,
+    /// the adaptive plugin installs the response-cache execution intercept(s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_cache: Option<ResponseCacheConfig>,
     /// Adaptive-local unsupported-config policy.
@@ -191,7 +191,8 @@ impl Default for AcgComponentConfig {
     }
 }
 
-/// Configuration for the adaptive plugin's `response_cache` feature
+/// Configuration for the adaptive plugin's exact-match LLM response and
+/// opt-in tool-result cache feature.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ResponseCacheConfig {
@@ -217,6 +218,9 @@ pub struct ResponseCacheConfig {
     pub header_allowlist: Vec<String>,
     /// Storage backend selection.
     pub backend: BackendConfig,
+    /// Opt-in tool-result cache configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<ToolCacheConfig>,
 }
 
 impl Default for ResponseCacheConfig {
@@ -230,6 +234,7 @@ impl Default for ResponseCacheConfig {
             key_strategy: KEY_STRATEGY_EXACT_REQUEST.to_string(),
             header_allowlist: Vec::new(),
             backend: BackendConfig::default(),
+            tools: None,
         }
     }
 }
@@ -404,6 +409,13 @@ nemo_relay::editor_config! {
             kind: Section,
             nested: BackendConfig,
             default: BackendConfig,
+        },
+        tools => {
+            label: "tools",
+            kind: Section,
+            optional: true,
+            nested: ToolCacheConfig,
+            default: ToolCacheConfig,
         },
     }
 }

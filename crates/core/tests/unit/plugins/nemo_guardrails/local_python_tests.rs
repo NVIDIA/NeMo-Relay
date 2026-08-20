@@ -1078,6 +1078,30 @@ fn stream_text_extraction_handles_supported_codecs() {
         ),
         Some("hello".to_string())
     );
+    // OCI GENERIC: bare choice delta with a top-level `message`.
+    assert_eq!(
+        extract_stream_text(
+            LocalGuardrailsCodec::OCIGenAI,
+            &json!({"index": 0, "message": {"content": [{"type": "TEXT", "text": "hello"}]}})
+        ),
+        Some("hello".to_string())
+    );
+    // OCI GENERIC: `choices`-wrapped deltas, optionally inside `chatResponse`.
+    assert_eq!(
+        extract_stream_text(
+            LocalGuardrailsCodec::OCIGenAI,
+            &json!({"chatResponse": {"choices": [
+                {"index": 0, "message": {"content": [{"type": "TEXT", "text": "hel"}]}},
+                {"index": 1, "message": {"content": [{"type": "TEXT", "text": "lo"}]}}
+            ]}})
+        ),
+        Some("hello".to_string())
+    );
+    // OCI COHERE: bare text fragment.
+    assert_eq!(
+        extract_stream_text(LocalGuardrailsCodec::OCIGenAI, &json!({"text": "hello"})),
+        Some("hello".to_string())
+    );
     // Gemini: visible text parts reach the guardrail worker.
     assert_eq!(
         extract_stream_text(
@@ -1101,9 +1125,41 @@ fn stream_text_extraction_handles_supported_codecs() {
             json!({"type": "content_block_delta", "delta": {"type": "input_json_delta"}}),
         ),
         (LocalGuardrailsCodec::GeminiGenerateContent, Json::Null),
+        // A tool-call-only OCI delta carries no user-visible text and must not
+        // reach the guardrail worker.
+        (
+            LocalGuardrailsCodec::OCIGenAI,
+            json!({"index": 0, "message": {"content": [], "toolCalls": [{"arguments": "{"}]}}),
+        ),
+        // The terminal COHERE event repeats the full response text alongside
+        // finishReason; forwarding it would double the rail input.
+        (
+            LocalGuardrailsCodec::OCIGenAI,
+            json!({"apiFormat": "COHERE", "text": "hello!", "finishReason": "COMPLETE"}),
+        ),
+        (
+            LocalGuardrailsCodec::OCIGenAI,
+            json!({"chatResponse": {"apiFormat": "COHERE", "text": "hello!", "finishReason": "COMPLETE"}}),
+        ),
     ] {
         assert_eq!(extract_stream_text(codec, &chunk), None);
     }
+}
+
+#[test]
+fn stream_text_extraction_oci_cohere_stream_is_not_doubled() {
+    // Live-shaped COHERE stream: incremental deltas, then a terminal event
+    // repeating the complete text. The rails must see the text exactly once.
+    let stream = [
+        json!({"apiFormat": "COHERE", "text": "hello"}),
+        json!({"apiFormat": "COHERE", "text": "!"}),
+        json!({"apiFormat": "COHERE", "text": "hello!", "finishReason": "COMPLETE"}),
+    ];
+    let forwarded: String = stream
+        .iter()
+        .filter_map(|chunk| extract_stream_text(LocalGuardrailsCodec::OCIGenAI, chunk))
+        .collect();
+    assert_eq!(forwarded, "hello!");
 }
 
 #[test]
@@ -1243,14 +1299,18 @@ async fn registered_local_backend_rewrites_llm_requests_and_tool_payloads() {
             .func(Arc::new(|args| {
                 Box::pin(async move {
                     assert_eq!(args, json!({"safe": true}));
-                    Ok(json!({"original": true}))
+                    Ok(crate::api::tool::ToolExecutionResult::annotated(
+                        json!({"original": true}),
+                        json!({"source": "provider"}),
+                    ))
                 })
             }))
             .build(),
     )
     .await
     .unwrap();
-    assert_eq!(tool_result, json!({"original": true}));
+    assert_eq!(tool_result.result, json!({"original": true}));
+    assert_eq!(tool_result.annotation, Some(json!({"source": "provider"})));
 }
 
 #[cfg(unix)]
@@ -1308,7 +1368,7 @@ async fn registered_local_backend_rejects_blocked_llm_and_tool_inputs() {
             .args(json!({"block": true}))
             .func(Arc::new(move |_| {
                 tool_callback_marker.store(true, Ordering::SeqCst);
-                Box::pin(async { Ok(json!({})) })
+                Box::pin(async { Ok(json!({}).into()) })
             }))
             .build(),
     )

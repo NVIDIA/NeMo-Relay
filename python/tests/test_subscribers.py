@@ -19,6 +19,7 @@ from nemo_relay import (
     MarkEvent,
     ScopeEvent,
     ScopeType,
+    ToolExecutionResult,
     llm,
     scope,
     subscribers,
@@ -256,7 +257,7 @@ class TestSubscriberEventDetails:
         events = []
         subscribers.register("py_tool_evt", lambda e: events.append(e))
         handle = tools.call("evt_tool", {"x": 1})
-        tools.call_end(handle, {"y": 2})
+        tools.call_end(handle, ToolExecutionResult({"y": 2}))
         subscribers.flush()
         subscribers.deregister("py_tool_evt")
 
@@ -306,7 +307,7 @@ class TestSubscriberEventDetails:
         scope_handle = scope.push("py_ts_scope", ScopeType.Agent, timestamp=timestamps[0])
         scope.event("py_ts_mark", handle=scope_handle, timestamp=timestamps[1])
         tool_handle = tools.call("py_ts_tool", {"x": 1}, timestamp=timestamps[2])
-        tools.call_end(tool_handle, {"ok": True}, timestamp=timestamps[3])
+        tools.call_end(tool_handle, ToolExecutionResult({"ok": True}), timestamp=timestamps[3])
         llm_handle = llm.call("py_ts_llm", make_request(), timestamp=timestamps[4])
         llm.call_end(llm_handle, {"ok": True}, timestamp=timestamps[5])
         scope.pop(scope_handle, timestamp=timestamps[6])
@@ -348,9 +349,9 @@ class TestSubscriberEventDetails:
             tool_handle = tools.call("py_bad_ts_tool", {"x": 1})
             try:
                 with pytest.raises(error_type, match=message):
-                    tools.call_end(tool_handle, {"ok": True}, timestamp=bad_timestamp)
+                    tools.call_end(tool_handle, ToolExecutionResult({"ok": True}), timestamp=bad_timestamp)
             finally:
-                tools.call_end(tool_handle, {"ok": True})
+                tools.call_end(tool_handle, ToolExecutionResult({"ok": True}))
 
             with pytest.raises(error_type, match=message):
                 llm.call("py_bad_ts_llm_start", make_request(), timestamp=bad_timestamp)
@@ -404,7 +405,7 @@ class TestHandleProperties:
         assert handle.name == "prop_tool"
         # data includes sanitized_args from the call
         assert handle.data is not None
-        tools.call_end(handle, {})
+        tools.call_end(handle, ToolExecutionResult({}))
 
     def test_llm_handle_all_properties(self):
         request = make_request()

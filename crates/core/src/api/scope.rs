@@ -1,10 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::api::event::{BaseEvent, CategoryProfile, DataSchema, EventCategory, MarkEvent};
+use crate::api::event::{
+    BaseEvent, CategoryProfile, DataSchema, EventCategory, LOG_SEVERITY_METADATA_KEY, LogSeverity,
+    METRIC_DATA_SCHEMA_NAME, METRIC_DATA_SCHEMA_VERSION, MarkEvent, MetricEnvelope,
+    MetricMeasurement,
+};
 use crate::api::runtime::global_context;
 use crate::api::runtime::scope_stack::snapshot_scope_stack;
-use crate::api::runtime::subscriber_dispatcher;
+use crate::api::runtime::subscriber_dispatcher::{self, SubscriberDelivery};
 use crate::api::runtime::{
     current_scope_stack, task_scope_push, task_scope_remove, task_scope_top,
 };
@@ -173,6 +177,9 @@ pub struct EmitMarkEventParams<'a> {
     /// Optional JSON metadata recorded on the emitted event.
     #[builder(default)]
     pub metadata: Option<Json>,
+    /// Optional typed log severity stored authoritatively in mark metadata.
+    #[builder(default)]
+    pub severity: Option<LogSeverity>,
     /// Optional semantic category for the mark.
     #[builder(default)]
     pub category: Option<EventCategory>,
@@ -183,6 +190,45 @@ pub struct EmitMarkEventParams<'a> {
     /// current UTC time is used.
     #[builder(default)]
     pub timestamp: Option<DateTime<Utc>>,
+}
+
+/// Builder parameters for [`metric`].
+#[derive(TypedBuilder)]
+#[builder(field_defaults(setter(strip_option(ignore_invalid, fallback_suffix = "_opt"))))]
+pub struct EmitMetricEventParams<'a> {
+    /// Mark name to emit for the metric recording operations.
+    pub name: &'a str,
+    /// Metric measurements recorded atomically by downstream metric exporters.
+    pub measurements: Vec<MetricMeasurement>,
+    /// Optional explicit parent scope.
+    #[builder(default)]
+    pub parent: Option<&'a ScopeHandle>,
+    /// Optional JSON metadata recorded on the emitted event.
+    #[builder(default)]
+    pub metadata: Option<Json>,
+    /// Optional timestamp recorded on the emitted metric mark.
+    #[builder(default)]
+    pub timestamp: Option<DateTime<Utc>>,
+}
+
+pub(crate) fn metadata_with_log_severity(
+    metadata: Option<Json>,
+    severity: Option<LogSeverity>,
+) -> Result<Option<Json>> {
+    let Some(severity) = severity else {
+        return Ok(metadata);
+    };
+    let mut metadata = metadata.unwrap_or_else(|| Json::Object(serde_json::Map::new()));
+    let object = metadata.as_object_mut().ok_or_else(|| {
+        FlowError::InvalidArgument(
+            "mark metadata must be a JSON object when severity is provided".into(),
+        )
+    })?;
+    object.insert(
+        LOG_SEVERITY_METADATA_KEY.into(),
+        Json::String(severity.as_str().into()),
+    );
+    Ok(Some(metadata))
 }
 
 /// Return the current scope at the top of the active stack.
@@ -296,6 +342,26 @@ pub fn push_scope(params: PushScopeParams<'_>) -> Result<ScopeHandle> {
 /// snapshot, so cleanup does not change the middleware applied to the emitted
 /// event.
 pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
+    pop_scope_inner(params, false).map(|_| ())
+}
+
+/// Pop the current scope and return a receipt for its scope-end subscriber delivery.
+///
+/// The receipt covers sanitizer and subscriber processing for the scope-end event.
+/// It does not wait for unrelated events queued after that event.
+#[doc(hidden)]
+pub fn pop_scope_with_subscriber_delivery(
+    params: PopScopeParams<'_>,
+) -> Result<SubscriberDelivery> {
+    pop_scope_inner(params, true)?.ok_or_else(|| {
+        FlowError::Internal("tracked scope pop did not create a subscriber delivery receipt".into())
+    })
+}
+
+fn pop_scope_inner(
+    params: PopScopeParams<'_>,
+    track_delivery: bool,
+) -> Result<Option<SubscriberDelivery>> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
     let (scope, event, subscribers, emission_scope_stack) = {
@@ -335,13 +401,23 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
     let publication_scope_stack = snapshot_scope_stack(&emission_scope_stack)?;
     let removed = task_scope_remove(params.handle_uuid)?;
     debug_assert_eq!(removed.uuid, scope.uuid);
-    let _ = subscriber_dispatcher::dispatch_sanitized_event(
-        event,
-        sanitizers,
-        &subscribers,
-        publication_scope_stack,
-    );
-    Ok(())
+    if track_delivery {
+        subscriber_dispatcher::dispatch_sanitized_event_with_delivery(
+            event,
+            sanitizers,
+            &subscribers,
+            publication_scope_stack,
+        )
+        .map(Some)
+    } else {
+        let _ = subscriber_dispatcher::dispatch_sanitized_event(
+            event,
+            sanitizers,
+            &subscribers,
+            publication_scope_stack,
+        );
+        Ok(None)
+    }
 }
 
 /// Emit a standalone mark event under the current or provided scope.
@@ -354,7 +430,11 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 /// - `parent`: Optional explicit parent scope. When `None`, the current top of
 ///   stack is used.
 /// - `data`: Optional JSON payload recorded on the emitted event.
+/// - `data_schema`: Optional name and version identifying the data payload.
 /// - `metadata`: Optional JSON metadata recorded on the emitted event.
+/// - `severity`: Optional typed severity stored in reserved mark metadata.
+/// - `category`: Optional semantic mark category.
+/// - `category_profile`: Optional category-specific profile.
 /// - `timestamp`: Optional timestamp recorded on the emitted mark event. When
 ///   `None`, the current UTC time is used.
 ///
@@ -364,7 +444,8 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error when the runtime owner check fails or when internal state
-/// cannot be read safely.
+/// cannot be read safely. Returns [`FlowError::InvalidArgument`] when a typed
+/// severity is provided with non-object metadata.
 ///
 /// # Notes
 /// The mark event is queued with subscriber and sanitizer snapshots captured
@@ -372,6 +453,7 @@ pub fn pop_scope(params: PopScopeParams<'_>) -> Result<()> {
 pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
+    let metadata = metadata_with_log_severity(params.metadata, params.severity)?;
     let scope_stack = current_scope_stack();
     let (event, subscribers, emission_scope_stack) = {
         let subscribers = if params.name == COMPACTION_EVENT_NAME {
@@ -399,7 +481,7 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
                 .timestamp(params.timestamp.unwrap_or_else(Utc::now))
                 .data_opt(params.data)
                 .data_schema_opt(params.data_schema)
-                .metadata_opt(params.metadata)
+                .metadata_opt(metadata)
                 .build(),
             params.category,
             params.category_profile,
@@ -415,3 +497,44 @@ pub fn event(params: EmitMarkEventParams<'_>) -> Result<()> {
     );
     Ok(())
 }
+
+/// Emit a Relay metric mark under the current or provided scope.
+///
+/// The measurements are validated as one atomic envelope before the mark is
+/// queued. The emitted mark uses the Relay-owned metric data schema so metric
+/// exporters can route it without relying on mutable metadata.
+///
+/// # Errors
+/// Returns [`FlowError::InvalidArgument`] when the measurement envelope is
+/// invalid, or any error returned while emitting the underlying mark.
+pub fn metric(params: EmitMetricEventParams<'_>) -> Result<()> {
+    ensure_runtime_owner()?;
+    let envelope = MetricEnvelope {
+        measurements: params.measurements,
+    };
+    envelope
+        .validate()
+        .map_err(|error| FlowError::InvalidArgument(error.to_string()))?;
+    let data = serde_json::to_value(envelope).map_err(|error| {
+        FlowError::InvalidArgument(format!("metric envelope could not be serialized: {error}"))
+    })?;
+    event(
+        EmitMarkEventParams::builder()
+            .name(params.name)
+            .parent_opt(params.parent)
+            .data(data)
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version(METRIC_DATA_SCHEMA_VERSION)
+                    .build(),
+            )
+            .metadata_opt(params.metadata)
+            .timestamp_opt(params.timestamp)
+            .build(),
+    )
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/scope_api_tests.rs"]
+mod tests;

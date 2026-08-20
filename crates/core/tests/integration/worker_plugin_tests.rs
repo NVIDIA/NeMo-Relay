@@ -17,10 +17,16 @@ use nemo_relay::api::scope::{
     EmitMarkEventParams, PopScopeParams, PushScopeParams, ScopeType, event, pop_scope, push_scope,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
-use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute, tool_request_intercepts};
+use nemo_relay::api::tool::{
+    ToolCallExecuteParams, ToolExecutionResult, tool_call_execute, tool_request_intercepts,
+};
 use nemo_relay::codec::request::AnnotatedLlmRequest;
 use nemo_relay::codec::traits::LlmCodec;
 use nemo_relay::error::Result as FlowResult;
+use nemo_relay::observability::otel_logs::{OpenTelemetryLogConfig, OpenTelemetryLogSubscriber};
+use nemo_relay::observability::otel_metrics::{
+    OpenTelemetryMetricConfig, OpenTelemetryMetricSubscriber,
+};
 use nemo_relay::plugin::dynamic::{
     DynamicPluginActivationSpec, DynamicPluginKind, PluginHostActivation, WorkerPluginActivation,
     WorkerPluginLoadSpec, load_worker_plugins,
@@ -29,6 +35,8 @@ use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
     list_plugin_kinds,
 };
+use opentelemetry_proto::tonic::collector::metrics::v1::ExportMetricsServiceRequest;
+use prost::Message;
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -39,6 +47,67 @@ static WORKER_PLUGIN_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::con
 fn enable_operational_logs() {
     let _ = spdlog::init_log_crate_proxy();
     log::set_max_level(log::LevelFilter::Info);
+}
+
+struct CapturedOtlpRequest {
+    path: String,
+    body: Vec<u8>,
+}
+
+fn capture_one_otlp_request(
+    listener: std::net::TcpListener,
+) -> std::sync::mpsc::Receiver<CapturedOtlpRequest> {
+    use std::io::{Read, Write};
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("collector should accept request");
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4_096];
+        let (header_end, content_length) = loop {
+            let count = stream.read(&mut buffer).expect("collector should read");
+            assert!(count > 0, "collector closed before request headers");
+            bytes.extend_from_slice(&buffer[..count]);
+            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                let header_end = offset + 4;
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                break (header_end, content_length);
+            }
+        };
+        while bytes.len() < header_end + content_length {
+            let count = stream
+                .read(&mut buffer)
+                .expect("collector should read body");
+            assert!(count > 0, "collector closed before request body");
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let path = headers
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .expect("request path")
+            .to_string();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            .expect("collector should respond");
+        sender
+            .send(CapturedOtlpRequest {
+                path,
+                body: bytes[header_end..header_end + content_length].to_vec(),
+            })
+            .expect("capture receiver should remain available");
+    });
+    receiver
 }
 
 #[test]
@@ -89,6 +158,175 @@ async fn plugin_host_activation_owns_worker_lifecycle() {
         .await
         .expect("cleared worker intercept chain should be empty");
     assert_eq!(unchanged, json!({ "input": true }));
+}
+
+#[tokio::test]
+async fn rust_worker_event_metadata_injector_enriches_events_and_is_removed_on_clear() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, report) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([("event_metadata_injector_only".into(), json!(true))]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+    assert!(!report.has_errors());
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "rust_worker_event_metadata_injector_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-before-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("injected mark should flush");
+    let injected = find_event(
+        &events.lock().unwrap(),
+        "external-plugin-event-metadata-injection-worker-before-clear",
+        None,
+    )
+    .clone();
+    assert_eq!(injected.metadata().unwrap()["existing"], true);
+    assert_eq!(
+        injected.metadata().unwrap()["external.injector.transport"],
+        "rust_grpc_worker"
+    );
+
+    activation.clear().expect("worker plugin host should clear");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-after-clear")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("post-clear mark should emit");
+    flush_subscribers().expect("post-clear mark should flush");
+    let events = events.lock().unwrap();
+    let after_clear = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-worker-after-clear",
+        None,
+    );
+    assert_eq!(after_clear.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+}
+
+#[tokio::test]
+async fn rust_worker_event_metadata_injector_error_preserves_event_delivery() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([
+                ("event_metadata_injector_only".into(), json!(true)),
+                ("event_metadata_injector_error".into(), json!(true)),
+            ]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "rust_worker_event_metadata_injector_error_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-error")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("failed injector must not block delivery");
+    let events = events.lock().unwrap();
+    let delivered = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-worker-error",
+        None,
+    );
+    assert_eq!(delivered.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+    activation.clear().expect("worker plugin host should clear");
+}
+
+#[tokio::test]
+async fn rust_worker_event_metadata_injector_process_exit_preserves_event_delivery() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let fixture = build_fixture_worker();
+    let (_manifest_dir, manifest_ref) = write_manifest(fixture.binary_path());
+    let (activation, _) = PluginHostActivation::activate(
+        PluginConfig::default(),
+        [DynamicPluginActivationSpec {
+            plugin_id: "fixture_worker".into(),
+            kind: DynamicPluginKind::Worker,
+            manifest_ref: manifest_ref.to_string_lossy().into_owned(),
+            environment_ref: None,
+            config: Map::from_iter([
+                ("event_metadata_injector_only".into(), json!(true)),
+                ("exit_in_event_metadata_injector".into(), json!(true)),
+            ]),
+        }],
+    )
+    .await
+    .expect("worker plugin host should activate");
+
+    let events = Arc::new(Mutex::new(Vec::<Event>::new()));
+    let captured = events.clone();
+    let subscriber_name = "rust_worker_event_metadata_injector_process_exit_events";
+    register_subscriber(
+        subscriber_name,
+        Arc::new(move |event| captured.lock().unwrap().push(event.clone())),
+    )
+    .expect("test subscriber should register");
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-worker-process-exit")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("mark should emit");
+    flush_subscribers().expect("terminated worker must not block delivery");
+    let events = events.lock().unwrap();
+    let delivered = find_event(
+        &events,
+        "external-plugin-event-metadata-injection-worker-process-exit",
+        None,
+    );
+    assert_eq!(delivered.metadata().unwrap(), &json!({"existing": true}));
+    drop(events);
+
+    deregister_subscriber(subscriber_name).expect("test subscriber should deregister");
+    activation
+        .clear()
+        .expect_err("terminated worker should report shutdown failure");
 }
 
 #[tokio::test]
@@ -168,7 +406,12 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
                     .name("worker-fixture-tool")
                     .args(json!({ "input": "execute" }))
                     .func(Arc::new(|args| {
-                        Box::pin(async move { Ok(json!({ "tool_callback": true, "args": args })) })
+                        Box::pin(async move {
+                            Ok(ToolExecutionResult::annotated(
+                                json!({ "tool_callback": true, "args": args }),
+                                json!({"source": "provider"}),
+                            ))
+                        })
                     }))
                     .build(),
             )
@@ -181,10 +424,11 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
         .await;
 
     assert_eq!(rewritten["worker_plugin"], true);
-    assert_eq!(tool_result["tool_callback"], true);
-    assert_eq!(tool_result["worker_plugin_tool_execution"], true);
+    assert_eq!(tool_result.result["tool_callback"], true);
+    assert_eq!(tool_result.result["worker_plugin_tool_execution"], true);
+    assert_eq!(tool_result.annotation, Some(json!({"source": "provider"})));
     assert_eq!(
-        tool_result["args"]["worker_plugin_tool_execution_request"],
+        tool_result.result["args"]["worker_plugin_tool_execution_request"],
         true
     );
 
@@ -372,6 +616,63 @@ async fn rust_worker_registers_and_invokes_all_current_surfaces() {
 }
 
 #[tokio::test]
+async fn rust_worker_tokenomics_metric_reaches_metrics_only() {
+    let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
+    let loaded = load_and_initialize_fixture(Map::from_iter([(
+        "emit_tokenomics_metric".into(),
+        json!(true),
+    )]))
+    .await;
+
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("metric capture listener should bind");
+    let metric_endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let metric_request = capture_one_otlp_request(listener);
+    let metric_subscriber = OpenTelemetryMetricSubscriber::new(
+        OpenTelemetryMetricConfig::new(metric_endpoint)
+            .with_instrumentation_scope("worker-tokenomics-metric-test"),
+    )
+    .expect("metric subscriber should build");
+    let log_subscriber =
+        OpenTelemetryLogSubscriber::new(OpenTelemetryLogConfig::new("http://127.0.0.1:9/v1/logs"))
+            .expect("log subscriber should build without connecting");
+    let metric_name = "worker_tokenomics_metric_metrics";
+    let log_name = "worker_tokenomics_metric_logs";
+    metric_subscriber.register(metric_name).unwrap();
+    log_subscriber.register(log_name).unwrap();
+
+    let rewritten = tool_request_intercepts("tokenomics_meter", json!({"input": true}))
+        .await
+        .expect("worker metric callback should complete");
+    assert_eq!(rewritten["worker_plugin"], true);
+
+    metric_subscriber.deregister(metric_name).unwrap();
+    log_subscriber.deregister(log_name).unwrap();
+    log_subscriber
+        .shutdown()
+        .expect("metric mark must not be reinterpreted as an OTLP log");
+    metric_subscriber
+        .shutdown()
+        .expect("metric provider should export its final collection");
+
+    let request = metric_request
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("worker metric should reach the local OTLP collector");
+    assert_eq!(request.path, "/v1/metrics");
+    let metrics = ExportMetricsServiceRequest::decode(request.body.as_slice()).unwrap();
+    let names = metrics
+        .resource_metrics
+        .iter()
+        .flat_map(|resource| &resource.scope_metrics)
+        .flat_map(|scope| &scope.metrics)
+        .map(|metric| metric.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["example.tokens.saved"]);
+
+    loaded.clear();
+}
+
+#[tokio::test]
 async fn worker_event_sanitizers_preserve_prior_field_changes() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.lock().await;
     let loaded = load_and_initialize_fixture(Map::new()).await;
@@ -496,7 +797,7 @@ async fn host_cancellation_reaches_rust_worker_invocation() {
 
                     let _drop_signal = DropSignal(Some(dropped));
                     let _ = started.send(());
-                    std::future::pending::<FlowResult<Json>>().await
+                    std::future::pending::<FlowResult<ToolExecutionResult>>().await
                 })
             }))
             .build(),
@@ -547,7 +848,9 @@ async fn worker_conditional_guardrail_blocks_tool_execution() {
             .name("worker-fixture-blocked-tool")
             .args(json!({ "input": "blocked" }))
             .func(Arc::new(|_| {
-                Box::pin(async move { Ok(json!({ "should_not_run": true })) })
+                Box::pin(
+                    async move { Ok(ToolExecutionResult::new(json!({ "should_not_run": true }))) },
+                )
             }))
             .build(),
     )
@@ -988,7 +1291,7 @@ fn unsupported_worker_relay_requirement_reports_compatibility_error() {
 }
 
 #[test]
-fn worker_request_intercept_rejects_manifest_that_admits_relay_0_5() {
+fn worker_loader_rejects_manifest_that_admits_pre_zero_eight_relay() {
     let _guard = WORKER_PLUGIN_TEST_LOCK.blocking_lock();
     let fixture = build_fixture_worker();
     let (_manifest_dir, manifest_ref) =
@@ -1002,11 +1305,14 @@ fn worker_request_intercept_rejects_manifest_that_admits_relay_0_5() {
     }]) {
         Ok(activation) => {
             activation.clear();
-            panic!("the request-intercept registration should reject Relay 0.5 compatibility");
+            panic!("the worker loader should reject pre-0.8 Relay compatibility");
         }
         Err(error) => error.to_string(),
     };
-    assert!(error.contains(">=0.6,<1.0"), "{error}");
+    assert!(
+        error.contains("excludes Relay versions before 0.8"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -1171,6 +1477,26 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
     .expect("test subscriber should register");
     cleanup.subscriber_name = Some(subscriber_name);
 
+    event(
+        EmitMarkEventParams::builder()
+            .name("external-plugin-event-metadata-injection-python-round-trip")
+            .metadata(json!({"existing": true}))
+            .build(),
+    )
+    .expect("Python injector mark should emit");
+    flush_subscribers().expect("Python injector mark should flush");
+    let injected = find_event(
+        &events.lock().unwrap(),
+        "external-plugin-event-metadata-injection-python-round-trip",
+        None,
+    )
+    .clone();
+    assert_eq!(injected.metadata().unwrap()["existing"], true);
+    assert_eq!(
+        injected.metadata().unwrap()["external.injector.transport"],
+        "python_grpc_worker"
+    );
+
     let rewritten = tool_request_intercepts("lookup", json!({ "query": "relay" }))
         .await
         .expect("Python callback should emit a mark and return its mutation");
@@ -1178,12 +1504,63 @@ async fn python_worker_host_runtime_mark_and_mutated_request_round_trip() {
         rewritten["_nemo_relay_plugin"]["tag"],
         "managed-environment"
     );
+
+    let tool_result = tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("python-worker-tool")
+            .args(json!({ "query": "relay" }))
+            .func(Arc::new(|args| {
+                Box::pin(async move {
+                    Ok(ToolExecutionResult::annotated(
+                        json!({ "provider_result": true, "args": args }),
+                        json!({ "source": "provider" }),
+                    ))
+                })
+            }))
+            .build(),
+    )
+    .await
+    .expect("Python tool execution intercept should call ToolNext and return its outcome");
+    assert_eq!(tool_result.result["provider_result"], true);
+    assert_eq!(
+        tool_result.result["_nemo_relay_plugin"]["tag"],
+        "managed-environment"
+    );
+    assert_eq!(
+        tool_result.result["args"]["_nemo_relay_plugin"]["tag"],
+        "managed-environment"
+    );
+    assert_eq!(
+        tool_result.annotation,
+        Some(json!({
+            "upstream": { "source": "provider" },
+            "worker": {
+                "tool_name": "python-worker-tool",
+                "tag": "managed-environment",
+            },
+        }))
+    );
+
     flush_subscribers().expect("Python callback mark should flush");
+    let captured_events = events.lock().unwrap();
     find_event(
-        &events.lock().unwrap(),
+        &captured_events,
         "examples.python_grpc_worker.tool_request",
         None,
     );
+    let tool_mark = find_event(
+        &captured_events,
+        "examples.python_grpc_worker.tool_execution",
+        None,
+    );
+    assert_eq!(
+        tool_mark.data(),
+        Some(&json!({
+            "tool_name": "python-worker-tool",
+            "tag": "managed-environment",
+        }))
+    );
+    drop(captured_events);
 
     drop(cleanup);
 }

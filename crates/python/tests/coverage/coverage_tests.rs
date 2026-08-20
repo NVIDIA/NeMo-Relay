@@ -43,6 +43,12 @@ fn load_module<'py>(py: Python<'py>, code: &str) -> Bound<'py, PyModule> {
         )
         .unwrap();
     module
+        .setattr(
+            "ToolResult",
+            py.get_type::<crate::py_types::PyToolExecutionResult>(),
+        )
+        .unwrap();
+    module
 }
 
 fn make_request() -> LlmRequest {
@@ -452,7 +458,8 @@ def tool_request_intercept(name, value):
     return value
 
 async def tool_execution_intercept(name, value, next):
-    return ToolOutcome(await next(value))
+    downstream = await next(value)
+    return ToolOutcome(downstream.result, annotation=downstream.annotation)
 
 class CoveragePlugin:
     def validate(self, plugin_config):
@@ -791,12 +798,13 @@ fn test_async_exec_and_intercept_wrappers() {
             py,
             r#"
 async def tool_exec(args):
-    return {"tool": args["x"] + 1}
+    return ToolResult({"tool": args["x"] + 1}, {"source": "python-exec"})
 
 async def tool_intercept(name, args, next):
-    result = await next({"x": args["x"] + 1})
+    downstream = await next({"x": args["x"] + 1})
+    result = dict(downstream.result)
     result["wrapped"] = True
-    return ToolOutcome(result)
+    return ToolOutcome(result, annotation=downstream.annotation)
 
 async def llm_exec(request):
     return {"model": request.content["model"]}
@@ -825,17 +833,29 @@ async def llm_intercept(name, request, next):
                 let tool_exec = wrap_py_tool_exec_fn(tool_exec_py);
                 assert_eq!(
                     tool_exec(json!({"x": 2})).await.unwrap(),
-                    json!({"tool": 3})
+                    nemo_relay::api::tool::ToolExecutionResult::annotated(
+                        json!({"tool": 3}),
+                        json!({"source": "python-exec"})
+                    )
                 );
 
                 let tool_intercept = wrap_py_tool_exec_intercept_fn(tool_intercept_py);
-                let tool_next: ToolExecutionNextFn =
-                    Arc::new(|args| Box::pin(async move { Ok(json!({"next": args["x"]})) }));
+                let tool_next: ToolExecutionNextFn = Arc::new(|args| {
+                    Box::pin(async move {
+                        Ok(nemo_relay::api::tool::ToolExecutionResult::annotated(
+                            json!({"next": args["x"]}),
+                            json!({"source": "python-next"}),
+                        ))
+                    })
+                });
                 assert_eq!(
                     tool_intercept("tool", json!({"x": 2}), tool_next)
                         .await
                         .unwrap(),
-                    json!({"next": 3, "wrapped": true}).into()
+                    nemo_relay::api::tool::ToolExecutionInterceptOutcome::annotated(
+                        json!({"next": 3, "wrapped": true}),
+                        json!({"source": "python-next"})
+                    )
                 );
 
                 let llm_exec = wrap_py_llm_exec_fn(llm_exec_py);
@@ -987,7 +1007,7 @@ async def llm_stream_intercept_fail(request, next):
 
                 let tool_intercept = wrap_py_tool_exec_intercept_fn(tool_intercept_fail_py);
                 let tool_next: ToolExecutionNextFn =
-                    Arc::new(|args| Box::pin(async move { Ok(args) }));
+                    Arc::new(|args| Box::pin(async move { Ok(args.into()) }));
                 assert!(
                     tool_intercept("tool", json!({"x": 1}), tool_next)
                         .await

@@ -240,14 +240,33 @@ The [Agent Trajectory Observability Format (ATOF) JSONL exporter](/configure-plu
 writes the canonical event stream to a native filesystem path as one raw ATOF
 event per line.
 
-### OpenTelemetry Subscriber
+### OpenTelemetry Subscribers
 
-The OpenTelemetry subscriber maps runtime events into OTLP traces for tracing
-backends. Each subscriber uses one `full`, `gen_ai`, or `openinference`
-projection. Select `openinference` for model-centric OpenInference semantics;
-there is no separate OpenInference subscriber.
+The trace subscriber maps runtime events into OTLP traces. Each trace
+subscriber uses one `full`, `gen_ai`, or `openinference` projection. Select
+`openinference` for model-centric OpenInference semantics; there is no separate
+OpenInference subscriber.
 
-Detailed setup, configuration, and API behavior for this subscriber belongs in
+Independent log and metric subscribers consume the same sanitized event
+stream. The log subscriber exports non-metric marks with typed severity and
+scope correlation. Valid marks that use the Relay-owned
+`nemo.relay.metric_measurements` schema route exclusively to the metric
+subscriber and are not projected as traces or logs. Invalid reserved metric
+marks reach no OTLP signal and produce an operational diagnostic. Scope events
+maintain log lineage but do not become logs or metrics. Operational stderr and
+file records are not input to either telemetry subscriber.
+
+Each direct trace, log, and metric subscriber also exposes a bounded runtime
+diagnostics snapshot. Rust and Python use `runtime_diagnostics()`, Node.js uses
+`runtimeDiagnostics()`. The C FFI exposes the corresponding
+`*_runtime_diagnostics_json` APIs, which return a caller-owned JSON array
+released with `nemo_relay_string_free`. These snapshots report stable codes,
+occurrence counts, and the most recent message for delivery and
+event-processing failures. See
+[OpenTelemetry](/configure-plugins/observability/opentelemetry#direct-subscribers)
+for the complete API and lifecycle contract.
+
+Detailed setup, configuration, and API behavior for these subscribers belongs in
 [Observability](/configure-plugins/observability/about).
 For configuration-driven setup, use the built-in
 [`observability` plugin](/configure-plugins/observability/configuration)

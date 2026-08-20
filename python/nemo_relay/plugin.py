@@ -459,67 +459,65 @@ def load_dynamic_plugin_activation_specs(
     specs: list[DynamicPluginActivationSpec] = []
     seen_plugin_ids: set[str] = set()
     for index, entry in enumerate(dynamic_plugins):
-        if not isinstance(entry, dict):
-            raise ValueError(f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}] must be a table")
-        entry = cast(dict[str, object], entry)
-        unknown_fields = sorted(set(entry) - {"manifest", "config"})
-        if unknown_fields:
-            raise ValueError(
-                f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}] has unknown fields: "
-                + ", ".join(unknown_fields)
-            )
-        manifest_ref = entry.get("manifest")
-        if not isinstance(manifest_ref, str) or not manifest_ref.strip():
-            raise ValueError(
-                f"invalid dynamic plugin config in {source}: "
-                f"plugins.dynamic[{index}].manifest must be a non-empty string"
-            )
-        manifest_path = Path(manifest_ref)
-        if not manifest_path.is_absolute():
-            manifest_path = source.parent / manifest_path
-        manifest_path = manifest_path.resolve()
-
-        manifest = _load_plugin_toml(manifest_path, "dynamic plugin manifest")
-        identity = manifest.get("plugin")
-        if not isinstance(identity, dict):
-            raise ValueError(f"invalid dynamic plugin manifest in {manifest_path}: 'plugin' must be a table")
-        identity = cast(dict[str, object], identity)
-        plugin_id = identity.get("id")
-        if not isinstance(plugin_id, str) or not plugin_id.strip():
-            raise ValueError(
-                f"invalid dynamic plugin manifest in {manifest_path}: 'plugin.id' must be a non-empty string"
-            )
-        plugin_id = plugin_id.strip()
-        kind = identity.get("kind")
-        if kind not in ("rust_dynamic", "worker"):
-            raise ValueError(
-                f"invalid dynamic plugin manifest in {manifest_path}: 'plugin.kind' must be 'rust_dynamic' or 'worker'"
-            )
-        if plugin_id in seen_plugin_ids:
-            raise ValueError(f"duplicate dynamic plugin id {plugin_id!r} in {source}")
-        seen_plugin_ids.add(plugin_id)
-
-        config = entry.get("config", {})
-        if not isinstance(config, dict):
-            raise ValueError(
-                f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}].config must be a table"
-            )
-        try:
-            normalized_config = cast(JsonObject, json.loads(json.dumps(config, allow_nan=False)))
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                f"invalid dynamic plugin config in {source}: "
-                f"plugins.dynamic[{index}].config must contain JSON values: {error}"
-            ) from error
-        specs.append(
-            DynamicPluginActivationSpec(
-                plugin_id=plugin_id,
-                kind=cast(DynamicPluginKind, kind),
-                manifest_ref=str(manifest_path),
-                config=normalized_config,
-            )
-        )
+        spec = _dynamic_plugin_spec(source, index, entry)
+        if spec.plugin_id in seen_plugin_ids:
+            raise ValueError(f"duplicate dynamic plugin id {spec.plugin_id!r} in {source}")
+        seen_plugin_ids.add(spec.plugin_id)
+        specs.append(spec)
     return specs
+
+
+def _dynamic_plugin_spec(source: Path, index: int, entry: object) -> DynamicPluginActivationSpec:
+    if not isinstance(entry, dict):
+        raise ValueError(f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}] must be a table")
+    entry = cast(dict[str, object], entry)
+    unknown_fields = sorted(set(entry) - {"manifest", "config"})
+    if unknown_fields:
+        raise ValueError(
+            f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}] has unknown fields: "
+            + ", ".join(unknown_fields)
+        )
+    manifest_path = _dynamic_manifest_path(source, index, entry.get("manifest"))
+    plugin_id, kind = _dynamic_manifest_identity(manifest_path)
+    config = _dynamic_plugin_config(source, index, entry.get("config", {}))
+    return DynamicPluginActivationSpec(plugin_id=plugin_id, kind=kind, manifest_ref=str(manifest_path), config=config)
+
+
+def _dynamic_manifest_path(source: Path, index: int, manifest_ref: object) -> Path:
+    if not isinstance(manifest_ref, str) or not manifest_ref.strip():
+        raise ValueError(
+            f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}].manifest must be a non-empty string"
+        )
+    path = Path(manifest_ref)
+    return (path if path.is_absolute() else source.parent / path).resolve()
+
+
+def _dynamic_manifest_identity(manifest_path: Path) -> tuple[str, DynamicPluginKind]:
+    identity = _load_plugin_toml(manifest_path, "dynamic plugin manifest").get("plugin")
+    if not isinstance(identity, dict):
+        raise ValueError(f"invalid dynamic plugin manifest in {manifest_path}: 'plugin' must be a table")
+    identity = cast(dict[str, object], identity)
+    plugin_id = identity.get("id")
+    if not isinstance(plugin_id, str) or not plugin_id.strip():
+        raise ValueError(f"invalid dynamic plugin manifest in {manifest_path}: 'plugin.id' must be a non-empty string")
+    kind = identity.get("kind")
+    if kind not in ("rust_dynamic", "worker"):
+        raise ValueError(
+            f"invalid dynamic plugin manifest in {manifest_path}: 'plugin.kind' must be 'rust_dynamic' or 'worker'"
+        )
+    return plugin_id.strip(), cast(DynamicPluginKind, kind)
+
+
+def _dynamic_plugin_config(source: Path, index: int, config: object) -> JsonObject:
+    if not isinstance(config, dict):
+        raise ValueError(f"invalid dynamic plugin config in {source}: plugins.dynamic[{index}].config must be a table")
+    try:
+        return cast(JsonObject, json.loads(json.dumps(config, allow_nan=False)))
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"invalid dynamic plugin config in {source}: "
+            f"plugins.dynamic[{index}].config must contain JSON values: {error}"
+        ) from error
 
 
 def _load_plugin_toml(path: Path, description: str) -> dict[str, object]:
