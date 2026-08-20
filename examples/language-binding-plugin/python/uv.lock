@@ -26,10 +26,12 @@ source = { directory = "../../../" }
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", marker = "extra == 'langchain-nvidia'", specifier = ">=3.14.1" },
+    { name = "aiohttp", marker = "extra == 'langchain-nvidia'", specifier = ">=3.14.3" },
+    { name = "cryptography", marker = "extra == 'deepagents'", specifier = ">=50.0.0" },
     { name = "deepagents", marker = "extra == 'deepagents'", specifier = ">=0.7.4,<0.8.0" },
-    { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.3.14,<2.0.0" },
-    { name = "langchain-anthropic", marker = "extra == 'deepagents'", specifier = ">=1.4.8,<2.0.0" },
+    { name = "idna", marker = "extra == 'langchain-nvidia'", specifier = ">=3.19" },
+    { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.3.15,<2.0.0" },
+    { name = "langchain-anthropic", marker = "extra == 'langchain'", specifier = ">=1.4.8,<2.0.0" },
     { name = "langchain-core", marker = "extra == 'langchain'" },
     { name = "langchain-nvidia-ai-endpoints", marker = "extra == 'langchain-nvidia'", specifier = ">=1.4.1,<2.0.0" },
     { name = "langgraph", marker = "extra == 'langchain'", specifier = ">=1.2.9,<2.0.0" },
@@ -40,6 +42,7 @@ requires-dist = [
     { name = "nemo-relay", extras = ["langchain"], marker = "extra == 'langgraph'" },
     { name = "nemo-relay", extras = ["langgraph"], marker = "extra == 'deepagents'" },
     { name = "nemo-relay-cli-bin", marker = "extra == 'cli'", directory = "../../../python/cli-bin" },
+    { name = "pyasn1", marker = "extra == 'deepagents'", specifier = ">=0.6.4" },
 ]
 provides-extras = ["cli", "deepagents", "langchain", "langchain-nvidia", "langgraph"]
 
