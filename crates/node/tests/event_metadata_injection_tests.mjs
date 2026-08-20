@@ -115,6 +115,34 @@ describe('event metadata injector bindings', () => {
     assert.equal(marks['node-event-metadata-after-deregister'].metadata, null);
   });
 
+  it('requires homogeneous numeric arrays at runtime', async () => {
+    const events = capture('node-event-metadata-numeric-sub');
+    lib.registerEventMetadataInjector('node-event-metadata-integers', 10, () => ({
+      'node.injector.integers': [1, 2],
+    }));
+    lib.registerEventMetadataInjector('node-event-metadata-doubles', 20, () => ({
+      'node.injector.doubles': [1.25, 2.5],
+    }));
+    lib.registerEventMetadataInjector('node-event-metadata-mixed-numbers', 30, () => ({
+      'node.injector.mixed_numbers': [1, 2.5],
+    }));
+    try {
+      lib.event('node-event-metadata-homogeneous-numeric-arrays');
+      await lib.flushSubscribers();
+      await waitFor(events, 1);
+    } finally {
+      lib.deregisterEventMetadataInjector('node-event-metadata-mixed-numbers');
+      lib.deregisterEventMetadataInjector('node-event-metadata-doubles');
+      lib.deregisterEventMetadataInjector('node-event-metadata-integers');
+      lib.deregisterSubscriber('node-event-metadata-numeric-sub');
+    }
+
+    assert.deepEqual(events.at(-1).metadata, {
+      'node.injector.doubles': [1.25, 2.5],
+      'node.injector.integers': [1, 2],
+    });
+  });
+
   it('cleans up plugin-owned callbacks', async () => {
     const kind = `node.test.event-metadata.${Date.now()}`;
     const events = capture('node-event-metadata-plugin-sub');

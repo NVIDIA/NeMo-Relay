@@ -204,7 +204,7 @@ EventSanitizeGuardrail: TypeAlias = Callable[
 EventMetadataScalar: TypeAlias = str | int | float | bool
 #: Flat event metadata value accepted from an injector. Lists must be empty or
 #: contain values of one primitive type; Relay validates this at runtime.
-EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int | float] | list[bool]
+EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
 #: Flat metadata additions returned by an event metadata injector.
 EventMetadata: TypeAlias = dict[str, EventMetadataValue]
 #: Additive middleware callback that inspects an immutable event and returns

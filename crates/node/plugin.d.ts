@@ -207,7 +207,10 @@ export interface ToolExecutionInterceptOutcome {
 /** Scalar value accepted in event metadata additions. */
 export type EventMetadataScalar = string | number | boolean;
 
-/** Flat value accepted in event metadata additions. */
+/**
+ * Flat value accepted in event metadata additions. After JSON conversion,
+ * numeric arrays must contain only integer values or only floating-point values.
+ */
 export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
 
 /** Metadata additions returned by an event metadata injector. */

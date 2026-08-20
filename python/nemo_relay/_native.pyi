@@ -59,7 +59,7 @@ _EventSanitizeGuardrail: TypeAlias = Callable[
     _EventSanitizeFields | Awaitable[_EventSanitizeFields],
 ]
 _EventMetadataScalar: TypeAlias = str | int | float | bool
-_EventMetadataValue: TypeAlias = _EventMetadataScalar | list[str] | list[int | float] | list[bool]
+_EventMetadataValue: TypeAlias = _EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
 _EventMetadata: TypeAlias = dict[str, _EventMetadataValue]
 _EventMetadataInjector: TypeAlias = Callable[
     [ScopeEvent | MarkEvent],

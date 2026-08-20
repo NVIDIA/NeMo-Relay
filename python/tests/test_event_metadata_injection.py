@@ -68,6 +68,41 @@ async def test_global_python_injectors_support_sync_async_and_failure_safe_outpu
     }
 
 
+async def test_python_injectors_require_homogeneous_numeric_lists(subscribed_events):
+    integers_name = f"python-integers-{uuid4()}"
+    doubles_name = f"python-doubles-{uuid4()}"
+    mixed_name = f"python-mixed-numbers-{uuid4()}"
+    mixed_injector = cast(
+        nemo_relay.EventMetadataInjectorCallback,
+        lambda _event: {"python.injector.mixed_numbers": [1, 2.5]},
+    )
+
+    event_metadata.register_injector(
+        integers_name,
+        10,
+        lambda _event: {"python.injector.integers": [1, 2]},
+    )
+    event_metadata.register_injector(
+        doubles_name,
+        20,
+        lambda _event: {"python.injector.doubles": [1.0, 2.5]},
+    )
+    event_metadata.register_injector(mixed_name, 30, mixed_injector)
+    try:
+        scope.event("python-homogeneous-numeric-lists")
+        await subscribers.flush_async()
+    finally:
+        event_metadata.deregister_injector(mixed_name)
+        event_metadata.deregister_injector(doubles_name)
+        event_metadata.deregister_injector(integers_name)
+
+    event = next(event for event in subscribed_events if event.name == "python-homogeneous-numeric-lists")
+    assert event.metadata == {
+        "python.injector.doubles": [1.0, 2.5],
+        "python.injector.integers": [1, 2],
+    }
+
+
 async def test_scope_local_python_injector_applies_only_to_owned_events(subscribed_events):
     with scope.scope("python-scope-owner", nemo_relay.ScopeType.Agent) as owner:
         scope_local.register_event_metadata_injector(
