@@ -51,6 +51,8 @@ The Go package provides the following capabilities:
 - **Middleware APIs**: Guardrails and intercepts for request rewriting,
   blocking, sanitization, and execution wrapping, including mark and scope
   event sanitizers at global, scope-local, and plugin-context levels.
+- **Event metadata injection**: Global, scope-local, and plugin-context
+  callbacks can inspect immutable events and propose flat metadata additions.
 - **Event subscribers**: Runtime lifecycle callbacks for observability and
   diagnostics.
 - **Typed OpenTelemetry export**: `NewOpenTelemetryConfig` returns configuration
@@ -73,6 +75,36 @@ Go middleware callbacks are synchronous. Relay waits for each callback on a
 native thread, so blocking I/O and other long-running callback work occupy that
 thread and can reduce middleware throughput. The Go binding does not provide
 completion-based middleware registration.
+
+## Event Metadata Injection
+
+Use `RegisterEventMetadataInjector` for application-wide metadata. The callback
+receives an owned event snapshot and returns proposed additions. Relay validates
+the map, preserves existing metadata, and applies injectors in priority order.
+Returning an error rejects only that callback's additions; the event is still
+delivered.
+
+The following Go example registers application-wide metadata injection:
+
+```go
+err := nemo.RegisterEventMetadataInjector(
+	"application-metadata",
+	10,
+	func(event nemo.Event) (nemo.EventMetadata, error) {
+		return nemo.EventMetadata{
+			"application.event_kind": event.Kind(),
+		}, nil
+	},
+)
+if err != nil {
+	log.Fatal(err)
+}
+defer nemo.DeregisterEventMetadataInjector("application-metadata")
+```
+
+Use `ScopeRegisterEventMetadataInjector` for an active scope. Plugins use
+`PluginContext.RegisterEventMetadataInjector` so component name qualification
+and rollback cleanup apply to the registration.
 
 ## OTLP Logs and Metrics
 
