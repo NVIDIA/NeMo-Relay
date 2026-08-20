@@ -3,7 +3,7 @@ title: "Module config"
 sidebar-title: "config"
 slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config"
 description: "Backend selection for the adaptive plugin's `response_cache` feature."
-position: 4
+position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -17,6 +17,9 @@ The `response_cache` section struct ([`crate::config::ResponseCacheConfig`](/ref
 ## Structs
 
 - [BackendConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-backendconfig): Backend selection mirroring the adaptive [`crate::config::BackendSpec`](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-backendspec) shape.
+- [ToolCacheConfig](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-toolcacheconfig): Opt-in tool-result cache configuration.
+- [ToolClass](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-toolclass): Policy shared by a class of tools.
+- [ToolOverride](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache/config/struct-tooloverride): Per-tool refinement applied after class resolution.
 
 ## Constants
 

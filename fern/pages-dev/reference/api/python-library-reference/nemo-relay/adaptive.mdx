@@ -151,9 +151,51 @@ def to_dict() -> JsonObject
 
 Serialize this ACG config to the canonical JSON object shape.
 
+### `ToolClass`
+
+One tool caching class (also the shape of the `default` default bucket).
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this tool class to the canonical JSON object shape.
+
+### `ToolOverride`
+
+Per-tool refinement applied on top of the tool's resolved class.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this tool override to the canonical JSON object shape.
+
+### `ToolCacheConfig`
+
+Opt-in tool-result cache settings.
+
+#### Methods
+
+##### `to_dict`
+
+```python
+def to_dict() -> JsonObject
+```
+
+Serialize this tool-cache config to the canonical JSON object shape.
+
 ### `ResponseCacheConfig`
 
-Opt-in LLM response cache (exact-match) settings.
+Opt-in exact-match LLM response and tool-result cache settings.
 
 #### Methods
 

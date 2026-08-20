@@ -35,6 +35,9 @@ This crate provides the adaptive runtime, persistence abstractions, learner impl
 - `pub use error::Result;`
 - `pub use redis::RedisBackend;`
 - `pub use response_cache::RESPONSE_CACHE_MARK;`
+- `pub use response_cache::config::ToolCacheConfig;`
+- `pub use response_cache::config::ToolClass;`
+- `pub use response_cache::config::ToolOverride;`
 - `pub use storage::erased::AnyBackend;`
 - `pub use storage::memory::InMemoryBackend;`
 - `pub use storage::traits::StorageBackend;`
@@ -56,7 +59,7 @@ This crate provides the adaptive runtime, persistence abstractions, learner impl
 - [learner](/reference/api/rust-library-reference/nemo-relay-adaptive/learner): Learning primitives and built-in learner implementations. Adaptive learners that derive runtime hints from observed executions.
 - [plugin_component](/reference/api/rust-library-reference/nemo-relay-adaptive/plugin_component): Core plugin integration for the adaptive runtime.
 - [redis](/reference/api/rust-library-reference/nemo-relay-adaptive/redis): Redis-backed [`StorageBackend`](/reference/api/rust-library-reference/nemo-relay-adaptive/storage/traits/trait-storagebackend) implementation.
-- [response_cache](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache): Opt-in LLM response cache (exact-match). Opt-in LLM response cache (exact-match): a feature of the adaptive plugin, configured through [`crate::config::AdaptiveConfig::response_cache`](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-adaptiveconfig).
+- [response_cache](/reference/api/rust-library-reference/nemo-relay-adaptive/response_cache): Opt-in exact-match LLM response and tool-result cache. Opt-in exact-match cache for LLM responses and tool results: a feature of the adaptive plugin, configured through [`crate::config::AdaptiveConfig::response_cache`](/reference/api/rust-library-reference/nemo-relay-adaptive/config/struct-adaptiveconfig).
 - [storage](/reference/api/rust-library-reference/nemo-relay-adaptive/storage): Storage backends and backend traits for adaptive state persistence. Storage backends for adaptive runtime state and learned artifacts.
 - [subscriber](/reference/api/rust-library-reference/nemo-relay-adaptive/subscriber): Event subscriber factory and event-to-record mapping helpers.
 - [tool_parallelism_learner](/reference/api/rust-library-reference/nemo-relay-adaptive/tool_parallelism_learner): Learner that derives tool fan-out plans from observed runs. Learner that derives tool parallelism plans from observed runs.

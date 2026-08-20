@@ -35,4 +35,4 @@ Returns an error when the runtime owner check fails or internal state cannot be 
 
 ## Notes
 
-Sanitize-response guardrails affect only the emitted end-event payload, not the caller-owned `response` value. If a sanitizer errors or panics, Relay omits the payload and response annotation and does not run remaining sanitizers.
+Sanitize-response guardrails affect only the emitted end-event payload, not the caller-owned `response` value. If a sanitizer errors or panics, Relay omits the payload and response annotation and does not run remaining sanitizers. When model pricing is configured, Relay estimates missing cost on a supplied or decoded response annotation that contains matching model and usage data.

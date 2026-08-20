@@ -97,7 +97,7 @@ export interface AcgConfig {
 
 ### `ResponseCacheConfig`
 
-Opt-in LLM response cache (exact-match) settings.
+Opt-in exact-match LLM response and tool-result cache settings.
 
 ```ts
 export interface ResponseCacheConfig {
@@ -113,6 +113,58 @@ export interface ResponseCacheConfig {
   keyStrategy?: string;
   headerAllowlist?: string[];
   backend?: BackendSpec;
+  /** Opt-in tool-result cache; omit to leave the tool surface off. */
+  tools?: ToolCacheConfig;
+}
+```
+
+### `ToolClass`
+
+Shared policy; omitted TTL and bypass rate inherit response-cache defaults.
+
+```ts
+export interface ToolClass {
+  cacheable?: boolean;
+  ttlSeconds?: number;
+  bypassRate?: number;
+  toolVersion?: string;
+  argSkip?: string[];
+  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
+  members?: string[];
+}
+```
+
+### `ToolOverride`
+
+Per-tool refinement; an explicit `argSkip: []` clears the class list.
+
+```ts
+export interface ToolOverride {
+  cacheable?: boolean;
+  ttlSeconds?: number;
+  bypassRate?: number;
+  toolVersion?: string;
+  argSkip?: string[];
+}
+```
+
+### `ToolCacheConfig`
+
+Opt-in caching for tools that are read-only and stable for their TTL.
+
+```ts
+export interface ToolCacheConfig {
+  enabled?: boolean;
+  /**
+   * Tool execution-intercept priority; omit for Rust's default (100).
+   */
+  priority?: number;
+  /** Whether error-shaped tool results may be cached; defaults to false. */
+  cacheErrors?: boolean;
+  default?: ToolClass;
+  classes?: Record<string, ToolClass>;
+  /** Exact tool names or `prefix*`, `*suffix`, or `*contains*` patterns. */
+  overrides?: Record<string, ToolOverride>;
 }
 ```
 
@@ -426,7 +478,7 @@ export declare function acgConfig(config?: AcgConfig): AcgConfig;
 
 Create response-cache settings with defaults applied.
 
-Merges caller-supplied overrides onto the opt-in LLM response-cache config shape (exact-match) used by the adaptive plugin. This is a section of the adaptive component, not a standalone plugin kind.
+Merges caller-supplied overrides onto the opt-in LLM response and tool-result cache config shape (exact-match) used by the adaptive plugin. This is a section of the adaptive component, not a standalone plugin kind.
 
 **Parameters**
 
