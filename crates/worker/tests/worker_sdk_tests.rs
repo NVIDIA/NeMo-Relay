@@ -1633,23 +1633,28 @@ async fn worker_service_propagates_host_runtime_errors() {
         );
     }
 
-    for (mode, expected) in [
+    for (index, (mode, expected)) in [
         (MockStreamMode::WorkerError, "stream worker failed"),
         (MockStreamMode::EmptyChunk, "empty stream chunk"),
         (MockStreamMode::TransportError, "stream status failed"),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         host.set_failures(MockHostFailures {
             llm_stream_mode: mode,
             ..Default::default()
         });
+        let mut request = llm_invoke(
+            "llm-stream",
+            RegistrationSurface::LlmStreamExecutionIntercept,
+            llm_request(),
+            None,
+            None,
+        );
+        request.invocation_id = format!("llm-stream-{index}");
         let mut stream = client
-            .invoke_stream(Request::new(llm_invoke(
-                "llm-stream",
-                RegistrationSurface::LlmStreamExecutionIntercept,
-                llm_request(),
-                None,
-                None,
-            )))
+            .invoke_stream(Request::new(request))
             .await
             .expect("stream invoke")
             .into_inner();
