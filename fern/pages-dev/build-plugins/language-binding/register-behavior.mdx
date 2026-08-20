@@ -12,6 +12,72 @@ example installs only the feature groups whose `enabled` values are true and rea
 configuration. It never calls a process-global middleware registrar from inside the
 plugin.
 
+## Register Event Metadata Injectors
+
+An event metadata injector receives an event snapshot and returns flat metadata
+additions. Relay validates and inserts accepted additions before event sanitizers run.
+Existing metadata values are preserved.
+
+The following examples register a component-owned callback through `PluginContext`:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+def register(self, plugin_config, context):
+    tag = plugin_config["tag"]
+    context.register_event_metadata_injector(
+        "component-metadata",
+        10,
+        lambda event: {"example.plugin.tag": tag},
+    )
+```
+
+Applications can instead use `nemo_relay.event_metadata.register_injector()` for a
+global callback or `nemo_relay.scope_local.register_event_metadata_injector()` for a
+callback owned by an active scope. The matching deregistration functions remove those
+registrations.
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+register(pluginConfig, context) {
+  context.registerEventMetadataInjector('component-metadata', 10, () => ({
+    'example.plugin.tag': pluginConfig.tag,
+  }));
+}
+```
+
+Applications can instead use `registerEventMetadataInjector()` for a global callback
+or `scopeRegisterEventMetadataInjector()` for a callback owned by an active scope. The
+matching deregistration functions remove those registrations.
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+let tag = config.tag.clone();
+ctx.register_event_metadata_injector(
+    "component-metadata",
+    10,
+    Arc::new(move |_event| {
+        let tag = tag.clone();
+        Box::pin(async move {
+            Ok(BTreeMap::from([(
+                "example.plugin.tag".into(),
+                Json::String(tag),
+            )]))
+        })
+    }),
+)?;
+```
+
+Applications can instead use `register_event_metadata_injector()` for a global
+callback or `scope_register_event_metadata_injector()` for a callback owned by
+an active scope. The matching deregistration functions remove those registrations.
+</Tab>
+</Tabs>
+
+Python and Node.js callbacks can return additions directly or asynchronously. Rust
+callbacks return a future. In every binding, callback failures and invalid return values
+omit that callback's additions without dropping the event.
+
 ## Register One Equivalent Request Intercept
 
 The following excerpts show the same model-header rewrite. The full checked examples add
