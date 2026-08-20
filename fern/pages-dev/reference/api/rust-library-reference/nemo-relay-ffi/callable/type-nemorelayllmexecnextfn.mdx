@@ -2,7 +2,7 @@
 title: "Type Alias Nemo Relay LlmExec Next Fn"
 sidebar-title: "NemoRelayLlmExecNextFn"
 description: "Runtime-provided \"next\" callback for LLM execution middleware chain. Takes a native JSON C string, returns a response JSON C string. `next_ctx` is borrowed and valid only until the intercept callback returns; callers must not retain it or invoke `next_fn` asynchronously. The returned string belongs to the caller and must be released with `nemo_relay_string_free`."
-position: 34
+position: 36
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
