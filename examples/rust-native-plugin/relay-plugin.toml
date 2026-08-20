@@ -15,7 +15,7 @@ native_api = "1"
 enabled = false
 
 [capabilities]
-items = ["plugin_native", "config_schema"]
+items = ["plugin_native", "config_schema", "export_activation_policy"]
 
 [config_schema]
 path = "config.schema.json"

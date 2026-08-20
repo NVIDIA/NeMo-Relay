@@ -89,6 +89,43 @@ Destination collision validation is signal-aware. Duplicate destinations
 within logs or within metrics are rejected, while different OTLP signals can
 share an authority.
 
+## Export Activation Policies
+
+Version 4 remote targets accept an optional `activation_policy`. The
+`provider` is the dynamic-plugin manifest ID of a native or worker plugin that
+declares the `export_activation_policy` capability and registers one callback:
+
+```toml
+[components.config.opentelemetry.endpoints.activation_policy]
+provider = "com.example.runtime-policy"
+timeout_millis = 5000
+config = { allowed_countries = ["US", "CA"], min_available_memory_mib = 2048 }
+```
+
+Relay evaluates the policy once for each configured target before constructing
+that exporter. The callback receives only the target kind and the opaque
+`config` value. Relay does not send the destination URL, headers, credentials,
+or other exporter settings to the policy. The decision remains fixed until
+plugin reconfiguration or restart.
+
+Policies are available on OTLP trace, log, and metric endpoints; ATOF stream
+sinks; and ATIF HTTP and S3 targets. Local ATOF and ATIF file destinations do
+not accept policies. Derived OTLP log and metric endpoints inherit the trace
+policy, but Relay evaluates each signal separately with `otlp_log` or
+`otlp_metric` as its target kind.
+
+The timeout defaults to 5000 milliseconds and must be between 1 and 60000.
+A deny decision, missing provider, callback error, unsupported worker surface,
+or timeout denies only that target. Relay continues activation and emits a
+structured diagnostic that contains the provider ID, target kind, and reason,
+but no destination or credential data. A denied target is never constructed,
+connected, or given a background exporter task.
+
+Mixed ATOF configurations retain allowed local sinks. When policy evaluation
+denies every remote ATIF target, Relay disables the ATIF dispatcher and does
+not silently fall back to its legacy local-file destination. Policies are an
+activation-time control only; per-event reevaluation is not supported.
+
 ## Full LLM Payloads
 
 By default, repeated LLM start events contain only the current user turn. Set
@@ -163,6 +200,7 @@ from nemo_relay.observability import (
     ObservabilityConfig,
     OpenTelemetryLogSectionConfig,
     OpenTelemetryMetricSectionConfig,
+    ExportActivationPolicyConfig,
     OpenTelemetrySectionConfig,
     OpenTelemetryEndpointConfig,
 )
@@ -178,6 +216,10 @@ config = plugin.PluginConfig(
                             type="gen_ai",
                             endpoint="http://localhost:4318/v1/traces",
                             service_name="agent-service",
+                            activation_policy=ExportActivationPolicyConfig(
+                                provider="com.example.runtime-policy",
+                                config={"allowed_countries": ["US", "CA"]},
+                            ),
                         )
                     ],
                     logs=OpenTelemetryLogSectionConfig(enabled=True),
@@ -203,6 +245,10 @@ const component = observability.ComponentSpec({
         type: "gen_ai",
         endpoint: "http://localhost:4318/v1/traces",
         service_name: "agent-service",
+        activation_policy: observability.exportActivationPolicy({
+          provider: "com.example.runtime-policy",
+          config: { allowed_countries: ["US", "CA"] },
+        }),
       }),
     ],
     logs: observability.openTelemetryLogConfig({ enabled: true }),

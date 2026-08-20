@@ -17,7 +17,7 @@ use crate::config_editor::{EditorConfig, EditorFieldKind, EditorSchema};
 use crate::plugin::plugin_config_schema;
 use crate::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-    list_plugin_kinds, lookup_plugin, validate_plugin_config,
+    list_plugin_kinds, lookup_plugin, rollback_registrations, validate_plugin_config,
 };
 use serde_json::json;
 use std::fs;
@@ -573,6 +573,7 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        activation_policy: None,
     }];
     assert_eq!(
         resolve_signal_endpoints("metrics", Some(&custom), &[]).unwrap()[0].endpoint,
@@ -598,6 +599,7 @@ fn signal_endpoint_resolution_rejects_ambiguous_trace_paths_and_wrong_signal_pat
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        activation_policy: None,
     };
     assert!(resolve_signal_endpoints("logs", Some(&vec![explicit.clone()]), &[]).is_err());
     explicit.endpoint = "https://collector.example/".to_string();
@@ -612,9 +614,18 @@ fn signal_endpoint_resolution_covers_missing_trace_grpc_and_invalid_transports()
     let mut grpc_trace = test_opentelemetry_endpoint();
     grpc_trace.transport = "grpc".to_string();
     grpc_trace.endpoint = "http://collector.example:4317".to_string();
+    grpc_trace.activation_policy = Some(ExportActivationPolicyConfig {
+        provider: "test.inherited-policy".into(),
+        timeout_millis: 1_234,
+        config: json!({"consent": true}),
+    });
     let derived = resolve_signal_endpoints("metrics", None, &[grpc_trace]).unwrap();
     assert_eq!(derived[0].endpoint, "http://collector.example:4317");
     assert_eq!(derived[0].transport, "grpc");
+    assert_eq!(
+        derived[0].activation_policy.as_ref().unwrap().provider,
+        "test.inherited-policy"
+    );
 
     for endpoint in ["ftp://collector.example", "not a url"] {
         let mut trace = test_opentelemetry_endpoint();
@@ -776,6 +787,7 @@ fn default_config_and_component_conversion_cover_public_shape() {
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
+            activation_policy: None,
         }],
         logs: None,
         metrics: None,
@@ -963,6 +975,7 @@ fn opentelemetry_endpoint_header_env_is_resolved_and_snapshotted() {
             mark_exclude_names: default_mark_exclude_names(),
             attribute_mappings: Vec::new(),
             promote_metadata_prefixes: Vec::new(),
+            activation_policy: None,
         },
     )
     .unwrap();
@@ -991,6 +1004,7 @@ fn test_opentelemetry_endpoint() -> OpenTelemetryEndpointConfig {
         mark_exclude_names: default_mark_exclude_names(),
         attribute_mappings: Vec::new(),
         promote_metadata_prefixes: Vec::new(),
+        activation_policy: None,
     }
 }
 
@@ -1006,6 +1020,7 @@ fn test_signal_endpoint() -> OpenTelemetrySignalEndpointConfig {
         service_version: None,
         instrumentation_scope: default_otel_instrumentation_scope(),
         timeout_millis: default_timeout_millis(),
+        activation_policy: None,
     }
 }
 
@@ -1182,8 +1197,8 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
     }
 }
 
-#[test]
-fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
+#[tokio::test]
+async fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
     let mut context = PluginRegistrationContext::new();
     let error = register_opentelemetry(
         OpenTelemetrySectionConfig {
@@ -1194,6 +1209,7 @@ fn opentelemetry_registration_rejects_an_empty_endpoint_list() {
         },
         &mut context,
     )
+    .await
     .unwrap_err();
     assert!(error.to_string().contains("at least one endpoint"));
 }
@@ -2044,6 +2060,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             )]),
             timeout_millis: 123,
             field_name_policy: "replace_dots".into(),
+            activation_policy: None,
         }),
     )
     .unwrap();
@@ -2077,6 +2094,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             header_env: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "preserve".into(),
+            activation_policy: None,
         }),
     )
     .unwrap_err();
@@ -2092,6 +2110,7 @@ fn build_atof_sink_config_maps_headers_timeout_and_rejects_transport() {
             header_env: std::collections::HashMap::new(),
             timeout_millis: 3_000,
             field_name_policy: "bogus".into(),
+            activation_policy: None,
         }),
     )
     .unwrap_err();
@@ -2315,6 +2334,7 @@ fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
         region: Some("us-east-1".into()),
         endpoint_url: Some("http://127.0.0.1:9".into()),
         allow_http: Some(true),
+        activation_policy: None,
     });
     let storage = build_atif_storage(3, &s3).expect("S3 client configuration should resolve");
     drop(storage);
@@ -2330,6 +2350,7 @@ fn atif_remote_storage_validates_s3_configuration_and_http_access_outcomes() {
                 headers: std::collections::HashMap::new(),
                 header_env: std::collections::HashMap::new(),
                 timeout_millis: 5_000,
+                activation_policy: None,
             }),
         )
         .unwrap();
@@ -4792,6 +4813,7 @@ fn atif_storage_private_helpers_resolve_env_and_key_prefix_branches() {
             region: Some("us-west-2".into()),
             endpoint_url: Some("http://127.0.0.1:9000".into()),
             allow_http: Some(true),
+            activation_policy: None,
         },
     )
     .unwrap();
@@ -4821,6 +4843,7 @@ fn http_storage_config(endpoint: impl Into<String>) -> HttpStorageConfig {
         headers: std::collections::HashMap::new(),
         header_env: std::collections::HashMap::new(),
         timeout_millis: 1_000,
+        activation_policy: None,
     }
 }
 
@@ -4906,6 +4929,7 @@ fn s3_remote_storage_uploads_to_a_custom_http_endpoint() {
             region: Some("us-east-1".into()),
             endpoint_url: Some(endpoint),
             allow_http: Some(true),
+            activation_policy: None,
         }),
     )
     .unwrap();
@@ -4976,4 +5000,273 @@ fn atif_filename_helpers_cover_metadata_resolution_and_rejection_paths() {
         )
         .is_err()
     );
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn export_activation_policy_is_evaluated_once_before_otel_construction() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let mut provider_context = PluginRegistrationContext::new();
+    provider_context
+        .register_export_activation_policy(
+            "test.allow-export",
+            Arc::new(move |request| {
+                let callback_calls = Arc::clone(&callback_calls);
+                Box::pin(async move {
+                    callback_calls.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(request.target_kind, ExportActivationTargetKind::OtlpTrace);
+                    assert_eq!(request.config, json!({"region": "local"}));
+                    Ok(ExportActivationDecision::Allow)
+                })
+            }),
+        )
+        .unwrap();
+
+    let mut endpoint = test_opentelemetry_endpoint();
+    endpoint.activation_policy = Some(ExportActivationPolicyConfig {
+        provider: "test.allow-export".into(),
+        timeout_millis: 5_000,
+        config: json!({"region": "local"}),
+    });
+    let mut observability_context = PluginRegistrationContext::new();
+    register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            endpoints: vec![endpoint],
+            logs: None,
+            metrics: None,
+        },
+        &mut observability_context,
+    )
+    .await
+    .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let mut observability_registrations = observability_context.into_registrations();
+    rollback_registrations(&mut observability_registrations);
+    let mut provider_registrations = provider_context.into_registrations();
+    rollback_registrations(&mut provider_registrations);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn unavailable_and_timed_out_export_policies_fail_closed() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let mut unavailable = test_opentelemetry_endpoint();
+    unavailable.activation_policy = Some(ExportActivationPolicyConfig {
+        provider: "test.missing-export-policy".into(),
+        timeout_millis: 5_000,
+        config: Json::Null,
+    });
+    let mut context = PluginRegistrationContext::new();
+    register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            endpoints: vec![unavailable],
+            logs: None,
+            metrics: None,
+        },
+        &mut context,
+    )
+    .await
+    .unwrap();
+    assert!(context.into_registrations().is_empty());
+
+    let mut provider_context = PluginRegistrationContext::new();
+    provider_context
+        .register_export_activation_policy(
+            "test.slow-export-policy",
+            Arc::new(|_| {
+                Box::pin(async {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    Ok(ExportActivationDecision::Allow)
+                })
+            }),
+        )
+        .unwrap();
+    let mut timed_out = test_opentelemetry_endpoint();
+    timed_out.activation_policy = Some(ExportActivationPolicyConfig {
+        provider: "test.slow-export-policy".into(),
+        timeout_millis: 1,
+        config: Json::Null,
+    });
+    let mut context = PluginRegistrationContext::new();
+    register_opentelemetry(
+        OpenTelemetrySectionConfig {
+            enabled: true,
+            endpoints: vec![timed_out],
+            logs: None,
+            metrics: None,
+        },
+        &mut context,
+    )
+    .await
+    .unwrap();
+    assert!(context.into_registrations().is_empty());
+    let mut provider_registrations = provider_context.into_registrations();
+    rollback_registrations(&mut provider_registrations);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn denied_and_failed_export_policies_fail_closed() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    for (provider, result) in [
+        (
+            "test.deny-export-policy",
+            Ok(ExportActivationDecision::Deny),
+        ),
+        (
+            "test.failed-export-policy",
+            Err(FlowError::Internal("policy failed".into())),
+        ),
+    ] {
+        let mut provider_context = PluginRegistrationContext::new();
+        let callback_result = result.clone();
+        provider_context
+            .register_export_activation_policy(
+                provider,
+                Arc::new(move |_| {
+                    let callback_result = callback_result.clone();
+                    Box::pin(async move { callback_result })
+                }),
+            )
+            .unwrap();
+
+        let mut endpoint = test_opentelemetry_endpoint();
+        endpoint.activation_policy = Some(ExportActivationPolicyConfig {
+            provider: provider.into(),
+            timeout_millis: 5_000,
+            config: Json::Null,
+        });
+        let mut context = PluginRegistrationContext::new();
+        register_opentelemetry(
+            OpenTelemetrySectionConfig {
+                enabled: true,
+                endpoints: vec![endpoint],
+                logs: None,
+                metrics: None,
+            },
+            &mut context,
+        )
+        .await
+        .unwrap();
+        assert!(context.into_registrations().is_empty());
+        let mut provider_registrations = provider_context.into_registrations();
+        rollback_registrations(&mut provider_registrations);
+    }
+}
+
+#[test]
+fn duplicate_export_activation_provider_is_rejected_and_rollback_releases_it() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let callback = Arc::new(|_| Box::pin(async { Ok(ExportActivationDecision::Allow) }) as _);
+    let mut first = PluginRegistrationContext::new();
+    first
+        .register_export_activation_policy("test.duplicate-policy", callback.clone())
+        .unwrap();
+    let mut duplicate = PluginRegistrationContext::new();
+    assert!(
+        duplicate
+            .register_export_activation_policy("test.duplicate-policy", callback.clone())
+            .is_err()
+    );
+
+    let mut first_registrations = first.into_registrations();
+    rollback_registrations(&mut first_registrations);
+    duplicate
+        .register_export_activation_policy("test.duplicate-policy", callback)
+        .unwrap();
+    let mut duplicate_registrations = duplicate.into_registrations();
+    rollback_registrations(&mut duplicate_registrations);
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn all_denied_atif_storage_does_not_fall_back_to_local_files() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let section = AtifSectionConfig {
+        enabled: true,
+        output_directory: Some(temp_dir("denied-atif-fallback")),
+        storage: vec![AtifStorageConfig::Http(HttpStorageConfig {
+            endpoint: "https://collector.example/atif".into(),
+            headers: HashMap::new(),
+            header_env: HashMap::new(),
+            timeout_millis: 3_000,
+            activation_policy: Some(ExportActivationPolicyConfig {
+                provider: "test.missing-atif-policy".into(),
+                timeout_millis: 5_000,
+                config: Json::Null,
+            }),
+        })],
+        ..AtifSectionConfig::default()
+    };
+    let mut context = PluginRegistrationContext::new();
+    register_atif_dispatcher(section, &mut context)
+        .await
+        .unwrap();
+    assert!(context.into_registrations().is_empty());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn denied_atof_stream_retains_allowed_local_sink() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let section = AtofSectionConfig {
+        enabled: true,
+        sinks: vec![
+            AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
+                output_directory: Some(temp_dir("allowed-local-atof")),
+                filename: Some("events.jsonl".into()),
+                mode: "overwrite".into(),
+            }),
+            AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
+                name: Some("denied".into()),
+                url: "https://collector.example/events".into(),
+                transport: "http_post".into(),
+                headers: HashMap::new(),
+                header_env: HashMap::new(),
+                timeout_millis: 3_000,
+                field_name_policy: "preserve".into(),
+                activation_policy: Some(ExportActivationPolicyConfig {
+                    provider: "test.missing-atof-policy".into(),
+                    timeout_millis: 5_000,
+                    config: Json::Null,
+                }),
+            }),
+        ],
+    };
+    let mut context = PluginRegistrationContext::new();
+    register_atof_exporter(section, &mut context).await.unwrap();
+    let mut registrations = context.into_registrations();
+    assert!(!registrations.is_empty());
+    rollback_registrations(&mut registrations);
+}
+
+#[test]
+fn export_activation_policy_config_validates_provider_and_timeout() {
+    let config = json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://localhost:4318/v1/traces",
+                "activation_policy": {
+                    "provider": " ",
+                    "timeout_millis": 60001
+                }
+            }]
+        }
+    });
+    let diagnostics = validate_observability_plugin_config(config.as_object().unwrap());
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("opentelemetry.endpoints[0].activation_policy.provider")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref()
+            == Some("opentelemetry.endpoints[0].activation_policy.timeout_millis")
+    }));
 }

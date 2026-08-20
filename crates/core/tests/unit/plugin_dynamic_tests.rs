@@ -628,6 +628,7 @@ enabled = false
 items = [
   "plugin_worker",
   "config_schema",
+  "export_activation_policy",
 ]
 
 [config_schema]
@@ -645,6 +646,7 @@ entrypoint = "acme_guardrails.plugin:register"
         vec![
             DynamicPluginCapability::PluginWorker,
             DynamicPluginCapability::ConfigSchema,
+            DynamicPluginCapability::ExportActivationPolicy,
         ]
     );
     assert_eq!(

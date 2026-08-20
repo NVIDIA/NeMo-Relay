@@ -22,15 +22,16 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DataSchema,
-    DiagnosticLevel, Event, EventCategory, EventSanitizeFields, Json, LlmCodecIdentity,
-    LlmJsonAsyncStream, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
-    LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
-    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
-    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NativeExecutorConfig, NativePlugin,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
-    NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
-    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    DiagnosticLevel, Event, EventCategory, EventSanitizeFields, ExportActivationDecision,
+    ExportActivationTargetKind, Json, LlmCodecIdentity, LlmJsonAsyncStream, LlmJsonStream, LlmNext,
+    LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext, LogSeverity, MetricKind,
+    MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION,
+    NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
+    NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
+    NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
+    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmAsyncStream,
@@ -68,12 +69,13 @@ fn async_abi_discriminants_reject_unknown_values() {
         Kind::ScopeSanitizeStart,
         Kind::ScopeSanitizeEnd,
         Kind::EventMetadataInjector,
+        Kind::ExportActivationPolicy,
     ];
     for (discriminant, kind) in middleware_kinds.into_iter().enumerate() {
         assert_eq!(kind as u32, discriminant as u32);
         assert_eq!(Kind::try_from(discriminant as u32), Ok(kind));
     }
-    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(15).is_err());
+    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(16).is_err());
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(1),
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
@@ -3295,6 +3297,12 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         )]))
     })
     .unwrap();
+    ctx.register_export_activation_policy(|request| async move {
+        assert_eq!(request.target_kind, ExportActivationTargetKind::OtlpTrace);
+        assert_eq!(request.config, json!({"enabled": true}));
+        Ok(ExportActivationDecision::Allow)
+    })
+    .unwrap();
 
     let metadata = ASYNC_REGISTRATIONS
         .lock()
@@ -3309,7 +3317,7 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(metadata.len(), 14);
+    assert_eq!(metadata.len(), 15);
     assert_eq!(metadata[0].1, "mark-async");
     assert_eq!(metadata[0].2, 1);
     assert_eq!(
@@ -3352,6 +3360,18 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     .unwrap();
     assert_eq!(result, json!({ "plugin.event_name": "checkpoint" }));
     unsafe { metadata_registration.free() };
+
+    let policy_registration =
+        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy);
+    let result = invoke_async_registration(
+        &host,
+        &policy_registration,
+        json!({"target_kind": "otlp_trace", "config": {"enabled": true}}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(result, json!("allow"));
+    unsafe { policy_registration.free() };
 
     for kind in [
         NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,

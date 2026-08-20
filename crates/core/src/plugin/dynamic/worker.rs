@@ -64,6 +64,9 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tower::service_fn;
 
 use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
+use crate::api::export_activation::{
+    ExportActivationDecision, ExportActivationPolicyFn, ExportActivationRequest,
+};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
@@ -96,6 +99,7 @@ use super::{
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
+const EXPORT_ACTIVATION_REQUEST_SCHEMA: &str = "nemo.relay.ExportActivationRequest@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -1071,6 +1075,8 @@ impl WorkerPluginInstance {
                         &registration.local_name,
                         registration.priority,
                     )?,
+                RegistrationSurface::ExportActivationPolicy => self
+                    .install_export_activation_policy_registration(ctx, &registration.local_name)?,
                 RegistrationSurface::MarkSanitizeGuardrail
                 | RegistrationSurface::ScopeSanitizeStartGuardrail
                 | RegistrationSurface::ScopeSanitizeEndGuardrail => self
@@ -1141,6 +1147,26 @@ impl WorkerPluginInstance {
             })
         });
         ctx.register_event_metadata_injector(name, priority, callback)
+    }
+
+    fn install_export_activation_policy_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        name: &str,
+    ) -> crate::plugin::Result<()> {
+        let callback = Arc::new(self.clone_for_callback());
+        let callback_name = name.to_owned();
+        let provider = self.plugin_kind.clone();
+        let policy: ExportActivationPolicyFn = Arc::new(move |request| {
+            let callback = Arc::clone(&callback);
+            let callback_name = callback_name.clone();
+            Box::pin(async move {
+                callback
+                    .invoke_export_activation_policy(&callback_name, request)
+                    .await
+            })
+        });
+        ctx.register_export_activation_policy(&provider, policy)
     }
 
     fn install_event_sanitize_registration(
@@ -1543,6 +1569,31 @@ impl WorkerPluginCallback {
             ))
         })?;
         Ok(additions)
+    }
+
+    async fn invoke_export_activation_policy(
+        &self,
+        registration_name: &str,
+        request: ExportActivationRequest,
+    ) -> FlowResult<ExportActivationDecision> {
+        let request = self.base_request(
+            registration_name,
+            RegistrationSurface::ExportActivationPolicy,
+            None,
+            Some(invoke_request_payload::Payload::ExportActivation(
+                json_envelope(EXPORT_ACTIVATION_REQUEST_SCHEMA, &request).map_err(|error| {
+                    FlowError::Internal(format!(
+                        "failed to serialize export activation request: {error}"
+                    ))
+                })?,
+            )),
+        );
+        let value = json_from_invoke_response(self.invoke_async(request).await?)?;
+        serde_json::from_value(value).map_err(|error| {
+            FlowError::Internal(format!(
+                "worker returned invalid export activation decision: {error}"
+            ))
+        })
     }
 
     async fn invoke_event_sanitize(

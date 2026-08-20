@@ -23,6 +23,7 @@ _TYPE_ALIASES = {
     "Event",
     "EventMetadataInjectorCallback",
     "EventSanitizeCallback",
+    "ExportActivationPolicyCallback",
     "Json",
     "LlmRequest",
     "SubscriberCallback",

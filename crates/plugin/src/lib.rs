@@ -40,7 +40,10 @@ pub use nemo_relay_types::codec::optimization::{
 };
 pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
-pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+pub use nemo_relay_types::plugin::{
+    ConfigDiagnostic, DiagnosticLevel, ExportActivationDecision, ExportActivationRequest,
+    ExportActivationTargetKind,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Map;
 
@@ -828,6 +831,8 @@ pub enum NemoRelayNativeAsyncMiddlewareKind {
     ScopeSanitizeEnd = 13,
     /// Event metadata injector.
     EventMetadataInjector = 14,
+    /// Activation-time policy for Relay-managed remote exporters.
+    ExportActivationPolicy = 15,
 }
 
 impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
@@ -850,6 +855,7 @@ impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
             12 => Ok(Self::ScopeSanitizeStart),
             13 => Ok(Self::ScopeSanitizeEnd),
             14 => Ok(Self::EventMetadataInjector),
+            15 => Ok(Self::ExportActivationPolicy),
             _ => Err(()),
         }
     }

@@ -53,6 +53,23 @@ class ConfigPolicy:
 
 
 @dataclass(slots=True)
+class ExportActivationPolicyConfig:
+    """Activation-time policy attached to one remote exporter target."""
+
+    provider: str
+    timeout_millis: int = 5000
+    config: Json = None
+
+    def to_dict(self) -> JsonObject:
+        """Serialize this policy attachment to the canonical plugin shape."""
+        return {
+            "provider": self.provider,
+            "timeout_millis": self.timeout_millis,
+            "config": self.config,
+        }
+
+
+@dataclass(slots=True)
 class AtofStreamSinkConfig:
     """Stream sink for raw ATOF events."""
 
@@ -63,6 +80,7 @@ class AtofStreamSinkConfig:
     timeout_millis: int = 3000
     field_name_policy: Literal["preserve", "replace_dots"] = "preserve"
     name: str | None = None
+    activation_policy: ExportActivationPolicyConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATOF stream sink to the canonical JSON object shape."""
@@ -76,6 +94,7 @@ class AtofStreamSinkConfig:
                 "header_env": self.header_env,
                 "timeout_millis": self.timeout_millis,
                 "field_name_policy": self.field_name_policy,
+                "activation_policy": self.activation_policy,
             }
         )
 
@@ -139,6 +158,7 @@ class S3StorageConfig:
     region: str | None = None
     endpoint_url: str | None = None
     allow_http: bool | None = None
+    activation_policy: ExportActivationPolicyConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this S3 storage config to the canonical JSON object shape."""
@@ -153,6 +173,7 @@ class S3StorageConfig:
                 "region": self.region,
                 "endpoint_url": self.endpoint_url,
                 "allow_http": self.allow_http,
+                "activation_policy": self.activation_policy,
             }
         )
 
@@ -165,6 +186,7 @@ class HttpStorageConfig:
     headers: dict[str, str] = field(default_factory=dict)
     header_env: dict[str, str] = field(default_factory=dict)
     timeout_millis: int = 3000
+    activation_policy: ExportActivationPolicyConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this HTTP storage config to the canonical JSON object shape."""
@@ -175,6 +197,7 @@ class HttpStorageConfig:
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "timeout_millis": self.timeout_millis,
+                "activation_policy": self.activation_policy,
             }
         )
 
@@ -233,6 +256,7 @@ class OpenTelemetryEndpointConfig:
     max_export_batch_size: int | None = None
     scheduled_delay_millis: int | None = None
     promote_metadata_prefixes: list[str] = field(default_factory=list)
+    activation_policy: ExportActivationPolicyConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this endpoint to the canonical plugin shape."""
@@ -256,6 +280,7 @@ class OpenTelemetryEndpointConfig:
                 "headers": self.headers,
                 "header_env": self.header_env,
                 "resource_attributes": self.resource_attributes,
+                "activation_policy": self.activation_policy,
             }
         )
 
@@ -274,6 +299,7 @@ class OpenTelemetrySignalEndpointConfig:
     service_version: str | None = None
     instrumentation_scope: str = "opentelemetry"
     timeout_millis: int = 3000
+    activation_policy: ExportActivationPolicyConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this signal endpoint to the canonical plugin shape."""
@@ -289,6 +315,7 @@ class OpenTelemetrySignalEndpointConfig:
                 "service_version": self.service_version,
                 "instrumentation_scope": self.instrumentation_scope,
                 "timeout_millis": self.timeout_millis,
+                "activation_policy": self.activation_policy,
             }
         )
 
@@ -414,6 +441,7 @@ class ComponentSpec:
 
 __all__ = [
     "ConfigPolicy",
+    "ExportActivationPolicyConfig",
     "AtofEndpointConfig",
     "AtofFileSinkConfig",
     "AtofStreamSinkConfig",

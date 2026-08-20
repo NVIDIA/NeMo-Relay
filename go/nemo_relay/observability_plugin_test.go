@@ -28,6 +28,9 @@ const (
 )
 
 func TestObservabilityConfigHelpers(t *testing.T) {
+	policyValue := NewExportActivationPolicyConfig("com.example.runtime-policy")
+	policyValue.Config = map[string]any{"allowed_countries": []string{"US", "CA"}}
+	policy := &policyValue
 	config := NewObservabilityConfig()
 	if config.Version != 4 {
 		t.Fatalf("expected version 4, got %d", config.Version)
@@ -40,13 +43,14 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 		t.Fatalf("unexpected ATOF defaults: %#v", atof)
 	}
 	atof.Sinks = []ObservabilityAtofSinkConfigurer{ObservabilityAtofEndpoint{
-		Name:            "archive",
-		URL:             "http://localhost:8080/events",
-		Transport:       "http_post",
-		Headers:         map[string]string{"X-Test": "yes"},
-		HeaderEnv:       map[string]string{"authorization": "NEMO_RELAY_ATOF_AUTH"},
-		TimeoutMillis:   1000,
-		FieldNamePolicy: "replace_dots",
+		Name:             "archive",
+		URL:              "http://localhost:8080/events",
+		Transport:        "http_post",
+		Headers:          map[string]string{"X-Test": "yes"},
+		HeaderEnv:        map[string]string{"authorization": "NEMO_RELAY_ATOF_AUTH"},
+		TimeoutMillis:    1000,
+		FieldNamePolicy:  "replace_dots",
+		ActivationPolicy: policy,
 	}}
 	atif := NewObservabilityAtifConfig()
 	if atif.Enabled || atif.AgentName != "NeMo Relay" || atif.ModelName != "unknown" || atif.FilenameTemplate != "nemo-relay-atif-{session_id}.json" {
@@ -63,6 +67,8 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	httpStorage.Headers = map[string]string{testStaticHeader: "value"}
 	httpStorage.HeaderEnv = map[string]string{"authorization": "NEMO_RELAY_ATIF_HTTP_AUTH"}
 	httpStorage.TimeoutMillis = 1500
+	httpStorage.ActivationPolicy = policy
+	s3Storage.ActivationPolicy = policy
 	assertS3StorageConfig(t, s3Storage)
 	assertHTTPStorageConfig(t, httpStorage)
 	atif.Storage = []ObservabilityAtifStorageConfigurer{
@@ -76,6 +82,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	}
 	otel.Endpoints[0].HeaderEnv["authorization"] = "OTEL_AUTHORIZATION"
 	otel.Endpoints[0].PromoteMetadataPrefixes = []string{"nv."}
+	otel.Endpoints[0].ActivationPolicy = policy
 	maxQueueSize := uint64(4096)
 	maxExportBatchSize := uint64(256)
 	scheduledDelayMillis := uint64(750)
@@ -89,6 +96,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	metricEndpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("https://collector.example/custom/metrics")
 	metricEndpoint.Headers["x-nv-project"] = "observability-dev"
 	metricEndpoint.ResourceAttributes["nv.project"] = "observability-dev"
+	metricEndpoint.ActivationPolicy = policy
 	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(metricEndpoint)
 	otel.Logs = &logs
 	otel.Metrics = &metrics
@@ -148,6 +156,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 		firstSink["header_env"].(map[string]any)["authorization"] != "NEMO_RELAY_ATOF_AUTH" {
 		t.Fatalf("expected serialized ATOF stream sink settings, got %#v", sinks)
 	}
+	assertExportActivationPolicy(t, firstSink["activation_policy"])
 	serialized, err := json.Marshal(wrapped)
 	if err != nil {
 		t.Fatalf("marshal observability component failed: %v", err)
@@ -163,6 +172,7 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	if otelEndpoints[0].(map[string]any)["header_env"].(map[string]any)["authorization"] != "OTEL_AUTHORIZATION" {
 		t.Fatalf("expected OpenTelemetry header_env in serialized config: %#v", wrapped.Config)
 	}
+	assertExportActivationPolicy(t, otelEndpoints[0].(map[string]any)["activation_policy"])
 	promotePrefixes := otelEndpoints[0].(map[string]any)["promote_metadata_prefixes"].([]any)
 	if len(promotePrefixes) != 1 || promotePrefixes[0] != "nv." {
 		t.Fatalf("expected OpenTelemetry metadata promotion prefixes in serialized config: %#v", wrapped.Config)
@@ -188,6 +198,15 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 		metricEndpoint["headers"].(map[string]any)["x-nv-project"] != "observability-dev" ||
 		metricEndpoint["resource_attributes"].(map[string]any)["nv.project"] != "observability-dev" {
 		t.Fatalf("expected OpenTelemetry metric settings in serialized config: %#v", metrics)
+	}
+	assertExportActivationPolicy(t, metricEndpoint["activation_policy"])
+}
+
+func assertExportActivationPolicy(t *testing.T, value any) {
+	t.Helper()
+	policy, ok := value.(map[string]any)
+	if !ok || policy["provider"] != "com.example.runtime-policy" || policy["timeout_millis"] != float64(5000) {
+		t.Fatalf("unexpected export activation policy: %#v", value)
 	}
 }
 

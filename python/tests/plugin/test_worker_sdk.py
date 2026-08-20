@@ -27,6 +27,7 @@ from nemo_relay_plugin import (  # noqa: E402
     ConfigDiagnostic,
     DataSchema,
     DiagnosticLevel,
+    ExportActivationDecision,
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
@@ -50,6 +51,7 @@ from nemo_relay_plugin import _api as plugin_api  # noqa: E402
 from nemo_relay_plugin._api import (  # noqa: E402
     ANNOTATED_LLM_REQUEST_SCHEMA,
     EVENT_SCHEMA,
+    EXPORT_ACTIVATION_REQUEST_SCHEMA,
     JSON_SCHEMA,
     LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA,
     LLM_REQUEST_SCHEMA,
@@ -535,6 +537,13 @@ class AllSurfacesPlugin(WorkerPlugin):
         async def event_metadata(event: Json) -> dict[str, Json]:
             return {"worker.event_name": event["name"]}
 
+        async def export_activation(request: Any) -> ExportActivationDecision:
+            return (
+                ExportActivationDecision.ALLOW
+                if request.config.get("enabled") is True
+                else ExportActivationDecision.DENY
+            )
+
         async def mark_sanitize(event: Json, fields: Json) -> Json:
             return {**fields, "data": {"sanitized": f"mark:{event['name']}"}, "metadata": None}
 
@@ -593,6 +602,7 @@ class AllSurfacesPlugin(WorkerPlugin):
 
         ctx.register_subscriber("subscriber", subscriber)
         ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
+        ctx.register_export_activation_policy(export_activation)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
         ctx.register_scope_sanitize_end_guardrail("scope_end_sanitize", scope_end_sanitize, priority=3)
@@ -637,6 +647,8 @@ def test_generated_proto_matches_worker_contract():
     assert pb.HealthRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 2
     assert pb.SUBSCRIBER == 1
     assert pb.EVENT_METADATA_INJECTOR == 2
+    assert pb.EXPORT_ACTIVATION_POLICY == 3
+    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["export_activation"].number == 13
     assert pb.TOOL_SANITIZE_REQUEST_GUARDRAIL == 10
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     assert pb.MARK_SANITIZE_GUARDRAIL == 30
@@ -701,6 +713,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
     assert registrations == [
         ("subscriber", pb.SUBSCRIBER, 0, False),
         ("event_metadata", pb.EVENT_METADATA_INJECTOR, 1, False),
+        ("export_activation_policy", pb.EXPORT_ACTIVATION_POLICY, 0, False),
         ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
         ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
         ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
@@ -1637,6 +1650,19 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
     )
     assert event_metadata.WhichOneof("result") == "json"
     assert _envelope_value(event_metadata.json.value) == {"worker.event_name": "metadata-event"}
+
+    export_activation = await service.Invoke(
+        _invoke_request(
+            "export_activation_policy",
+            pb.EXPORT_ACTIVATION_POLICY,
+            export_activation=_json_envelope(
+                EXPORT_ACTIVATION_REQUEST_SCHEMA,
+                {"target_kind": "otlp_trace", "config": {"enabled": True}},
+            ),
+        ),
+        AbortContext(),
+    )
+    assert _envelope_value(export_activation.json.value) == "allow"
 
     tool_sanitize_request = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL)
     assert tool_sanitize_request["tag"] == "sanitize_lookup"
@@ -3205,6 +3231,7 @@ def _all_expected_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
         pb.EVENT_METADATA_INJECTOR,
+        pb.EXPORT_ACTIVATION_POLICY,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

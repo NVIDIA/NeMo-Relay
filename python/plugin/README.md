@@ -35,6 +35,8 @@ regenerate their protobuf bindings, rebuild with this SDK, and declare a
   code outside the Relay host process.
 - **Use the shared runtime contract**: Register subscribers, guardrails, and
   intercepts through `WorkerPlugin` and `PluginContext`.
+- **Gate remote exporters at activation**: Register one typed export policy
+  that receives only the target kind and opaque policy configuration.
 - **Call back into Relay safely**: Emit marks, create scopes, and continue
   managed execution through the host runtime handle.
 - **Keep worker lifecycle managed**: Let Relay provision the worker environment,

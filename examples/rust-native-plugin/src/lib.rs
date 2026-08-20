@@ -4,9 +4,9 @@
 use futures::StreamExt;
 use nemo_relay_plugin::{
     CategoryProfile, ConfigDiagnostic, DiagnosticLevel, Event, EventCategory, Json,
-    LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome, NativeExecutorConfig, NativePlugin,
-    PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory, ScopeType,
-    ToolExecutionInterceptOutcome,
+    ExportActivationDecision, LlmJsonAsyncStream, LlmRequest, LlmRequestInterceptOutcome,
+    NativeExecutorConfig, NativePlugin, PendingMarkSpec, PluginContext, PluginRuntime, ScopeCategory,
+    ScopeType, ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -185,6 +185,18 @@ impl NativePlugin for ExampleNativePlugin {
     ) -> nemo_relay_plugin::Result<()> {
         let config = ExampleConfig::parse(plugin_config)?;
         let runtime = ctx.runtime();
+
+        ctx.register_export_activation_policy(|request| async move {
+            // This example is intentionally generic: each endpoint opts in by
+            // passing `config = { allow = true }` in its activation policy.
+            // A production provider could make the same decision from GeoIP,
+            // available memory, user consent, or another runtime signal.
+            Ok(if request.config.get("allow").and_then(Json::as_bool) == Some(true) {
+                ExportActivationDecision::Allow
+            } else {
+                ExportActivationDecision::Deny
+            })
+        })?;
 
         ctx.register_subscriber("example_native_subscriber", {
             let runtime = runtime.clone();

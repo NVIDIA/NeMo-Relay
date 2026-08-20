@@ -51,7 +51,10 @@ pub use nemo_relay_types::codec::optimization::{
 };
 pub use nemo_relay_types::codec::request::{ANNOTATED_LLM_REQUEST_SCHEMA, AnnotatedLlmRequest};
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
-pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
+pub use nemo_relay_types::plugin::{
+    ConfigDiagnostic, DiagnosticLevel, ExportActivationDecision, ExportActivationRequest,
+    ExportActivationTargetKind,
+};
 use nemo_relay_worker_proto::v1::plugin_worker_server::{PluginWorker, PluginWorkerServer};
 use nemo_relay_worker_proto::v1::relay_host_runtime_client::RelayHostRuntimeClient;
 use nemo_relay_worker_proto::v1::{
@@ -123,6 +126,7 @@ pub type BoxFutureResult<T> = Pin<Box<dyn Future<Output = Result<T>> + Send>>;
 pub type JsonStream = Pin<Box<dyn tokio_stream::Stream<Item = Result<Json>> + Send>>;
 
 const JSON_SCHEMA: &str = "nemo.relay.Json@1";
+const EXPORT_ACTIVATION_REQUEST_SCHEMA: &str = "nemo.relay.ExportActivationRequest@1";
 const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 
@@ -184,6 +188,8 @@ type EventSanitizeFn =
     Arc<dyn Fn(&Event, EventSanitizeFields) -> BoxFutureResult<EventSanitizeFields> + Send + Sync>;
 type EventMetadataInjectorFn =
     Arc<dyn Fn(Arc<Event>) -> BoxFutureResult<BTreeMap<String, Json>> + Send + Sync>;
+type ExportActivationPolicyFn =
+    Arc<dyn Fn(ExportActivationRequest) -> BoxFutureResult<ExportActivationDecision> + Send + Sync>;
 type ToolSanitizeFn = Arc<dyn Fn(&str, Json) -> BoxFutureResult<Json> + Send + Sync>;
 type ToolConditionalFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Option<String>> + Send + Sync>;
 type ToolRequestFn = Arc<dyn Fn(String, Json) -> BoxFutureResult<Json> + Send + Sync>;
@@ -309,6 +315,7 @@ struct WorkerHandlers {
     registrations: Vec<Registration>,
     subscribers: HashMap<String, SubscriberFn>,
     event_metadata_injectors: HashMap<String, EventMetadataInjectorFn>,
+    export_activation_policies: HashMap<String, ExportActivationPolicyFn>,
     mark_sanitizers: HashMap<String, EventSanitizeFn>,
     scope_start_sanitizers: HashMap<String, EventSanitizeFn>,
     scope_end_sanitizers: HashMap<String, EventSanitizeFn>,
@@ -383,6 +390,20 @@ impl PluginContext {
         self.handlers.event_metadata_injectors.insert(
             name.into(),
             Arc::new(move |event| Box::pin(callback(event))),
+        );
+    }
+
+    /// Registers this plugin's activation-time policy for remote exporters.
+    pub fn register_export_activation_policy<F, Fut>(&mut self, callback: F)
+    where
+        F: Fn(ExportActivationRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ExportActivationDecision>> + Send + 'static,
+    {
+        const NAME: &str = "export_activation_policy";
+        self.push_registration(NAME, RegistrationSurface::ExportActivationPolicy, 0, false);
+        self.handlers.export_activation_policies.insert(
+            NAME.into(),
+            Arc::new(move |request| Box::pin(callback(request))),
         );
     }
 
@@ -1819,6 +1840,10 @@ impl WorkerService {
                 self.invoke_event_metadata_injector_response(request, &scope)
                     .await
             }
+            RegistrationSurface::ExportActivationPolicy => {
+                self.invoke_export_activation_policy_response(request, &scope)
+                    .await
+            }
             RegistrationSurface::MarkSanitizeGuardrail
             | RegistrationSurface::ScopeSanitizeStartGuardrail
             | RegistrationSurface::ScopeSanitizeEndGuardrail => {
@@ -1869,6 +1894,33 @@ impl WorkerService {
         Ok(json_response(serde_json::to_value(future.await?).map_err(
             |err| WorkerSdkError::Callback(format!("serialize Event metadata additions: {err}")),
         )?))
+    }
+
+    async fn invoke_export_activation_policy_response(
+        &self,
+        request: InvokeRequest,
+        scope: &Option<ScopeContext>,
+    ) -> Result<InvokeResponse> {
+        let payload = match request.payload {
+            Some(nemo_relay_worker_proto::v1::invoke_request::Payload::ExportActivation(value)) => {
+                value
+            }
+            _ => {
+                return Err(WorkerSdkError::InvalidInput(
+                    "export activation policy requires an export_activation payload".into(),
+                ));
+            }
+        };
+        if payload.schema != EXPORT_ACTIVATION_REQUEST_SCHEMA {
+            return Err(WorkerSdkError::InvalidInput(format!(
+                "unsupported export activation request schema {:?}",
+                payload.schema
+            )));
+        }
+        let policy_request = decode_json_envelope::<ExportActivationRequest>(&payload)?;
+        let handler = self.export_activation_policy(&request.registration_name)?;
+        let future = with_thread_scope(scope, || handler(policy_request));
+        Ok(json_response(serde_json::to_value(future.await?)?))
     }
 
     async fn invoke_event_sanitize_response(
@@ -2112,6 +2164,20 @@ impl WorkerService {
             .ok_or_else(|| {
                 WorkerSdkError::InvalidInput(format!(
                     "Event metadata injector '{name}' not registered"
+                ))
+            })
+    }
+
+    fn export_activation_policy(&self, name: &str) -> Result<ExportActivationPolicyFn> {
+        self.handlers
+            .lock()
+            .map_err(|err| WorkerSdkError::Callback(format!("handler lock poisoned: {err}")))?
+            .export_activation_policies
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                WorkerSdkError::InvalidInput(format!(
+                    "export activation policy '{name}' not registered"
                 ))
             })
     }
@@ -2743,6 +2809,7 @@ fn all_surfaces() -> Vec<RegistrationSurface> {
     vec![
         RegistrationSurface::Subscriber,
         RegistrationSurface::EventMetadataInjector,
+        RegistrationSurface::ExportActivationPolicy,
         RegistrationSurface::ToolSanitizeRequestGuardrail,
         RegistrationSurface::ToolSanitizeResponseGuardrail,
         RegistrationSurface::ToolConditionalExecutionGuardrail,

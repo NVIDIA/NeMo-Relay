@@ -27,6 +27,9 @@ Public data types:
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
+    ExportActivationTargetKind: Remote exporter kind presented to a policy.
+    ExportActivationRequest: Secret-free activation request for one remote target.
+    ExportActivationDecision: Allow-or-deny result returned by an activation policy.
     ScopeType: Semantic category for a Relay execution scope.
     WorkerSdkError: SDK, host-call, or worker protocol error.
 
@@ -41,6 +44,7 @@ Public authoring types:
 Public callback aliases used in registration annotations:
     SubscriberCallback: Event subscriber callback.
     EventMetadataInjectorCallback: Event metadata injector callback.
+    ExportActivationPolicyCallback: Activation-time remote-export policy callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
     ToolRequestCallback: Tool request intercept callback.
@@ -226,6 +230,7 @@ def _llm_codec_capability(invocation: pb.LlmInvocation) -> str | None:
 
 WORKER_PROTOCOL = "grpc-v1"
 JSON_SCHEMA = "nemo.relay.Json@1"
+EXPORT_ACTIVATION_REQUEST_SCHEMA = "nemo.relay.ExportActivationRequest@1"
 DATA_SCHEMA_SCHEMA = "nemo.relay.DataSchema@1"
 METRIC_DATA_SCHEMA_NAME = "nemo.relay.metric_measurements"
 METRIC_DATA_SCHEMA_VERSION = "1"
@@ -937,6 +942,38 @@ class _SupportsWorkerPlugin(Protocol):
 
 SubscriberCallback: TypeAlias = Callable[[Event], None | Awaitable[None]]
 EventMetadataInjectorCallback: TypeAlias = Callable[[Event], dict[str, Json] | Awaitable[dict[str, Json]]]
+
+
+class ExportActivationTargetKind(str, Enum):
+    """Remote exporter target presented to an activation policy."""
+
+    OTLP_TRACE = "otlp_trace"
+    OTLP_LOG = "otlp_log"
+    OTLP_METRIC = "otlp_metric"
+    ATOF_STREAM = "atof_stream"
+    ATIF_HTTP = "atif_http"
+    ATIF_S3 = "atif_s3"
+
+
+class ExportActivationDecision(str, Enum):
+    """Decision returned by an export-activation policy."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+
+
+@dataclass(frozen=True, slots=True)
+class ExportActivationRequest:
+    """Non-secret input supplied to an export-activation policy."""
+
+    target_kind: ExportActivationTargetKind
+    config: Json = None
+
+
+ExportActivationPolicyCallback: TypeAlias = Callable[
+    [ExportActivationRequest],
+    ExportActivationDecision | Awaitable[ExportActivationDecision],
+]
 EventSanitizeCallback: TypeAlias = Callable[
     [Event, EventSanitizeFields],
     EventSanitizeFields | Awaitable[EventSanitizeFields],
@@ -971,6 +1008,7 @@ class _Handlers:
     registrations: list[Any]
     subscribers: dict[str, SubscriberCallback]
     event_metadata_injectors: dict[str, EventMetadataInjectorCallback]
+    export_activation_policies: dict[str, ExportActivationPolicyCallback]
     mark_sanitizers: dict[str, EventSanitizeCallback]
     scope_start_sanitizers: dict[str, EventSanitizeCallback]
     scope_end_sanitizers: dict[str, EventSanitizeCallback]
@@ -992,6 +1030,7 @@ class _Handlers:
             registrations=[],
             subscribers={},
             event_metadata_injectors={},
+            export_activation_policies={},
             mark_sanitizers={},
             scope_start_sanitizers={},
             scope_end_sanitizers={},
@@ -1096,6 +1135,12 @@ class PluginContext:
         """
         self._push_registration(name, pb.EVENT_METADATA_INJECTOR, priority, False)
         self._handlers.event_metadata_injectors[name] = callback
+
+    def register_export_activation_policy(self, callback: ExportActivationPolicyCallback) -> None:
+        """Register this plugin's activation-time policy for remote exporters."""
+        name = "export_activation_policy"
+        self._push_registration(name, pb.EXPORT_ACTIVATION_POLICY, 0, False)
+        self._handlers.export_activation_policies[name] = callback
 
     def _register_event_sanitizer(
         self,
@@ -2230,6 +2275,30 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                     )(event)
                 )
                 return _json_response(result)
+            if request.surface == pb.EXPORT_ACTIVATION_POLICY:
+                payload = _decode_required_envelope(
+                    request.export_activation,
+                    "export activation request",
+                    EXPORT_ACTIVATION_REQUEST_SCHEMA,
+                )
+                if not isinstance(payload, dict):
+                    raise WorkerSdkError("export activation request must be an object")
+                try:
+                    policy_request = ExportActivationRequest(
+                        target_kind=ExportActivationTargetKind(payload["target_kind"]),
+                        config=payload.get("config"),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise WorkerSdkError(f"invalid export activation request: {exc}") from exc
+                decision = await _maybe_await(
+                    self._handler(
+                        self._handlers.export_activation_policies,
+                        request.registration_name,
+                    )(policy_request)
+                )
+                if not isinstance(decision, ExportActivationDecision):
+                    raise WorkerSdkError("export activation policy must return ExportActivationDecision")
+                return _json_response(decision.value)
             if request.surface in PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES:
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 fields: EventSanitizeFields = {
@@ -2414,6 +2483,7 @@ def _all_surfaces() -> list[int]:
     return [
         pb.SUBSCRIBER,
         pb.EVENT_METADATA_INJECTOR,
+        pb.EXPORT_ACTIVATION_POLICY,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

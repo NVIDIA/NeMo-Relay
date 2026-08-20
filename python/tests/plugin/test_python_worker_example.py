@@ -23,7 +23,13 @@ if os.environ.get("NEMO_RELAY_SKIP_PYTHON_PLUGIN_TESTS") == "1":
 
 pytest.importorskip("grpc")
 
-from nemo_relay_plugin import PluginContext, PluginRuntime  # noqa: E402
+from nemo_relay_plugin import (  # noqa: E402
+    ExportActivationDecision,
+    ExportActivationRequest,
+    ExportActivationTargetKind,
+    PluginContext,
+    PluginRuntime,
+)
 
 
 def test_manifest_integrity_matches_artifact_bytes():
@@ -125,6 +131,19 @@ async def test_example_register_propagates_configured_tag(example: Any):
     context.runtime = runtime
     plugin = example.ExamplePythonWorker()
     plugin.register(context, {"tag": "demo"})
+
+    context.register_export_activation_policy.assert_called_once()
+    (decide_export,) = context.register_export_activation_policy.call_args.args
+    request = ExportActivationRequest(
+        target_kind=ExportActivationTargetKind.OTLP_TRACE,
+        config={"allow": True},
+    )
+    assert await decide_export(request) is ExportActivationDecision.ALLOW
+    request = ExportActivationRequest(
+        target_kind=ExportActivationTargetKind.OTLP_TRACE,
+        config={"allow": False},
+    )
+    assert await decide_export(request) is ExportActivationDecision.DENY
 
     context.register_event_metadata_injector.assert_called_once()
     injector_name, injector = context.register_event_metadata_injector.call_args.args

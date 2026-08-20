@@ -45,6 +45,9 @@ Public data types:
     ToolExecutionInterceptOutcome: Canonical tool execution-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
+    ExportActivationTargetKind: Remote exporter kind presented to a policy.
+    ExportActivationRequest: Secret-free activation request for one remote target.
+    ExportActivationDecision: Allow-or-deny result returned by an activation policy.
     RuntimeDiagnostic: One aggregated host runtime diagnostic entry.
     RuntimeDiagnostics: Immutable host runtime diagnostics snapshot.
     ScopeType: Semantic category for a Relay execution scope.
@@ -53,6 +56,7 @@ Public data types:
 Public callback aliases:
     SubscriberCallback: Event subscriber callback.
     EventMetadataInjectorCallback: Event metadata injector callback.
+    ExportActivationPolicyCallback: Activation-time remote-export policy callback.
     EventSanitizeCallback: Mark or scope event sanitizer callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
@@ -86,6 +90,10 @@ from ._api import (
     EventMetadataInjectorCallback,
     EventSanitizeCallback,
     EventSanitizeFields,
+    ExportActivationDecision,
+    ExportActivationPolicyCallback,
+    ExportActivationRequest,
+    ExportActivationTargetKind,
     Json,
     LlmCodecIdentity,
     LlmConditionalCallback,
@@ -141,6 +149,10 @@ __all__ = [
     "EventMetadataInjectorCallback",
     "EventSanitizeCallback",
     "EventSanitizeFields",
+    "ExportActivationDecision",
+    "ExportActivationPolicyCallback",
+    "ExportActivationRequest",
+    "ExportActivationTargetKind",
     "Json",
     "LlmConditionalCallback",
     "LlmCodecIdentity",

@@ -23,6 +23,7 @@ from nemo_relay.observability import (
     AtofFileSinkConfig,
     AtofStreamSinkConfig,
     ComponentSpec,
+    ExportActivationPolicyConfig,
     HttpStorageConfig,
     ObservabilityConfig,
     OpenTelemetryEndpointConfig,
@@ -87,6 +88,40 @@ class _AtofCapture:
 
 
 class TestObservabilityConfigHelpers:
+    def test_remote_targets_serialize_export_activation_policy(self):
+        policy = ExportActivationPolicyConfig(
+            provider="com.example.runtime-policy",
+            config={"allowed_countries": ["US", "CA"]},
+        )
+        expected = {
+            "provider": "com.example.runtime-policy",
+            "timeout_millis": 5000,
+            "config": {"allowed_countries": ["US", "CA"]},
+        }
+        assert (
+            OpenTelemetryEndpointConfig("full", "http://localhost:4318/v1/traces", activation_policy=policy).to_dict()[
+                "activation_policy"
+            ]
+            == expected
+        )
+        assert (
+            OpenTelemetrySignalEndpointConfig("http://localhost:4318/v1/logs", activation_policy=policy).to_dict()[
+                "activation_policy"
+            ]
+            == expected
+        )
+        assert (
+            AtofStreamSinkConfig("http://localhost:8080/events", activation_policy=policy).to_dict()[
+                "activation_policy"
+            ]
+            == expected
+        )
+        assert (
+            HttpStorageConfig("https://example.com/atif", activation_policy=policy).to_dict()["activation_policy"]
+            == expected
+        )
+        assert S3StorageConfig("archive", activation_policy=policy).to_dict()["activation_policy"] == expected
+
     def test_opentelemetry_endpoint_preserves_existing_positional_arguments(self):
         endpoint = OpenTelemetryEndpointConfig(
             "full",

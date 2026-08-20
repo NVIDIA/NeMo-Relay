@@ -6,6 +6,12 @@ import type { ConfigPolicy, ConfigDiagnostic, ConfigReport } from './plugin';
 
 export { ConfigPolicy, ConfigDiagnostic, ConfigReport };
 
+export interface ExportActivationPolicyConfig {
+  provider: string;
+  timeout_millis?: number;
+  config?: Json;
+}
+
 export interface AtofConfig {
   enabled?: boolean;
   sinks?: AtofSinkConfig[];
@@ -29,6 +35,7 @@ export interface AtofStreamSinkConfig {
   timeout_millis?: number;
   field_name_policy?: 'preserve' | 'replace_dots' | string;
   name?: string;
+  activation_policy?: ExportActivationPolicyConfig;
 }
 
 /** @deprecated Use AtofStreamSinkConfig. */
@@ -44,6 +51,7 @@ export interface S3StorageConfig {
   region?: string;
   endpoint_url?: string;
   allow_http?: boolean;
+  activation_policy?: ExportActivationPolicyConfig;
 }
 
 export interface HttpStorageConfig {
@@ -52,6 +60,7 @@ export interface HttpStorageConfig {
   headers?: Record<string, string>;
   header_env?: Record<string, string>;
   timeout_millis?: number;
+  activation_policy?: ExportActivationPolicyConfig;
 }
 
 export interface AtifConfig {
@@ -85,6 +94,7 @@ export interface OpenTelemetryEndpointConfig {
   max_queue_size?: number;
   max_export_batch_size?: number;
   scheduled_delay_millis?: number;
+  activation_policy?: ExportActivationPolicyConfig;
 }
 
 export interface OpenTelemetrySignalEndpointConfig {
@@ -98,6 +108,7 @@ export interface OpenTelemetrySignalEndpointConfig {
   service_version?: string;
   instrumentation_scope?: string;
   timeout_millis?: number;
+  activation_policy?: ExportActivationPolicyConfig;
 }
 
 export interface OpenTelemetryLogSectionConfig {
@@ -149,6 +160,10 @@ export declare function defaultConfig(): Config;
 export declare function atofConfig(config?: AtofConfig): AtofConfig;
 /** Create per-agent Agent Trajectory Interchange Format (ATIF) trajectory settings with defaults applied. */
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
+/** Create and validate one remote-export activation policy attachment. */
+export declare function exportActivationPolicy(
+  config: ExportActivationPolicyConfig,
+): ExportActivationPolicyConfig;
 /** Create one typed OpenTelemetry endpoint. */
 export declare function openTelemetryEndpoint(config: OpenTelemetryEndpointConfig): OpenTelemetryEndpointConfig;
 /** Create one signal-specific OpenTelemetry endpoint for logs or metrics. */

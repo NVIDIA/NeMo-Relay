@@ -131,3 +131,39 @@ Keep tests outside `src`, use the shared DTOs re-exported by
 `nemo-relay-plugin`, and do not retain host-owned ABI handles after a callback
 returns. Refer to [Configure Discoverable
 Plugins](/configure-plugins/discoverable-plugins) for trust-policy configuration.
+
+## Register an Export Activation Policy
+
+Native ABI v4 exposes the activation policy through the existing asynchronous
+registration table, so it adds no fields to the ABI-v4 descriptor. Add
+`"export_activation_policy"` to the manifest `capabilities.items`, keep the
+Relay compatibility range at `>=0.8.0,<1.0`, and register one callback:
+
+```rust
+use nemo_relay_plugin::{
+    ExportActivationDecision, ExportActivationTargetKind, Json, PluginContext, Result,
+};
+
+fn register_policy(context: &mut PluginContext<'_>) -> Result<()> {
+    context.register_export_activation_policy(|request| async move {
+        let allowed = match request.target_kind {
+            ExportActivationTargetKind::OtlpTrace
+            | ExportActivationTargetKind::OtlpLog
+            | ExportActivationTargetKind::OtlpMetric => {
+                request.config.get("telemetry_allowed") == Some(&Json::Bool(true))
+            }
+            _ => true,
+        };
+        Ok(if allowed {
+            ExportActivationDecision::Allow
+        } else {
+            ExportActivationDecision::Deny
+        })
+    })
+}
+```
+
+The callback can implement GeoIP, available-memory, consent, or environment
+checks. Keep it bounded and deterministic for the activation attempt. Relay
+applies the target's timeout and fails that target closed if the callback
+returns an error.

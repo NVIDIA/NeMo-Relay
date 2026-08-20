@@ -12,6 +12,21 @@ import {
   OpenTelemetryLogSubscriber,
   OpenTelemetryMetricSubscriber,
 } from '../index.js';
+import {
+  type ExportActivationPolicyConfig,
+  exportActivationPolicy,
+  openTelemetryEndpoint,
+} from '../observability.js';
+
+const activationPolicy: ExportActivationPolicyConfig = exportActivationPolicy({
+  provider: 'com.example.runtime-policy',
+  config: { allowed_countries: ['US', 'CA'] },
+});
+openTelemetryEndpoint({
+  type: 'full',
+  endpoint: 'http://localhost:4318/v1/traces',
+  activation_policy: activationPolicy,
+});
 
 const dataSchema: DataSchema = { name: 'example.fixture', version: '1' };
 

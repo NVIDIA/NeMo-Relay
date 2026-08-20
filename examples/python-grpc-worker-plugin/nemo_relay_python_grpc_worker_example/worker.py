@@ -10,6 +10,8 @@ from typing import Any
 from nemo_relay_plugin import (
     ConfigDiagnostic,
     DiagnosticLevel,
+    ExportActivationDecision,
+    ExportActivationRequest,
     Json,
     PendingMarkSpec,
     PluginContext,
@@ -66,6 +68,16 @@ class ExamplePythonWorker(WorkerPlugin):
         if not isinstance(tag, str):
             raise TypeError("tag must be a string")
 
+        async def decide_export(
+            request: ExportActivationRequest,
+        ) -> ExportActivationDecision:
+            # Each endpoint opts in with `config = { allow = true }`. A real
+            # provider can replace this with GeoIP, memory, consent, or other
+            # activation-time logic without receiving the endpoint URL or secrets.
+            if isinstance(request.config, dict) and request.config.get("allow") is True:
+                return ExportActivationDecision.ALLOW
+            return ExportActivationDecision.DENY
+
         async def inject_event_metadata(event: Any) -> dict[str, Json]:
             if config.get("event_metadata_injector_error") is True:
                 raise RuntimeError("Python Event metadata injector error requested")
@@ -101,6 +113,7 @@ class ExamplePythonWorker(WorkerPlugin):
                 ],
             )
 
+        ctx.register_export_activation_policy(decide_export)
         ctx.register_event_metadata_injector("example_event_metadata_injector", inject_event_metadata)
         if config.get("event_metadata_injector_only") is True:
             return

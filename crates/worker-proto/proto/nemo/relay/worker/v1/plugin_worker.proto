@@ -45,6 +45,7 @@ enum RegistrationSurface {
   REGISTRATION_SURFACE_UNSPECIFIED = 0;
   SUBSCRIBER = 1;
   EVENT_METADATA_INJECTOR = 2;
+  EXPORT_ACTIVATION_POLICY = 3;
   TOOL_SANITIZE_REQUEST_GUARDRAIL = 10;
   TOOL_SANITIZE_RESPONSE_GUARDRAIL = 11;
   TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
@@ -165,6 +166,7 @@ message InvokeRequest {
     JsonEnvelope event = 10;
     ToolInvocation tool = 11;
     LlmInvocation llm = 12;
+    JsonEnvelope export_activation = 13;
   }
 }
 

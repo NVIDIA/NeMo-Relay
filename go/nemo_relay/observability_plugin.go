@@ -8,6 +8,13 @@ import "encoding/json"
 // ObservabilityPluginKind is the top-level plugin kind used by the core observability component.
 const ObservabilityPluginKind = "observability"
 
+// ExportActivationPolicyConfig attaches one dynamic policy provider to a remote exporter target.
+type ExportActivationPolicyConfig struct {
+	Provider      string `json:"provider"`
+	TimeoutMillis uint64 `json:"timeout_millis,omitempty"`
+	Config        any    `json:"config,omitempty"`
+}
+
 // ObservabilityConfig is the canonical Go shape for the observability plugin config document.
 type ObservabilityConfig struct {
 	Version       uint32                            `json:"version,omitempty"`
@@ -29,16 +36,17 @@ type ObservabilityOpenTelemetryConfig struct {
 
 // ObservabilityOpenTelemetrySignalEndpointConfig configures one log or metric OTLP destination.
 type ObservabilityOpenTelemetrySignalEndpointConfig struct {
-	Endpoint             string            `json:"endpoint"`
-	Transport            string            `json:"transport,omitempty"`
-	Headers              map[string]string `json:"headers,omitempty"`
-	HeaderEnv            map[string]string `json:"header_env,omitempty"`
-	ResourceAttributes   map[string]string `json:"resource_attributes,omitempty"`
-	ServiceName          string            `json:"service_name,omitempty"`
-	ServiceNamespace     string            `json:"service_namespace,omitempty"`
-	ServiceVersion       string            `json:"service_version,omitempty"`
-	InstrumentationScope string            `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis        uint64            `json:"timeout_millis,omitempty"`
+	Endpoint             string                        `json:"endpoint"`
+	Transport            string                        `json:"transport,omitempty"`
+	Headers              map[string]string             `json:"headers,omitempty"`
+	HeaderEnv            map[string]string             `json:"header_env,omitempty"`
+	ResourceAttributes   map[string]string             `json:"resource_attributes,omitempty"`
+	ServiceName          string                        `json:"service_name,omitempty"`
+	ServiceNamespace     string                        `json:"service_namespace,omitempty"`
+	ServiceVersion       string                        `json:"service_version,omitempty"`
+	InstrumentationScope string                        `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis        uint64                        `json:"timeout_millis,omitempty"`
+	ActivationPolicy     *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 }
 
 // ObservabilityOpenTelemetryLogConfig configures the plugin's OTLP log pipeline.
@@ -65,24 +73,25 @@ type ObservabilityOpenTelemetryMetricConfig struct {
 
 // ObservabilityOpenTelemetryEndpointConfig configures one typed OTLP destination.
 type ObservabilityOpenTelemetryEndpointConfig struct {
-	Type                    OpenTelemetryType      `json:"type"`
-	Endpoint                string                 `json:"endpoint"`
-	MarkProjection          string                 `json:"mark_projection,omitempty"`
-	MarkExcludeNames        []string               `json:"mark_exclude_names,omitempty"`
-	AttributeMappings       []OtlpAttributeMapping `json:"attribute_mappings,omitempty"`
-	PromoteMetadataPrefixes []string               `json:"promote_metadata_prefixes,omitempty"`
-	Transport               string                 `json:"transport,omitempty"`
-	Headers                 map[string]string      `json:"headers,omitempty"`
-	HeaderEnv               map[string]string      `json:"header_env,omitempty"`
-	ResourceAttributes      map[string]string      `json:"resource_attributes,omitempty"`
-	ServiceName             string                 `json:"service_name,omitempty"`
-	ServiceNamespace        string                 `json:"service_namespace,omitempty"`
-	ServiceVersion          string                 `json:"service_version,omitempty"`
-	InstrumentationScope    string                 `json:"instrumentation_scope,omitempty"`
-	TimeoutMillis           uint64                 `json:"timeout_millis,omitempty"`
-	MaxQueueSize            *uint64                `json:"max_queue_size,omitempty"`
-	MaxExportBatchSize      *uint64                `json:"max_export_batch_size,omitempty"`
-	ScheduledDelayMillis    *uint64                `json:"scheduled_delay_millis,omitempty"`
+	Type                    OpenTelemetryType             `json:"type"`
+	Endpoint                string                        `json:"endpoint"`
+	MarkProjection          string                        `json:"mark_projection,omitempty"`
+	MarkExcludeNames        []string                      `json:"mark_exclude_names,omitempty"`
+	AttributeMappings       []OtlpAttributeMapping        `json:"attribute_mappings,omitempty"`
+	PromoteMetadataPrefixes []string                      `json:"promote_metadata_prefixes,omitempty"`
+	Transport               string                        `json:"transport,omitempty"`
+	Headers                 map[string]string             `json:"headers,omitempty"`
+	HeaderEnv               map[string]string             `json:"header_env,omitempty"`
+	ResourceAttributes      map[string]string             `json:"resource_attributes,omitempty"`
+	ServiceName             string                        `json:"service_name,omitempty"`
+	ServiceNamespace        string                        `json:"service_namespace,omitempty"`
+	ServiceVersion          string                        `json:"service_version,omitempty"`
+	InstrumentationScope    string                        `json:"instrumentation_scope,omitempty"`
+	TimeoutMillis           uint64                        `json:"timeout_millis,omitempty"`
+	MaxQueueSize            *uint64                       `json:"max_queue_size,omitempty"`
+	MaxExportBatchSize      *uint64                       `json:"max_export_batch_size,omitempty"`
+	ScheduledDelayMillis    *uint64                       `json:"scheduled_delay_millis,omitempty"`
+	ActivationPolicy        *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 }
 
 // ObservabilityAtofConfig configures filesystem-backed raw ATOF JSONL export.
@@ -118,13 +127,14 @@ func (config ObservabilityAtofFileSinkConfig) MarshalJSON() ([]byte, error) {
 
 // ObservabilityAtofStreamSinkConfig configures one remote ATOF destination.
 type ObservabilityAtofStreamSinkConfig struct {
-	URL             string            `json:"url"`
-	Transport       string            `json:"transport,omitempty"`
-	Headers         map[string]string `json:"headers,omitempty"`
-	HeaderEnv       map[string]string `json:"header_env,omitempty"`
-	TimeoutMillis   uint64            `json:"timeout_millis,omitempty"`
-	FieldNamePolicy string            `json:"field_name_policy,omitempty"`
-	Name            string            `json:"name,omitempty"`
+	URL              string                        `json:"url"`
+	Transport        string                        `json:"transport,omitempty"`
+	Headers          map[string]string             `json:"headers,omitempty"`
+	HeaderEnv        map[string]string             `json:"header_env,omitempty"`
+	TimeoutMillis    uint64                        `json:"timeout_millis,omitempty"`
+	FieldNamePolicy  string                        `json:"field_name_policy,omitempty"`
+	Name             string                        `json:"name,omitempty"`
+	ActivationPolicy *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 }
 
 func (ObservabilityAtofStreamSinkConfig) atofSinkConfig() {
@@ -164,14 +174,15 @@ type ObservabilityAtifStorageConfigurer interface {
 
 // ObservabilityS3StorageConfig configures S3-compatible ATIF trajectory upload.
 type ObservabilityS3StorageConfig struct {
-	Bucket             string `json:"bucket"`
-	KeyPrefix          string `json:"key_prefix,omitempty"`
-	AccessKeyID        string `json:"access_key_id,omitempty"`
-	SecretAccessKeyVar string `json:"secret_access_key_var,omitempty"`
-	SessionTokenVar    string `json:"session_token_var,omitempty"`
-	Region             string `json:"region,omitempty"`
-	EndpointURL        string `json:"endpoint_url,omitempty"`
-	AllowHTTP          *bool  `json:"allow_http,omitempty"`
+	Bucket             string                        `json:"bucket"`
+	KeyPrefix          string                        `json:"key_prefix,omitempty"`
+	AccessKeyID        string                        `json:"access_key_id,omitempty"`
+	SecretAccessKeyVar string                        `json:"secret_access_key_var,omitempty"`
+	SessionTokenVar    string                        `json:"session_token_var,omitempty"`
+	Region             string                        `json:"region,omitempty"`
+	EndpointURL        string                        `json:"endpoint_url,omitempty"`
+	AllowHTTP          *bool                         `json:"allow_http,omitempty"`
+	ActivationPolicy   *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 }
 
 func (ObservabilityS3StorageConfig) atifStorageConfig() {
@@ -181,15 +192,16 @@ func (ObservabilityS3StorageConfig) atifStorageConfig() {
 // MarshalJSON serializes the S3 config with the core plugin's fixed type discriminator.
 func (config ObservabilityS3StorageConfig) MarshalJSON() ([]byte, error) {
 	type s3StorageJSON struct {
-		Type               string `json:"type"`
-		Bucket             string `json:"bucket"`
-		KeyPrefix          string `json:"key_prefix,omitempty"`
-		AccessKeyID        string `json:"access_key_id,omitempty"`
-		SecretAccessKeyVar string `json:"secret_access_key_var,omitempty"`
-		SessionTokenVar    string `json:"session_token_var,omitempty"`
-		Region             string `json:"region,omitempty"`
-		EndpointURL        string `json:"endpoint_url,omitempty"`
-		AllowHTTP          *bool  `json:"allow_http,omitempty"`
+		Type               string                        `json:"type"`
+		Bucket             string                        `json:"bucket"`
+		KeyPrefix          string                        `json:"key_prefix,omitempty"`
+		AccessKeyID        string                        `json:"access_key_id,omitempty"`
+		SecretAccessKeyVar string                        `json:"secret_access_key_var,omitempty"`
+		SessionTokenVar    string                        `json:"session_token_var,omitempty"`
+		Region             string                        `json:"region,omitempty"`
+		EndpointURL        string                        `json:"endpoint_url,omitempty"`
+		AllowHTTP          *bool                         `json:"allow_http,omitempty"`
+		ActivationPolicy   *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 	}
 	return json.Marshal(s3StorageJSON{
 		Type:               "s3",
@@ -201,15 +213,17 @@ func (config ObservabilityS3StorageConfig) MarshalJSON() ([]byte, error) {
 		Region:             config.Region,
 		EndpointURL:        config.EndpointURL,
 		AllowHTTP:          config.AllowHTTP,
+		ActivationPolicy:   config.ActivationPolicy,
 	})
 }
 
 // ObservabilityHttpStorageConfig configures HTTP ATIF trajectory upload.
 type ObservabilityHttpStorageConfig struct {
-	Endpoint      string            `json:"endpoint"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	HeaderEnv     map[string]string `json:"header_env,omitempty"`
-	TimeoutMillis uint64            `json:"timeout_millis,omitempty"`
+	Endpoint         string                        `json:"endpoint"`
+	Headers          map[string]string             `json:"headers,omitempty"`
+	HeaderEnv        map[string]string             `json:"header_env,omitempty"`
+	TimeoutMillis    uint64                        `json:"timeout_millis,omitempty"`
+	ActivationPolicy *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 }
 
 func (ObservabilityHttpStorageConfig) atifStorageConfig() {
@@ -219,18 +233,20 @@ func (ObservabilityHttpStorageConfig) atifStorageConfig() {
 // MarshalJSON serializes the HTTP config with the core plugin's fixed type discriminator.
 func (config ObservabilityHttpStorageConfig) MarshalJSON() ([]byte, error) {
 	type httpStorageJSON struct {
-		Type          string            `json:"type"`
-		Endpoint      string            `json:"endpoint"`
-		Headers       map[string]string `json:"headers,omitempty"`
-		HeaderEnv     map[string]string `json:"header_env,omitempty"`
-		TimeoutMillis uint64            `json:"timeout_millis,omitempty"`
+		Type             string                        `json:"type"`
+		Endpoint         string                        `json:"endpoint"`
+		Headers          map[string]string             `json:"headers,omitempty"`
+		HeaderEnv        map[string]string             `json:"header_env,omitempty"`
+		TimeoutMillis    uint64                        `json:"timeout_millis,omitempty"`
+		ActivationPolicy *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 	}
 	return json.Marshal(httpStorageJSON{
-		Type:          "http",
-		Endpoint:      config.Endpoint,
-		Headers:       config.Headers,
-		HeaderEnv:     config.HeaderEnv,
-		TimeoutMillis: config.TimeoutMillis,
+		Type:             "http",
+		Endpoint:         config.Endpoint,
+		Headers:          config.Headers,
+		HeaderEnv:        config.HeaderEnv,
+		TimeoutMillis:    config.TimeoutMillis,
+		ActivationPolicy: config.ActivationPolicy,
 	})
 }
 
@@ -243,6 +259,11 @@ type ObservabilityComponentSpec struct {
 // NewObservabilityConfig returns a default observability config with version 4.
 func NewObservabilityConfig() ObservabilityConfig {
 	return ObservabilityConfig{Version: 4}
+}
+
+// NewExportActivationPolicyConfig returns an activation policy with the canonical timeout.
+func NewExportActivationPolicyConfig(provider string) ExportActivationPolicyConfig {
+	return ExportActivationPolicyConfig{Provider: provider, TimeoutMillis: 5000}
 }
 
 // NewObservabilityAtofConfig returns disabled ATOF JSONL settings with native defaults.

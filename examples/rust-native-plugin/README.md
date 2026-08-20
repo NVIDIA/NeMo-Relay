@@ -100,6 +100,8 @@ nemo-relay --bind 127.0.0.1:4040
 
 The example registers the following runtime behavior:
 
+- An export-activation policy that allows a remote target only when its opaque
+  policy config contains `allow = true`.
 - A subscriber that emits a mark when it sees non-plugin scope starts.
 - Tool sanitize request/response guardrails for observability payload tagging.
 - Conditional execution guardrails for tools and LLMs controlled by config.

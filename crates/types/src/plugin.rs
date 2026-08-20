@@ -5,6 +5,49 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::Json;
+
+/// Remote exporter target presented to an activation policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ExportActivationTargetKind {
+    /// OpenTelemetry trace destination.
+    OtlpTrace,
+    /// OpenTelemetry log destination.
+    OtlpLog,
+    /// OpenTelemetry metric destination.
+    OtlpMetric,
+    /// Remote ATOF stream sink.
+    AtofStream,
+    /// Remote ATIF HTTP storage.
+    AtifHttp,
+    /// Remote ATIF S3-compatible storage.
+    AtifS3,
+}
+
+/// Input supplied to an export-activation policy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ExportActivationRequest {
+    /// Kind of remote exporter target being considered.
+    pub target_kind: ExportActivationTargetKind,
+    /// Opaque target-local policy configuration.
+    #[serde(default)]
+    pub config: Json,
+}
+
+/// Decision returned by an export-activation policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ExportActivationDecision {
+    /// Construct and activate the remote exporter target.
+    Allow,
+    /// Suppress the remote exporter target for this activation.
+    Deny,
+}
+
 /// Diagnostic severity returned by plugin validation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

@@ -41,7 +41,8 @@ outcome fields now use structural protobuf messages.
 
 - **`WorkerPlugin`**: The plugin identity, validation, and registration
   contract.
-- **`PluginContext`**: Typed registrations for all supported worker surfaces.
+- **`PluginContext`**: Typed registrations for all supported worker surfaces,
+  including activation-time policies for Relay-managed remote exporters.
 - **`PluginRuntime` and continuations**: Host-runtime callbacks and tool/LLM
   execution-chain helpers.
 - **Canonical tool results**: `ToolNext` returns `ToolExecutionResult`, so

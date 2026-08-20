@@ -20,11 +20,11 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, Json, JsonStream, LlmNext,
-    LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
-    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
-    serve_plugin_arc_with_config,
+    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, ExportActivationDecision, Json,
+    JsonStream, LlmNext, LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement,
+    MetricValueType, PluginContext, PluginRuntime, Result, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
+    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -127,6 +127,11 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             .supported_surfaces
             .contains(&(RegistrationSurface::EventMetadataInjector as i32))
     );
+    assert!(
+        handshake
+            .supported_surfaces
+            .contains(&(RegistrationSurface::ExportActivationPolicy as i32))
+    );
 
     let bad_health = client
         .health(Request::new(HealthRequest {
@@ -213,7 +218,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 22);
+    assert_eq!(registrations.len(), 23);
     for local_name in [
         "llm-sanitize-request",
         "llm-sanitize-response",
@@ -544,6 +549,9 @@ async fn worker_service_invokes_every_registration_surface() {
     )
     .await;
     assert_eq!(metadata, json!({"worker.event_name": "subscriber-event"}));
+
+    let policy = invoke_json(&mut client, export_activation_invoke()).await;
+    assert_eq!(policy, json!("allow"));
 
     let mark_fields = invoke_json(
         &mut client,
@@ -1833,6 +1841,17 @@ impl WorkerPlugin for SurfacePlugin {
                 json!(event.name()),
             )]))
         });
+        ctx.register_export_activation_policy(|request| async move {
+            Ok(
+                if request.target_kind == nemo_relay_worker::ExportActivationTargetKind::OtlpTrace
+                    && request.config == json!({"enabled": true})
+                {
+                    ExportActivationDecision::Allow
+                } else {
+                    ExportActivationDecision::Deny
+                },
+            )
+        });
         ctx.register_mark_sanitize_guardrail("event-sanitize", 1, |event, mut fields| {
             let event_name = event.name().to_owned();
             async move {
@@ -2685,6 +2704,27 @@ fn event_invoke_surface(registration_name: &str, surface: RegistrationSurface) -
         payload: Some(nemo_relay_worker_proto::v1::invoke_request::Payload::Event(
             json_envelope("nemo.relay.Event@1", &event).expect("encode event"),
         )),
+    }
+}
+
+fn export_activation_invoke() -> InvokeRequest {
+    InvokeRequest {
+        activation_id: ACTIVATION_ID.into(),
+        invocation_id: "invoke-policy".into(),
+        registration_name: "export_activation_policy".into(),
+        surface: RegistrationSurface::ExportActivationPolicy as i32,
+        continuation_id: String::new(),
+        scope: None,
+        auth_token: AUTH_TOKEN.into(),
+        payload: Some(
+            nemo_relay_worker_proto::v1::invoke_request::Payload::ExportActivation(
+                json_envelope(
+                    "nemo.relay.ExportActivationRequest@1",
+                    &json!({"target_kind": "otlp_trace", "config": {"enabled": true}}),
+                )
+                .expect("encode export activation request"),
+            ),
+        ),
     }
 }
 

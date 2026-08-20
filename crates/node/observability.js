@@ -48,6 +48,30 @@ function atifConfig(config = {}) {
 }
 
 /**
+ * Create and validate one remote-export activation policy attachment.
+ *
+ * @param {object} config - Policy settings including a dynamic plugin provider ID.
+ * @returns {object} A normalized policy attachment.
+ */
+function exportActivationPolicy(config) {
+  if (!config || typeof config !== 'object') {
+    throw new TypeError('Export activation policy config is required');
+  }
+  if (typeof config.provider !== 'string' || config.provider.trim() === '') {
+    throw new TypeError('Export activation policy provider must be a nonblank string');
+  }
+  const timeout = config.timeout_millis ?? 5000;
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 60000) {
+    throw new TypeError('Export activation policy timeout_millis must be between 1 and 60000');
+  }
+  return {
+    timeout_millis: 5000,
+    config: null,
+    ...config,
+  };
+}
+
+/**
  * Create one typed OpenTelemetry endpoint.
  *
  * @param {object} config - Endpoint settings including required `type` and `endpoint`.
@@ -167,6 +191,7 @@ module.exports = {
   defaultConfig,
   atofConfig,
   atifConfig,
+  exportActivationPolicy,
   openTelemetryEndpoint,
   openTelemetrySignalEndpoint,
   openTelemetryLogConfig,

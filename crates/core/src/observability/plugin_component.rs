@@ -36,6 +36,10 @@ use serde_json::{Map, Value as Json};
 use uuid::Uuid;
 
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
+use crate::api::export_activation::{
+    ExportActivationDecision, ExportActivationRequest, ExportActivationTargetKind,
+    evaluate_export_activation_policy,
+};
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
 use crate::api::subscriber::{
@@ -189,6 +193,20 @@ pub struct OpenTelemetrySectionConfig {
     pub metrics: Option<OpenTelemetryMetricSectionConfig>,
 }
 
+/// Activation-time policy attached to one remote exporter target.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ExportActivationPolicyConfig {
+    /// Dynamic plugin identifier that owns the policy callback.
+    pub provider: String,
+    /// Maximum policy evaluation time in milliseconds.
+    #[serde(default = "default_export_activation_timeout_millis")]
+    pub timeout_millis: u64,
+    /// Opaque target-local configuration passed to the policy.
+    #[serde(default)]
+    pub config: Json,
+}
+
 /// Signal-common OTLP destination fields used by logs and metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -223,6 +241,9 @@ pub struct OpenTelemetrySignalEndpointConfig {
     /// OTLP request timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
+    /// Optional activation-time policy for this destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_policy: Option<ExportActivationPolicyConfig>,
 }
 
 /// OTLP log pipeline settings.
@@ -363,6 +384,9 @@ pub struct OpenTelemetryEndpointConfig {
     /// Maximum delay before exporting a non-full batch, in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scheduled_delay_millis: Option<u64>,
+    /// Optional activation-time policy for this destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_policy: Option<ExportActivationPolicyConfig>,
 }
 
 /// Multi-sink ATOF JSONL exporter config.
@@ -436,6 +460,9 @@ pub struct AtofStreamSinkSectionConfig {
     /// Optional stable name used by other components to reference this endpoint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Optional activation-time policy for this remote sink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_policy: Option<ExportActivationPolicyConfig>,
 }
 
 /// Per-trajectory ATIF exporter config.
@@ -573,6 +600,9 @@ pub struct S3StorageConfig {
     /// Allow plain HTTP endpoints. When unset, `AWS_ALLOW_HTTP` is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_http: Option<bool>,
+    /// Optional activation-time policy for this remote storage target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_policy: Option<ExportActivationPolicyConfig>,
 }
 
 /// HTTP endpoint settings for ATIF trajectory upload.
@@ -595,6 +625,9 @@ pub struct HttpStorageConfig {
     /// Request timeout in milliseconds.
     #[serde(default = "default_timeout_millis")]
     pub timeout_millis: u64,
+    /// Optional activation-time policy for this remote storage target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_policy: Option<ExportActivationPolicyConfig>,
 }
 
 crate::editor_config! {
@@ -767,6 +800,7 @@ impl EditorConfig for OpenTelemetryEndpointConfig {
                     &[],
                     false,
                 ),
+                otel_editor_field("activation_policy", EditorFieldKind::Json, &[], true),
             ],
         };
         &SCHEMA
@@ -797,6 +831,7 @@ impl EditorConfig for OpenTelemetrySignalEndpointConfig {
                     &[],
                     false,
                 ),
+                otel_editor_field("activation_policy", EditorFieldKind::Json, &[], true),
             ],
         };
         &SCHEMA
@@ -870,6 +905,7 @@ crate::editor_config! {
         timeout_millis => { label: "timeout_millis", kind: Integer },
         field_name_policy => { label: "field_name_policy", kind: Enum, values: ["preserve", "replace_dots"] },
         name => { label: "name", kind: String, optional: true },
+        activation_policy => { label: "activation_policy", kind: Json, optional: true },
     }
 }
 
@@ -962,7 +998,7 @@ impl Plugin for ObservabilityPlugin {
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
             let config = parse_observability_config(&plugin_config)?;
-            register_observability(config, ctx)
+            register_observability(config, ctx).await
         })
     }
 }
@@ -1064,7 +1100,7 @@ fn string_enum_schema(
     schema.into()
 }
 
-fn register_observability(
+async fn register_observability(
     config: ObservabilityConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
@@ -1087,13 +1123,13 @@ fn register_observability(
     }
     register_full_payload_policy(config.enable_full_payloads, ctx)?;
     if let Some(atof) = config.atof.filter(|section| section.enabled) {
-        register_atof_exporter(atof, ctx)?;
+        register_atof_exporter(atof, ctx).await?;
     }
     if let Some(atif) = config.atif.filter(|section| section.enabled) {
-        register_atif_dispatcher(atif, ctx)?;
+        register_atif_dispatcher(atif, ctx).await?;
     }
     if let Some(otel) = config.opentelemetry.filter(|section| section.enabled) {
-        register_opentelemetry(otel, ctx)?;
+        register_opentelemetry(otel, ctx).await?;
     }
     Ok(())
 }
@@ -1121,10 +1157,31 @@ fn register_full_payload_policy(
     Ok(())
 }
 
-fn register_atof_exporter(
-    section: AtofSectionConfig,
+async fn register_atof_exporter(
+    mut section: AtofSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    let mut allowed_sinks = Vec::with_capacity(section.sinks.len());
+    for (index, sink) in section.sinks.into_iter().enumerate() {
+        let allowed = match &sink {
+            AtofSinkSectionConfig::File(_) => true,
+            AtofSinkSectionConfig::Stream(stream) => {
+                export_target_allowed(
+                    stream.activation_policy.as_ref(),
+                    ExportActivationTargetKind::AtofStream,
+                    &format!("atof.sinks[{index}]"),
+                )
+                .await
+            }
+        };
+        if allowed {
+            allowed_sinks.push(sink);
+        }
+    }
+    section.sinks = allowed_sinks;
+    if section.sinks.is_empty() {
+        return Ok(());
+    }
     let exporters = section
         .sinks
         .into_iter()
@@ -1214,12 +1271,34 @@ fn build_atof_sink_config(
 
 type AtifStorageList = Arc<Vec<Arc<AtifRemoteStorage>>>;
 
-fn register_atif_dispatcher(
-    section: AtifSectionConfig,
+async fn register_atif_dispatcher(
+    mut section: AtifSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
     validate_atif_filename_template(&section.filename_template)
         .map_err(PluginError::InvalidConfig)?;
+
+    let had_remote_storage = !section.storage.is_empty();
+    let mut allowed_storage = Vec::with_capacity(section.storage.len());
+    for (index, entry) in section.storage.into_iter().enumerate() {
+        let (policy, kind) = match &entry {
+            AtifStorageConfig::Http(config) => (
+                config.activation_policy.as_ref(),
+                ExportActivationTargetKind::AtifHttp,
+            ),
+            AtifStorageConfig::S3(config) => (
+                config.activation_policy.as_ref(),
+                ExportActivationTargetKind::AtifS3,
+            ),
+        };
+        if export_target_allowed(policy, kind, &format!("atif.storage[{index}]")).await {
+            allowed_storage.push(entry);
+        }
+    }
+    section.storage = allowed_storage;
+    if had_remote_storage && section.storage.is_empty() {
+        return Ok(());
+    }
 
     let mut storage_vec = Vec::with_capacity(section.storage.len());
     for (index, entry) in section.storage.iter().enumerate() {
@@ -1364,7 +1443,7 @@ fn build_atif_storage(
     ))
 }
 
-fn register_opentelemetry(
+async fn register_opentelemetry(
     section: OpenTelemetrySectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
@@ -1391,10 +1470,46 @@ fn register_opentelemetry(
         .as_ref()
         .map(|section| resolve_signal_endpoints("metrics", section.endpoints.as_ref(), &endpoints))
         .transpose()?;
-    let trace_subscribers = build_opentelemetry_subscribers(endpoints)?;
-    let log_subscribers = match (logs, log_endpoints) {
-        (Some(section), Some(endpoints)) => {
-            match build_opentelemetry_log_subscribers(section, endpoints) {
+    let mut allowed_traces = Vec::with_capacity(endpoints.len());
+    for (index, endpoint) in endpoints.into_iter().enumerate() {
+        if export_target_allowed(
+            endpoint.activation_policy.as_ref(),
+            ExportActivationTargetKind::OtlpTrace,
+            &format!("opentelemetry.traces[{index}]"),
+        )
+        .await
+        {
+            allowed_traces.push(endpoint);
+        }
+    }
+    let mut allowed_logs = Vec::new();
+    for (index, endpoint) in log_endpoints.unwrap_or_default().into_iter().enumerate() {
+        if export_target_allowed(
+            endpoint.activation_policy.as_ref(),
+            ExportActivationTargetKind::OtlpLog,
+            &format!("opentelemetry.logs.endpoints[{index}]"),
+        )
+        .await
+        {
+            allowed_logs.push(endpoint);
+        }
+    }
+    let mut allowed_metrics = Vec::new();
+    for (index, endpoint) in metric_endpoints.unwrap_or_default().into_iter().enumerate() {
+        if export_target_allowed(
+            endpoint.activation_policy.as_ref(),
+            ExportActivationTargetKind::OtlpMetric,
+            &format!("opentelemetry.metrics.endpoints[{index}]"),
+        )
+        .await
+        {
+            allowed_metrics.push(endpoint);
+        }
+    }
+    let trace_subscribers = build_opentelemetry_subscribers(allowed_traces)?;
+    let log_subscribers = match logs {
+        Some(section) if !allowed_logs.is_empty() => {
+            match build_opentelemetry_log_subscribers(section, allowed_logs) {
                 Ok(subscribers) => subscribers,
                 Err(error) => {
                     let _ = shutdown_opentelemetry_providers(&trace_subscribers);
@@ -1404,9 +1519,9 @@ fn register_opentelemetry(
         }
         _ => Vec::new(),
     };
-    let metric_subscribers = match (metrics, metric_endpoints) {
-        (Some(section), Some(endpoints)) => {
-            match build_opentelemetry_metric_subscribers(section, endpoints) {
+    let metric_subscribers = match metrics {
+        Some(section) if !allowed_metrics.is_empty() => {
+            match build_opentelemetry_metric_subscribers(section, allowed_metrics) {
                 Ok(subscribers) => subscribers,
                 Err(error) => {
                     let _ = shutdown_opentelemetry_providers(&trace_subscribers);
@@ -1419,6 +1534,9 @@ fn register_opentelemetry(
         }
         _ => Vec::new(),
     };
+    if trace_subscribers.is_empty() && log_subscribers.is_empty() && metric_subscribers.is_empty() {
+        return Ok(());
+    }
     for (signal, count) in [
         ("traces", trace_subscribers.len()),
         ("logs", log_subscribers.len()),
@@ -1751,6 +1869,7 @@ fn derive_signal_endpoint(
         service_version: trace.service_version.clone(),
         instrumentation_scope: trace.instrumentation_scope.clone(),
         timeout_millis: trace.timeout_millis,
+        activation_policy: trace.activation_policy.clone(),
     })
 }
 
@@ -3263,6 +3382,7 @@ fn validate_opentelemetry_signal_fields(
         "service_version",
         "instrumentation_scope",
         "timeout_millis",
+        "activation_policy",
     ];
     let section_fields = match signal {
         "logs" => &[
@@ -3344,6 +3464,7 @@ fn validate_opentelemetry_endpoint_fields(
         "max_queue_size",
         "max_export_batch_size",
         "scheduled_delay_millis",
+        "activation_policy",
     ];
     const REMOVED: &[&str] = &["semantic_selector", "capture_content"];
     let Some(endpoints) = opentelemetry
@@ -3566,6 +3687,12 @@ fn validate_opentelemetry_section(
         }
         validate_opentelemetry_batch_config(diagnostics, policy, index, endpoint);
         validate_opentelemetry_headers(diagnostics, policy, index, endpoint);
+        validate_export_activation_policy(
+            diagnostics,
+            policy,
+            &format!("opentelemetry.endpoints[{index}].activation_policy"),
+            endpoint.activation_policy.as_ref(),
+        );
     }
     for error in opentelemetry_destination_collision_errors(&section.endpoints) {
         diagnostics.push(ConfigDiagnostic {
@@ -3742,6 +3869,12 @@ fn validate_opentelemetry_signal_endpoint_values(
         index,
         "headers",
         endpoint.headers.keys(),
+    );
+    validate_export_activation_policy(
+        diagnostics,
+        policy,
+        &format!("opentelemetry.{signal}.endpoints[{index}].activation_policy"),
+        endpoint.activation_policy.as_ref(),
     );
     validate_case_insensitive_signal_header_duplicates(
         diagnostics,
@@ -4303,6 +4436,12 @@ fn validate_atof_stream_sink_values(
     index: usize,
     endpoint: &AtofStreamSinkSectionConfig,
 ) {
+    validate_export_activation_policy(
+        diagnostics,
+        policy,
+        &format!("atof.sinks[{index}].activation_policy"),
+        endpoint.activation_policy.as_ref(),
+    );
     let transport = AtofEndpointTransport::parse(&endpoint.transport);
     if endpoint.url.trim().is_empty() {
         push_policy_diag(
@@ -4539,6 +4678,12 @@ fn validate_atif_storage_values(
 ) {
     match storage {
         AtifStorageConfig::Http(http) => {
+            validate_export_activation_policy(
+                diagnostics,
+                policy,
+                &format!("atif.storage[{index}].activation_policy"),
+                http.activation_policy.as_ref(),
+            );
             validate_atif_http_endpoint(
                 diagnostics,
                 policy,
@@ -4580,6 +4725,12 @@ fn validate_atif_storage_values(
             }
         }
         AtifStorageConfig::S3(s3) => {
+            validate_export_activation_policy(
+                diagnostics,
+                policy,
+                &format!("atif.storage[{index}].activation_policy"),
+                s3.activation_policy.as_ref(),
+            );
             if s3.bucket.trim().is_empty() {
                 push_policy_diag(
                     diagnostics,
@@ -4603,6 +4754,40 @@ fn validate_atif_storage_values(
                 s3.session_token_var.as_deref(),
             );
         }
+    }
+}
+
+fn validate_export_activation_policy(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    field: &str,
+    activation_policy: Option<&ExportActivationPolicyConfig>,
+) {
+    let Some(activation_policy) = activation_policy else {
+        return;
+    };
+    if activation_policy.provider.trim().is_empty()
+        || activation_policy.provider.trim() != activation_policy.provider
+    {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+            Some(format!("{field}.provider")),
+            "export activation policy provider must be nonblank and have no surrounding whitespace"
+                .to_string(),
+        );
+    }
+    if !(1..=60_000).contains(&activation_policy.timeout_millis) {
+        push_policy_diag(
+            diagnostics,
+            policy.unsupported_value,
+            "observability.unsupported_value",
+            Some(OBSERVABILITY_PLUGIN_KIND.to_string()),
+            Some(format!("{field}.timeout_millis")),
+            "export activation policy timeout_millis must be between 1 and 60000".to_string(),
+        );
     }
 }
 
@@ -4797,8 +4982,62 @@ fn observability_registration_error(error: impl std::fmt::Display) -> PluginErro
     PluginError::RegistrationFailed(error.to_string())
 }
 
+async fn export_target_allowed(
+    policy: Option<&ExportActivationPolicyConfig>,
+    target_kind: ExportActivationTargetKind,
+    field: &str,
+) -> bool {
+    let Some(policy) = policy else {
+        return true;
+    };
+    let request = ExportActivationRequest {
+        target_kind,
+        config: policy.config.clone(),
+    };
+    let outcome = tokio::time::timeout(
+        Duration::from_millis(policy.timeout_millis),
+        evaluate_export_activation_policy(&policy.provider, request),
+    )
+    .await;
+    let (allowed, reason) = match outcome {
+        Ok(Ok(ExportActivationDecision::Allow)) => (true, "allowed"),
+        Ok(Ok(ExportActivationDecision::Deny)) => (false, "denied"),
+        Ok(Err(FlowError::NotFound(_))) => (false, "provider_unavailable"),
+        Ok(Err(_)) => (false, "provider_error"),
+        Err(_) => (false, "timeout"),
+    };
+    if !allowed {
+        log::warn!(
+            target: "nemo_relay.plugin",
+            event = "export_activation_policy_denied",
+            plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+            provider = policy.provider.as_str(),
+            target_kind = export_activation_target_kind_name(target_kind),
+            field,
+            reason;
+            "Remote exporter target suppressed by activation policy"
+        );
+    }
+    allowed
+}
+
+const fn export_activation_target_kind_name(kind: ExportActivationTargetKind) -> &'static str {
+    match kind {
+        ExportActivationTargetKind::OtlpTrace => "otlp_trace",
+        ExportActivationTargetKind::OtlpLog => "otlp_log",
+        ExportActivationTargetKind::OtlpMetric => "otlp_metric",
+        ExportActivationTargetKind::AtofStream => "atof_stream",
+        ExportActivationTargetKind::AtifHttp => "atif_http",
+        ExportActivationTargetKind::AtifS3 => "atif_s3",
+    }
+}
+
 fn default_observability_config_version() -> u32 {
     4
+}
+
+fn default_export_activation_timeout_millis() -> u64 {
+    5_000
 }
 
 fn default_atof_mode() -> String {

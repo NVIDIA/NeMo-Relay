@@ -18,6 +18,31 @@ function tempDir(prefix) {
 }
 
 describe('observability plugin helpers', () => {
+  it('builds export activation policies for remote targets', () => {
+    const policy = observability.exportActivationPolicy({
+      provider: 'com.example.runtime-policy',
+      config: { allowed_countries: ['US', 'CA'] },
+    });
+    assert.deepEqual(policy, {
+      provider: 'com.example.runtime-policy',
+      timeout_millis: 5000,
+      config: { allowed_countries: ['US', 'CA'] },
+    });
+    assert.equal(
+      observability.openTelemetryEndpoint({
+        type: 'full',
+        endpoint: 'http://localhost:4318/v1/traces',
+        activation_policy: policy,
+      }).activation_policy,
+      policy,
+    );
+    assert.throws(() => observability.exportActivationPolicy({ provider: ' ' }), /nonblank/);
+    assert.throws(
+      () => observability.exportActivationPolicy({ provider: 'test', timeout_millis: 60001 }),
+      /between 1 and 60000/,
+    );
+  });
+
   it('builds defaults and plugin component shape', () => {
     assert.deepEqual(observability.defaultConfig(), { version: 4 });
     assert.equal(

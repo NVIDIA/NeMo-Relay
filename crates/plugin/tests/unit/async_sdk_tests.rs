@@ -125,6 +125,10 @@ fn async_sdk_status_helpers_keep_operation_labels_stable() {
             NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector,
             "Event metadata injector",
         ),
+        (
+            NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy,
+            "export activation policy",
+        ),
     ];
     for (kind, expected) in labels {
         assert_eq!(registration_operation(kind), expected);

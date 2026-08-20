@@ -244,6 +244,8 @@ pub enum DynamicPluginCapability {
     PluginWorker,
     /// Typed configuration schema contribution capability.
     ConfigSchema,
+    /// Activation-time policy for Relay-managed remote exporters.
+    ExportActivationPolicy,
 }
 
 /// Host policy startup classification for a plugin.

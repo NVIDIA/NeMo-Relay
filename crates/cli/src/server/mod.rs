@@ -20,8 +20,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use nemo_relay::plugin::dynamic::{
-    DynamicPluginKind, NativePluginActivation, NativePluginLoadSpec, WorkerPluginActivation,
-    WorkerPluginLoadSpec, load_native_plugins, load_worker_plugins,
+    DynamicPluginCapability, DynamicPluginKind, DynamicPluginManifest, NativePluginActivation,
+    NativePluginLoadSpec, WorkerPluginActivation, WorkerPluginLoadSpec, load_native_plugins,
+    load_worker_plugins,
 };
 use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
@@ -977,13 +978,6 @@ impl PluginActivation {
         {
             return Err(CliError::Config(error.to_string()));
         }
-        plugin_config
-            .components
-            .extend(dynamic_plugins.iter().map(|plugin| PluginComponentSpec {
-                kind: plugin.plugin_id.clone(),
-                enabled: true,
-                config: plugin.config.clone(),
-            }));
         for plugin in &dynamic_plugins {
             if let Some(snapshot) = plugin.activation_snapshot.as_ref() {
                 snapshot.verify_current()?;
@@ -1038,6 +1032,40 @@ impl PluginActivation {
                 })
             })
             .collect::<Result<Vec<_>, CliError>>()?;
+        let mut policy_components = Vec::new();
+        let mut regular_components = Vec::new();
+        for plugin in &dynamic_plugins {
+            let manifest_ref = plugin
+                .activation_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.activation_manifest_ref())
+                .or_else(|| plugin.manifest_ref.clone())
+                .ok_or_else(|| {
+                    CliError::Config(format!(
+                        "dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                        plugin.plugin_id
+                    ))
+                })?;
+            let (manifest, _) = DynamicPluginManifest::load_from_path(&manifest_ref)
+                .map_err(|error| CliError::Config(error.to_string()))?;
+            let component = PluginComponentSpec {
+                kind: plugin.plugin_id.clone(),
+                enabled: true,
+                config: plugin.config.clone(),
+            };
+            if manifest
+                .capabilities
+                .items
+                .contains(&DynamicPluginCapability::ExportActivationPolicy)
+            {
+                policy_components.push(component);
+            } else {
+                regular_components.push(component);
+            }
+        }
+        policy_components.append(&mut plugin_config.components);
+        policy_components.append(&mut regular_components);
+        plugin_config.components = policy_components;
         let snapshots = dynamic_plugins
             .iter()
             .filter_map(|plugin| plugin.activation_snapshot.clone())

@@ -22,6 +22,9 @@ use std::task::{Context, Poll};
 use futures_util::FutureExt;
 
 use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
+use crate::api::export_activation::{
+    ExportActivationDecision, ExportActivationPolicyFn, ExportActivationRequest,
+};
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
     EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
@@ -3504,6 +3507,39 @@ fn wrap_native_async_event_metadata_injector(
     })
 }
 
+fn wrap_native_async_export_activation_policy(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ExportActivationPolicyFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move |request: ExportActivationRequest| {
+        let user_data = user_data.clone();
+        Box::pin(async move {
+            serde_json::from_value::<ExportActivationDecision>(
+                invoke_native_async_callback(
+                    cb,
+                    user_data,
+                    serde_json::to_value(request).map_err(|error| {
+                        FlowError::Internal(format!(
+                            "failed to serialize export activation request: {error}"
+                        ))
+                    })?,
+                    None,
+                    None,
+                )
+                .await?,
+            )
+            .map_err(|error| {
+                FlowError::Internal(format!(
+                    "invalid native export activation decision: {error}"
+                ))
+            })
+        })
+    })
+}
+
 fn wrap_native_async_tool_execution(
     instance: Arc<NativePluginInstance>,
     cb: NemoRelayNativeAsyncMiddlewareCb,
@@ -3813,6 +3849,13 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
                 priority,
                 wrap_native_async_event_metadata_injector(instance, cb, user_data, free_fn),
             ),
+        NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy => {
+            let provider = instance.plugin_kind.clone();
+            context.register_export_activation_policy(
+                &provider,
+                wrap_native_async_export_activation_policy(instance, cb, user_data, free_fn),
+            )
+        }
     };
     match registration {
         Ok(()) => NemoRelayStatus::Ok,

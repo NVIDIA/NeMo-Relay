@@ -23,7 +23,8 @@ use crate::plugin::{
 };
 
 use super::{
-    DynamicPluginKind, DynamicPluginTeardownOutcome, NativePluginActivation, NativePluginLoadSpec,
+    DynamicPluginCapability, DynamicPluginKind, DynamicPluginManifest,
+    DynamicPluginTeardownOutcome, NativePluginActivation, NativePluginLoadSpec,
     load_native_plugins,
 };
 
@@ -177,15 +178,28 @@ impl PluginHostActivation {
                 .transpose()?
         };
 
-        config.components.extend(
-            dynamic_plugins
-                .into_iter()
-                .map(|plugin| PluginComponentSpec {
-                    kind: plugin.plugin_id,
-                    enabled: true,
-                    config: plugin.config,
-                }),
-        );
+        let mut policy_components = Vec::new();
+        let mut regular_components = Vec::new();
+        for plugin in dynamic_plugins {
+            let (manifest, _) = DynamicPluginManifest::load_from_path(&plugin.manifest_ref)?;
+            let component = PluginComponentSpec {
+                kind: plugin.plugin_id,
+                enabled: true,
+                config: plugin.config,
+            };
+            if manifest
+                .capabilities
+                .items
+                .contains(&DynamicPluginCapability::ExportActivationPolicy)
+            {
+                policy_components.push(component);
+            } else {
+                regular_components.push(component);
+            }
+        }
+        policy_components.append(&mut config.components);
+        policy_components.append(&mut regular_components);
+        config.components = policy_components;
         let rollback_failures = Arc::new(Mutex::new(Vec::new()));
         let owner_id = claim.owner_id();
         let initialization = tokio::spawn(initialize_plugins_exact_for_host(

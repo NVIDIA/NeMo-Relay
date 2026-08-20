@@ -1058,10 +1058,12 @@ check-python-worker-proto:
 
     assert pb.HandshakeRequest.DESCRIPTOR.fields_by_name["worker_protocol"].number == 4
     assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["auth_token"].number == 7
+    assert pb.InvokeRequest.DESCRIPTOR.fields_by_name["export_activation"].number == 13
     assert {method.name for method in pb.DESCRIPTOR.services_by_name["PluginWorker"].methods} == {
         "Handshake", "Health", "Validate", "Register", "Invoke", "InvokeStream", "CancelInvocation", "Shutdown"
     }
     assert pb.SUBSCRIBER == 1
+    assert pb.EXPORT_ACTIVATION_POLICY == 3
     assert pb.LLM_STREAM_EXECUTION_INTERCEPT == 25
     tool_next = pb.DESCRIPTOR.services_by_name["RelayHostRuntime"].methods_by_name["ToolNext"]
     assert tool_next.output_type.full_name == "nemo.relay.worker.v1.ToolExecutionResultResponse"

@@ -1165,6 +1165,32 @@ impl PluginContext<'_> {
         )
     }
 
+    /// Registers this plugin's activation-time policy for remote exporters.
+    pub fn register_export_activation_policy<F, Fut>(&mut self, callback: F) -> Result<()>
+    where
+        F: Fn(ExportActivationRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ExportActivationDecision>> + Send + 'static,
+    {
+        let callback = Arc::new(callback);
+        self.register_unary_adapter(
+            NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy,
+            "export_activation_policy",
+            0,
+            false,
+            Box::new(move |value, _, _| {
+                let callback = Arc::clone(&callback);
+                Box::pin(async move {
+                    let request: ExportActivationRequest =
+                        serde_json::from_value(value).map_err(|error| {
+                            format!("invalid export activation policy request: {error}")
+                        })?;
+                    serde_json::to_value(callback(request).await?)
+                        .map_err(|error| error.to_string())
+                })
+            }),
+        )
+    }
+
     /// Registers an asynchronous mark-event sanitizer.
     pub fn register_mark_sanitize_guardrail<F, Fut>(
         &mut self,
@@ -1609,6 +1635,7 @@ fn registration_operation(kind: NemoRelayNativeAsyncMiddlewareKind) -> &'static 
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart => "scope start sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd => "scope end sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector => "Event metadata injector",
+        NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy => "export activation policy",
     }
 }
 

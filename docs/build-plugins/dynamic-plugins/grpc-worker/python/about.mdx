@@ -211,6 +211,44 @@ returns at most 32 entries. Entries do not identify the emitting plugin. If a
 worker connects to an older Relay host, the SDK translates gRPC `UNIMPLEMENTED`
 into an unsupported-runtime-diagnostics error.
 
+## Register an Export Activation Policy
+
+Add `"export_activation_policy"` to the worker manifest
+`capabilities.items`. Worker protocol `grpc-v1` carries the versioned request
+and decision through its existing unary `Invoke` RPC:
+
+```python
+from nemo_relay_plugin import (
+    ExportActivationDecision,
+    ExportActivationRequest,
+    ExportActivationTargetKind,
+)
+
+
+async def decide_export(request: ExportActivationRequest) -> ExportActivationDecision:
+    config = request.config if isinstance(request.config, dict) else {}
+    if request.target_kind in {
+        ExportActivationTargetKind.OTLP_TRACE,
+        ExportActivationTargetKind.OTLP_LOG,
+        ExportActivationTargetKind.OTLP_METRIC,
+    }:
+        return (
+            ExportActivationDecision.ALLOW
+            if config.get("telemetry_allowed") is True
+            else ExportActivationDecision.DENY
+        )
+    return ExportActivationDecision.ALLOW
+
+
+ctx.register_export_activation_policy(decide_export)
+```
+
+Relay starts a referenced policy worker before constructing gated exporters.
+It sends only the target kind and opaque policy configuration, never exporter
+destinations, headers, or credentials. If the worker does not advertise the
+surface, exits, errors, or exceeds the per-target timeout, Relay denies that
+target without preventing the rest of the runtime from starting.
+
 ## Emit Typed Marks and Metrics
 
 Worker plugins can assign a schema and OTLP log severity to a mark without

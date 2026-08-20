@@ -22,6 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
+use crate::api::export_activation::{
+    ExportActivationPolicyFn, deregister_export_activation_policy,
+    register_export_activation_policy,
+};
 use crate::api::registry::{
     deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
@@ -431,6 +435,33 @@ impl PluginRegistrationContext {
             Some(namespace) => format!("{namespace}{name}"),
             None => name.to_string(),
         }
+    }
+
+    /// Registers the single export-activation policy owned by `provider`.
+    pub fn register_export_activation_policy(
+        &mut self,
+        provider: &str,
+        callback: ExportActivationPolicyFn,
+    ) -> Result<()> {
+        register_export_activation_policy(provider, callback).map_err(|error| {
+            PluginError::RegistrationFailed(format!("export activation policy: {error}"))
+        })?;
+
+        let provider = provider.to_string();
+        self.registrations.push(PluginRegistration::new(
+            "export_activation_policy",
+            provider.clone(),
+            Box::new(move || {
+                deregister_export_activation_policy(&provider)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        PluginError::RegistrationFailed(format!(
+                            "export activation policy deregistration failed: {error}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
     }
 
     /// Registers an event subscriber and records its rollback closure.
