@@ -35,8 +35,8 @@ class ConfigReport(TypedDict):
 class ResponseCacheKeyStrategy(str, Enum):
     """Supported LLM response-cache key derivation strategies."""
 
-    EXACT_REQUEST: str
-    LOGICAL: str
+    EXACT_REQUEST: ResponseCacheKeyStrategy
+    LOGICAL: ResponseCacheKeyStrategy
 
 @dataclass(slots=True)
 class ConfigPolicy:
