@@ -1,27 +1,28 @@
 ---
 title: "Response Cache"
-description: "Configure exact-match response caching for managed LLM calls."
+description: "Configure exact-match response caching for managed LLM calls and tool results."
 position: 5
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
 
-Use the response cache when the same LLM request is made more than once and the
-repeat should be served from a store instead of calling the provider again. An
-eligible request that matches an unexpired cache entry can be served from the
-store without calling the provider. Buffered hits preserve the stored response
-shape and usage fields; streaming hits replay an equivalent provider-native
-stream.
+Use the response cache when a repeatable managed LLM request or explicitly
+classified tool call should be served from a store instead of running live.
+An eligible request or tool call that matches an unexpired cache entry can be
+served without calling the provider or tool. Buffered LLM hits preserve the
+stored response shape and usage fields; streaming hits replay an equivalent
+provider-native stream.
 
 The cache is an optional `response_cache` section of the
 [Adaptive plugin](/configure-plugins/adaptive/configuration), not a standalone plugin
-kind. It is off until the section is present, applies to
+kind. It is off until the section is present. Its LLM surface applies to
 [managed LLM calls](/instrument-applications/instrument-llm-call) without
-changing the execution API. By default, only requests with an explicit numeric
-`temperature = 0` are eligible; set `cache_nondeterministic = true` to opt
-sampled requests into caching. Runtime backend errors fail open to a normal
-live call, while invalid configuration is rejected during validation.
+changing the execution API; its tool-result surface is separately opt-in. By
+default, only requests with an explicit numeric `temperature = 0` are eligible;
+set `cache_nondeterministic = true` to opt sampled requests into caching.
+Runtime backend errors fail open to a normal live call, while invalid
+configuration is rejected during validation.
 
 `namespace` is required and defines one trusted cache-sharing domain. Do not
 use one namespace across mutually untrusted tenants or upstreams.
@@ -292,9 +293,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 </Tabs>
 
-## What Gets Cached
+## LLM Responses
 
-Only complete, replayable answers are stored:
+Only complete, replayable LLM answers are stored:
 
 - A response with a non-null `error` or a `status` such as `failed`,
   `cancelled`, `incomplete`, or `in_progress` is never stored.
@@ -349,7 +350,9 @@ normalization, under the default `key_strategy = "exact_request"`:
   fragment the keyspace.
 - Request headers stay out of the key unless named in `header_allowlist`.
   Allowlist every trusted, non-secret response-affecting header; an omitted
-  header does not partition the key. Known auth headers are rejected, but
+  header contributes no value. A non-empty normalized allowlist policy also
+  partitions the key, even when a listed header is absent; an empty allowlist
+  preserves the version-1 key shape. Known auth headers are rejected, but
   validation cannot recognize every custom credential name, so never allowlist
   credentials.
 - The provider name and required namespace partition every key. An internal
@@ -360,6 +363,82 @@ normalization, under the default `key_strategy = "exact_request"`:
 - Requests containing integers outside the exactly representable RFC 8785
   range (less than `-2^53` or greater than `2^53`) bypass the cache.
 
+## Tool-Result Cache
+
+The same `response_cache` section can also cache results from
+[managed tool calls](/instrument-applications/instrument-tool-call). This is a
+separate, opt-in surface: it shares the configured store and namespace with
+the LLM cache, but tool keys carry a distinct surface tag and cannot collide
+with LLM keys.
+
+Caching a tool call suppresses the real call. Cache only tools that are
+read-only and stable for their TTL; do not cache a tool merely because it is
+idempotent. A cache hit skips even an idempotent write. Classify each tool
+explicitly before enabling the tool surface:
+
+```toml
+[components.config.response_cache.tools]
+enabled = true
+cache_errors = false # default: do not store conventional in-band error results
+
+[components.config.response_cache.tools.classes.docs]
+cacheable = true
+ttl_seconds = 300
+tool_version = "docs-v1"
+arg_skip = ["trace_id"]
+members = ["docs_search", "docs_lookup"]
+
+[components.config.response_cache.tools.overrides.docs_search]
+tool_version = "docs-search-v2" # identifies the deployed tool contract
+```
+
+Prefer exact names for cacheable tools. Wildcards are appropriate only for a
+controlled namespace whose current and future matching tools are guaranteed to
+remain read-only and TTL-stable. Supported wildcard forms are `prefix*`,
+`*suffix`, `*contains*`, and the catch-all `*` for noncacheable policies; other
+placements are rejected. An exact class member wins over a wildcard, and an
+exact override wins over a wildcard override. Among wildcard matches, Relay
+selects the most-specific pattern.
+Configuration validation rejects overlapping wildcard class patterns or
+wildcard overrides that disagree on `cacheable`, so a broad deny policy cannot
+silently become a cacheable result. Unmatched tools use `tools.default`, which
+must remain uncacheable.
+
+### Tool Keys and Identity
+
+A tool key includes the namespace, tool name, optional `tool_version`,
+effective arguments, `arg_skip` policy, and `cache_errors` policy. It has no
+automatic tenant, scope, caller-identity, or request-header partition. In
+particular, `header_allowlist` applies only to LLM keys.
+
+Do not cache a tool whose result depends on tenant identity, caller identity,
+the active scope, permissions, ambient state, or another input absent from its
+arguments. If a cacheable tool needs a caller or tenant partition, add a trusted
+discriminator to the real arguments in a tool request interceptor before the
+cache runs. A scope-local execution interceptor is not a cache partition.
+
+`arg_skip` removes only top-level argument keys before keying. Skip only fields
+that cannot change the result, such as tracing metadata. The normalized
+`arg_skip` policy itself is part of key identity, so changing it starts a
+separate keyspace instead of reusing values created under a different policy.
+
+### Tool Errors and Middleware Order
+
+Tool callbacks that return an actual execution error are never stored. By
+default, Relay also does not store a JSON object with a non-null `error` field,
+`isError = true`, or `is_error = true`; these are conventional in-band error
+signals rather than a universal tool-result schema. Set
+`tools.cache_errors = true` only when such results are stable and safe to reuse.
+With the default, a sampled refresh that returns one of these error-shaped
+values leaves a previously stored successful result in place.
+
+Tool conditional-execution guardrails and tool request interceptors run before
+the cache derives its key. Sanitize guardrails affect emitted observability
+payloads only; they do not change the real arguments, result, or cache key.
+`tools.priority` controls the tool execution interceptor: lower priorities run
+outermost. A hit returns before later execution interceptors and the managed
+callback.
+
 ## Observability
 
 Every cache decision emits a `response_cache` mark with
@@ -367,21 +446,28 @@ Every cache decision emits a `response_cache` mark with
 
 | Status | Meaning |
 |---|---|
-| `hit` | Served the stored answer; the provider was skipped. |
+| `hit` | Served the stored result; the provider or tool callback was skipped. |
 | `miss` | No entry was served; the call ran live. After an ordinary lookup miss, Relay attempts to store a cacheable result. |
 | `bypass` | The request is not cacheable, or the `bypass_rate` sampler chose to run live. |
 
 Mark attributes use `nemo_relay.response_cache.*`: `backend`, `surface`,
 `key_hash` (the `sha256:…` fingerprint), `ttl_ms`, and `age_ms` as applicable;
-`saved_tokens` and `saved_cost_usd` appear on hits when they can be derived. A
-`reason` appears on bypasses and store-error misses (for example `sampled`,
-`stateful_store`, `store_error`, or `stream_no_codec`). Cache marks never
-include prompts, answers, or credentials.
+`saved_tokens` and `saved_cost_usd` appear on LLM hits when they can be
+derived, while `saved_invocations` appears on tool hits. Tool marks use
+`surface = "tool"`; unclassified, uncacheable tools pass through without a
+cache mark. A `reason` appears on bypasses and store-error misses (for example
+`sampled`, `stateful_store`, `store_error`, or `stream_no_codec`). Cache marks
+never include prompts, answers, or credentials, but treat `key_hash` as
+sensitive telemetry: a hash can still reveal information when an observer can
+guess the keyed input.
 
 `nemo-relay doctor` reports the cache state: `not configured` when the section
 is absent, `configured but disabled (adaptive plugin disabled)` when the
 adaptive component is off, `on; backend '<kind>' reachable` when healthy, and
-a failure when the config is invalid or the backend is unreachable.
+a failure when the config is invalid or the backend is unreachable. When the
+tool surface is configured, `Response cache (tools)` reports `configured but
+disabled` when its switch is off. When it is on, the line reports the number of
+cacheable classes and cacheable overrides, plus the default policy.
 
 ## Fields
 
@@ -393,11 +479,24 @@ a failure when the config is invalid or the backend is unreachable.
 | `bypass_rate` | `0.0` | Probability in `[0.0, 1.0]` of running a cacheable call live. A sampled call attempts to refresh the entry when its result is cacheable and the write succeeds. |
 | `cache_nondeterministic` | `false` | Only requests with an explicit numeric `temperature = 0` are eligible. Set `true` to cache and reuse sampled responses. |
 | `key_strategy` | `"exact_request"` | The only supported strategy: reuse requires the same normalized request. |
-| `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). Known auth headers are rejected. |
+| `header_allowlist` | `[]` | Trusted, non-secret response-affecting headers folded into the key (case-insensitive). A non-empty normalized allowlist policy also partitions the key. Known auth headers are rejected. |
 | `backend.kind` | `"in_memory"` | `"in_memory"`, or `"redis"` (requires building with the `redis-backend` feature). |
 | `backend.config.max_bytes` | 256 MiB | In-memory size budget; the oldest entries are evicted first. |
 | `backend.config.url` | — | Redis connection URL. Required for the `redis` backend. |
 | `backend.config.key_prefix` | `"nemo-relay:llm-cache:"` | Prefix for keys in Redis. |
+
+### Tool Cache Fields
+
+The following fields configure the separately opt-in tool-result surface:
+
+| Field | Default | Notes |
+|---|---|---|
+| `tools.enabled` | `false` | Master switch. Classes and overrides are validated even when the surface is disabled. |
+| `tools.priority` | `100` | Tool execution-intercept priority. Lower values run earlier and outermost. |
+| `tools.cache_errors` | `false` | Store conventional in-band error objects only when `true`; callback errors are never stored. |
+| `tools.default` | uncacheable | Policy for tools that match no class. Keep it uncacheable; classify every cacheable tool through a named class or override. |
+| `tools.classes.<name>` | — | Named policy with `cacheable`, optional `ttl_seconds`, `bypass_rate`, and `tool_version`, top-level `arg_skip`, and `members` containing exact names or supported wildcard forms. An omitted TTL or bypass rate inherits the response-cache value. |
+| `tools.overrides.<name>` | — | Per-tool refinement after class resolution. `cacheable`, `ttl_seconds`, `bypass_rate`, and `tool_version` override when supplied; `arg_skip` replaces the class list, including when set to `[]`. |
 
 A routing plugin that sets `x-nemo-relay-internal-dispatch-backend` must use a
 priority lower than `response_cache.priority` so backend selection runs before
@@ -405,12 +504,14 @@ cache key derivation. To derive keys before ACG rewrites requests, set
 `response_cache.priority` lower than `acg.priority`.
 
 <Warning>
-Cached responses are stored unredacted. PII sanitize guardrails rewrite emitted
-telemetry, never payloads, so the store holds full response bodies. Cache
-entries can also store provider and model diagnostics plus the key fingerprint;
-they do not store full request bodies or headers. A shared Redis backend must be
-trusted and access-controlled. Use a separate configuration and namespace for
-each mutually untrusted tenant or upstream domain.
+Cached LLM responses and tool results are stored unredacted. PII sanitize
+guardrails rewrite emitted telemetry, never payloads, so the store holds full
+result bodies. Cache entries can also store provider and model diagnostics plus
+the key fingerprint; they do not store full LLM request bodies or headers. A
+shared Redis backend must be trusted and access-controlled. Use a separate
+configuration and namespace for each mutually untrusted tenant or upstream
+domain. `backend.config.max_bytes` limits only the in-memory backend; configure
+Redis capacity and eviction in Redis itself.
 </Warning>
 
 ## Common Validation Failures
@@ -424,3 +525,25 @@ each mutually untrusted tenant or upstream domain.
 - `backend.kind` is unknown; or `redis` has a missing, non-string, or
   whitespace-only `backend.config.url`, uses a non-string `key_prefix`, or is
   unavailable because Relay was built without the `redis-backend` feature.
+- A tool policy sets `ttl_seconds = 0` or a `bypass_rate` outside `[0.0, 1.0]`,
+  or the same member name or pattern appears in two classes.
+- A tool class member or override key uses an unsupported wildcard form.
+- Overlapping wildcard class patterns or wildcard overrides disagree on
+  `cacheable`. `tools.default.cacheable` and a cacheable catch-all `*` member
+  or override are rejected; use named classes to limit caching to explicitly
+  read-only tools.
+
+Tool-cache diagnostics use the following error codes.
+
+| Diagnostic | Condition |
+|---|---|
+| `response_cache.tool_default_members` | `tools.default.members` is non-empty. The default bucket is not a matcher. |
+| `response_cache.tool_cacheable_default` | `tools.default.cacheable` is true. |
+| `response_cache.tool_multiple_classes` | The same member or pattern appears in more than one named class. |
+| `response_cache.tool_invalid_pattern` | A class member or override key is not exact, `*`, `prefix*`, `*suffix`, or `*contains*`. |
+| `response_cache.tool_invalid_ttl` | A class, default policy, or override sets `ttl_seconds = 0`. |
+| `response_cache.tool_invalid_bypass_rate` | A class, default policy, or override sets `bypass_rate` outside `[0.0, 1.0]`. |
+| `response_cache.tool_catch_all_member` | A cacheable class uses a catch-all `*` member. |
+| `response_cache.tool_catch_all_override` | A cacheable `*` override applies to every tool. |
+| `response_cache.tool_conflicting_classes` | Overlapping wildcard members in different classes have different `cacheable` values. |
+| `response_cache.tool_conflicting_overrides` | Overlapping wildcard overrides have different `cacheable` declarations. An omitted value inherits policy, so it cannot safely overlap an explicit value. |

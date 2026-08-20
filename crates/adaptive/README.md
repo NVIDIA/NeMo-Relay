@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 `nemo-relay-adaptive` is the Rust companion crate for adaptive NeMo Relay
 runtime behavior. Use it with `nemo-relay` when an agent runtime should learn
 from observed executions, inject runtime hints, persist adaptive state, or
-cache repeated LLM responses.
+cache repeated LLM responses and classified tool results.
 
 Adaptive behavior is installed through the same plugin system used by the core
 runtime, so applications can enable it without changing their orchestration
