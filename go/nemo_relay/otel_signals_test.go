@@ -204,7 +204,7 @@ func TestOpenTelemetrySignalConfigRejectsFractionalMillisecondDurations(t *testi
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if err := test.normalize(); err == nil {
+			if test.normalize() == nil {
 				t.Fatal("expected fractional-millisecond duration to fail")
 			}
 		})

@@ -224,8 +224,8 @@ func TestEventMetadataInjectorRegistrationErrorsReleaseCallbacks(t *testing.T) {
 	if err := RegisterEventMetadataInjector(eventMetadataDuplicateInjector, 0, callback); err == nil {
 		t.Fatal("expected duplicate event metadata injector registration to fail")
 	}
-	if current := registeredClosureCount(); current != baseline+1 {
-		t.Fatalf("duplicate registration leaked callback: baseline=%d current=%d", baseline, current)
+	if registeredClosureCount() != baseline+1 {
+		t.Fatalf("duplicate registration leaked callback: baseline=%d current=%d", baseline, registeredClosureCount())
 	}
 	if err := DeregisterEventMetadataInjector(eventMetadataDuplicateInjector); err != nil {
 		t.Fatal(err)
@@ -234,53 +234,60 @@ func TestEventMetadataInjectorRegistrationErrorsReleaseCallbacks(t *testing.T) {
 
 func TestEventMetadataInjectorNilCallbacksDoNotRegister(t *testing.T) {
 	runTestInIsolatedWorkingDirectory(t, func(t *testing.T) {
-		runTestWithScopeStack(t, func(t *testing.T) {
-			baseline := registeredClosureCount()
-
-			if err := RegisterEventMetadataInjector("go-event-metadata-nil-global", 0, nil); !errors.Is(err, errEventMetadataInjectorCallbackNil) {
-				t.Fatalf("RegisterEventMetadataInjector() error = %v, want %v", err, errEventMetadataInjectorCallbackNil)
-			}
-			if current := registeredClosureCount(); current != baseline {
-				t.Fatalf("nil global callback changed registry size: baseline=%d current=%d", baseline, current)
-			}
-
-			scope, err := PushScope("go-event-metadata-nil-scope", ScopeTypeCustom)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := ScopeRegisterEventMetadataInjector(scope.UUID(), "go-event-metadata-nil-local", 0, nil); !errors.Is(err, errEventMetadataInjectorCallbackNil) {
-				t.Fatalf("ScopeRegisterEventMetadataInjector() error = %v, want %v", err, errEventMetadataInjectorCallbackNil)
-			}
-			if current := registeredClosureCount(); current != baseline {
-				t.Fatalf("nil scope callback changed registry size: baseline=%d current=%d", baseline, current)
-			}
-			if err := PopScope(scope); err != nil {
-				t.Fatal(err)
-			}
-
-			const kind = "go.event.metadata.nil.plugin"
-			if err := RegisterPlugin(kind, PluginFuncs{RegisterFunc: func(_ map[string]any, ctx *PluginContext) error {
-				return ctx.RegisterEventMetadataInjector("nil", 0, nil)
-			}}); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = DeregisterPlugin(kind) })
-
-			pluginBaseline := registeredClosureCount()
-			if _, err := InitializePlugins(PluginConfig{
-				Version: 1,
-				Components: []PluginComponentSpec{{
-					Kind:    kind,
-					Enabled: true,
-				}},
-			}); err == nil {
-				t.Fatal("expected nil plugin callback registration to fail")
-			}
-			if current := registeredClosureCount(); current != pluginBaseline {
-				t.Fatalf("nil plugin callback changed registry size: baseline=%d current=%d", pluginBaseline, current)
-			}
-		})
+		runTestWithScopeStack(t, testEventMetadataInjectorNilCallbacksDoNotRegister)
 	})
+}
+
+func testEventMetadataInjectorNilCallbacksDoNotRegister(t *testing.T) {
+	baseline := registeredClosureCount()
+	assertNilGlobalEventMetadataInjector(t, baseline)
+	assertNilScopeEventMetadataInjector(t, baseline)
+	assertNilPluginEventMetadataInjector(t)
+}
+
+func assertNilGlobalEventMetadataInjector(t *testing.T, baseline int) {
+	t.Helper()
+	if err := RegisterEventMetadataInjector("go-event-metadata-nil-global", 0, nil); !errors.Is(err, errEventMetadataInjectorCallbackNil) {
+		t.Fatalf("RegisterEventMetadataInjector() error = %v, want %v", err, errEventMetadataInjectorCallbackNil)
+	}
+	if registeredClosureCount() != baseline {
+		t.Fatalf("nil global callback changed registry size: baseline=%d current=%d", baseline, registeredClosureCount())
+	}
+}
+
+func assertNilScopeEventMetadataInjector(t *testing.T, baseline int) {
+	t.Helper()
+	scope, err := PushScope("go-event-metadata-nil-scope", ScopeTypeCustom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ScopeRegisterEventMetadataInjector(scope.UUID(), "go-event-metadata-nil-local", 0, nil); !errors.Is(err, errEventMetadataInjectorCallbackNil) {
+		t.Fatalf("ScopeRegisterEventMetadataInjector() error = %v, want %v", err, errEventMetadataInjectorCallbackNil)
+	}
+	if registeredClosureCount() != baseline {
+		t.Fatalf("nil scope callback changed registry size: baseline=%d current=%d", baseline, registeredClosureCount())
+	}
+	if err := PopScope(scope); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNilPluginEventMetadataInjector(t *testing.T) {
+	t.Helper()
+	const kind = "go.event.metadata.nil.plugin"
+	if err := RegisterPlugin(kind, PluginFuncs{RegisterFunc: func(_ map[string]any, ctx *PluginContext) error {
+		return ctx.RegisterEventMetadataInjector("nil", 0, nil)
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = DeregisterPlugin(kind) })
+	baseline := registeredClosureCount()
+	if _, err := InitializePlugins(PluginConfig{Version: 1, Components: []PluginComponentSpec{{Kind: kind, Enabled: true}}}); err == nil {
+		t.Fatal("expected nil plugin callback registration to fail")
+	}
+	if registeredClosureCount() != baseline {
+		t.Fatalf("nil plugin callback changed registry size: baseline=%d current=%d", baseline, registeredClosureCount())
+	}
 }
 
 func decodeEventMetadata(t *testing.T, event Event) map[string]any {

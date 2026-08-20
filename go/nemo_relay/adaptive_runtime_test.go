@@ -285,11 +285,11 @@ func TestResponseCacheToolsConfigReachesTypedSurface(t *testing.T) {
 
 	payload, err := json.Marshal(config)
 	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
+		t.Fatalf(marshalFailedMsg, err)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+		t.Fatalf(unmarshalFailedMsg, err)
 	}
 	rcSection, ok := decoded["response_cache"].(map[string]any)
 	if !ok {
@@ -338,11 +338,11 @@ func marshalResponseCacheConfig(t *testing.T, responseCache ResponseCacheConfig)
 	t.Helper()
 	payload, err := json.Marshal(responseCache)
 	if err != nil {
-		t.Fatalf("marshal failed: %v", err)
+		t.Fatalf(marshalFailedMsg, err)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
+		t.Fatalf(unmarshalFailedMsg, err)
 	}
 	return decoded
 }
