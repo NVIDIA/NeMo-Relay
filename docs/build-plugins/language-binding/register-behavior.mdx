@@ -42,52 +42,6 @@ Use the context methods so component name qualification and rollback also apply
 to these registries. Refer to [Event Sanitizers](/reference/event-sanitizers)
 for the binding-specific method names.
 
-## Register Event Metadata Injectors
-
-An event metadata injector receives an event snapshot and returns flat metadata
-additions. Relay validates and inserts accepted additions before event
-sanitizers run. Existing metadata values are preserved.
-
-Use the component-scoped registration method when a plugin owns the callback:
-
-<Tabs>
-<Tab title="Python" language="python">
-```python
-def register(self, plugin_config, context):
-    context.register_event_metadata_injector(
-        "deployment-metadata",
-        10,
-        lambda event: {"deployment.zone": plugin_config["zone"]},
-    )
-```
-
-Applications can instead use
-`nemo_relay.event_metadata.register_injector()` for a global callback or
-`nemo_relay.scope_local.register_event_metadata_injector()` for a callback
-owned by an active scope. The matching deregistration functions remove those
-registrations.
-</Tab>
-
-<Tab title="Node.js" language="node">
-```js
-register(pluginConfig, context) {
-  context.registerEventMetadataInjector('deployment-metadata', 10, () => ({
-    'deployment.zone': pluginConfig.zone,
-  }));
-}
-```
-
-Applications can instead use `registerEventMetadataInjector()` for a global
-callback or `scopeRegisterEventMetadataInjector()` for a callback owned by an
-active scope. The matching deregistration functions remove those
-registrations.
-</Tab>
-</Tabs>
-
-Callbacks may return additions directly or through an awaitable or Promise.
-Callback failures and invalid return values omit that callback's additions
-without dropping the event.
-
 ## Header Plugin Example
 
 The same model applies in every binding: validate component-local config, then install middleware through the component-scoped registration context.
