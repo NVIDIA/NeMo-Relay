@@ -252,12 +252,13 @@ typedef struct Option_NemoRelayFinalizerCb Option_NemoRelayFinalizerCb;
 typedef struct Option_NemoRelayPluginValidateCb Option_NemoRelayPluginValidateCb;
 
 /**
- * Callback for mark and scope event sanitizers.
- * The returned JSON string transfers to Relay and is freed exactly once.
+ * Callback for event metadata injection.
+ *
+ * The returned string must contain a JSON object whose properties are proposed
+ * metadata additions. It transfers to Relay and is freed exactly once. Return
+ * null after setting the last error message to report a callback failure.
  */
-typedef char *(*NemoRelayEventSanitizeCb)(void *user_data,
-                                          const struct FfiEvent *event,
-                                          const char *fields_json);
+typedef char *(*NemoRelayEventMetadataInjectorCb)(void *user_data, const struct FfiEvent *event);
 
 /**
  * Optional destructor for user data passed to callbacks.
@@ -268,6 +269,14 @@ typedef char *(*NemoRelayEventSanitizeCb)(void *user_data,
  * destructor runs.
  */
 typedef void (*NemoRelayFreeFn)(void *user_data);
+
+/**
+ * Callback for mark and scope event sanitizers.
+ * The returned JSON string transfers to Relay and is freed exactly once.
+ */
+typedef char *(*NemoRelayEventSanitizeCb)(void *user_data,
+                                          const struct FfiEvent *event,
+                                          const char *fields_json);
 
 /**
  * Callback for LLM execution (default callable). Receives a native JSON C string,
@@ -870,6 +879,50 @@ NemoRelayStatus nemo_relay_adaptive_build_cache_telemetry_event(const char *opti
  * Set manual latency sensitivity on the current scope.
  */
 NemoRelayStatus nemo_relay_adaptive_set_latency_sensitivity(uint32_t value);
+
+/**
+ * Register a global event metadata injector.
+ *
+ * # Safety
+ * Pointers must remain valid for the documented call lifetime. The callback
+ * and user data remain owned by Relay until deregistration.
+ */
+NemoRelayStatus nemo_relay_register_event_metadata_injector(const char *name,
+                                                            int32_t priority,
+                                                            NemoRelayEventMetadataInjectorCb cb,
+                                                            void *user_data,
+                                                            NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a global event metadata injector.
+ *
+ * # Safety
+ * `name` must be a valid C string.
+ */
+NemoRelayStatus nemo_relay_deregister_event_metadata_injector(const char *name);
+
+/**
+ * Register an event metadata injector owned by an active scope.
+ *
+ * # Safety
+ * Pointers must remain valid for the documented call lifetime. The callback
+ * and user data remain owned by Relay until deregistration or scope cleanup.
+ */
+NemoRelayStatus nemo_relay_scope_register_event_metadata_injector(const char *scope_uuid,
+                                                                  const char *name,
+                                                                  int32_t priority,
+                                                                  NemoRelayEventMetadataInjectorCb cb,
+                                                                  void *user_data,
+                                                                  NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister an event metadata injector owned by an active scope.
+ *
+ * # Safety
+ * String pointers must be valid C strings.
+ */
+NemoRelayStatus nemo_relay_scope_deregister_event_metadata_injector(const char *scope_uuid,
+                                                                    const char *name);
 
 /**
  * Register a global mark event sanitizer.
@@ -2056,6 +2109,20 @@ NemoRelayStatus nemo_relay_plugin_context_register_subscriber(struct FfiPluginCo
                                                               NemoRelayEventSubscriberCb cb,
                                                               void *user_data,
                                                               NemoRelayFreeFn free_fn);
+
+/**
+ * Register an event metadata injector into a plugin context.
+ *
+ * # Safety
+ * Pointers must remain valid for the documented call lifetime. The callback
+ * and user data remain owned by the plugin registration until rollback.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_event_metadata_injector(struct FfiPluginContext *ctx,
+                                                                           const char *name,
+                                                                           int32_t priority,
+                                                                           NemoRelayEventMetadataInjectorCb cb,
+                                                                           void *user_data,
+                                                                           NemoRelayFreeFn free_fn);
 
 /**
  * Register a mark event sanitizer into a plugin context.
