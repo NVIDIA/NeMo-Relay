@@ -384,7 +384,7 @@ fn multi_agent_operations_attempt_every_target_before_reporting_errors() {
         visited.borrow_mut().push(agent);
         match agent {
             CodingAgent::Codex => Err(error::CliError::Install("codex failure".into())),
-            CodingAgent::ClaudeCode => Ok(ExitCode::FAILURE),
+            CodingAgent::ClaudeCode | CodingAgent::Pi => Ok(ExitCode::FAILURE),
         }
     })
     .unwrap_err()

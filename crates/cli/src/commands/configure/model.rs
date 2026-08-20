@@ -280,14 +280,16 @@ pub(crate) fn read_agents_from_doc(doc: &DocumentMut) -> Vec<CodingAgent> {
     let Some(table) = doc.get("agents").and_then(|i| i.as_table()) else {
         return Vec::new();
     };
+    // Driven from `CodingAgent::ALL` rather than a hand-written match: an agent missing
+    // from this list is not just unreported, it is *deleted*. An unscoped wizard run
+    // rewrites the whole `[agents]` table from what it read here, so a key it cannot
+    // parse silently disappears from the user's configuration.
     let mut found = Vec::new();
     for (key, _) in table.iter() {
-        let agent = match key {
-            "claude" => Some(CodingAgent::ClaudeCode),
-            "codex" => Some(CodingAgent::Codex),
-            _ => None,
-        };
-        if let Some(agent) = agent {
+        if let Some(agent) = CodingAgent::ALL
+            .into_iter()
+            .find(|agent| agent_key_and_command(*agent).0 == key)
+        {
             found.push(agent);
         }
     }

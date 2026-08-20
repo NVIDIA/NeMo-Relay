@@ -327,10 +327,21 @@ async fn validate_agent_version(agent: CodingAgent, probe: &[String]) -> Result<
         )));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    agent
+    let version = agent
         .validate_version_output(&stdout)
-        .map(|_| ())
-        .map_err(CliError::Launch)
+        .map_err(CliError::Launch)?;
+    // Logged rather than returned: this is not a reason to refuse the launch, and there is no
+    // note channel here -- `PreparedAgentLaunch` is already built by the time the probe runs.
+    if let Some(unverified) = agent.unverified_version(&version) {
+        log::warn!(
+            target: "nemo_relay.cli",
+            event = "agent_version_unverified",
+            agent = agent.as_arg(),
+            version = version.to_string().as_str();
+            "{unverified}"
+        );
+    }
+    Ok(())
 }
 
 // Splits a configured command string into argv words for run mode. This intentionally uses simple
