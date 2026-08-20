@@ -115,7 +115,7 @@ describe('event metadata injector bindings', () => {
     assert.equal(marks['node-event-metadata-after-deregister'].metadata, null);
   });
 
-  it('requires homogeneous numeric arrays at runtime', async () => {
+  it('accepts numeric arrays with integer and fractional values at runtime', async () => {
     const events = capture('node-event-metadata-numeric-sub');
     lib.registerEventMetadataInjector('node-event-metadata-integers', 10, () => ({
       'node.injector.integers': [1, 2],
@@ -140,6 +140,7 @@ describe('event metadata injector bindings', () => {
     assert.deepEqual(events.at(-1).metadata, {
       'node.injector.doubles': [1.25, 2.5],
       'node.injector.integers': [1, 2],
+      'node.injector.mixed_numbers': [1, 2.5],
     });
   });
 
