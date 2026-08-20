@@ -141,29 +141,45 @@ Relay compatibility range at `>=0.8.0,<1.0`, and register one callback:
 
 ```rust
 use nemo_relay_plugin::{
-    ExportActivationDecision, ExportActivationTargetKind, Json, PluginContext, Result,
+    ExportActivationDecision, ExportActivationPolicyConfig, ExportActivationTargetKind,
+    ExportTargetRegistration, PluginContext, Result,
 };
 
-fn register_policy(context: &mut PluginContext<'_>) -> Result<()> {
+fn register_geo_gated_otlp(context: &mut PluginContext<'_>) -> Result<()> {
     context.register_export_activation_policy(|request| async move {
-        let allowed = match request.target_kind {
-            ExportActivationTargetKind::OtlpTrace
-            | ExportActivationTargetKind::OtlpLog
-            | ExportActivationTargetKind::OtlpMetric => {
-                request.config.get("telemetry_allowed") == Some(&Json::Bool(true))
-            }
-            _ => true,
-        };
+        let country = lookup_current_public_ip_country().await?;
+        let allowed = request.config["allowed_countries"]
+            .as_array()
+            .is_some_and(|countries| {
+                countries
+                    .iter()
+                    .any(|value| value.as_str() == Some(country.as_str()))
+            });
         Ok(if allowed {
             ExportActivationDecision::Allow
         } else {
             ExportActivationDecision::Deny
         })
-    })
+    })?;
+
+    context.register_export_target(
+        ExportTargetRegistration {
+            id: "audit-otlp".into(),
+            target_kind: ExportActivationTargetKind::OTLP_TRACE,
+            activation_policy: Some(ExportActivationPolicyConfig {
+                provider: "examples.rust_native_policy".into(),
+                timeout_millis: 30_000,
+                config: serde_json::json!({"allowed_countries": ["US", "CA"]}),
+            }),
+        },
+        || async { start_custom_otlp_exporter().await },
+    )
 }
 ```
 
 The callback can implement GeoIP, available-memory, consent, or environment
 checks. Keep it bounded and deterministic for the activation attempt. Relay
 applies the target's timeout and fails that target closed if the callback
-returns an error.
+returns an error. In this example, `examples.rust_native_policy` is both the dynamic
+plugin's manifest ID and the provider referenced by its own deferred OTLP
+export target. Construct the exporter only in `start_custom_otlp_exporter`.

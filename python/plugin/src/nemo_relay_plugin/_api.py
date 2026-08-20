@@ -27,8 +27,8 @@ Public data types:
     LlmRequestInterceptOutcome: Canonical LLM request-intercept result.
     DiagnosticLevel: Severity of a configuration diagnostic.
     ConfigDiagnostic: Structured configuration warning or error.
-    ExportActivationTargetKind: Remote exporter kind presented to a policy.
-    ExportActivationRequest: Secret-free activation request for one remote target.
+    ExportActivationTargetKind: Local or remote exporter kind presented to a policy.
+    ExportActivationRequest: Secret-free activation request for one export target.
     ExportActivationDecision: Allow-or-deny result returned by an activation policy.
     ScopeType: Semantic category for a Relay execution scope.
     WorkerSdkError: SDK, host-call, or worker protocol error.
@@ -44,7 +44,7 @@ Public authoring types:
 Public callback aliases used in registration annotations:
     SubscriberCallback: Event subscriber callback.
     EventMetadataInjectorCallback: Event metadata injector callback.
-    ExportActivationPolicyCallback: Activation-time remote-export policy callback.
+    ExportActivationPolicyCallback: Activation-time export policy callback.
     ToolSanitizeCallback: Tool request or response sanitizer callback.
     ToolConditionalCallback: Tool execution guardrail callback.
     ToolRequestCallback: Tool request intercept callback.
@@ -944,15 +944,40 @@ SubscriberCallback: TypeAlias = Callable[[Event], None | Awaitable[None]]
 EventMetadataInjectorCallback: TypeAlias = Callable[[Event], dict[str, Json] | Awaitable[dict[str, Json]]]
 
 
-class ExportActivationTargetKind(str, Enum):
-    """Remote exporter target presented to an activation policy."""
+class ExportActivationTargetKind(str):
+    """Validated namespaced exporter kind presented to an activation policy."""
 
-    OTLP_TRACE = "otlp_trace"
-    OTLP_LOG = "otlp_log"
-    OTLP_METRIC = "otlp_metric"
-    ATOF_STREAM = "atof_stream"
-    ATIF_HTTP = "atif_http"
-    ATIF_S3 = "atif_s3"
+    OTLP_TRACE: ClassVar[ExportActivationTargetKind]
+    OTLP_LOG: ClassVar[ExportActivationTargetKind]
+    OTLP_METRIC: ClassVar[ExportActivationTargetKind]
+    ATOF_FILE: ClassVar[ExportActivationTargetKind]
+    ATOF_STREAM: ClassVar[ExportActivationTargetKind]
+    ATIF_FILE: ClassVar[ExportActivationTargetKind]
+    ATIF_HTTP: ClassVar[ExportActivationTargetKind]
+    ATIF_S3: ClassVar[ExportActivationTargetKind]
+
+    def __new__(cls, value: str) -> ExportActivationTargetKind:
+        if (
+            not isinstance(value, str)
+            or len(value) > 255
+            or "." not in value
+            or any(
+                not segment or not all(character.isalnum() or character in "_-" for character in segment)
+                for segment in value.split(".")
+            )
+        ):
+            raise ValueError("export target kind must be a dot-separated namespaced identifier")
+        return str.__new__(cls, value)
+
+
+ExportActivationTargetKind.OTLP_TRACE = ExportActivationTargetKind("nemo_relay.otlp.trace")
+ExportActivationTargetKind.OTLP_LOG = ExportActivationTargetKind("nemo_relay.otlp.log")
+ExportActivationTargetKind.OTLP_METRIC = ExportActivationTargetKind("nemo_relay.otlp.metric")
+ExportActivationTargetKind.ATOF_FILE = ExportActivationTargetKind("nemo_relay.atof.file")
+ExportActivationTargetKind.ATOF_STREAM = ExportActivationTargetKind("nemo_relay.atof.stream")
+ExportActivationTargetKind.ATIF_FILE = ExportActivationTargetKind("nemo_relay.atif.file")
+ExportActivationTargetKind.ATIF_HTTP = ExportActivationTargetKind("nemo_relay.atif.http")
+ExportActivationTargetKind.ATIF_S3 = ExportActivationTargetKind("nemo_relay.atif.s3")
 
 
 class ExportActivationDecision(str, Enum):
@@ -970,10 +995,29 @@ class ExportActivationRequest:
     config: Json = None
 
 
+@dataclass(frozen=True, slots=True)
+class ExportActivationPolicyConfig:
+    """Policy provider and bounded evaluation configuration for one target."""
+
+    provider: str
+    timeout_millis: int = 30_000
+    config: Json = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExportTargetRegistration:
+    """Deferred plugin-managed exporter registration."""
+
+    id: str
+    target_kind: ExportActivationTargetKind
+    activation_policy: ExportActivationPolicyConfig | None = None
+
+
 ExportActivationPolicyCallback: TypeAlias = Callable[
     [ExportActivationRequest],
     ExportActivationDecision | Awaitable[ExportActivationDecision],
 ]
+ExportTargetActivationCallback: TypeAlias = Callable[[], None | Awaitable[None]]
 EventSanitizeCallback: TypeAlias = Callable[
     [Event, EventSanitizeFields],
     EventSanitizeFields | Awaitable[EventSanitizeFields],
@@ -1009,6 +1053,7 @@ class _Handlers:
     subscribers: dict[str, SubscriberCallback]
     event_metadata_injectors: dict[str, EventMetadataInjectorCallback]
     export_activation_policies: dict[str, ExportActivationPolicyCallback]
+    export_targets: dict[str, ExportTargetActivationCallback]
     mark_sanitizers: dict[str, EventSanitizeCallback]
     scope_start_sanitizers: dict[str, EventSanitizeCallback]
     scope_end_sanitizers: dict[str, EventSanitizeCallback]
@@ -1031,6 +1076,7 @@ class _Handlers:
             subscribers={},
             event_metadata_injectors={},
             export_activation_policies={},
+            export_targets={},
             mark_sanitizers={},
             scope_start_sanitizers={},
             scope_end_sanitizers={},
@@ -1137,10 +1183,27 @@ class PluginContext:
         self._handlers.event_metadata_injectors[name] = callback
 
     def register_export_activation_policy(self, callback: ExportActivationPolicyCallback) -> None:
-        """Register this plugin's activation-time policy for remote exporters."""
+        """Register this plugin's activation-time policy for exporters."""
         name = "export_activation_policy"
         self._push_registration(name, pb.EXPORT_ACTIVATION_POLICY, 0, False)
         self._handlers.export_activation_policies[name] = callback
+
+    def register_export_target(
+        self,
+        registration: ExportTargetRegistration,
+        callback: ExportTargetActivationCallback,
+    ) -> None:
+        """Register a callback that constructs and starts an allowed exporter."""
+        metadata = asdict(registration)
+        metadata["target_kind"] = str(registration.target_kind)
+        self._push_registration(
+            registration.id,
+            pb.EXPORT_TARGET,
+            0,
+            False,
+            export_target=_json_envelope("nemo.relay.ExportTargetRegistration@1", metadata),
+        )
+        self._handlers.export_targets[registration.id] = callback
 
     def _register_event_sanitizer(
         self,
@@ -1449,7 +1512,15 @@ class PluginContext:
         self._push_registration(name, pb.LLM_STREAM_EXECUTION_INTERCEPT, priority, False)
         self._handlers.llm_stream_executions[name] = callback
 
-    def _push_registration(self, name: str, surface: int, priority: int, break_chain: bool) -> None:
+    def _push_registration(
+        self,
+        name: str,
+        surface: int,
+        priority: int,
+        break_chain: bool,
+        *,
+        export_target: Any | None = None,
+    ) -> None:
         if any(
             registration.local_name == name and registration.surface == surface
             for registration in self._handlers.registrations
@@ -1461,6 +1532,7 @@ class PluginContext:
                 surface=surface,
                 priority=priority,
                 break_chain=break_chain,
+                export_target=export_target,
             )
         )
 
@@ -2299,6 +2371,9 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
                 if not isinstance(decision, ExportActivationDecision):
                     raise WorkerSdkError("export activation policy must return ExportActivationDecision")
                 return _json_response(decision.value)
+            if request.surface == pb.EXPORT_TARGET:
+                await _maybe_await(self._handler(self._handlers.export_targets, request.registration_name)())
+                return pb.InvokeResponse(empty=pb.EmptyResult())
             if request.surface in PluginContext._EVENT_SANITIZER_HANDLER_ATTRIBUTES:
                 event = _decode_required_envelope(request.event, "event", EVENT_SCHEMA)
                 fields: EventSanitizeFields = {
@@ -2484,6 +2559,7 @@ def _all_surfaces() -> list[int]:
         pb.SUBSCRIBER,
         pb.EVENT_METADATA_INJECTOR,
         pb.EXPORT_ACTIVATION_POLICY,
+        pb.EXPORT_TARGET,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

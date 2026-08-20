@@ -5010,7 +5010,7 @@ async fn export_activation_policy_is_evaluated_once_before_otel_construction() {
     let callback_calls = Arc::clone(&calls);
     let mut provider_context = PluginRegistrationContext::new();
     provider_context
-        .register_export_activation_policy(
+        .register_export_activation_policy_for_provider(
             "test.allow-export",
             Arc::new(move |request| {
                 let callback_calls = Arc::clone(&callback_calls);
@@ -5078,7 +5078,7 @@ async fn unavailable_and_timed_out_export_policies_fail_closed() {
 
     let mut provider_context = PluginRegistrationContext::new();
     provider_context
-        .register_export_activation_policy(
+        .register_export_activation_policy_for_provider(
             "test.slow-export-policy",
             Arc::new(|_| {
                 Box::pin(async {
@@ -5130,7 +5130,7 @@ async fn denied_and_failed_export_policies_fail_closed() {
         let mut provider_context = PluginRegistrationContext::new();
         let callback_result = result.clone();
         provider_context
-            .register_export_activation_policy(
+            .register_export_activation_policy_for_provider(
                 provider,
                 Arc::new(move |_| {
                     let callback_result = callback_result.clone();
@@ -5171,24 +5171,27 @@ fn export_activation_provider_uniqueness_is_scoped_to_one_activation() {
     let callback = Arc::new(|_| Box::pin(async { Ok(ExportActivationDecision::Allow) }) as _);
     let mut first = PluginRegistrationContext::new();
     first
-        .register_export_activation_policy("test.duplicate-policy", callback.clone())
+        .register_export_activation_policy_for_provider("test.duplicate-policy", callback.clone())
         .unwrap();
     let registry = first.export_activation_policies();
     let mut duplicate = PluginRegistrationContext::with_export_activation_policies(registry);
     assert!(
         duplicate
-            .register_export_activation_policy("test.duplicate-policy", callback.clone())
+            .register_export_activation_policy_for_provider(
+                "test.duplicate-policy",
+                callback.clone(),
+            )
             .is_err()
     );
     let mut independent_activation = PluginRegistrationContext::new();
     independent_activation
-        .register_export_activation_policy("test.duplicate-policy", callback.clone())
+        .register_export_activation_policy_for_provider("test.duplicate-policy", callback.clone())
         .unwrap();
 
     let mut first_registrations = first.into_registrations();
     rollback_registrations(&mut first_registrations);
     duplicate
-        .register_export_activation_policy("test.duplicate-policy", callback)
+        .register_export_activation_policy_for_provider("test.duplicate-policy", callback)
         .unwrap();
     let mut duplicate_registrations = duplicate.into_registrations();
     rollback_registrations(&mut duplicate_registrations);
@@ -5236,6 +5239,7 @@ async fn denied_atof_stream_retains_allowed_local_sink() {
                 output_directory: Some(output_directory.clone()),
                 filename: Some("events.jsonl".into()),
                 mode: "overwrite".into(),
+                activation_policy: None,
             }),
             AtofSinkSectionConfig::Stream(AtofStreamSinkSectionConfig {
                 name: Some("denied".into()),
@@ -5271,6 +5275,53 @@ async fn denied_atof_stream_retains_allowed_local_sink() {
     let content = fs::read_to_string(output_directory.join("events.jsonl")).unwrap();
     assert_eq!(content.lines().count(), 3);
     assert!(content.contains("\"name\":\"checkpoint\""));
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn denied_atof_file_sink_creates_no_file_or_subscriber() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let output_directory = temp_dir("denied-local-atof");
+    let section = AtofSectionConfig {
+        enabled: true,
+        sinks: vec![AtofSinkSectionConfig::File(AtofFileSinkSectionConfig {
+            output_directory: Some(output_directory.clone()),
+            filename: Some("events.jsonl".into()),
+            mode: "overwrite".into(),
+            activation_policy: Some(ExportActivationPolicyConfig {
+                provider: "test.missing-local-atof-policy".into(),
+                timeout_millis: 5_000,
+                config: Json::Null,
+            }),
+        })],
+    };
+    let mut context = PluginRegistrationContext::new();
+    register_atof_exporter(section, &mut context).await.unwrap();
+    assert!(context.into_registrations().is_empty());
+    assert!(!output_directory.join("events.jsonl").exists());
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn denied_atif_local_destination_disables_local_only_dispatcher() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let output_directory = temp_dir("denied-local-atif");
+    let section = AtifSectionConfig {
+        enabled: true,
+        output_directory: Some(output_directory.clone()),
+        local_activation_policy: Some(ExportActivationPolicyConfig {
+            provider: "test.missing-local-atif-policy".into(),
+            timeout_millis: 5_000,
+            config: Json::Null,
+        }),
+        ..AtifSectionConfig::default()
+    };
+    let mut context = PluginRegistrationContext::new();
+    register_atif_dispatcher(section, &mut context)
+        .await
+        .unwrap();
+    assert!(context.into_registrations().is_empty());
+    assert_eq!(fs::read_dir(output_directory).unwrap().count(), 0);
 }
 
 #[tokio::test]
@@ -5326,6 +5377,7 @@ fn filtered_atif_storage_preserves_original_sink_labels() {
             ..AtifSectionConfig::default()
         },
         vec![2],
+        true,
     );
     assert_eq!(dispatcher.sink_targets(), vec![SinkLabel::Remote(2)]);
 }

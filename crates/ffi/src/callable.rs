@@ -32,6 +32,9 @@ use serde_json::Value as Json;
 use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
+use nemo_relay::api::export_activation::{
+    ExportActivationDecision, ExportActivationPolicyFn, ExportActivationRequest,
+};
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
@@ -292,6 +295,14 @@ pub type NemoRelayPluginRegisterCb = unsafe extern "C" fn(
     ctx: *mut FfiPluginContext,
 ) -> NemoRelayStatus;
 
+/// Callback for an activation-scoped export policy provider.
+pub type NemoRelayExportActivationPolicyCb =
+    unsafe extern "C" fn(user_data: *mut libc::c_void, request_json: *const c_char) -> *mut c_char;
+
+/// One-shot callback that constructs an allowed export target.
+pub type NemoRelayExportTargetActivationCb =
+    unsafe extern "C" fn(user_data: *mut libc::c_void) -> NemoRelayStatus;
+
 // ---------------------------------------------------------------------------
 // Shared user_data wrapper (ensures cleanup)
 // ---------------------------------------------------------------------------
@@ -322,6 +333,62 @@ fn make_user_data(
         ptr: user_data,
         free_fn,
     })
+}
+
+/// Wraps an export activation policy callback.
+pub fn wrap_export_activation_policy_fn(
+    cb: NemoRelayExportActivationPolicyCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> ExportActivationPolicyFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |request: ExportActivationRequest| {
+        let ud = Arc::clone(&ud);
+        Box::pin(async move {
+            clear_last_error();
+            let request = json_to_c_string(&serde_json::to_value(request).map_err(|error| {
+                FlowError::Internal(format!(
+                    "failed to serialize export activation request: {error}"
+                ))
+            })?);
+            let result_ptr = unsafe { cb(ud.ptr, request) };
+            unsafe { nemo_relay_string_free_internal(request) };
+            let result = json_result_from_ptr(
+                result_ptr,
+                "export activation policy callback returned null",
+            )
+            .and_then(|value| {
+                serde_json::from_value::<ExportActivationDecision>(value).map_err(|error| {
+                    FlowError::Internal(format!(
+                        "invalid export activation policy decision: {error}"
+                    ))
+                })
+            });
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
+    })
+}
+
+/// Wraps a one-shot export-target activation callback.
+pub fn wrap_export_target_activation_fn(
+    cb: NemoRelayExportTargetActivationCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> impl Fn() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync {
+    let ud = make_user_data(user_data, free_fn);
+    move || {
+        let ud = Arc::clone(&ud);
+        Box::pin(async move {
+            clear_last_error();
+            match unsafe { cb(ud.ptr) } {
+                NemoRelayStatus::Ok => Ok(()),
+                status => Err(FlowError::Internal(last_error_message().unwrap_or_else(
+                    || format!("export target activation failed with status {status:?}"),
+                ))),
+            }
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

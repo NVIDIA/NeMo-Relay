@@ -69,6 +69,7 @@ The following table describes the top-level ATIF settings:
 | `extra` | Omitted | Optional ATIF agent metadata. |
 | `output_directory` | Current working directory | Directory containing trajectory files and the recovery copy when every configured remote destination fails. |
 | `filename_template` | `nemo-relay-atif-{session_id}.json` | Must contain `{session_id}`. Can contain `{metadata.<path>}` placeholders for metadata-based routing. |
+| `local_activation_policy` | Omitted | Optional policy for the implicit local file and local recovery fallback. A denial suppresses both uses. |
 | `storage` | Omitted | Optional list of remote storage destinations. When non-empty, trajectories are uploaded to every configured backend. If all fail for one trajectory, Relay writes a local recovery copy. Refer to [Remote Storage](#remote-storage). |
 
 ### Metadata-Based Paths
@@ -119,6 +120,12 @@ trajectory to every configured backend instead of writing a local file.
 `output_directory` is ignored for successful remote writes, but Relay uses it
 for a local recovery copy when every configured remote destination fails for a
 trajectory.
+
+Each HTTP or S3 entry can include `activation_policy`. Relay evaluates entries
+independently and preserves their original configuration indices in
+diagnostics. If every configured remote entry is denied, Relay disables the
+dispatcher instead of promoting the implicit local destination to primary
+storage.
 
 Each storage entry is tagged with a `type` discriminator so additional
 backends can be added without breaking existing configs. S3-compatible object

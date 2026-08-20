@@ -22,7 +22,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
-use crate::api::export_activation::{ExportActivationPolicyFn, ExportActivationPolicyRegistry};
+use crate::api::export_activation::{
+    ExportActivationPolicyFn, ExportActivationPolicyRegistry, ExportTargetActivationFn,
+    ExportTargetRegistration,
+};
 use crate::api::registry::{
     deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
@@ -405,6 +408,7 @@ impl PluginRegistration {
 pub struct PluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
     namespace: Option<String>,
+    provider_id: Option<String>,
     export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 }
 
@@ -413,6 +417,7 @@ impl Default for PluginRegistrationContext {
         Self {
             registrations: Vec::new(),
             namespace: None,
+            provider_id: None,
             export_activation_policies: Arc::new(ExportActivationPolicyRegistry::default()),
         }
     }
@@ -429,17 +434,20 @@ impl PluginRegistrationContext {
         Self {
             registrations: vec![],
             namespace: Some(namespace.into()),
+            provider_id: None,
             export_activation_policies: Arc::new(ExportActivationPolicyRegistry::default()),
         }
     }
 
     pub(crate) fn with_namespace_and_export_activation_policies(
         namespace: impl Into<String>,
+        provider_id: impl Into<String>,
         export_activation_policies: Arc<ExportActivationPolicyRegistry>,
     ) -> Self {
         Self {
             registrations: Vec::new(),
             namespace: Some(namespace.into()),
+            provider_id: Some(provider_id.into()),
             export_activation_policies,
         }
     }
@@ -451,12 +459,19 @@ impl PluginRegistrationContext {
         Self {
             registrations: Vec::new(),
             namespace: None,
+            provider_id: None,
             export_activation_policies,
         }
     }
 
-    pub(crate) fn export_activation_policies(&self) -> Arc<ExportActivationPolicyRegistry> {
+    #[doc(hidden)]
+    pub fn export_activation_policies(&self) -> Arc<ExportActivationPolicyRegistry> {
         Arc::clone(&self.export_activation_policies)
+    }
+
+    #[doc(hidden)]
+    pub fn export_activation_provider_id(&self) -> Option<&str> {
+        self.provider_id.as_deref()
     }
 
     /// Returns the runtime-qualified name for a plugin-local registration.
@@ -472,7 +487,7 @@ impl PluginRegistrationContext {
     }
 
     /// Registers the single export-activation policy owned by `provider`.
-    pub fn register_export_activation_policy(
+    pub(crate) fn register_export_activation_policy_for_provider(
         &mut self,
         provider: &str,
         callback: ExportActivationPolicyFn,
@@ -495,6 +510,53 @@ impl PluginRegistrationContext {
                     .map_err(|error| {
                         PluginError::RegistrationFailed(format!(
                             "export activation policy deregistration failed: {error}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers the activation policy owned by this component's plugin kind.
+    pub fn register_export_activation_policy(
+        &mut self,
+        callback: ExportActivationPolicyFn,
+    ) -> Result<()> {
+        let provider = self.provider_id.clone().ok_or_else(|| {
+            PluginError::RegistrationFailed(
+                "component export activation policies require a host-owned plugin context".into(),
+            )
+        })?;
+        self.register_export_activation_policy_for_provider(&provider, callback)
+    }
+
+    /// Registers one deferred local or remote export target.
+    pub fn register_export_target<F, Fut>(
+        &mut self,
+        registration: ExportTargetRegistration,
+        activate: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = crate::error::Result<()>> + Send + 'static,
+    {
+        let qualified_id = self.qualify_name(&format!("export-target:{}", registration.id));
+        let activation: ExportTargetActivationFn = Arc::new(move || Box::pin(activate()));
+        self.export_activation_policies
+            .register_target(qualified_id.clone(), registration, activation)
+            .map_err(|error| PluginError::RegistrationFailed(format!("export target: {error}")))?;
+
+        let export_activation_policies = Arc::clone(&self.export_activation_policies);
+        self.registrations.push(PluginRegistration::new(
+            "export_target",
+            qualified_id.clone(),
+            Box::new(move || {
+                export_activation_policies
+                    .deregister_target(&qualified_id)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        PluginError::RegistrationFailed(format!(
+                            "export target deregistration failed: {error}"
                         ))
                     })
             }),
@@ -2729,10 +2791,17 @@ async fn initialize_plugin_components(
     let mut ordinals: HashMap<&str, usize> = HashMap::new();
     let mut registrations = PendingPluginRegistrations::new(rollback_failures.clone());
 
-    for component in config
+    // Observability is the built-in consumer of export policies. Register all
+    // other components first so ordinary and dynamic policy providers are
+    // complete before observability evaluates and constructs its targets.
+    let enabled_components = config
         .components
         .iter()
-        .filter(|component| component.enabled)
+        .filter(|component| component.enabled);
+    for component in enabled_components
+        .clone()
+        .filter(|component| component.kind != "observability")
+        .chain(enabled_components.filter(|component| component.kind == "observability"))
     {
         let Some(plugin) = lookup_registered_plugin(&component.kind) else {
             return Err(PluginError::NotFound(format!(
@@ -2753,6 +2822,7 @@ async fn initialize_plugin_components(
 
         let mut pending = PendingPluginRegistrationContext::new(
             namespace,
+            component.kind.clone(),
             rollback_failures.clone(),
             Arc::clone(&export_activation_policies),
         );
@@ -2761,6 +2831,13 @@ async fn initialize_plugin_components(
             .await?;
         registrations.extend(pending.take());
     }
+
+    export_activation_policies
+        .activate_targets()
+        .await
+        .map_err(|error| {
+            PluginError::RegistrationFailed(format!("export target activation failed: {error}"))
+        })?;
 
     Ok(registrations.take())
 }
@@ -2804,12 +2881,14 @@ struct PendingPluginRegistrationContext {
 impl PendingPluginRegistrationContext {
     fn new(
         namespace: String,
+        provider_id: String,
         rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
         export_activation_policies: Arc<ExportActivationPolicyRegistry>,
     ) -> Self {
         Self {
             context: PluginRegistrationContext::with_namespace_and_export_activation_policies(
                 namespace,
+                provider_id,
                 export_activation_policies,
             ),
             rollback_failures,

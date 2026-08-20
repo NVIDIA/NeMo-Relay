@@ -407,6 +407,16 @@ typedef NemoRelayStatus (*NemoRelayPluginRegisterCb)(void *user_data,
                                                      struct FfiPluginContext *ctx);
 
 /**
+ * Callback for an activation-scoped export policy provider.
+ */
+typedef char *(*NemoRelayExportActivationPolicyCb)(void *user_data, const char *request_json);
+
+/**
+ * One-shot callback that constructs an allowed export target.
+ */
+typedef NemoRelayStatus (*NemoRelayExportTargetActivationCb)(void *user_data);
+
+/**
  * Callback for tool request/response sanitization guardrails and intercepts.
  * Receives tool name and arguments as JSON, returns sanitized arguments as JSON.
  * The returned string must be allocated with `malloc` or equivalent.
@@ -2056,6 +2066,30 @@ NemoRelayStatus nemo_relay_plugin_context_register_subscriber(struct FfiPluginCo
                                                               NemoRelayEventSubscriberCb cb,
                                                               void *user_data,
                                                               NemoRelayFreeFn free_fn);
+
+/**
+ * Register the activation-scoped export policy owned by this plugin component.
+ *
+ * # Safety
+ * `ctx` must be valid and callback user data must remain valid until `free_fn` runs.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_export_activation_policy(struct FfiPluginContext *ctx,
+                                                                            NemoRelayExportActivationPolicyCb cb,
+                                                                            void *user_data,
+                                                                            NemoRelayFreeFn free_fn);
+
+/**
+ * Register one deferred local or remote export target.
+ *
+ * # Safety
+ * `ctx` and `registration_json` must be valid and callback user data must
+ * remain valid until `free_fn` runs.
+ */
+NemoRelayStatus nemo_relay_plugin_context_register_export_target(struct FfiPluginContext *ctx,
+                                                                 const char *registration_json,
+                                                                 NemoRelayExportTargetActivationCb cb,
+                                                                 void *user_data,
+                                                                 NemoRelayFreeFn free_fn);
 
 /**
  * Register a mark event sanitizer into a plugin context.

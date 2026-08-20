@@ -54,7 +54,7 @@ class ConfigPolicy:
 
 @dataclass(slots=True)
 class ExportActivationPolicyConfig:
-    """Activation-time policy attached to one remote exporter target."""
+    """Activation-time policy attached to one export target."""
 
     provider: str
     timeout_millis: int = 30000
@@ -123,6 +123,7 @@ class AtofFileSinkConfig:
     output_directory: str | None = None
     filename: str | None = None
     mode: Literal["append", "overwrite"] = "append"
+    activation_policy: ExportActivationPolicyConfig | None = None
 
     def to_dict(self) -> JsonObject:
         return _normalize_object(
@@ -131,6 +132,7 @@ class AtofFileSinkConfig:
                 "output_directory": self.output_directory,
                 "filename": self.filename,
                 "mode": self.mode,
+                "activation_policy": self.activation_policy,
             }
         )
 
@@ -215,6 +217,7 @@ class AtifConfig:
     output_directory: str | None = None
     filename_template: str = "nemo-relay-atif-{session_id}.json"
     storage: list[S3StorageConfig | HttpStorageConfig] | None = None
+    local_activation_policy: ExportActivationPolicyConfig | None = None
 
     def to_dict(self) -> JsonObject:
         """Serialize this ATIF config to the canonical JSON object shape."""
@@ -228,6 +231,7 @@ class AtifConfig:
             "output_directory": self.output_directory,
             "filename_template": self.filename_template,
             "storage": self.storage,
+            "local_activation_policy": self.local_activation_policy,
         }
         if value["agent_version"] is None:
             value.pop("agent_version")

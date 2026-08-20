@@ -12,6 +12,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use pyo3::prelude::*;
 use serde_json::{Map, Value as Json};
 
+use nemo_relay::api::export_activation::{
+    ExportActivationPolicyRegistry, ExportTargetRegistration,
+};
 use nemo_relay::api::registry::{
     deregister_llm_conditional_execution_guardrail, deregister_llm_execution_intercept,
     deregister_llm_request_intercept, deregister_llm_sanitize_request_guardrail,
@@ -39,11 +42,12 @@ use nemo_relay::plugin::{
 
 use crate::convert::{json_to_py, py_to_json};
 use crate::py_callable::{
-    wrap_py_event_sanitize_fn, wrap_py_event_subscriber, wrap_py_llm_conditional_fn,
-    wrap_py_llm_exec_intercept_fn, wrap_py_llm_request_intercept_fn,
-    wrap_py_llm_sanitize_request_fn, wrap_py_llm_sanitize_response_fn,
-    wrap_py_llm_stream_exec_intercept_fn, wrap_py_tool_conditional_fn,
-    wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn, wrap_py_tool_request_intercept_fn,
+    wrap_py_event_sanitize_fn, wrap_py_event_subscriber, wrap_py_export_activation_policy_fn,
+    wrap_py_export_target_activation_fn, wrap_py_llm_conditional_fn, wrap_py_llm_exec_intercept_fn,
+    wrap_py_llm_request_intercept_fn, wrap_py_llm_sanitize_request_fn,
+    wrap_py_llm_sanitize_response_fn, wrap_py_llm_stream_exec_intercept_fn,
+    wrap_py_tool_conditional_fn, wrap_py_tool_exec_intercept_fn, wrap_py_tool_fn,
+    wrap_py_tool_request_intercept_fn,
 };
 
 #[cfg(test)]
@@ -144,6 +148,8 @@ fn new_py_plugin_context(
     _plugin_kind: &str,
     registrations: Arc<Mutex<Vec<PluginRegistration>>>,
     namespace_prefix: String,
+    provider_id: String,
+    export_activation: Arc<ExportActivationPolicyRegistry>,
 ) -> PyResult<Py<PyPluginContext>> {
     #[cfg(test)]
     if FORCE_PLUGIN_CONTEXT_NEW_ERROR
@@ -161,6 +167,8 @@ fn new_py_plugin_context(
         PyPluginContext {
             registrations,
             namespace_prefix,
+            provider_id,
+            export_activation,
         },
     )
 }
@@ -171,12 +179,16 @@ pub(crate) fn invoke_python_plugin_register(
     register_fn: &Bound<'_, PyAny>,
     plugin_config: &Map<String, Json>,
     namespace_prefix: String,
+    provider_id: String,
+    export_activation: Arc<ExportActivationPolicyRegistry>,
 ) -> PyResult<Vec<PluginRegistration>> {
     let py_ctx = new_py_plugin_context(
         py,
         plugin_kind,
         Arc::new(Mutex::new(vec![])),
         namespace_prefix,
+        provider_id,
+        export_activation,
     )?;
     let plugin_config_py = plugin_config_to_py(py, plugin_kind, plugin_config)?;
     match register_fn.call1((plugin_config_py, py_ctx.clone_ref(py))) {
@@ -197,6 +209,8 @@ pub(crate) fn invoke_python_plugin_register(
 pub struct PyPluginContext {
     registrations: Arc<Mutex<Vec<PluginRegistration>>>,
     namespace_prefix: String,
+    provider_id: String,
+    export_activation: Arc<ExportActivationPolicyRegistry>,
 }
 
 impl PyPluginContext {
@@ -240,6 +254,74 @@ impl PyPluginContext {
 
 #[pymethods]
 impl PyPluginContext {
+    #[pyo3(signature = (callback: "object") -> "None", text_signature = "(callback: object) -> None")]
+    fn register_export_activation_policy(&self, callback: Py<PyAny>) -> PyResult<()> {
+        self.export_activation
+            .register(
+                &self.provider_id,
+                wrap_py_export_activation_policy_fn(callback),
+            )
+            .map_err(to_py_err)?;
+        let provider = self.provider_id.clone();
+        let export_activation = Arc::clone(&self.export_activation);
+        self.registrations
+            .lock()
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "plugin context lock poisoned: {error}"
+                ))
+            })?
+            .push(PluginRegistration::new(
+                "export_activation_policy",
+                provider.clone(),
+                Box::new(move || {
+                    export_activation
+                        .deregister(&provider)
+                        .map(|_| ())
+                        .map_err(|error| PluginError::RegistrationFailed(error.to_string()))
+                }),
+            ));
+        Ok(())
+    }
+
+    #[pyo3(signature = (registration: "object", callback: "object") -> "None", text_signature = "(registration: object, callback: object) -> None")]
+    fn register_export_target(
+        &self,
+        registration: &Bound<'_, PyAny>,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        let registration =
+            serde_json::from_value::<ExportTargetRegistration>(py_to_json(registration)?)
+                .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+        let qualified_id = self.qualify_name(&format!("export-target:{}", registration.id));
+        self.export_activation
+            .register_target(
+                qualified_id.clone(),
+                registration,
+                Arc::new(wrap_py_export_target_activation_fn(callback)),
+            )
+            .map_err(to_py_err)?;
+        let export_activation = Arc::clone(&self.export_activation);
+        self.registrations
+            .lock()
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "plugin context lock poisoned: {error}"
+                ))
+            })?
+            .push(PluginRegistration::new(
+                "export_target",
+                qualified_id.clone(),
+                Box::new(move || {
+                    export_activation
+                        .deregister_target(&qualified_id)
+                        .map(|_| ())
+                        .map_err(|error| PluginError::RegistrationFailed(error.to_string()))
+                }),
+            ));
+        Ok(())
+    }
+
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
     fn register_mark_sanitize_guardrail(
         &self,
@@ -642,6 +724,8 @@ impl Plugin for PyPlugin {
         ctx: &'a mut PluginRegistrationContext,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), PluginError>> + Send + 'a>> {
         let namespace_prefix = ctx.qualify_name("");
+        let export_activation = ctx.export_activation_policies();
+        let provider_id = self.plugin_kind.clone();
         let plugin_config = plugin_config.clone();
         Box::pin(async move {
             let registrations = Python::attach(|py| -> PyResult<Vec<PluginRegistration>> {
@@ -652,6 +736,8 @@ impl Plugin for PyPlugin {
                     &register_fn,
                     &plugin_config,
                     namespace_prefix,
+                    provider_id,
+                    export_activation,
                 )
             })
             .map_err(|err| PluginError::RegistrationFailed(err.to_string()))?;

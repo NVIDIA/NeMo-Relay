@@ -91,9 +91,10 @@ share an authority.
 
 ## Export Activation Policies
 
-Version 4 remote targets accept an optional `activation_policy`. The
-`provider` is the dynamic-plugin manifest ID of a native or worker plugin that
-declares the `export_activation_policy` capability and registers one callback:
+Version 4 export targets accept an optional `activation_policy`. The
+`provider` is the ordinary plugin kind or dynamic-plugin manifest ID of a
+component that registers one policy callback. Dynamic providers also declare
+the `export_activation_policy` capability:
 
 ```toml
 [components.config.opentelemetry.endpoints.activation_policy]

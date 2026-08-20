@@ -24,6 +24,7 @@ use futures_util::FutureExt;
 use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
 use crate::api::export_activation::{
     ExportActivationDecision, ExportActivationPolicyFn, ExportActivationRequest,
+    ExportTargetActivationFn, ExportTargetRegistration,
 };
 use crate::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use crate::api::runtime::{
@@ -56,10 +57,11 @@ use chrono::{DateTime, Utc};
 use libloading::{Library, Symbol};
 use nemo_relay_plugin::{
     NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NemoRelayNativeAsyncCallbackState, NemoRelayNativeAsyncCompletion,
-    NemoRelayNativeAsyncLlmStreamOpenCb, NemoRelayNativeAsyncLlmStreamPullCb,
-    NemoRelayNativeAsyncMiddlewareCb, NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext,
-    NemoRelayNativeAsyncNextResultCb, NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
+    NemoRelayNativeActivationHookKind, NemoRelayNativeAsyncCallbackState,
+    NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
+    NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
+    NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
+    NemoRelayNativeAsyncNextStreamCb, NemoRelayNativeAsyncStream,
     NemoRelayNativeAsyncStreamMiddlewareCb, NemoRelayNativeEventSanitizeCb,
     NemoRelayNativeEventSubscriberCb, NemoRelayNativeFreeFn, NemoRelayNativeHostApiV1,
     NemoRelayNativeHostApiV3, NemoRelayNativeHostApiV4, NemoRelayNativeLlmAsyncStream,
@@ -80,7 +82,7 @@ use tokio::runtime::Runtime;
 use tokio_stream::{Stream, StreamExt};
 
 use super::{
-    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
+    DynamicPluginCapability, DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, deregister_tracked_registrations_checked,
     validate_annotated_request_consumer_compatibility, validate_dynamic_plugin_relay_compatibility,
 };
@@ -285,6 +287,7 @@ struct NativePluginInstance {
     plugin_kind: String,
     relay_compat: String,
     allows_multiple_components: bool,
+    allows_export_activation_policy: bool,
     plugin: Mutex<NemoRelayNativePluginV1>,
     _library: Library,
 }
@@ -445,6 +448,10 @@ fn load_one_native_plugin(
         plugin_kind,
         relay_compat,
         allows_multiple_components: plugin.allows_multiple_components,
+        allows_export_activation_policy: manifest
+            .capabilities
+            .items
+            .contains(&DynamicPluginCapability::ExportActivationPolicy),
         plugin: Mutex::new(plugin),
         _library: library,
     }))
@@ -3540,6 +3547,23 @@ fn wrap_native_async_export_activation_policy(
     })
 }
 
+fn wrap_native_async_export_target(
+    instance: Arc<NativePluginInstance>,
+    cb: NemoRelayNativeAsyncMiddlewareCb,
+    user_data: *mut c_void,
+    free_fn: NemoRelayNativeFreeFn,
+) -> ExportTargetActivationFn {
+    let user_data = make_user_data(instance, user_data, free_fn);
+    Arc::new(move || {
+        let user_data = Arc::clone(&user_data);
+        Box::pin(async move {
+            invoke_native_async_callback(cb, user_data, Json::Null, None, None)
+                .await
+                .map(|_| ())
+        })
+    })
+}
+
 fn wrap_native_async_tool_execution(
     instance: Arc<NativePluginInstance>,
     cb: NemoRelayNativeAsyncMiddlewareCb,
@@ -3736,6 +3760,45 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
         Ok(name) => name,
         Err(status) => return status,
     };
+    if let Ok(hook) = NemoRelayNativeActivationHookKind::try_from(kind) {
+        let context = unsafe { &mut *host_ctx.ctx };
+        let registration = match hook {
+            NemoRelayNativeActivationHookKind::ExportActivationPolicy => {
+                if !instance.allows_export_activation_policy {
+                    log::warn!(
+                        target: "nemo_relay.plugin",
+                        event = "native_registration_capability_undeclared",
+                        plugin_id = instance.plugin_kind.as_str(),
+                        capability = "export_activation_policy";
+                        "Native export activation policy ignored because the manifest capability was not declared"
+                    );
+                    return NemoRelayStatus::Ok;
+                }
+                let (user_data, free_fn) = user_data_guard.transfer();
+                context.register_export_activation_policy(
+                    wrap_native_async_export_activation_policy(instance, cb, user_data, free_fn),
+                )
+            }
+            NemoRelayNativeActivationHookKind::ExportTarget => {
+                let target = match serde_json::from_str::<ExportTargetRegistration>(&name) {
+                    Ok(target) => target,
+                    Err(error) => {
+                        set_native_last_error(format!(
+                            "invalid native export target registration: {error}"
+                        ));
+                        return NemoRelayStatus::InvalidArg;
+                    }
+                };
+                let (user_data, free_fn) = user_data_guard.transfer();
+                let activation = wrap_native_async_export_target(instance, cb, user_data, free_fn);
+                context.register_export_target(target, move || activation())
+            }
+        };
+        return match registration {
+            Ok(()) => NemoRelayStatus::Ok,
+            Err(error) => status_from_plugin_error(error),
+        };
+    }
     let kind = match NemoRelayNativeAsyncMiddlewareKind::try_from(kind) {
         Ok(kind) => kind,
         Err(()) => {
@@ -3849,13 +3912,6 @@ unsafe extern "C" fn native_plugin_context_register_async_middleware(
                 priority,
                 wrap_native_async_event_metadata_injector(instance, cb, user_data, free_fn),
             ),
-        NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy => {
-            let provider = instance.plugin_kind.clone();
-            context.register_export_activation_policy(
-                &provider,
-                wrap_native_async_export_activation_policy(instance, cb, user_data, free_fn),
-            )
-        }
     };
     match registration {
         Ok(()) => NemoRelayStatus::Ok,

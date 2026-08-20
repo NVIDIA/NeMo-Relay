@@ -23,11 +23,12 @@ use futures::StreamExt;
 use nemo_relay_plugin::{
     AnnotatedLlmRequest, BuiltinLlmCodec, CategoryProfile, ConfigDiagnostic, DataSchema,
     DiagnosticLevel, Event, EventCategory, EventSanitizeFields, ExportActivationDecision,
-    ExportActivationTargetKind, Json, LlmCodecIdentity, LlmJsonAsyncStream, LlmJsonStream, LlmNext,
-    LlmRequest, LlmRequestInterceptOutcome, LlmStream, LlmStreamNext, LogSeverity, MetricKind,
-    MetricMeasurement, MetricValueType, NEMO_RELAY_NATIVE_ABI_VERSION,
-    NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE, NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY,
-    NativeExecutorConfig, NativePlugin, NemoRelayNativeAsyncCallbackState,
+    ExportActivationTargetKind, ExportTargetRegistration, Json, LlmCodecIdentity,
+    LlmJsonAsyncStream, LlmJsonStream, LlmNext, LlmRequest, LlmRequestInterceptOutcome, LlmStream,
+    LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
+    NEMO_RELAY_NATIVE_ABI_VERSION, NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE,
+    NEMO_RELAY_NATIVE_ABI_VERSION_LEGACY, NativeExecutorConfig, NativePlugin,
+    NemoRelayNativeActivationHookKind, NemoRelayNativeAsyncCallbackState,
     NemoRelayNativeAsyncCompletion, NemoRelayNativeAsyncLlmStreamOpenCb,
     NemoRelayNativeAsyncLlmStreamPullCb, NemoRelayNativeAsyncMiddlewareCb,
     NemoRelayNativeAsyncMiddlewareKind, NemoRelayNativeAsyncNext, NemoRelayNativeAsyncNextResultCb,
@@ -69,13 +70,17 @@ fn async_abi_discriminants_reject_unknown_values() {
         Kind::ScopeSanitizeStart,
         Kind::ScopeSanitizeEnd,
         Kind::EventMetadataInjector,
-        Kind::ExportActivationPolicy,
     ];
     for (discriminant, kind) in middleware_kinds.into_iter().enumerate() {
         assert_eq!(kind as u32, discriminant as u32);
         assert_eq!(Kind::try_from(discriminant as u32), Ok(kind));
     }
-    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(16).is_err());
+    assert!(NemoRelayNativeAsyncMiddlewareKind::try_from(15).is_err());
+    assert_eq!(
+        NemoRelayNativeActivationHookKind::ExportActivationPolicy as u32,
+        15
+    );
+    assert_eq!(NemoRelayNativeActivationHookKind::ExportTarget as u32, 16);
     assert_eq!(
         NemoRelayNativeAsyncCallbackState::try_from(1),
         Ok(NemoRelayNativeAsyncCallbackState::Pending)
@@ -288,7 +293,7 @@ struct RegisteredLlmRequestIntercept {
 }
 
 struct RegisteredAsync {
-    kind: NemoRelayNativeAsyncMiddlewareKind,
+    kind: u32,
     name: String,
     priority: i32,
     break_chain: bool,
@@ -1856,10 +1861,6 @@ unsafe extern "C" fn capture_register_async_middleware(
         }
         return status;
     }
-    let kind = match NemoRelayNativeAsyncMiddlewareKind::try_from(kind) {
-        Ok(kind) => kind,
-        Err(()) => return NemoRelayStatus::InvalidArg,
-    };
     let name = match required_host_string(&test_host(), name) {
         Ok(name) => name,
         Err(status) => return status,
@@ -2169,11 +2170,19 @@ fn test_llm_request() -> LlmRequest {
 }
 
 fn take_async_registration(kind: NemoRelayNativeAsyncMiddlewareKind) -> RegisteredAsync {
+    take_async_registration_raw(kind as u32)
+}
+
+fn take_activation_registration(kind: NemoRelayNativeActivationHookKind) -> RegisteredAsync {
+    take_async_registration_raw(kind as u32)
+}
+
+fn take_async_registration_raw(kind: u32) -> RegisteredAsync {
     let mut registrations = ASYNC_REGISTRATIONS.lock().unwrap();
     let index = registrations
         .iter()
         .position(|registration| registration.kind == kind)
-        .unwrap_or_else(|| panic!("missing {kind:?} registration"));
+        .unwrap_or_else(|| panic!("missing kind {kind} registration"));
     registrations.remove(index)
 }
 
@@ -2184,7 +2193,7 @@ fn invoke_async_registration(
     next: Option<&MockAsyncNext>,
 ) -> std::result::Result<Json, String> {
     ASYNC_TOOL_NEXT_RESULT.store(
-        registration.kind == NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept,
+        registration.kind == NemoRelayNativeAsyncMiddlewareKind::ToolExecutionIntercept as u32,
         Ordering::SeqCst,
     );
     let completion = MockAsyncCompletion::new();
@@ -3303,6 +3312,15 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
         Ok(ExportActivationDecision::Allow)
     })
     .unwrap();
+    ctx.register_export_target(
+        ExportTargetRegistration {
+            id: "self-otel".into(),
+            target_kind: ExportActivationTargetKind::OTLP_TRACE,
+            activation_policy: None,
+        },
+        || async { Ok(()) },
+    )
+    .unwrap();
 
     let metadata = ASYNC_REGISTRATIONS
         .lock()
@@ -3317,17 +3335,17 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(metadata.len(), 15);
+    assert_eq!(metadata.len(), 16);
     assert_eq!(metadata[0].1, "mark-async");
     assert_eq!(metadata[0].2, 1);
     assert_eq!(
         metadata[6].0,
-        NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept
+        NemoRelayNativeAsyncMiddlewareKind::ToolRequestIntercept as u32
     );
     assert!(metadata[6].3);
     assert_eq!(
         metadata[11].0,
-        NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept
+        NemoRelayNativeAsyncMiddlewareKind::LlmRequestIntercept as u32
     );
     assert!(metadata[11].3);
     {
@@ -3362,16 +3380,24 @@ fn typed_async_middleware_registers_and_round_trips_every_surface() {
     unsafe { metadata_registration.free() };
 
     let policy_registration =
-        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy);
+        take_activation_registration(NemoRelayNativeActivationHookKind::ExportActivationPolicy);
     let result = invoke_async_registration(
         &host,
         &policy_registration,
-        json!({"target_kind": "otlp_trace", "config": {"enabled": true}}),
+        json!({"target_kind": "nemo_relay.otlp.trace", "config": {"enabled": true}}),
         None,
     )
     .unwrap();
     assert_eq!(result, json!("allow"));
     unsafe { policy_registration.free() };
+
+    let target_registration =
+        take_activation_registration(NemoRelayNativeActivationHookKind::ExportTarget);
+    let target: ExportTargetRegistration = serde_json::from_str(&target_registration.name).unwrap();
+    assert_eq!(target.id, "self-otel");
+    let result = invoke_async_registration(&host, &target_registration, Json::Null, None).unwrap();
+    assert_eq!(result, Json::Null);
+    unsafe { target_registration.free() };
 
     for kind in [
         NemoRelayNativeAsyncMiddlewareKind::MarkSanitize,
@@ -3583,11 +3609,12 @@ fn typed_export_activation_policy_round_trips_deny_and_error() {
     ctx.register_export_activation_policy(|_| async move { Err("policy failed".into()) })
         .unwrap();
 
-    let deny = take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy);
+    let deny =
+        take_activation_registration(NemoRelayNativeActivationHookKind::ExportActivationPolicy);
     let result = invoke_async_registration(
         &host,
         &deny,
-        json!({"target_kind": "atif_s3", "config": {"enabled": false}}),
+        json!({"target_kind": "nemo_relay.atif.s3", "config": {"enabled": false}}),
         None,
     )
     .unwrap();
@@ -3595,11 +3622,11 @@ fn typed_export_activation_policy_round_trips_deny_and_error() {
     unsafe { deny.free() };
 
     let failure =
-        take_async_registration(NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy);
+        take_activation_registration(NemoRelayNativeActivationHookKind::ExportActivationPolicy);
     let error = invoke_async_registration(
         &host,
         &failure,
-        json!({"target_kind": "otlp_trace", "config": null}),
+        json!({"target_kind": "nemo_relay.otlp.trace", "config": null}),
         None,
     )
     .unwrap_err();

@@ -56,6 +56,7 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	if atif.Enabled || atif.AgentName != "NeMo Relay" || atif.ModelName != "unknown" || atif.FilenameTemplate != "nemo-relay-atif-{session_id}.json" {
 		t.Fatalf("unexpected ATIF defaults: %#v", atif)
 	}
+	atif.LocalActivationPolicy = policy
 	allowHTTP := false
 	s3Storage := NewObservabilityS3StorageConfig("archive")
 	s3Storage.KeyPrefix = "runs/"
@@ -114,6 +115,8 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 
 func TestObservabilityAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *testing.T) {
 	file := NewObservabilityAtofFileSinkConfig()
+	filePolicy := NewExportActivationPolicyConfig("com.example.runtime-policy")
+	file.ActivationPolicy = &filePolicy
 	if file.Mode != "append" {
 		t.Fatalf("file sink mode = %q, want append", file.Mode)
 	}
@@ -123,6 +126,9 @@ func TestObservabilityAtofSinkConfigConstructorsSerializeTheirDiscriminators(t *
 	}
 	if !strings.Contains(string(fileJSON), `"type":"file"`) {
 		t.Fatalf("file sink discriminator missing: %s", fileJSON)
+	}
+	if !strings.Contains(string(fileJSON), `"activation_policy"`) {
+		t.Fatalf("file sink activation policy missing: %s", fileJSON)
 	}
 
 	stream := NewObservabilityAtofStreamSinkConfig("http://localhost:8080/events")
@@ -315,6 +321,7 @@ func assertHTTPStorageConfig(t *testing.T, storage ObservabilityHttpStorageConfi
 
 func assertWrappedAtifStorageConfig(t *testing.T, atifConfig map[string]any) {
 	t.Helper()
+	assertExportActivationPolicy(t, atifConfig["local_activation_policy"])
 	storage := atifConfig["storage"].([]any)
 	if len(storage) != 2 {
 		t.Fatalf("expected two ATIF storage destinations, got %#v", storage)
@@ -431,9 +438,11 @@ func requireOtelRequest(t *testing.T, requests <-chan otelRequest, path, bodyFra
 	t.Helper()
 	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
+	var observedPaths []string
 	for {
 		select {
 		case request := <-requests:
+			observedPaths = append(observedPaths, request.Path)
 			if request.Path != path {
 				continue
 			}
@@ -442,7 +451,7 @@ func requireOtelRequest(t *testing.T, requests <-chan otelRequest, path, bodyFra
 			}
 			return
 		case <-timeout.C:
-			t.Fatalf("timed out waiting for OTLP %s export", path)
+			t.Fatalf("timed out waiting for OTLP %s export; observed paths: %v", path, observedPaths)
 		}
 	}
 }

@@ -5,6 +5,7 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -35,6 +36,66 @@ func TestPluginConfigSerializationErrorsSurfaceBeforeFFI(t *testing.T) {
 	}
 }
 
+func TestPluginCanGateItsOwnExportTarget(t *testing.T) {
+	for _, decision := range []ExportActivationDecision{ExportActivationAllow, ExportActivationDeny} {
+		t.Run(string(decision), func(t *testing.T) {
+			kind := fmt.Sprintf("tests.go_export_activation_%s", decision)
+			activations := 0
+			err := RegisterPlugin(kind, PluginFuncs{
+				RegisterFunc: func(_ map[string]any, ctx *PluginContext) error {
+					if err := ctx.RegisterExportActivationPolicy(func(request ExportActivationRequest) (ExportActivationDecision, error) {
+						if request.TargetKind != "tests.telemetry.otlp" {
+							t.Fatalf("unexpected target kind %q", request.TargetKind)
+						}
+						return decision, nil
+					}); err != nil {
+						return err
+					}
+					return ctx.RegisterExportTarget(
+						ExportTargetRegistration{
+							ID:         "self-otel",
+							TargetKind: "tests.telemetry.otlp",
+							ActivationPolicy: &ExportActivationPolicyConfig{
+								Provider:      kind,
+								TimeoutMillis: 30_000,
+								Config:        json.RawMessage(`{"country":"US"}`),
+							},
+						},
+						func() error {
+							activations++
+							return nil
+						},
+					)
+				},
+			})
+			if err != nil {
+				t.Fatalf("RegisterPlugin() error = %v", err)
+			}
+			defer DeregisterPlugin(kind)
+			defer ClearPluginConfiguration()
+
+			_, err = InitializePlugins(PluginConfig{
+				Version: 1,
+				Components: []PluginComponentSpec{{
+					Kind:    kind,
+					Enabled: true,
+					Config:  map[string]any{},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("InitializePlugins() error = %v", err)
+			}
+			expected := 0
+			if decision == ExportActivationAllow {
+				expected = 1
+			}
+			if activations != expected {
+				t.Fatalf("activation count = %d, want %d", activations, expected)
+			}
+		})
+	}
+}
+
 func TestClosedPluginContextRejectsEveryRegistrationSurface(t *testing.T) {
 	ctx := &PluginContext{}
 	request := func(LLMRequestDTO, LLMSanitizeRequestContext) (LLMRequestDTO, bool) {
@@ -49,6 +110,12 @@ func TestClosedPluginContextRejectsEveryRegistrationSurface(t *testing.T) {
 		call func() error
 	}{
 		{name: "subscriber", call: func() error { return ctx.RegisterSubscriber("closed_subscriber", nil) }},
+		{name: "export activation policy", call: func() error {
+			return ctx.RegisterExportActivationPolicy(nil)
+		}},
+		{name: "export target", call: func() error {
+			return ctx.RegisterExportTarget(ExportTargetRegistration{}, nil)
+		}},
 		{name: "mark sanitizer", call: func() error { return ctx.RegisterMarkSanitizeGuardrail("closed_mark", 0, nil) }},
 		{name: "scope-start sanitizer", call: func() error { return ctx.RegisterScopeSanitizeStartGuardrail("closed_scope_start", 0, nil) }},
 		{name: "scope-end sanitizer", call: func() error { return ctx.RegisterScopeSanitizeEndGuardrail("closed_scope_end", 0, nil) }},

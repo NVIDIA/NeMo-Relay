@@ -504,6 +504,7 @@ fn native_test_adapter(
             plugin_kind: "test.native.adapter".into(),
             relay_compat: "^0.8".into(),
             allows_multiple_components: false,
+            allows_export_activation_policy: true,
             plugin: Mutex::new(plugin),
             _library: libloading::os::unix::Library::this().into(),
         }),
@@ -4694,6 +4695,7 @@ fn native_registration_entrypoints_reject_invalid_host_contexts_and_names() {
         plugin_kind: "test.native".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
+        allows_export_activation_policy: true,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
     });
@@ -5130,6 +5132,7 @@ fn assert_async_request_registration_rejects_legacy_relay_contract() {
         plugin_kind: "test.native.legacy".into(),
         relay_compat: "^0.5".into(),
         allows_multiple_components: false,
+        allows_export_activation_policy: false,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
     });
@@ -5179,6 +5182,7 @@ async fn native_async_wrappers_validate_callback_result_shapes() {
         plugin_kind: "test.native.async".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
+        allows_export_activation_policy: true,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
     });
@@ -6044,6 +6048,7 @@ async fn native_callback_wrappers_release_error_outputs_and_preserve_reasons() {
         plugin_kind: "test.native.callback-errors".into(),
         relay_compat: "^0.8".into(),
         allows_multiple_components: false,
+        allows_export_activation_policy: true,
         plugin: Mutex::new(NemoRelayNativePluginV1::default()),
         _library: libloading::os::unix::Library::this().into(),
     });

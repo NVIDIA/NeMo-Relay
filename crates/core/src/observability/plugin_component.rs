@@ -37,8 +37,9 @@ use uuid::Uuid;
 
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
 use crate::api::export_activation::{
-    ExportActivationDecision, ExportActivationPolicyRegistry, ExportActivationRequest,
-    ExportActivationTargetKind,
+    ExportActivationDecision, ExportActivationPolicyConfig, ExportActivationPolicyRegistry,
+    ExportActivationRequest, ExportActivationTargetKind, MAX_EXPORT_ACTIVATION_TIMEOUT_MILLIS,
+    MIN_EXPORT_ACTIVATION_TIMEOUT_MILLIS,
 };
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
@@ -192,24 +193,6 @@ pub struct OpenTelemetrySectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<OpenTelemetryMetricSectionConfig>,
 }
-
-/// Activation-time policy attached to one remote exporter target.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-pub struct ExportActivationPolicyConfig {
-    /// Dynamic plugin identifier that owns the policy callback.
-    pub provider: String,
-    /// Maximum policy evaluation time in milliseconds.
-    #[serde(default = "default_export_activation_timeout_millis")]
-    pub timeout_millis: u64,
-    /// Opaque target-local configuration passed to the policy.
-    #[serde(default)]
-    pub config: Json,
-}
-
-const MIN_EXPORT_ACTIVATION_TIMEOUT_MILLIS: u64 = 1_000;
-const DEFAULT_EXPORT_ACTIVATION_TIMEOUT_MILLIS: u64 = 30_000;
-const MAX_EXPORT_ACTIVATION_TIMEOUT_MILLIS: u64 = 300_000;
 
 /// Signal-common OTLP destination fields used by logs and metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,6 +417,9 @@ pub struct AtofFileSinkSectionConfig {
     #[serde(default = "default_atof_mode")]
     #[cfg_attr(feature = "schema", schemars(schema_with = "atof_mode_schema"))]
     pub mode: String,
+    /// Optional activation-time policy for this local file sink.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activation_policy: Option<ExportActivationPolicyConfig>,
 }
 
 /// Stream sink settings for the ATOF plugin section.
@@ -509,6 +495,10 @@ pub struct AtifSectionConfig {
     /// [`storage`]: Self::storage
     #[serde(default = "default_atif_filename_template")]
     pub filename_template: String,
+    /// Optional activation-time policy for the implicit local file destination.
+    /// This also controls local fallback when remote storage writes fail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_activation_policy: Option<ExportActivationPolicyConfig>,
     /// Optional list of remote storage destinations. When non-empty, completed
     /// trajectories are uploaded to every configured backend instead of being
     /// written locally; the local file write at [`output_directory`] is
@@ -532,6 +522,7 @@ impl Default for AtifSectionConfig {
             extra: None,
             output_directory: None,
             filename_template: default_atif_filename_template(),
+            local_activation_policy: None,
             storage: Vec::new(),
         }
     }
@@ -897,6 +888,7 @@ crate::editor_config! {
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename => { label: "filename", kind: String, optional: true },
         mode => { label: "mode", kind: Enum, values: ["append", "overwrite"] },
+        activation_policy => { label: "activation_policy", kind: Json, optional: true },
     }
 }
 
@@ -923,6 +915,7 @@ crate::editor_config! {
         extra => { label: "extra", kind: Json, optional: true },
         output_directory => { label: "output_directory", kind: String, optional: true },
         filename_template => { label: "filename_template", kind: String },
+        local_activation_policy => { label: "local_activation_policy", kind: Json, optional: true },
         storage => { label: "storage", kind: Json, optional: true },
     }
 }
@@ -1169,7 +1162,15 @@ async fn register_atof_exporter(
     let mut allowed_sinks = Vec::with_capacity(section.sinks.len());
     for (index, sink) in section.sinks.into_iter().enumerate() {
         let allowed = match &sink {
-            AtofSinkSectionConfig::File(_) => true,
+            AtofSinkSectionConfig::File(file) => {
+                export_target_allowed(
+                    &export_activation_policies,
+                    file.activation_policy.as_ref(),
+                    ExportActivationTargetKind::ATOF_FILE,
+                    &format!("atof.sinks[{index}]"),
+                )
+                .await
+            }
             AtofSinkSectionConfig::Stream(stream) => {
                 export_target_allowed(
                     &export_activation_policies,
@@ -1283,6 +1284,13 @@ async fn register_atif_dispatcher(
         .map_err(PluginError::InvalidConfig)?;
 
     let had_remote_storage = !section.storage.is_empty();
+    let local_allowed = export_target_allowed(
+        &export_activation_policies,
+        section.local_activation_policy.as_ref(),
+        ExportActivationTargetKind::ATIF_FILE,
+        "atif.local",
+    )
+    .await;
     let mut allowed_storage = Vec::with_capacity(section.storage.len());
     for (index, entry) in section.storage.into_iter().enumerate() {
         let (policy, kind) = match &entry {
@@ -1306,7 +1314,8 @@ async fn register_atif_dispatcher(
             allowed_storage.push((index, entry));
         }
     }
-    if had_remote_storage && allowed_storage.is_empty() {
+    if (had_remote_storage && allowed_storage.is_empty()) || (!had_remote_storage && !local_allowed)
+    {
         return Ok(());
     }
 
@@ -1328,6 +1337,7 @@ async fn register_atif_dispatcher(
     let manager = Arc::new(Mutex::new(AtifDispatcher::with_remote_storage_indices(
         section,
         remote_storage_indices,
+        local_allowed,
     )));
     let dispatcher = atif_dispatcher_subscriber(
         Arc::clone(&manager),
@@ -2270,6 +2280,7 @@ fn shutdown_opentelemetry_providers(
 struct AtifDispatcher {
     config: AtifSectionConfig,
     remote_storage_indices: Vec<usize>,
+    local_allowed: bool,
     agents: HashMap<Uuid, ManagedAtifExporter>,
     scope_owners: HashMap<Uuid, Uuid>,
     scope_subscribers: HashMap<Uuid, String>,
@@ -2370,18 +2381,21 @@ enum SinkLabel {
 }
 
 impl AtifDispatcher {
+    #[cfg(test)]
     fn new(config: AtifSectionConfig) -> Self {
         let remote_storage_indices = (0..config.storage.len()).collect();
-        Self::with_remote_storage_indices(config, remote_storage_indices)
+        Self::with_remote_storage_indices(config, remote_storage_indices, true)
     }
 
     fn with_remote_storage_indices(
         config: AtifSectionConfig,
         remote_storage_indices: Vec<usize>,
+        local_allowed: bool,
     ) -> Self {
         Self {
             config,
             remote_storage_indices,
+            local_allowed,
             agents: HashMap::new(),
             scope_owners: HashMap::new(),
             scope_subscribers: HashMap::new(),
@@ -2669,12 +2683,15 @@ impl AtifDispatcher {
             .clone()
             .unwrap_or_else(default_output_directory);
         let path = directory.join(&filename);
-        Ok((filename, Some(path)))
+        Ok((filename, self.local_allowed.then_some(path)))
     }
 
     fn sink_targets(&self) -> Vec<SinkLabel> {
         if self.config.storage.is_empty() {
-            vec![SinkLabel::Local]
+            self.local_allowed
+                .then_some(SinkLabel::Local)
+                .into_iter()
+                .collect()
         } else {
             self.remote_storage_indices
                 .iter()
@@ -3024,6 +3041,7 @@ fn write_atif(
             .iter()
             .all(|label| matches!(label, SinkLabel::Remote(_)))
         && results.iter().all(|(_, result)| result.is_err())
+        && write.local_path.is_some()
     {
         let fallback = match &write.local_path {
             Some(path) => write_atif_local(path, &write.payload),
@@ -3346,6 +3364,7 @@ fn validate_observability_section_fields(
             "extra",
             "output_directory",
             "filename_template",
+            "local_activation_policy",
             "storage",
         ],
     );
@@ -4423,6 +4442,12 @@ fn validate_atof_sink<'a>(
 ) {
     match sink {
         AtofSinkSectionConfig::File(file) => {
+            validate_export_activation_policy(
+                diagnostics,
+                policy,
+                &format!("atof.sinks[{index}].activation_policy"),
+                file.activation_policy.as_ref(),
+            );
             if AtofExporterMode::parse(&file.mode).is_none() {
                 push_policy_diag(
                     diagnostics,
@@ -4700,6 +4725,12 @@ fn validate_atif_values(
     policy: &ConfigPolicy,
     section: &AtifSectionConfig,
 ) {
+    validate_export_activation_policy(
+        diagnostics,
+        policy,
+        "atif.local_activation_policy",
+        section.local_activation_policy.as_ref(),
+    );
     if let Err(message) = validate_atif_filename_template(&section.filename_template) {
         push_policy_diag(
             diagnostics,
@@ -5039,7 +5070,7 @@ async fn export_target_allowed(
         return true;
     };
     let request = ExportActivationRequest {
-        target_kind,
+        target_kind: target_kind.clone(),
         config: policy.config.clone(),
     };
     let outcome = tokio::time::timeout(
@@ -5060,10 +5091,10 @@ async fn export_target_allowed(
             event = "export_activation_policy_denied",
             plugin_kind = OBSERVABILITY_PLUGIN_KIND,
             provider = policy.provider.as_str(),
-            target_kind = export_activation_target_kind_name(target_kind),
+            target_kind = target_kind.as_str(),
             field,
             reason;
-            "Remote exporter target suppressed by activation policy"
+            "Exporter target suppressed by activation policy"
         );
     }
     allowed
@@ -5076,23 +5107,8 @@ fn export_activation_timeout(timeout_millis: u64) -> Duration {
     ))
 }
 
-const fn export_activation_target_kind_name(kind: ExportActivationTargetKind) -> &'static str {
-    match kind {
-        ExportActivationTargetKind::OtlpTrace => "otlp_trace",
-        ExportActivationTargetKind::OtlpLog => "otlp_log",
-        ExportActivationTargetKind::OtlpMetric => "otlp_metric",
-        ExportActivationTargetKind::AtofStream => "atof_stream",
-        ExportActivationTargetKind::AtifHttp => "atif_http",
-        ExportActivationTargetKind::AtifS3 => "atif_s3",
-    }
-}
-
 fn default_observability_config_version() -> u32 {
     4
-}
-
-fn default_export_activation_timeout_millis() -> u64 {
-    DEFAULT_EXPORT_ACTIVATION_TIMEOUT_MILLIS
 }
 
 fn default_atof_mode() -> String {

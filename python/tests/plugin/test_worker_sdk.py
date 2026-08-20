@@ -28,6 +28,9 @@ from nemo_relay_plugin import (  # noqa: E402
     DataSchema,
     DiagnosticLevel,
     ExportActivationDecision,
+    ExportActivationPolicyConfig,
+    ExportActivationTargetKind,
+    ExportTargetRegistration,
     Json,
     LlmOptimizationContribution,
     LlmRequestInterceptOutcome,
@@ -603,6 +606,17 @@ class AllSurfacesPlugin(WorkerPlugin):
         ctx.register_subscriber("subscriber", subscriber)
         ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
         ctx.register_export_activation_policy(export_activation)
+        ctx.register_export_target(
+            ExportTargetRegistration(
+                id="self_otel",
+                target_kind=ExportActivationTargetKind.OTLP_TRACE,
+                activation_policy=ExportActivationPolicyConfig(
+                    provider=self.plugin_id,
+                    config={"enabled": True},
+                ),
+            ),
+            lambda: None,
+        )
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
         ctx.register_scope_sanitize_end_guardrail("scope_end_sanitize", scope_end_sanitize, priority=3)
@@ -714,6 +728,7 @@ async def test_health_handshake_validate_register_and_all_surfaces(service: _Wor
         ("subscriber", pb.SUBSCRIBER, 0, False),
         ("event_metadata", pb.EVENT_METADATA_INJECTOR, 1, False),
         ("export_activation_policy", pb.EXPORT_ACTIVATION_POLICY, 0, False),
+        ("self_otel", pb.EXPORT_TARGET, 0, False),
         ("event_sanitize", pb.MARK_SANITIZE_GUARDRAIL, 1, False),
         ("event_sanitize", pb.SCOPE_SANITIZE_START_GUARDRAIL, 2, False),
         ("scope_end_sanitize", pb.SCOPE_SANITIZE_END_GUARDRAIL, 3, False),
@@ -1657,12 +1672,22 @@ async def test_unary_invoke_success_paths(service: _WorkerService, host_stub: Re
             pb.EXPORT_ACTIVATION_POLICY,
             export_activation=_json_envelope(
                 EXPORT_ACTIVATION_REQUEST_SCHEMA,
-                {"target_kind": "otlp_trace", "config": {"enabled": True}},
+                {"target_kind": "nemo_relay.otlp.trace", "config": {"enabled": True}},
             ),
         ),
         AbortContext(),
     )
     assert _envelope_value(export_activation.json.value) == "allow"
+
+    export_target = await service.Invoke(
+        _invoke_request(
+            "self_otel",
+            pb.EXPORT_TARGET,
+            export_target=_json_envelope("nemo.relay.ExportTargetActivation@1", None),
+        ),
+        AbortContext(),
+    )
+    assert export_target.WhichOneof("result") == "empty"
 
     tool_sanitize_request = await _invoke_json_async(service, "tool_sanitize", pb.TOOL_SANITIZE_REQUEST_GUARDRAIL)
     assert tool_sanitize_request["tag"] == "sanitize_lookup"
@@ -3232,6 +3257,7 @@ def _all_expected_surfaces() -> list[int]:
         pb.SUBSCRIBER,
         pb.EVENT_METADATA_INJECTOR,
         pb.EXPORT_ACTIVATION_POLICY,
+        pb.EXPORT_TARGET,
         pb.MARK_SANITIZE_GUARDRAIL,
         pb.SCOPE_SANITIZE_START_GUARDRAIL,
         pb.SCOPE_SANITIZE_END_GUARDRAIL,

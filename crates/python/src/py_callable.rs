@@ -46,6 +46,9 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
 use nemo_relay::api::event::{Event, EventSanitizeFields};
+use nemo_relay::api::export_activation::{
+    ExportActivationDecision, ExportActivationPolicyFn, ExportActivationRequest,
+};
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::tool::ToolExecutionResult;
 use nemo_relay::codec::request::AnnotatedLlmRequest as AnnotatedLLMRequest;
@@ -877,6 +880,74 @@ pub fn wrap_py_tool_fn(py_fn: Py<PyAny>) -> ToolSanitizeFn {
             result
         })
     })
+}
+
+/// Wraps a Python export activation policy callback.
+pub fn wrap_py_export_activation_policy_fn(py_fn: Py<PyAny>) -> ExportActivationPolicyFn {
+    let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
+    Arc::new(move |request: ExportActivationRequest| {
+        let py_fn = Arc::clone(&py_fn);
+        let task_locals = task_locals_with_running_loop(task_locals.as_ref());
+        Box::pin(async move {
+            let result = resolve_py_object_or_future(Python::attach(|py| {
+                let request = json_to_py(
+                    py,
+                    &serde_json::to_value(request).map_err(|error| {
+                        FlowError::Internal(format!(
+                            "failed to serialize export activation request: {error}"
+                        ))
+                    })?,
+                )
+                .map_err(|error| FlowError::Internal(error.to_string()))?;
+                let result = py_fn
+                    .bind(py)
+                    .call1((request,))
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    None,
+                )
+            }))
+            .await?;
+            Python::attach(|py| {
+                let value = py_to_json(result.bind(py))
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                serde_json::from_value::<ExportActivationDecision>(value)
+                    .map_err(|error| FlowError::Internal(error.to_string()))
+            })
+        })
+    })
+}
+
+/// Wraps a one-shot Python export-target activation callback.
+pub fn wrap_py_export_target_activation_fn(
+    py_fn: Py<PyAny>,
+) -> impl Fn() -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send>> + Send + Sync {
+    let py_fn = Arc::new(py_fn);
+    let task_locals = capture_python_task_locals();
+    move || {
+        let py_fn = Arc::clone(&py_fn);
+        let task_locals = task_locals.clone();
+        Box::pin(async move {
+            let _ = resolve_py_object_or_future(Python::attach(|py| {
+                let result = py_fn
+                    .bind(py)
+                    .call0()
+                    .map_err(|error| FlowError::Internal(error.to_string()))?;
+                split_py_object_or_future_with_locals(
+                    py,
+                    result.unbind(),
+                    task_locals.as_ref(),
+                    None,
+                )
+            }))
+            .await?;
+            Ok(())
+        })
+    }
 }
 
 /// Wrap a Python callable `(str, Json) -> Optional[str]` for tool conditional guardrails.

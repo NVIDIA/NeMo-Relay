@@ -476,6 +476,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Subscriber as i32,
                 priority: 0,
                 break_chain: false,
+                export_target: None,
             }],
             error: None,
         },
@@ -491,6 +492,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: 999,
                 priority: 0,
                 break_chain: false,
+                export_target: None,
             }],
             error: None,
         },
@@ -510,6 +512,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 surface: RegistrationSurface::Unspecified as i32,
                 priority: 0,
                 break_chain: false,
+                export_target: None,
             }],
             error: None,
         },
@@ -562,7 +565,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
 }
 
 #[test]
-fn unadvertised_export_activation_policy_registration_is_ignored() {
+fn unadvertised_export_activation_hook_registration_is_ignored() {
     let policy = registration(
         RegistrationSurface::ExportActivationPolicy,
         "export_activation_policy",
@@ -570,20 +573,50 @@ fn unadvertised_export_activation_policy_registration_is_ignored() {
     let subscriber = registration(RegistrationSurface::Subscriber, "subscriber");
     let mut registrations = vec![policy.clone(), subscriber.clone()];
 
-    filter_unadvertised_export_activation_policy(
+    filter_unadvertised_export_activation_hooks(
         "fixture_worker",
+        true,
         &[RegistrationSurface::Subscriber as i32],
         &mut registrations,
     );
     assert_eq!(registrations, vec![subscriber]);
 
     let mut advertised = vec![policy.clone()];
-    filter_unadvertised_export_activation_policy(
+    filter_unadvertised_export_activation_hooks(
         "fixture_worker",
+        true,
         &[RegistrationSurface::ExportActivationPolicy as i32],
         &mut advertised,
     );
-    assert_eq!(advertised, vec![policy]);
+    assert_eq!(advertised, vec![policy.clone()]);
+
+    let target = registration(RegistrationSurface::ExportTarget, "exporter");
+    let mut unadvertised_target = vec![target.clone()];
+    filter_unadvertised_export_activation_hooks(
+        "fixture_worker",
+        true,
+        &[RegistrationSurface::ExportActivationPolicy as i32],
+        &mut unadvertised_target,
+    );
+    assert!(unadvertised_target.is_empty());
+
+    let mut advertised_target = vec![target.clone()];
+    filter_unadvertised_export_activation_hooks(
+        "fixture_worker",
+        true,
+        &[RegistrationSurface::ExportTarget as i32],
+        &mut advertised_target,
+    );
+    assert_eq!(advertised_target, vec![target]);
+
+    let mut undeclared_policy = vec![policy];
+    filter_unadvertised_export_activation_hooks(
+        "fixture_worker",
+        false,
+        &[RegistrationSurface::ExportActivationPolicy as i32],
+        &mut undeclared_policy,
+    );
+    assert!(undeclared_policy.is_empty());
 }
 
 #[test]
@@ -2917,6 +2950,7 @@ fn registration(surface: RegistrationSurface, local_name: &str) -> Registration 
         surface: surface as i32,
         priority: 0,
         break_chain: false,
+        export_target: None,
     }
 }
 

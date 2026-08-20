@@ -66,6 +66,7 @@ use tower::service_fn;
 use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
 use crate::api::export_activation::{
     ExportActivationDecision, ExportActivationPolicyFn, ExportActivationRequest,
+    ExportTargetRegistration,
 };
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
 use crate::api::runtime::subscriber_dispatcher::{
@@ -91,7 +92,7 @@ use crate::plugin::{
 };
 
 use super::{
-    DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
+    DynamicPluginCapability, DynamicPluginKind, DynamicPluginManifest, DynamicPluginManifestLoad,
     DynamicPluginTeardownOutcome, WorkerRuntime, deregister_tracked_registrations_checked,
     validate_annotated_request_consumer_compatibility, validate_dynamic_plugin_relay_compatibility,
 };
@@ -100,6 +101,7 @@ const JSON_SCHEMA: &str = "nemo.relay.Json@1";
 const DATA_SCHEMA_SCHEMA: &str = "nemo.relay.DataSchema@1";
 const EVENT_SCHEMA: &str = "nemo.relay.Event@1";
 const EXPORT_ACTIVATION_REQUEST_SCHEMA: &str = "nemo.relay.ExportActivationRequest@1";
+const EXPORT_TARGET_REGISTRATION_SCHEMA: &str = "nemo.relay.ExportTargetRegistration@1";
 const LLM_REQUEST_SCHEMA: &str = "nemo.relay.LlmRequest@1";
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKER_RPC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -620,8 +622,12 @@ fn load_one_worker_plugin(
             return Err(worker_error_to_plugin(error, "worker registration failed"));
         }
         validate_registration_plan(&spec.plugin_id, &register)?;
-        filter_unadvertised_export_activation_policy(
+        filter_unadvertised_export_activation_hooks(
             &spec.plugin_id,
+            manifest
+                .capabilities
+                .items
+                .contains(&DynamicPluginCapability::ExportActivationPolicy),
             &handshake.supported_surfaces,
             &mut register.registrations,
         );
@@ -1082,6 +1088,9 @@ impl WorkerPluginInstance {
                     )?,
                 RegistrationSurface::ExportActivationPolicy => self
                     .install_export_activation_policy_registration(ctx, &registration.local_name)?,
+                RegistrationSurface::ExportTarget => {
+                    self.install_export_target_registration(ctx, registration)?
+                }
                 RegistrationSurface::MarkSanitizeGuardrail
                 | RegistrationSurface::ScopeSanitizeStartGuardrail
                 | RegistrationSurface::ScopeSanitizeEndGuardrail => self
@@ -1161,7 +1170,6 @@ impl WorkerPluginInstance {
     ) -> crate::plugin::Result<()> {
         let callback = Arc::new(self.clone_for_callback());
         let callback_name = name.to_owned();
-        let provider = self.plugin_kind.clone();
         let policy: ExportActivationPolicyFn = Arc::new(move |request| {
             let callback = Arc::clone(&callback);
             let callback_name = callback_name.clone();
@@ -1171,7 +1179,40 @@ impl WorkerPluginInstance {
                     .await
             })
         });
-        ctx.register_export_activation_policy(&provider, policy)
+        ctx.register_export_activation_policy(policy)
+    }
+
+    fn install_export_target_registration(
+        &self,
+        ctx: &mut PluginRegistrationContext,
+        registration: &Registration,
+    ) -> crate::plugin::Result<()> {
+        let envelope = registration.export_target.as_ref().ok_or_else(|| {
+            PluginError::RegistrationFailed(format!(
+                "worker export target '{}' omitted registration metadata",
+                registration.local_name
+            ))
+        })?;
+        if envelope.schema != EXPORT_TARGET_REGISTRATION_SCHEMA {
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker export target '{}' used unsupported schema {:?}",
+                registration.local_name, envelope.schema
+            )));
+        }
+        let target =
+            decode_json_envelope::<ExportTargetRegistration>(envelope).map_err(|error| {
+                PluginError::RegistrationFailed(format!(
+                    "worker export target '{}' metadata is invalid: {error}",
+                    registration.local_name
+                ))
+            })?;
+        let instance = Arc::new(self.clone_for_callback());
+        let callback_name = registration.local_name.clone();
+        ctx.register_export_target(target, move || {
+            let instance = Arc::clone(&instance);
+            let callback_name = callback_name.clone();
+            async move { instance.invoke_export_target(&callback_name).await }
+        })
     }
 
     fn install_event_sanitize_registration(
@@ -1599,6 +1640,25 @@ impl WorkerPluginCallback {
                 "worker returned invalid export activation decision: {error}"
             ))
         })
+    }
+
+    async fn invoke_export_target(&self, registration_name: &str) -> FlowResult<()> {
+        let request = self.base_request(
+            registration_name,
+            RegistrationSurface::ExportTarget,
+            None,
+            Some(invoke_request_payload::Payload::ExportTarget(
+                json_envelope("nemo.relay.ExportTargetActivation@1", &Json::Null).map_err(
+                    |error| {
+                        FlowError::Internal(format!(
+                            "failed to serialize export target activation: {error}"
+                        ))
+                    },
+                )?,
+            )),
+        );
+        let _ = json_from_invoke_response(self.invoke_async(request).await?)?;
+        Ok(())
     }
 
     async fn invoke_event_sanitize(
@@ -3396,25 +3456,44 @@ fn validate_registration_plan(
     Ok(())
 }
 
-fn filter_unadvertised_export_activation_policy(
+fn filter_unadvertised_export_activation_hooks(
     plugin_id: &str,
+    policy_capability_declared: bool,
     supported_surfaces: &[i32],
     registrations: &mut Vec<Registration>,
 ) {
-    let policy_surface = RegistrationSurface::ExportActivationPolicy as i32;
-    if supported_surfaces.contains(&policy_surface) {
-        return;
-    }
     registrations.retain(|registration| {
-        if registration.surface != policy_surface {
+        let surface = RegistrationSurface::try_from(registration.surface).ok();
+        if surface == Some(RegistrationSurface::ExportActivationPolicy)
+            && !policy_capability_declared
+        {
+            log::warn!(
+                target: "nemo_relay.worker",
+                event = "worker_registration_capability_undeclared",
+                plugin_id,
+                capability = "export_activation_policy";
+                "Worker export activation policy ignored because the manifest capability was not declared"
+            );
+            return false;
+        }
+        if !matches!(
+            surface,
+            Some(RegistrationSurface::ExportActivationPolicy | RegistrationSurface::ExportTarget)
+        ) || supported_surfaces.contains(&registration.surface)
+        {
             return true;
         }
+        let surface_name = match surface {
+            Some(RegistrationSurface::ExportActivationPolicy) => "export_activation_policy",
+            Some(RegistrationSurface::ExportTarget) => "export_target",
+            _ => unreachable!(),
+        };
         log::warn!(
             target: "nemo_relay.worker",
             event = "worker_registration_surface_unadvertised",
             plugin_id,
-            surface = "export_activation_policy";
-            "Worker export activation policy registration ignored because the surface was not advertised"
+            surface = surface_name;
+            "Worker export activation hook registration ignored because the surface was not advertised"
         );
         false
     });

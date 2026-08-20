@@ -116,6 +116,8 @@ class TestObservabilityConfigHelpers:
             ]
             == expected
         )
+        assert AtofFileSinkConfig(activation_policy=policy).to_dict()["activation_policy"] == expected
+        assert AtifConfig(local_activation_policy=policy).to_dict()["local_activation_policy"] == expected
         assert (
             HttpStorageConfig("https://example.com/atif", activation_policy=policy).to_dict()["activation_policy"]
             == expected

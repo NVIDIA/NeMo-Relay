@@ -24,6 +24,7 @@ export interface AtofFileSinkConfig {
   output_directory?: string;
   filename?: string;
   mode?: 'append' | 'overwrite' | string;
+  activation_policy?: ExportActivationPolicyConfig;
 }
 
 export interface AtofStreamSinkConfig {
@@ -73,6 +74,7 @@ export interface AtifConfig {
   output_directory?: string;
   filename_template?: string;
   storage?: S3StorageConfig | HttpStorageConfig | Array<S3StorageConfig | HttpStorageConfig>;
+  local_activation_policy?: ExportActivationPolicyConfig;
 }
 
 export interface OpenTelemetryEndpointConfig {
@@ -160,7 +162,7 @@ export declare function defaultConfig(): Config;
 export declare function atofConfig(config?: AtofConfig): AtofConfig;
 /** Create per-agent Agent Trajectory Interchange Format (ATIF) trajectory settings with defaults applied. */
 export declare function atifConfig(config?: AtifConfig): AtifConfig;
-/** Create and validate one remote-export activation policy attachment. */
+/** Create and validate one export-activation policy attachment. */
 export declare function exportActivationPolicy(
   config: ExportActivationPolicyConfig,
 ): ExportActivationPolicyConfig;

@@ -95,6 +95,11 @@ max_queue_size = 4096
 max_export_batch_size = 512
 scheduled_delay_millis = 1000
 
+[components.config.opentelemetry.endpoints.activation_policy]
+provider = "com.example.runtime-policy"
+timeout_millis = 30000
+config = { allowed_countries = ["US", "CA"] }
+
 [components.config.opentelemetry.endpoints.header_env]
 authorization = "OTEL_AUTHORIZATION"
 
@@ -144,6 +149,7 @@ to the other exporters.
 | `mark_exclude_names` | `["llm.chunk"]` | Mark names excluded from `full` and `openinference` projection. |
 | `attribute_mappings` | `[]` | `{ key, alias }` copies applied by `full` and `openinference` projection. |
 | `promote_metadata_prefixes` | `[]` | Literal prefixes that select sanitized Event metadata to copy to top-level span attributes. |
+| `activation_policy` | Omitted | Optional activation hook for this endpoint. Relay evaluates derived trace, log, and metric targets separately and does not construct denied exporters. |
 
 Metadata promotion preserves the original Event metadata and does not replace
 attributes produced by a trace projection or `attribute_mappings`. Relay omits

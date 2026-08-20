@@ -56,6 +56,8 @@ typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
 typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx);
 typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayExportActivationPolicyCb)(void* user_data, const char* request_json);
+typedef int32_t (*NemoRelayExportTargetActivationCb)(void* user_data);
 
 // Helper to call the tool exec next function pointer from Go
 static inline char* callToolExecNext(NemoRelayToolExecNextFn next_fn, const char* args_json, void* next_ctx) {
@@ -682,6 +684,37 @@ func goEventSanitizeTrampoline(userData unsafe.Pointer, event *C.FfiEvent, field
 //export goFreeTrampoline
 func goFreeTrampoline(userData unsafe.Pointer) {
 	unregisterClosure(userData)
+}
+
+//export goExportActivationPolicyTrampoline
+func goExportActivationPolicyTrampoline(userData unsafe.Pointer, requestJSON *C.char) *C.char {
+	fn := lookupClosure(userData).(ExportActivationPolicyFunc)
+	var request ExportActivationRequest
+	if err := jsonUnmarshal([]byte(C.GoString(requestJSON)), &request); err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	decision, err := fn(request)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	payload, err := jsonMarshal(decision)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(payload))
+}
+
+//export goExportTargetActivationTrampoline
+func goExportTargetActivationTrampoline(userData unsafe.Pointer) C.int32_t {
+	fn := lookupClosure(userData).(ExportTargetActivationFunc)
+	if err := fn(); err != nil {
+		setLastErrorMessage(err.Error())
+		return 5 // NemoRelayStatus::Internal
+	}
+	return 0 // NemoRelayStatus::Ok
 }
 
 //export goLlmRequestTrampoline

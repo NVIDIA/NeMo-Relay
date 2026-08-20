@@ -1103,6 +1103,33 @@ impl PluginContext<'_> {
         }
     }
 
+    fn register_activation_adapter(
+        &mut self,
+        kind: NemoRelayNativeActivationHookKind,
+        payload: &str,
+        adapter: Box<UnaryAdapter>,
+    ) -> Result<()> {
+        let state = Box::into_raw(Box::new(UnaryCallbackState {
+            host: self.host_v4()?,
+            executor: Arc::clone(&self.executor),
+            adapter,
+        }));
+        let status = unsafe {
+            self.register_activation_hook_raw(
+                kind,
+                payload,
+                unary_trampoline,
+                state.cast(),
+                Some(drop_unary_callback),
+            )
+        };
+        if status == NemoRelayStatus::Ok {
+            Ok(())
+        } else {
+            Err(status_message(self.host, status, "activation hook"))
+        }
+    }
+
     fn register_event_adapter<F, Fut>(
         &mut self,
         kind: NemoRelayNativeAsyncMiddlewareKind,
@@ -1165,18 +1192,16 @@ impl PluginContext<'_> {
         )
     }
 
-    /// Registers this plugin's activation-time policy for remote exporters.
+    /// Registers this plugin's activation-time export policy.
     pub fn register_export_activation_policy<F, Fut>(&mut self, callback: F) -> Result<()>
     where
         F: Fn(ExportActivationRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ExportActivationDecision>> + Send + 'static,
     {
         let callback = Arc::new(callback);
-        self.register_unary_adapter(
-            NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy,
+        self.register_activation_adapter(
+            NemoRelayNativeActivationHookKind::ExportActivationPolicy,
             "export_activation_policy",
-            0,
-            false,
             Box::new(move |value, _, _| {
                 let callback = Arc::clone(&callback);
                 Box::pin(async move {
@@ -1186,6 +1211,32 @@ impl PluginContext<'_> {
                         })?;
                     serde_json::to_value(callback(request).await?)
                         .map_err(|error| error.to_string())
+                })
+            }),
+        )
+    }
+
+    /// Registers a deferred local or remote export target.
+    pub fn register_export_target<F, Fut>(
+        &mut self,
+        registration: ExportTargetRegistration,
+        activate: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let payload = serde_json::to_string(&registration)
+            .map_err(|error| format!("failed to serialize export target registration: {error}"))?;
+        let activate = Arc::new(activate);
+        self.register_activation_adapter(
+            NemoRelayNativeActivationHookKind::ExportTarget,
+            &payload,
+            Box::new(move |_, _, _| {
+                let activate = Arc::clone(&activate);
+                Box::pin(async move {
+                    activate().await?;
+                    Ok(Json::Null)
                 })
             }),
         )
@@ -1635,7 +1686,6 @@ fn registration_operation(kind: NemoRelayNativeAsyncMiddlewareKind) -> &'static 
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeStart => "scope start sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::ScopeSanitizeEnd => "scope end sanitizer",
         NemoRelayNativeAsyncMiddlewareKind::EventMetadataInjector => "Event metadata injector",
-        NemoRelayNativeAsyncMiddlewareKind::ExportActivationPolicy => "export activation policy",
     }
 }
 

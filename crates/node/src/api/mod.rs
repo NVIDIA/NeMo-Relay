@@ -28,6 +28,10 @@ use serde::Deserialize;
 use serde_json::Value as Json;
 use tokio_stream::{Stream, StreamExt};
 
+use nemo_relay::api::export_activation::{
+    ExportActivationDecision, ExportActivationPolicyConfig, ExportActivationPolicyRegistry,
+    ExportActivationRequest, ExportActivationTargetKind, ExportTargetRegistration,
+};
 use nemo_relay::api::llm as core_llm_api;
 use nemo_relay::api::llm::{LlmAttributes, LlmRequest};
 use nemo_relay::api::registry as core_registry_api;
@@ -823,6 +827,8 @@ fn add_plugin_event_sanitizer(
 fn build_plugin_context(
     env: &Env,
     namespace_prefix: String,
+    provider_id: String,
+    export_activation: Arc<ExportActivationPolicyRegistry>,
     registrations: Arc<StdMutex<Vec<PluginRegistration>>>,
 ) -> napi::Result<JsObject> {
     let mut context = env.create_object()?;
@@ -1332,7 +1338,7 @@ fn build_plugin_context(
     )?;
 
     let tool_regs = registrations.clone();
-    let tool_exec_namespace = namespace_prefix;
+    let tool_exec_namespace = namespace_prefix.clone();
     let register_tool_execution_intercept = env.create_function_from_closure(
         "__nemo_relay_adaptive_register_tool_execution_intercept",
         move |ctx| {
@@ -1370,12 +1376,129 @@ fn build_plugin_context(
         register_tool_execution_intercept,
     )?;
 
+    let policy_registry = export_activation.clone();
+    let policy_provider_id = provider_id.clone();
+    let policy_regs = registrations.clone();
+    let register_export_activation_policy = env.create_function_from_closure(
+        "__nemo_relay_plugin_register_export_activation_policy",
+        move |ctx| {
+            let callback = Arc::new(PromiseAwareFn::new(ctx.env, &ctx.get::<JsFunction>(0)?)?);
+            let policy_callback = callback.clone();
+            policy_registry
+                .register(
+                    &policy_provider_id,
+                    Arc::new(move |request: ExportActivationRequest| {
+                        let policy_callback = policy_callback.clone();
+                        Box::pin(async move {
+                            let request = serde_json::to_value(request).map_err(|error| {
+                                FlowError::Internal(format!(
+                                    "failed to serialize export activation request: {error}"
+                                ))
+                            })?;
+                            let decision = policy_callback.call(request).await?;
+                            serde_json::from_value::<ExportActivationDecision>(decision).map_err(
+                                |error| {
+                                    FlowError::Internal(format!(
+                                        "invalid export activation decision: {error}"
+                                    ))
+                                },
+                            )
+                        })
+                    }),
+                )
+                .map_err(to_napi_err)?;
+            let cleanup_registry = policy_registry.clone();
+            let cleanup_provider_id = policy_provider_id.clone();
+            policy_regs.lock().unwrap().push(PluginRegistration::new(
+                "export_activation_policy",
+                cleanup_provider_id.clone(),
+                Box::new(move || {
+                    cleanup_registry
+                        .deregister(&cleanup_provider_id)
+                        .map(|_| ())
+                        .map_err(|error| {
+                            PluginError::RegistrationFailed(format!(
+                                "export activation policy deregistration failed: {error}"
+                            ))
+                        })?;
+                    Ok(())
+                }),
+            ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property(
+        "registerExportActivationPolicy",
+        register_export_activation_policy,
+    )?;
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct NodeExportTargetRegistration {
+        id: String,
+        target_kind: String,
+        #[serde(default)]
+        activation_policy: Option<ExportActivationPolicyConfig>,
+    }
+
+    let target_registry = export_activation;
+    let target_regs = registrations;
+    let register_export_target = env.create_function_from_closure(
+        "__nemo_relay_plugin_register_export_target",
+        move |ctx| {
+            let registration = ctx.get::<Json>(0)?;
+            let registration: NodeExportTargetRegistration = serde_json::from_value(registration)
+                .map_err(|error| {
+                napi::Error::from_reason(format!("invalid export target: {error}"))
+            })?;
+            let target_kind = ExportActivationTargetKind::new(registration.target_kind)
+                .map_err(napi::Error::from_reason)?;
+            let target_id = registration.id.clone();
+            let qualified_target_id = format!("{namespace_prefix}export-target:{target_id}");
+            let callback = Arc::new(PromiseAwareFn::new(ctx.env, &ctx.get::<JsFunction>(1)?)?);
+            target_registry
+                .register_target(
+                    qualified_target_id.clone(),
+                    ExportTargetRegistration {
+                        id: registration.id,
+                        target_kind,
+                        activation_policy: registration.activation_policy,
+                    },
+                    Arc::new(move || {
+                        let callback = callback.clone();
+                        Box::pin(async move { callback.call_spread(Vec::new()).await.map(|_| ()) })
+                    }),
+                )
+                .map_err(to_napi_err)?;
+            let cleanup_registry = target_registry.clone();
+            let cleanup_target_id = qualified_target_id;
+            target_regs.lock().unwrap().push(PluginRegistration::new(
+                "export_target",
+                target_id,
+                Box::new(move || {
+                    cleanup_registry
+                        .deregister_target(&cleanup_target_id)
+                        .map(|_| ())
+                        .map_err(|error| {
+                            PluginError::RegistrationFailed(format!(
+                                "export target deregistration failed: {error}"
+                            ))
+                        })
+                }),
+            ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property("registerExportTarget", register_export_target)?;
+
     Ok(context)
 }
 
 struct NodePluginRegisterCall {
     plugin_config: Json,
     namespace_prefix: String,
+    provider_id: String,
+    export_activation: Arc<ExportActivationPolicyRegistry>,
     registrations: Arc<StdMutex<Vec<PluginRegistration>>>,
 }
 
@@ -1740,6 +1863,8 @@ impl Plugin for NodePlugin {
             let payload = NodePluginRegisterCall {
                 plugin_config: Json::Object(plugin_config),
                 namespace_prefix,
+                provider_id: self.plugin_kind.clone(),
+                export_activation: ctx.export_activation_policies().clone(),
                 registrations: registrations.clone(),
             };
             let (tx, rx) = std::sync::mpsc::sync_channel::<std::result::Result<(), String>>(1);
@@ -5208,6 +5333,8 @@ pub fn register_plugin(
                 let plugin_context = build_plugin_context(
                     &ctx.env,
                     ctx.value.namespace_prefix,
+                    ctx.value.provider_id,
+                    ctx.value.export_activation,
                     ctx.value.registrations,
                 )?;
                 Ok(vec![

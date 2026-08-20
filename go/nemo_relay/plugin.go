@@ -30,6 +30,8 @@ typedef char* (*NemoRelayLlmExecNextFn)(const char* native_json, void* next_ctx)
 typedef char* (*NemoRelayLlmExecInterceptCb)(void* user_data, const char* native_json, NemoRelayLlmExecNextFn next_fn, void* next_ctx);
 typedef char* (*NemoRelayToolExecNextFn)(const char* args_json, void* next_ctx);
 typedef char* (*NemoRelayToolExecInterceptCb)(void* user_data, const char* args_json, NemoRelayToolExecNextFn next_fn, void* next_ctx);
+typedef char* (*NemoRelayExportActivationPolicyCb)(void* user_data, const char* request_json);
+typedef int32_t (*NemoRelayExportTargetActivationCb)(void* user_data);
 
 extern int32_t nemo_relay_validate_plugin_config(const char* config_json, char** out_json);
 extern int32_t nemo_relay_initialize_plugins(const char* config_json, char** out_json);
@@ -58,6 +60,8 @@ extern int32_t nemo_relay_plugin_context_register_tool_request_intercept(FfiPlug
 extern int32_t nemo_relay_plugin_context_register_llm_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_llm_stream_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayLlmExecInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_plugin_context_register_tool_execution_intercept(FfiPluginContext* ctx, const char* name, int32_t priority, NemoRelayToolExecInterceptCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_export_activation_policy(FfiPluginContext* ctx, NemoRelayExportActivationPolicyCb cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_plugin_context_register_export_target(FfiPluginContext* ctx, const char* registration_json, NemoRelayExportTargetActivationCb cb, void* user_data, NemoRelayFreeFn free_fn);
 
 extern char* goPluginValidateTrampoline(void*, const char*);
 extern int32_t goPluginRegisterTrampoline(void*, const char*, FfiPluginContext*);
@@ -72,10 +76,13 @@ extern char* goLlmConditionalTrampoline(void*, const void*);
 extern char* goLlmExecInterceptTrampoline(void*, const char*, NemoRelayLlmExecNextFn, void*);
 extern int32_t goLlmRequestInterceptTrampoline(void*, const char*, const void*, const char*, char**);
 extern char* goToolExecInterceptTrampoline(void*, const char*, NemoRelayToolExecNextFn, void*);
+extern char* goExportActivationPolicyTrampoline(void*, const char*);
+extern int32_t goExportTargetActivationTrampoline(void*);
 */
 import "C"
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"runtime"
@@ -288,6 +295,33 @@ type pluginActivationState struct {
 type PluginContext struct {
 	ptr *C.FfiPluginContext
 }
+
+// ExportActivationDecision is the activation-time decision for one export target.
+type ExportActivationDecision string
+
+const (
+	ExportActivationAllow ExportActivationDecision = "allow"
+	ExportActivationDeny  ExportActivationDecision = "deny"
+)
+
+// ExportActivationRequest is passed to a policy without exporter destinations or credentials.
+type ExportActivationRequest struct {
+	TargetKind string          `json:"target_kind"`
+	Config     json.RawMessage `json:"config"`
+}
+
+// ExportTargetRegistration describes one deferred plugin-managed exporter.
+type ExportTargetRegistration struct {
+	ID               string                        `json:"id"`
+	TargetKind       string                        `json:"target_kind"`
+	ActivationPolicy *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
+}
+
+// ExportActivationPolicyFunc decides whether Relay may activate one exporter.
+type ExportActivationPolicyFunc func(ExportActivationRequest) (ExportActivationDecision, error)
+
+// ExportTargetActivationFunc constructs and starts an allowed exporter.
+type ExportTargetActivationFunc func() error
 
 // Plugin is the plugin callback contract.
 //
@@ -578,6 +612,41 @@ func (ctx *PluginContext) RegisterSubscriber(name string, fn EventSubscriberFunc
 		ctx.ptr,
 		cName,
 		(C.NemoRelayEventSubscriberFn)(C.goEventSubscriberTrampoline),
+		userData,
+		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterExportActivationPolicy registers the policy owned by this plugin kind.
+func (ctx *PluginContext) RegisterExportActivationPolicy(fn ExportActivationPolicyFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New(errPluginContextClosed)
+	}
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_relay_plugin_context_register_export_activation_policy(
+		ctx.ptr,
+		(C.NemoRelayExportActivationPolicyCb)(C.goExportActivationPolicyTrampoline),
+		userData,
+		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
+	))
+}
+
+// RegisterExportTarget defers exporter construction until its policy allows activation.
+func (ctx *PluginContext) RegisterExportTarget(registration ExportTargetRegistration, fn ExportTargetActivationFunc) error {
+	if ctx == nil || ctx.ptr == nil {
+		return errors.New(errPluginContextClosed)
+	}
+	payload, err := jsonMarshal(registration)
+	if err != nil {
+		return err
+	}
+	cPayload := C.CString(string(payload))
+	defer C.free(unsafe.Pointer(cPayload))
+	userData := registerClosure(fn)
+	return checkStatus(C.nemo_relay_plugin_context_register_export_target(
+		ctx.ptr,
+		cPayload,
+		(C.NemoRelayExportTargetActivationCb)(C.goExportTargetActivationTrampoline),
 		userData,
 		(C.NemoRelayFreeFn)(C.goFreeTrampoline),
 	))

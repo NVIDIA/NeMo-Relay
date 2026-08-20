@@ -53,6 +53,8 @@ fn plugin_context_helpers_and_error_conversion_work() {
     let context = PyPluginContext {
         registrations: Arc::new(Mutex::new(vec![])),
         namespace_prefix: "demo.".to_string(),
+        provider_id: "demo".to_string(),
+        export_activation: Arc::new(Default::default()),
     };
 
     assert_eq!(context.qualify_name("subscriber"), "demo.subscriber");
@@ -73,6 +75,8 @@ fn plugin_context_rejects_legacy_and_uninspectable_llm_sanitizers() {
     let context = PyPluginContext {
         registrations: Arc::new(Mutex::new(vec![])),
         namespace_prefix: "invalid.".to_string(),
+        provider_id: "invalid".to_string(),
+        export_activation: Arc::new(Default::default()),
     };
 
     Python::attach(|py| {
@@ -263,6 +267,8 @@ async def tool_execution_intercept(name, value, next):
         let context = PyPluginContext {
             registrations: Arc::new(Mutex::new(vec![])),
             namespace_prefix: "demo.".to_string(),
+            provider_id: "demo".to_string(),
+            export_activation: Arc::new(Default::default()),
         };
 
         context
@@ -744,6 +750,8 @@ async def tool_execution_intercept(name, value, next):
         let context = PyPluginContext {
             registrations: Arc::new(Mutex::new(vec![])),
             namespace_prefix: "rollback.".to_string(),
+            provider_id: "rollback".to_string(),
+            export_activation: Arc::new(Default::default()),
         };
 
         context
@@ -966,6 +974,8 @@ class FailingPlugin:
                 &register_fn,
                 &serde_json::Map::new(),
                 namespace_prefix.clone(),
+                "demo.rollback".to_string(),
+                Arc::new(Default::default()),
             )
             .unwrap_err();
             assert!(err.to_string().contains("boom"), "{err}");
@@ -973,6 +983,8 @@ class FailingPlugin:
             let context = PyPluginContext {
                 registrations: Arc::new(Mutex::new(vec![])),
                 namespace_prefix: namespace_prefix.clone(),
+                provider_id: "demo.rollback".to_string(),
+                export_activation: Arc::new(Default::default()),
             };
             context
                 .register_subscriber("sub", helpers.getattr("subscriber").unwrap().unbind())
@@ -1037,6 +1049,8 @@ async def tool_execution_intercept(name, value, next):
         let context = PyPluginContext {
             registrations,
             namespace_prefix: "poison.".to_string(),
+            provider_id: "poison".to_string(),
+            export_activation: Arc::new(Default::default()),
         };
 
         fn assert_poisoned_tool_registrations(

@@ -48,7 +48,7 @@ function atifConfig(config = {}) {
 }
 
 /**
- * Create and validate one remote-export activation policy attachment.
+ * Create and validate one export-activation policy attachment.
  *
  * @param {object} config - Policy settings including a dynamic plugin provider ID.
  * @returns {object} A normalized policy attachment.

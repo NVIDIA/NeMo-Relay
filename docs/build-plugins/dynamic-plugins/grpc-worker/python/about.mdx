@@ -220,34 +220,47 @@ and decision through its existing unary `Invoke` RPC:
 ```python
 from nemo_relay_plugin import (
     ExportActivationDecision,
+    ExportActivationPolicyConfig,
     ExportActivationRequest,
     ExportActivationTargetKind,
+    ExportTargetRegistration,
 )
 
 
 async def decide_export(request: ExportActivationRequest) -> ExportActivationDecision:
     config = request.config if isinstance(request.config, dict) else {}
-    if request.target_kind in {
-        ExportActivationTargetKind.OTLP_TRACE,
-        ExportActivationTargetKind.OTLP_LOG,
-        ExportActivationTargetKind.OTLP_METRIC,
-    }:
-        return (
-            ExportActivationDecision.ALLOW
-            if config.get("telemetry_allowed") is True
-            else ExportActivationDecision.DENY
-        )
-    return ExportActivationDecision.ALLOW
+    country = await lookup_current_public_ip_country()
+    allowed_countries = config.get("allowed_countries", [])
+    return (
+        ExportActivationDecision.ALLOW
+        if country in allowed_countries
+        else ExportActivationDecision.DENY
+    )
 
 
 ctx.register_export_activation_policy(decide_export)
+ctx.register_export_target(
+    ExportTargetRegistration(
+        id="audit-otlp",
+        target_kind=ExportActivationTargetKind.OTLP_TRACE,
+        activation_policy=ExportActivationPolicyConfig(
+            provider="examples.python_grpc_worker",
+            timeout_millis=30_000,
+            config={"allowed_countries": ["US", "CA"]},
+        ),
+    ),
+    start_custom_otlp_exporter,
+)
 ```
 
 Relay starts a referenced policy worker before constructing gated exporters.
 It sends only the target kind and opaque policy configuration, never exporter
 destinations, headers, or credentials. If the worker does not advertise the
 surface, exits, errors, or exceeds the per-target timeout, Relay denies that
-target without preventing the rest of the runtime from starting.
+target without preventing the rest of the runtime from starting. The provider
+above is the same worker manifest that owns `start_custom_otlp_exporter`, so the
+worker starts as bootstrap infrastructure while the OTLP exporter does not
+start unless its policy allows it.
 
 ## Emit Typed Marks and Metrics
 

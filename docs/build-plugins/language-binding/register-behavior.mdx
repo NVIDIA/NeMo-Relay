@@ -42,6 +42,57 @@ Use the context methods so component name qualification and rollback also apply
 to these registries. Refer to [Event Sanitizers](/reference/event-sanitizers)
 for the binding-specific method names.
 
+## Gate Plugin Exporters During Activation
+
+Export activation hooks are component-scoped lifecycle APIs, not middleware.
+They do not have priorities, scope inheritance, or a place in tool, LLM, or
+event execution chains.
+
+A plugin can register one policy provider and any number of deferred export
+targets. Register both from the same component when an exporter should use its
+own policy. Relay completes component registration first, evaluates each policy
+once, and invokes only allowed or ungated target callbacks. Construct files,
+connections, exporter workers, and background tasks inside the target callback.
+Relay retains an allowed callback until activation teardown so callback-owned
+state remains alive.
+
+Policy requests contain only a validated namespaced `target_kind` and the
+target's opaque `config`. Relay does not include target IDs, paths, URLs,
+headers, or credentials. Missing providers, callback errors, and timeouts deny
+only the affected target. The timeout defaults to 30 seconds and accepts values
+from 1 second through 5 minutes.
+
+```python
+async def policy(request):
+    country = await lookup_current_public_ip_country()
+    return "allow" if country in request["config"]["allowed_countries"] else "deny"
+
+async def start_exporter():
+    # Keep the collector URL and credentials in component config, not policy config.
+    exporter = create_otlp_trace_exporter(component_config["otlp"])
+    await exporter.start()
+
+context.register_export_activation_policy(policy)
+context.register_export_target(
+    {
+        "id": "audit-otlp",
+        "target_kind": "nemo_relay.otlp.trace",
+        "activation_policy": {
+            "provider": "com.example.audit",
+            "timeout_millis": 30_000,
+            "config": {"allowed_countries": ["US", "CA"]},
+        },
+    },
+    start_exporter,
+)
+```
+
+Dynamic policy providers must declare the `export_activation_policy` manifest
+capability. Worker plugins must also advertise both activation-hook surfaces
+that they register. The provider library or worker is bootstrap infrastructure:
+Relay loads or starts it before policy evaluation, but it does not construct a
+gated exporter before the policy allows it.
+
 ## Header Plugin Example
 
 The same model applies in every binding: validate component-local config, then install middleware through the component-scoped registration context.

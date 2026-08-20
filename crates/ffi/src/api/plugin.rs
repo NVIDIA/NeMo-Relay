@@ -4,21 +4,24 @@
 use super::{
     Arc, CStr, ConfigDiagnostic, DiagnosticLevel, DynamicPluginActivationSpec, FfiPluginActivation,
     FfiPluginContext, Future, NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb,
-    NemoRelayFreeFn, NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb,
-    NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
-    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayStatus,
-    NemoRelayToolConditionalCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin,
-    PluginConfig, PluginError, PluginHostActivation, PluginRegistrationContext,
-    active_plugin_report, c_char, c_str_to_json, c_str_to_string, clear_last_error,
-    clear_plugin_configuration, deregister_plugin, initialize_plugins, json_to_c_string,
-    last_error_message, list_plugin_kinds, nemo_relay_string_free, register_adaptive_component,
-    register_plugin, set_last_error, status_from_plugin_error, tokio_runtime,
-    validate_plugin_config, wrap_event_sanitize_fn, wrap_event_subscriber, wrap_llm_conditional_fn,
-    wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn, wrap_llm_sanitize_request_fn,
-    wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn, wrap_tool_conditional_fn,
-    wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn, wrap_tool_sanitize_fn,
+    NemoRelayExportActivationPolicyCb, NemoRelayExportTargetActivationCb, NemoRelayFreeFn,
+    NemoRelayLlmConditionalCb, NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb,
+    NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb, NemoRelayPluginRegisterCb,
+    NemoRelayPluginValidateCb, NemoRelayStatus, NemoRelayToolConditionalCb,
+    NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, Pin, Plugin, PluginConfig, PluginError,
+    PluginHostActivation, PluginRegistrationContext, active_plugin_report, c_char, c_str_to_json,
+    c_str_to_string, clear_last_error, clear_plugin_configuration, deregister_plugin,
+    initialize_plugins, json_to_c_string, last_error_message, list_plugin_kinds,
+    nemo_relay_string_free, register_adaptive_component, register_plugin, set_last_error,
+    status_from_plugin_error, tokio_runtime, validate_plugin_config, wrap_event_sanitize_fn,
+    wrap_event_subscriber, wrap_export_activation_policy_fn, wrap_export_target_activation_fn,
+    wrap_llm_conditional_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
+    wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_intercept_fn,
+    wrap_tool_conditional_fn, wrap_tool_exec_intercept_fn, wrap_tool_request_intercept_fn,
+    wrap_tool_sanitize_fn,
 };
 use crate::api::event_registry::Surface;
+use nemo_relay::api::export_activation::ExportTargetRegistration;
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
 struct FfiHostedPluginUserData {
@@ -539,6 +542,65 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_subscriber(
     match unsafe { &mut *((*ctx).0) }.register_subscriber(&name, wrapped) {
         Ok(()) => NemoRelayStatus::Ok,
         Err(err) => status_from_plugin_error(&err),
+    }
+}
+
+/// Register the activation-scoped export policy owned by this plugin component.
+///
+/// # Safety
+/// `ctx` must be valid and callback user data must remain valid until `free_fn` runs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_export_activation_policy(
+    ctx: *mut FfiPluginContext,
+    cb: NemoRelayExportActivationPolicyCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let callback = wrap_export_activation_policy_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_export_activation_policy(callback) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(&error),
+    }
+}
+
+/// Register one deferred local or remote export target.
+///
+/// # Safety
+/// `ctx` and `registration_json` must be valid and callback user data must
+/// remain valid until `free_fn` runs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nemo_relay_plugin_context_register_export_target(
+    ctx: *mut FfiPluginContext,
+    registration_json: *const c_char,
+    cb: NemoRelayExportTargetActivationCb,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> NemoRelayStatus {
+    clear_last_error();
+    if ctx.is_null() {
+        set_last_error("plugin context is null");
+        return NemoRelayStatus::NullPointer;
+    }
+    let Some(value) = c_str_to_json(registration_json) else {
+        set_last_error("export target registration JSON is null or invalid");
+        return NemoRelayStatus::InvalidArg;
+    };
+    let registration = match serde_json::from_value::<ExportTargetRegistration>(value) {
+        Ok(registration) => registration,
+        Err(error) => {
+            set_last_error(&format!("invalid export target registration: {error}"));
+            return NemoRelayStatus::InvalidArg;
+        }
+    };
+    let activate = wrap_export_target_activation_fn(cb, user_data, free_fn);
+    match unsafe { &mut *((*ctx).0) }.register_export_target(registration, activate) {
+        Ok(()) => NemoRelayStatus::Ok,
+        Err(error) => status_from_plugin_error(&error),
     }
 }
 

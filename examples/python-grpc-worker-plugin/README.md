@@ -9,7 +9,7 @@ This example shows a Python worker plugin using the `nemo-relay-plugin` SDK. It
 registers tool request and execution intercepts, calls the host continuation,
 preserves the upstream tool-result annotation, and emits marks through both the
 host runtime and the execution outcome. It also registers an export-activation
-policy that allows a remote target only when its opaque policy config contains
+policy that allows an export target only when its opaque policy config contains
 `allow = true`.
 
 The example targets Relay 0.8 or later and the canonical `grpc-v1` tool-result

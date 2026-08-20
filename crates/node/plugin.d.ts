@@ -204,8 +204,37 @@ export interface ToolExecutionInterceptOutcome {
   pendingMarks?: PendingMarkSpec[];
 }
 
+/** Configuration selecting a component-scoped export activation provider. */
+export interface ExportActivationPolicyConfig {
+  provider: string;
+  timeout_millis?: number;
+  config?: Json;
+}
+
+/** Request passed to an export activation policy exactly once per target. */
+export interface ExportActivationRequest {
+  target_kind: string;
+  config: Json;
+}
+
+/** Deferred registration for one plugin-managed export target. */
+export interface ExportTargetRegistration {
+  id: string;
+  targetKind: string;
+  activationPolicy?: ExportActivationPolicyConfig;
+}
+
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
+  /** Register this component's export activation policy provider. */
+  registerExportActivationPolicy(
+    callback: (request: ExportActivationRequest) => "allow" | "deny" | Promise<"allow" | "deny">,
+  ): void;
+  /** Register a target whose callback constructs and starts the exporter only when allowed. */
+  registerExportTarget(
+    registration: ExportTargetRegistration,
+    activate: () => void | Promise<void>,
+  ): void;
   /**
    * Register an event subscriber for this component. Callback failures are isolated and reported
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.

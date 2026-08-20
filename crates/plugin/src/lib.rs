@@ -41,8 +41,8 @@ pub use nemo_relay_types::codec::optimization::{
 pub use nemo_relay_types::codec::request::AnnotatedLlmRequest;
 pub use nemo_relay_types::codec::response::AnnotatedLlmResponse;
 pub use nemo_relay_types::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, ExportActivationDecision, ExportActivationRequest,
-    ExportActivationTargetKind,
+    ConfigDiagnostic, DiagnosticLevel, ExportActivationDecision, ExportActivationPolicyConfig,
+    ExportActivationRequest, ExportActivationTargetKind, ExportTargetRegistration,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Map;
@@ -831,8 +831,6 @@ pub enum NemoRelayNativeAsyncMiddlewareKind {
     ScopeSanitizeEnd = 13,
     /// Event metadata injector.
     EventMetadataInjector = 14,
-    /// Activation-time policy for Relay-managed remote exporters.
-    ExportActivationPolicy = 15,
 }
 
 impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
@@ -855,7 +853,28 @@ impl TryFrom<u32> for NemoRelayNativeAsyncMiddlewareKind {
             12 => Ok(Self::ScopeSanitizeStart),
             13 => Ok(Self::ScopeSanitizeEnd),
             14 => Ok(Self::EventMetadataInjector),
+            _ => Err(()),
+        }
+    }
+}
+
+/// Activation-hook surface selected by the native generic async transport.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NemoRelayNativeActivationHookKind {
+    /// Policy provider evaluated before export-target construction.
+    ExportActivationPolicy = 15,
+    /// Deferred local or remote export-target constructor.
+    ExportTarget = 16,
+}
+
+impl TryFrom<u32> for NemoRelayNativeActivationHookKind {
+    type Error = ();
+
+    fn try_from(value: u32) -> std::result::Result<Self, Self::Error> {
+        match value {
             15 => Ok(Self::ExportActivationPolicy),
+            16 => Ok(Self::ExportTarget),
             _ => Err(()),
         }
     }
@@ -2473,6 +2492,46 @@ impl<'a> PluginContext<'a> {
                 name,
                 priority,
                 break_chain,
+                cb,
+                user_data,
+                free_fn,
+            )
+        })
+    }
+
+    /// Registers an activation hook through the ABI-v4 generic async transport.
+    ///
+    /// This does not add fields to the ABI table; activation hooks use distinct
+    /// discriminants carried by the existing completion-based callback transport.
+    ///
+    /// # Safety
+    /// `cb`, `user_data`, and `free_fn` must remain valid until the host
+    /// deregisters the callback or invokes `free_fn`.
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn register_activation_hook_raw(
+        &mut self,
+        kind: NemoRelayNativeActivationHookKind,
+        payload: &str,
+        cb: NemoRelayNativeAsyncMiddlewareCb,
+        user_data: *mut c_void,
+        free_fn: NemoRelayNativeFreeFn,
+    ) -> NemoRelayStatus {
+        if self.host.abi_version < NEMO_RELAY_NATIVE_ABI_VERSION_ASYNC_MIDDLEWARE
+            || self.host.struct_size < std::mem::size_of::<NemoRelayNativeHostApiV3>()
+        {
+            if let Some(free_fn) = free_fn {
+                unsafe { free_fn(user_data) };
+            }
+            return NemoRelayStatus::InvalidArg;
+        }
+        let host = unsafe { &*(self.host as *const _ as *const NemoRelayNativeHostApiV3) };
+        self.with_name_and_callback(payload, user_data, free_fn, |_, payload| unsafe {
+            (host.plugin_context_register_async_middleware)(
+                self.raw,
+                kind as u32,
+                payload,
+                0,
+                false,
                 cb,
                 user_data,
                 free_fn,

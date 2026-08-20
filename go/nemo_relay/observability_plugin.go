@@ -8,7 +8,7 @@ import "encoding/json"
 // ObservabilityPluginKind is the top-level plugin kind used by the core observability component.
 const ObservabilityPluginKind = "observability"
 
-// ExportActivationPolicyConfig attaches one dynamic policy provider to a remote exporter target.
+// ExportActivationPolicyConfig attaches one policy provider to an export target.
 type ExportActivationPolicyConfig struct {
 	Provider      string `json:"provider"`
 	TimeoutMillis uint64 `json:"timeout_millis,omitempty"`
@@ -107,9 +107,10 @@ type ObservabilityAtofSinkConfigurer interface {
 
 // ObservabilityAtofFileSinkConfig configures one filesystem ATOF JSONL destination.
 type ObservabilityAtofFileSinkConfig struct {
-	OutputDirectory string `json:"output_directory,omitempty"`
-	Filename        string `json:"filename,omitempty"`
-	Mode            string `json:"mode,omitempty"`
+	OutputDirectory  string                        `json:"output_directory,omitempty"`
+	Filename         string                        `json:"filename,omitempty"`
+	Mode             string                        `json:"mode,omitempty"`
+	ActivationPolicy *ExportActivationPolicyConfig `json:"activation_policy,omitempty"`
 }
 
 func (ObservabilityAtofFileSinkConfig) atofSinkConfig() {
@@ -156,15 +157,16 @@ type ObservabilityAtofEndpoint = ObservabilityAtofStreamSinkConfig
 
 // ObservabilityAtifConfig configures per-top-level-agent ATIF file export.
 type ObservabilityAtifConfig struct {
-	Enabled          bool                                 `json:"enabled,omitempty"`
-	AgentName        string                               `json:"agent_name,omitempty"`
-	AgentVersion     string                               `json:"agent_version,omitempty"`
-	ModelName        string                               `json:"model_name,omitempty"`
-	ToolDefinitions  []map[string]any                     `json:"tool_definitions,omitempty"`
-	Extra            map[string]any                       `json:"extra,omitempty"`
-	OutputDirectory  string                               `json:"output_directory,omitempty"`
-	FilenameTemplate string                               `json:"filename_template,omitempty"`
-	Storage          []ObservabilityAtifStorageConfigurer `json:"storage,omitempty"`
+	Enabled               bool                                 `json:"enabled,omitempty"`
+	AgentName             string                               `json:"agent_name,omitempty"`
+	AgentVersion          string                               `json:"agent_version,omitempty"`
+	ModelName             string                               `json:"model_name,omitempty"`
+	ToolDefinitions       []map[string]any                     `json:"tool_definitions,omitempty"`
+	Extra                 map[string]any                       `json:"extra,omitempty"`
+	OutputDirectory       string                               `json:"output_directory,omitempty"`
+	FilenameTemplate      string                               `json:"filename_template,omitempty"`
+	Storage               []ObservabilityAtifStorageConfigurer `json:"storage,omitempty"`
+	LocalActivationPolicy *ExportActivationPolicyConfig        `json:"local_activation_policy,omitempty"`
 }
 
 // ObservabilityAtifStorageConfigurer is one remote ATIF trajectory storage destination.

@@ -20,7 +20,8 @@ use futures_util::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
 use nemo_relay_worker::{
-    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, ExportActivationDecision, Json,
+    ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, ExportActivationDecision,
+    ExportActivationPolicyConfig, ExportActivationTargetKind, ExportTargetRegistration, Json,
     JsonStream, LlmNext, LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement,
     MetricValueType, PluginContext, PluginRuntime, Result, ScopeType,
     ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
@@ -132,6 +133,11 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
             .supported_surfaces
             .contains(&(RegistrationSurface::ExportActivationPolicy as i32))
     );
+    assert!(
+        handshake
+            .supported_surfaces
+            .contains(&(RegistrationSurface::ExportTarget as i32))
+    );
 
     let bad_health = client
         .health(Request::new(HealthRequest {
@@ -218,7 +224,7 @@ async fn worker_service_enforces_auth_and_reports_registrations() {
     assert_eq!(invalid_register_config.code(), tonic::Code::InvalidArgument);
 
     let registrations = register_plugin(&mut client).await;
-    assert_eq!(registrations.len(), 23);
+    assert_eq!(registrations.len(), 24);
     for local_name in [
         "llm-sanitize-request",
         "llm-sanitize-response",
@@ -552,6 +558,8 @@ async fn worker_service_invokes_every_registration_surface() {
 
     let policy = invoke_json(&mut client, export_activation_invoke()).await;
     assert_eq!(policy, json!("allow"));
+    let target = invoke_json(&mut client, export_target_invoke()).await;
+    assert_eq!(target, Json::Null);
 
     let mark_fields = invoke_json(
         &mut client,
@@ -1852,6 +1860,18 @@ impl WorkerPlugin for SurfacePlugin {
                 },
             )
         });
+        ctx.register_export_target(
+            ExportTargetRegistration {
+                id: "self-otel".into(),
+                target_kind: ExportActivationTargetKind::OTLP_TRACE,
+                activation_policy: Some(ExportActivationPolicyConfig {
+                    provider: PLUGIN_ID.into(),
+                    timeout_millis: 30_000,
+                    config: json!({"enabled": true}),
+                }),
+            },
+            || async { Ok(()) },
+        );
         ctx.register_mark_sanitize_guardrail("event-sanitize", 1, |event, mut fields| {
             let event_name = event.name().to_owned();
             async move {
@@ -2720,9 +2740,27 @@ fn export_activation_invoke() -> InvokeRequest {
             nemo_relay_worker_proto::v1::invoke_request::Payload::ExportActivation(
                 json_envelope(
                     "nemo.relay.ExportActivationRequest@1",
-                    &json!({"target_kind": "otlp_trace", "config": {"enabled": true}}),
+                    &json!({"target_kind": "nemo_relay.otlp.trace", "config": {"enabled": true}}),
                 )
                 .expect("encode export activation request"),
+            ),
+        ),
+    }
+}
+
+fn export_target_invoke() -> InvokeRequest {
+    InvokeRequest {
+        activation_id: ACTIVATION_ID.into(),
+        invocation_id: "invoke-target".into(),
+        registration_name: "self-otel".into(),
+        surface: RegistrationSurface::ExportTarget as i32,
+        continuation_id: String::new(),
+        scope: None,
+        auth_token: AUTH_TOKEN.into(),
+        payload: Some(
+            nemo_relay_worker_proto::v1::invoke_request::Payload::ExportTarget(
+                json_envelope("nemo.relay.ExportTargetActivation@1", &Json::Null)
+                    .expect("encode export target activation"),
             ),
         ),
     }

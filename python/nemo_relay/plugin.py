@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncIterator, Callable, Literal, Protocol, Self, TypedDict, cast
+from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, Protocol, Self, TypedDict, cast
 
 from nemo_relay import (
     EventSanitizeGuardrail,
@@ -110,8 +110,49 @@ DynamicPluginKind = Literal["rust_dynamic", "worker"]
 """Execution lane for a dynamically loaded plugin."""
 
 
+class ExportActivationPolicyConfig(TypedDict, total=False):
+    """Policy provider and bounded evaluation settings for one exporter."""
+
+    provider: str
+    timeout_millis: int
+    config: Json
+
+
+class ExportActivationRequest(TypedDict):
+    """Secret-free request passed to an exporter activation policy."""
+
+    target_kind: str
+    config: Json
+
+
+class ExportTargetRegistration(TypedDict, total=False):
+    """Deferred plugin-managed exporter registration."""
+
+    id: str
+    target_kind: str
+    activation_policy: ExportActivationPolicyConfig
+
+
 class PluginContext(Protocol):
     """Component-scoped registration context passed to custom plugin handlers."""
+
+    def register_export_activation_policy(
+        self,
+        callback: Callable[
+            [ExportActivationRequest],
+            Literal["allow", "deny"] | Awaitable[Literal["allow", "deny"]],
+        ],
+    ) -> None:
+        """Register the activation policy owned by this plugin kind."""
+        ...
+
+    def register_export_target(
+        self,
+        registration: ExportTargetRegistration,
+        callback: Callable[[], None | Awaitable[None]],
+    ) -> None:
+        """Defer exporter construction until activation allows the target."""
+        ...
 
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None:
         """Register an infallible event subscriber for this component."""
@@ -714,6 +755,9 @@ __all__ = [
     "ConfigReport",
     "DynamicPluginActivationSpec",
     "DynamicPluginKind",
+    "ExportActivationPolicyConfig",
+    "ExportActivationRequest",
+    "ExportTargetRegistration",
     "PluginConfig",
     "PluginContext",
     "PluginHostActivation",

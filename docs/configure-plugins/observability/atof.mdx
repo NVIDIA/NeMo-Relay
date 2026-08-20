@@ -68,6 +68,11 @@ The following table describes the top-level ATOF settings:
 | `enabled` | `false` | Must be `true` to export events. |
 | `sinks` | `[]` | File and stream destinations. An enabled ATOF section requires at least one sink. Each event delivered to the ATOF subscriber is sent to every configured sink. |
 
+Each file or stream sink can include an `activation_policy` table. Denying a
+file sink prevents Relay from opening its file. If every sink is denied, Relay
+does not install an ATOF exporter; canonical event generation and unrelated
+subscribers continue normally.
+
 ## File Sinks
 
 Each file sink writes the raw event stream to one JSONL file. The following

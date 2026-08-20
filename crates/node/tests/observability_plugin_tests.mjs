@@ -48,6 +48,12 @@ describe('observability plugin helpers', () => {
       }).activation_policy,
       policy,
     );
+    assert.equal(
+      observability.atofConfig({ sinks: [{ type: 'file', activation_policy: policy }] }).sinks[0]
+        .activation_policy,
+      policy,
+    );
+    assert.equal(observability.atifConfig({ local_activation_policy: policy }).local_activation_policy, policy);
     assert.throws(() => observability.exportActivationPolicy({ provider: ' ' }), /nonblank/);
     assert.throws(
       () => observability.exportActivationPolicy({ provider: 'test', timeout_millis: 999 }),

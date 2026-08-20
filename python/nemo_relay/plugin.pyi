@@ -4,11 +4,12 @@
 import os
 from collections.abc import Callable, Sequence
 from types import TracebackType
-from typing import AsyncContextManager, Literal, Protocol, Self, TypedDict
+from typing import AsyncContextManager, Awaitable, Literal, Protocol, Self, TypedDict
 
 from nemo_relay import (
     Event,
     EventSanitizeGuardrail,
+    Json,
     JsonObject,
     LlmConditionalExecutionGuardrail,
     LlmExecutionIntercept,
@@ -48,7 +49,28 @@ class ConfigReport(TypedDict):
     diagnostics: list[ConfigDiagnostic]
     runtime_diagnostics: list[RuntimeDiagnostic]
 
+class ExportActivationPolicyConfig(TypedDict, total=False):
+    provider: str
+    timeout_millis: int
+    config: Json
+
+class ExportActivationRequest(TypedDict):
+    target_kind: str
+    config: Json
+
+class ExportTargetRegistration(TypedDict, total=False):
+    id: str
+    target_kind: str
+    activation_policy: ExportActivationPolicyConfig
+
 class PluginContext(Protocol):
+    def register_export_activation_policy(
+        self,
+        callback: Callable[[ExportActivationRequest], Literal["allow", "deny"] | Awaitable[Literal["allow", "deny"]]],
+    ) -> None: ...
+    def register_export_target(
+        self, registration: ExportTargetRegistration, callback: Callable[[], None | Awaitable[None]]
+    ) -> None: ...
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None: ...
     def register_mark_sanitize_guardrail(self, name: str, priority: int, callback: EventSanitizeGuardrail) -> None: ...
     def register_scope_sanitize_start_guardrail(
