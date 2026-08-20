@@ -25,10 +25,11 @@ equivalent binding configuration.
 | `[load]` | The native library and symbol, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. |
 
 For native packages, `compat.native_api = "1"` is the authored manifest contract. It is
-not the C host-table ABI number. The current SDK requests ABI v4 and the host retains
-frozen v3 and v2 compatibility for older compiled plugins. For workers, declare
-`compat.worker_protocol = "grpc-v1"`; the handshake still negotiates the exact protocol,
-surfaces, authentication token, and lifecycle at startup.
+not the [C host-table ABI number](/build-plugins/native/native-abi-reference). The
+current SDK requests ABI v4 and the host retains frozen v3 and v2 compatibility for
+older compiled plugins. For workers, declare `compat.worker_protocol = "grpc-v1"`; the
+[handshake](/build-plugins/workers/grpc-v1-protocol) still negotiates the exact
+protocol, surfaces, authentication token, and lifecycle at startup.
 
 ## Start from a Complete Manifest
 
@@ -154,9 +155,10 @@ Relay can validate and activate:
 
 1. Build the shared library or worker from a clean checkout and place the entrypoint at
    the relative path declared by `relay-plugin.toml`.
-2. Validate the component schema against valid, invalid, and disabled example
-   configurations. Keep unknown-field behavior aligned between the schema and the
-   plugin's validation callback.
+2. Validate the
+   [component schema](/build-plugins/fundamentals/configuration-and-validation) against
+   valid, invalid, and disabled example configurations. Keep unknown-field behavior
+   aligned between the schema and the plugin's validation callback.
 3. Generate the artifact digest with `shasum -a 256 <artifact>` on macOS,
    `sha256sum <artifact>` on Linux, or `Get-FileHash -Algorithm SHA256 <artifact>` in
    PowerShell. Do this after the final `source.artifact` bytes are in place; changing

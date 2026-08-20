@@ -6,14 +6,17 @@ position: 24
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Execution intercepts receive the real request and a continuation representing the rest
+[Execution intercepts](/about-nemo-relay/concepts/middleware) receive the real request
+and a continuation representing the rest
 of the call path. The example's `execution` group registers a tool wrapper, a unary LLM
 wrapper, and an LLM stream wrapper at the configured priority.
 
 ## Tool and Unary Results
 
 The tool wrapper calls `next` once, awaits the downstream `ToolExecutionResult`, and
-converts it into a `ToolExecutionInterceptOutcome` with the example's pending mark. The
+converts it into a
+[`ToolExecutionInterceptOutcome`](/reference/tool-execution-intercept-outcomes) with the
+example's pending mark. The
 conversion preserves both the application `result` and any opaque `annotation`. Relay
 owns the pending mark: it is emitted in the managed lifecycle and does not appear in the
 application-visible result.

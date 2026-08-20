@@ -8,7 +8,8 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 Python and Rust workers expose the same registration model even though their closure
 syntax differs. The checked examples share configuration and observable behavior so a
-reader can compare runtime mechanics instead of reverse-engineering two unrelated demos.
+reader can compare runtime mechanics instead of reverse-engineering two unrelated
+demonstrations.
 
 ## Callback Families
 
@@ -25,9 +26,10 @@ reader can compare runtime mechanics instead of reverse-engineering two unrelate
 | Stream LLM execution | Async generator or async callback returning an async iterator. | Async closure returning a `JsonStream`. | Chunks produced lazily until completion, error, or cancellation. |
 
 Subscribers plus three event sanitizers, five tool registrations, and six LLM
-registrations make 15 surfaces. Registration names are component-local; priority
-and `break_chain` are sent in registration metadata and enforced by the host after it
-merges visible middleware.
+registrations make 15 surfaces. Registration names are component-local;
+[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) are sent in
+registration metadata and enforced by the host after it merges visible
+[middleware](/about-nemo-relay/concepts/middleware).
 
 ## Register Synchronous and Asynchronous Callbacks
 

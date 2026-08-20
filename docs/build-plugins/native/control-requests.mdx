@@ -72,7 +72,8 @@ invocations as well as checking the returned error.
 
 The tool request intercept adds configured policy metadata to the JSON request and
 returns it. The LLM request intercept adds the configured header and returns the full
-request-intercept outcome, including the original annotated request. Preserving the
+[request-intercept outcome](/reference/llm-request-intercept-outcomes), including the
+original annotated request. Preserving the
 annotation matters because a codec can already have normalized the request for later
 middleware.
 

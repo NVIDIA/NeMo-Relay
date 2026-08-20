@@ -6,7 +6,8 @@ position: 34
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-Worker code cannot manipulate host scope objects directly. The SDK exposes an
+Worker code cannot manipulate host [scope](/about-nemo-relay/concepts/scopes) objects
+directly. The SDK exposes an
 authenticated `PluginRuntime` proxy whose operations preserve the invocation's captured
 scope context while the `RelayHostRuntime` service performs the real work.
 
@@ -26,7 +27,8 @@ Every host request carries the activation ID, token, and relevant scope context.
 must not expose, log, or persist the activation token or codec capability IDs. Those
 values identify a live local capability and expire with the activation or invocation.
 
-Use typed mark options when an exported mark needs a data schema or log severity. Use
+Use typed [mark](/about-nemo-relay/concepts/events) options when an exported mark needs
+a data schema or log severity. Use
 `emit_metric` for Relay metric measurements. `runtime_diagnostics` returns the bounded,
 ordered host-level `{ code, message, count }` snapshot. It does not identify the plugin
 that recorded a diagnostic.

@@ -6,9 +6,11 @@ position: 25
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The native runtime handle lets plugin middleware participate in Relay's event hierarchy
+The native runtime handle lets plugin middleware participate in Relay's
+[event hierarchy](/about-nemo-relay/concepts/events)
 without linking the host runtime crate. The example's `runtime` group emits a configured
-mark, opens and closes a child scope, and optionally creates an isolated scope stack.
+mark, opens and closes a child scope, and optionally creates an isolated
+[scope stack](/about-nemo-relay/concepts/scopes).
 
 ## Preserve Stack Ownership
 

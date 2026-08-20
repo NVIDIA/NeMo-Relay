@@ -6,9 +6,11 @@ position: 32
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the Python
-worker. It depends on `nemo-relay-worker` 0.8.0, implements `WorkerPlugin`, registers all
-15 surfaces, and lets the SDK create the authenticated `grpc-v1` server from the
+The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the
+[Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 0.8.0,
+implements `WorkerPlugin`, registers all
+15 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
+create the authenticated `grpc-v1` server from the
 activation environment Relay provides.
 
 ## Build and Calculate Integrity
@@ -37,7 +39,7 @@ Build the executable and materialize its platform-specific manifest as follows:
    hexadecimal value after `sha256:` in `[integrity].sha256`.
 
 Success at this stage means tests pass, the manifest entrypoint resolves to the built
-executable, and integrity describes the exact executable that will start.
+executable, and integrity describes the exact executable that starts.
 
 The local manifest retains the checked package identity and replaces only the executable
 name and digest placeholders:
@@ -80,7 +82,8 @@ marks. Rebuild the worker when adopting this SDK release; the protocol name rema
 `grpc-v1`, but an earlier generated binding cannot read the structural result messages.
 
 The artifact and entrypoint paths must identify the same executable. Relay verifies the
-artifact digest before it starts the command, and the worker handshake must return the
+artifact digest before it starts the command, and the worker
+[handshake](/build-plugins/workers/grpc-v1-protocol) must return the
 same plugin identity and `grpc-v1` protocol.
 
 ## Register and Start the Worker

@@ -37,7 +37,7 @@ token, and a worker is trusted to request host operations within that activation
 | Custom command | Advanced path for another language or an existing service executable. It must implement every required `grpc-v1` lifecycle, authentication, envelope, cancellation, continuation, codec, and shutdown rule itself. The SDK tutorials do not apply to it. |
 
 Async Python and Rust callback work is cancelled cooperatively when the host caller times
-out, a stream consumer goes away, or shutdown begins. Dropping a future or cancelling an
+out, a stream consumer disconnects, or shutdown begins. Dropping a future or cancelling an
 `asyncio` task cannot preempt arbitrary blocking work or a separately spawned process.
 Keep blocking work off the SDK event loop, propagate cancellation, and put external
 cleanup in a guaranteed finalizer.

@@ -24,7 +24,8 @@ extern "C" fn nemo_relay_register_plugin(
 ```
 
 The current host negotiates ABI v4, then a separately frozen v3 table, then the frozen
-legacy v2 table. ABI v4 extends the complete v3 prefix with completion-scoped codecs and
+legacy v2 table. ABI v4 extends the complete v3 prefix with completion-scoped
+[codecs](/about-nemo-relay/concepts/codecs) and
 pull-based downstream LLM streams. This table version is independent of authored
 `compat.native_api = "1"`.
 
