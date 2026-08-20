@@ -55,11 +55,11 @@ Event metadata injectors, event sanitizers, conditional-execution guardrails,
 request intercepts, execution intercepts, and subscribers are not re-entrant.
 These callbacks must not invoke another NeMo Relay API that runs middleware,
 flushes subscriber delivery, waits on an exporter, or clears plugins. Scope
-APIs remain supported:
-callbacks may create, push, or pop scopes at any nesting level and may replace
-the active scope stack with an arbitrary stack. Emitting a new event is the
-only supported operation that can enqueue additional callback work; Relay
-queues that event for later publication instead of recursively dispatching it.
+APIs remain supported. Callbacks may create, push, or pop scopes at any nesting
+level and may replace the active scope stack with an arbitrary stack. Emitting
+a new event is the only supported operation that can enqueue additional
+callback work; Relay queues that event for later publication instead of
+recursively dispatching it.
 An event sanitizer must await child tasks whose emissions belong to its
 reserved FIFO position. Relay cancels detached async sanitizer tasks after the
 sanitizer returns. Detached blocking work runs without that sanitizer
@@ -150,10 +150,10 @@ execution intercept cannot undo work from a `next` continuation that it already
 invoked. This fail-closed contract is the same whether the callback completes
 directly or asynchronously.
 
-Event metadata injectors fail open. If an injector fails, panics, or returns
-invalid attributes, Relay logs the failure, ignores only that injector's output
-for the current event, and continues with later injectors using the event as
-it stood before the failed injector.
+Event metadata injectors fail open. If an event metadata injector fails, panics,
+or returns invalid attributes, Relay logs the failure, ignores only that
+injector's output for the current event, and continues with later injectors
+using the event as it stood before the failed injector.
 
 ## Intercepts
 
@@ -199,12 +199,12 @@ Event metadata keys contain one or more non-empty segments made of ASCII
 letters, digits, underscores, or hyphens. Segments may be separated by single
 dots, so keys such as `region.zone.name` are valid. Leading dots, trailing dots,
 consecutive dots, whitespace, and unsupported punctuation are invalid. Relay
-stores accepted keys literally; dots do not create nested objects. Values may
-be strings, numbers, booleans, or homogeneous lists of those primitive types.
-Nested objects, `null`, and mixed-type lists are rejected as one atomic callback
-result.
+stores accepted keys literally, which is why dots do not create nested objects.
+Values may be strings, numbers, booleans, or homogeneous lists of those
+primitive types. Nested objects, `null`, and mixed-type lists are rejected as
+one atomic callback result.
 
-Injection is insert-only. Existing event metadata is never overwritten.
+Injection is insert-only and existing event metadata is never overwritten.
 Injectors run in ascending numeric priority and then by registration name, so
 the first injector to insert a missing key wins. A later injector that returns
 the same key cannot replace it.
@@ -277,7 +277,8 @@ Subscriber and exporter delivery is therefore delayed, while start/end/mark
 order is preserved. Closing a scope or deregistering middleware after emission
 does not affect queued snapshots. Injector failures fail open and omit that
 injector's output. Sanitizer failures fail closed: Relay records the callback
-failure and withholds the governed observability payload.
+failure, clears the governed observability fields, and continues publication
+with the event shell.
 
 ## Managed Execution Order
 
