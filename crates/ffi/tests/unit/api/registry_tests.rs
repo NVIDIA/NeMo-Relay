@@ -126,6 +126,321 @@ unsafe extern "C" fn invalid_event_sanitize_cb(
     CString::new("not-json").unwrap().into_raw()
 }
 
+unsafe extern "C" fn event_metadata_injector_cb(
+    _user_data: *mut libc::c_void,
+    event: *const FfiEvent,
+) -> *mut c_char {
+    let name = unsafe { take_string(nemo_relay_event_name(event)) }.unwrap_or_default();
+    CString::new(
+        json!({
+            "ffi.injected": name,
+            "ffi.integers": [1, 2],
+            "ffi.doubles": [1.25, 2.5],
+            "ffi.numbers": [1, 2.5],
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
+
+unsafe extern "C" fn event_metadata_local_injector_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    CString::new(json!({"ffi.local": true}).to_string())
+        .unwrap()
+        .into_raw()
+}
+
+unsafe extern "C" fn event_metadata_injector_fail_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    crate::error::set_last_error("event metadata injector callback failed");
+    ptr::null_mut()
+}
+
+unsafe extern "C" fn event_metadata_injector_invalid_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    CString::new("[]").unwrap().into_raw()
+}
+
+unsafe extern "C" fn event_metadata_injector_mixed_values_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    CString::new(
+        json!({
+            "ffi.invalid.mixed_values": [1, "two"],
+            "ffi.invalid.sentinel": "must-be-omitted",
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
+
+#[test]
+fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let subscriber_name = cstring(&unique_name("ffi_event_metadata_subscriber"));
+        assert_status!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let global_name = cstring(&unique_name("ffi_event_metadata_global"));
+        let failure_name = cstring(&unique_name("ffi_event_metadata_failure"));
+        let invalid_name = cstring(&unique_name("ffi_event_metadata_invalid"));
+        let mixed_values_name = cstring(&unique_name("ffi_event_metadata_mixed_values"));
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                Some(event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                failure_name.as_ptr(),
+                20,
+                Some(event_metadata_injector_fail_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                invalid_name.as_ptr(),
+                30,
+                Some(event_metadata_injector_invalid_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                mixed_values_name.as_ptr(),
+                40,
+                Some(event_metadata_injector_mixed_values_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_name = cstring("ffi-event-metadata-scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+        let local_name = cstring(&unique_name("ffi_event_metadata_local"));
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                5,
+                Some(event_metadata_local_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mark_name = cstring("ffi-event-metadata-mark");
+        assert_status!(
+            nemo_relay_event(mark_name.as_ptr(), scope, ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+
+        for name in [
+            &global_name,
+            &failure_name,
+            &invalid_name,
+            &mixed_values_name,
+        ] {
+            assert_status!(
+                nemo_relay_deregister_event_metadata_injector(name.as_ptr()),
+                NemoRelayStatus::Ok
+            );
+        }
+
+        let cleanup_name = cstring("ffi-event-metadata-cleanup");
+        assert_status!(
+            nemo_relay_event(cleanup_name.as_ptr(), ptr::null(), ptr::null(), ptr::null(),),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let events = lock_unpoisoned(event_log());
+        let scope_start = events
+            .iter()
+            .find(|event| {
+                event["name"] == "ffi-event-metadata-scope"
+                    && event["json"]["scope_category"] == "start"
+            })
+            .expect("scope start should be delivered");
+        let mark = events
+            .iter()
+            .find(|event| event["name"] == "ffi-event-metadata-mark")
+            .expect("mark should be delivered");
+        let scope_end = events
+            .iter()
+            .find(|event| {
+                event["name"] == "ffi-event-metadata-scope"
+                    && event["json"]["scope_category"] == "end"
+            })
+            .expect("scope end should be delivered");
+        let cleanup = events
+            .iter()
+            .find(|event| event["name"] == "ffi-event-metadata-cleanup")
+            .expect("cleanup mark should be delivered");
+        assert_eq!(
+            scope_start["metadata"]["ffi.injected"],
+            json!("ffi-event-metadata-scope")
+        );
+        assert!(scope_start["metadata"].get("ffi.local").is_none());
+        assert_eq!(
+            mark["metadata"]["ffi.injected"],
+            json!("ffi-event-metadata-mark")
+        );
+        assert_eq!(mark["metadata"]["ffi.integers"], json!([1, 2]));
+        assert_eq!(mark["metadata"]["ffi.doubles"], json!([1.25, 2.5]));
+        assert_eq!(mark["metadata"]["ffi.numbers"], json!([1, 2.5]));
+        assert!(mark["metadata"].get("ffi.invalid.mixed_values").is_none());
+        assert!(mark["metadata"].get("ffi.invalid.sentinel").is_none());
+        assert_eq!(mark["metadata"]["ffi.local"], json!(true));
+        assert_eq!(
+            scope_end["metadata"]["ffi.injected"],
+            json!("ffi-event-metadata-scope")
+        );
+        assert_eq!(scope_end["metadata"]["ffi.local"], json!(true));
+        assert!(cleanup["metadata"].is_null());
+        drop(events);
+
+        assert_status!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_event_metadata_injector_rejects_null_callbacks() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let global_name = cstring(&unique_name("ffi_event_metadata_null_global"));
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                Some(event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_deregister_event_metadata_injector(global_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_name = cstring("ffi-event-metadata-null-scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+        let local_name = cstring(&unique_name("ffi_event_metadata_null_local"));
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                10,
+                Some(event_metadata_local_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
 #[test]
 fn test_ffi_event_sanitizer_registries_and_error_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());

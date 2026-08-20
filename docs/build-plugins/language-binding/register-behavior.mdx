@@ -50,11 +50,33 @@ Applications can instead use `registerEventMetadataInjector()` for a global call
 or `scopeRegisterEventMetadataInjector()` for a callback owned by an active scope. The
 matching deregistration functions remove those registrations.
 </Tab>
+<Tab title="Rust" language="rust">
+```rust
+let tag = config.tag.clone();
+ctx.register_event_metadata_injector(
+    "component-metadata",
+    10,
+    Arc::new(move |_event| {
+        let tag = tag.clone();
+        Box::pin(async move {
+            Ok(BTreeMap::from([(
+                "example.plugin.tag".into(),
+                Json::String(tag),
+            )]))
+        })
+    }),
+)?;
+```
+
+Applications can instead use `register_event_metadata_injector()` for a global
+callback or `scope_register_event_metadata_injector()` for a callback owned by
+an active scope. The matching deregistration functions remove those registrations.
+</Tab>
 </Tabs>
 
-Callbacks can return additions directly or through an awaitable or Promise. Callback
-failures and invalid return values omit that callback's additions without dropping the
-event.
+Python and Node.js callbacks can return additions directly or asynchronously. Rust
+callbacks return a future. In every binding, callback failures and invalid return values
+omit that callback's additions without dropping the event.
 
 ## Register One Equivalent Request Intercept
 

@@ -48,6 +48,7 @@ typedef char* (*NemoRelayLlmConditionalCb)(void* user_data, const FfiLLMRequest*
 typedef char* (*NemoRelayLlmExecFn)(void* user_data, const char* native_json);
 typedef char* (*NemoRelayLlmSanitizeResponseCb)(void* user_data, const char* response_json, NemoRelayLlmSanitizeResponseContext context);
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
+typedef char* (*NemoRelayEventMetadataInjectorFn)(void* user_data, const FfiEvent* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 typedef struct FfiPluginContext FfiPluginContext;
 
@@ -99,6 +100,8 @@ import (
 // Global closure registry: maps integer IDs to Go closures.
 // The ID is passed as void* user_data to C callbacks.
 // ---------------------------------------------------------------------------
+
+var errEventMetadataInjectorCallbackNil = errors.New("event metadata injector callback is nil")
 
 var (
 	closureRegistryMu sync.Mutex
@@ -317,6 +320,16 @@ type FinalizerFunc func() string
 // implement [Event]. The Go binding snapshots FFI event fields before invoking
 // the callback, so it is safe to retain the event after the callback returns.
 type EventSubscriberFunc func(event Event)
+
+// EventMetadata contains flat metadata additions proposed by an injector.
+// Relay validates keys and values and never overwrites metadata already present
+// on the event.
+type EventMetadata map[string]any
+
+// EventMetadataInjectorFunc inspects an event and proposes metadata additions.
+// Return nil metadata with a nil error for a valid no-op. Returning an error
+// rejects this callback's additions without preventing event delivery.
+type EventMetadataInjectorFunc func(event Event) (EventMetadata, error)
 
 // EventSanitizeFields contains the observability fields an event sanitizer may replace.
 //
@@ -661,6 +674,25 @@ func goEventSubscriberTrampoline(userData unsafe.Pointer, event *C.FfiEvent) {
 	fn := lookupClosure(userData).(EventSubscriberFunc)
 	goEvent := newEvent(event)
 	fn(goEvent)
+}
+
+//export goEventMetadataInjectorTrampoline
+func goEventMetadataInjectorTrampoline(userData unsafe.Pointer, event *C.FfiEvent) *C.char {
+	fn := lookupClosure(userData).(EventMetadataInjectorFunc)
+	metadata, err := fn(newEvent(event))
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	if metadata == nil {
+		metadata = EventMetadata{}
+	}
+	result, err := json.Marshal(metadata)
+	if err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	return C.CString(string(result))
 }
 
 //export goEventSanitizeTrampoline

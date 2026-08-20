@@ -4,6 +4,17 @@
 //! Unit tests for plugin in the NeMo Relay FFI crate.
 
 use super::*;
+use nemo_relay::plugin::rollback_registrations;
+
+unsafe extern "C" fn plugin_event_metadata_injector_cb(
+    _user_data: *mut libc::c_void,
+    event: *const FfiEvent,
+) -> *mut c_char {
+    let name = unsafe { take_string(nemo_relay_event_name(event)) }.unwrap_or_default();
+    CString::new(json!({"ffi.injected": name}).to_string())
+        .unwrap()
+        .into_raw()
+}
 
 #[test]
 fn test_ffi_dynamic_plugin_activation_rejects_empty_specs_without_outputs() {
@@ -253,6 +264,115 @@ fn test_ffi_plugin_registration_validation_and_cleanup() {
     }
 
     assert_eq!(*lock_unpoisoned(plugin_frees()), 1);
+}
+
+#[test]
+fn test_ffi_plugin_context_event_metadata_injector_is_rolled_back() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    let subscriber_name = cstring(&unique_name("ffi_plugin_metadata_subscriber"));
+    let injector_name = cstring("metadata");
+    let mut registrations = PluginRegistrationContext::with_namespace("ffi_plugin::");
+    let mut ctx = FfiPluginContext(&mut registrations as *mut _);
+
+    unsafe {
+        assert_status!(
+            nemo_relay_register_subscriber(
+                subscriber_name.as_ptr(),
+                subscriber_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_plugin_context_register_event_metadata_injector(
+                &mut ctx,
+                injector_name.as_ptr(),
+                10,
+                Some(plugin_event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let active_name = cstring("ffi-plugin-metadata-active");
+        assert_status!(
+            nemo_relay_event(active_name.as_ptr(), ptr::null(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let mut registrations = registrations.into_registrations();
+        rollback_registrations(&mut registrations);
+        let cleanup_name = cstring("ffi-plugin-metadata-cleanup");
+        assert_status!(
+            nemo_relay_event(cleanup_name.as_ptr(), ptr::null(), ptr::null(), ptr::null(),),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(nemo_relay_flush_subscribers(), NemoRelayStatus::Ok);
+
+        let events = lock_unpoisoned(event_log());
+        let active = events
+            .iter()
+            .find(|event| event["name"] == "ffi-plugin-metadata-active")
+            .expect("plugin-active mark should be delivered");
+        let cleanup = events
+            .iter()
+            .find(|event| event["name"] == "ffi-plugin-metadata-cleanup")
+            .expect("plugin-cleanup mark should be delivered");
+        assert_eq!(
+            active["metadata"]["ffi.injected"],
+            json!("ffi-plugin-metadata-active")
+        );
+        assert!(cleanup["metadata"].is_null());
+        drop(events);
+
+        assert_status!(
+            nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+    }
+}
+
+#[test]
+fn test_ffi_plugin_context_event_metadata_injector_rejects_null_callback() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    let injector_name = cstring("metadata");
+    let mut registrations = PluginRegistrationContext::with_namespace("ffi_plugin_null::");
+    let mut ctx = FfiPluginContext(&mut registrations as *mut _);
+
+    unsafe {
+        assert_status!(
+            nemo_relay_plugin_context_register_event_metadata_injector(
+                &mut ctx,
+                injector_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_plugin_context_register_event_metadata_injector(
+                &mut ctx,
+                injector_name.as_ptr(),
+                10,
+                Some(plugin_event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+    }
+
+    let mut registrations = registrations.into_registrations();
+    rollback_registrations(&mut registrations);
 }
 
 #[test]

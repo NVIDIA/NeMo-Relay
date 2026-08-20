@@ -16,6 +16,7 @@
 //! free function in an `Arc<UserData>` so the closure is `Send + Sync` and the
 //! free function is called exactly once when all references are dropped.
 
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::future::Future;
 use std::pin::Pin;
@@ -23,10 +24,11 @@ use std::sync::Arc;
 
 use libc::c_char;
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity, LlmConditionalFn, LlmExecutionNextFn,
-    LlmJsonStream, LlmRequestInterceptFn, LlmSanitizeRequestContext, LlmSanitizeRequestFn,
-    LlmSanitizeResponseContext, LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn,
-    ToolExecutionFn, ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
+    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmCodecIdentity,
+    LlmConditionalFn, LlmExecutionNextFn, LlmJsonStream, LlmRequestInterceptFn,
+    LlmSanitizeRequestContext, LlmSanitizeRequestFn, LlmSanitizeResponseContext,
+    LlmSanitizeResponseFn, LlmStreamExecutionNextFn, ToolConditionalFn, ToolExecutionFn,
+    ToolExecutionNextFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use serde_json::Value as Json;
 use tokio_stream::StreamExt;
@@ -199,6 +201,18 @@ pub type NemoRelayLlmExecInterceptCb = unsafe extern "C" fn(
 /// the runtime. The `FfiEvent` pointer is only valid for the duration of the call.
 pub type NemoRelayEventSubscriberCb =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent);
+
+/// Callback for event metadata injection.
+///
+/// The returned string must contain a JSON object whose properties are proposed
+/// metadata additions. It transfers to Relay and is freed exactly once. Return
+/// null after setting the last error message to report a callback failure.
+pub type NemoRelayEventMetadataInjectorCb = Option<
+    unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent) -> *mut c_char,
+>;
+
+type FfiEventMetadataInjectorFn =
+    unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent) -> *mut c_char;
 
 /// Callback for mark and scope event sanitizers.
 /// The returned JSON string transfers to Relay and is freed exactly once.
@@ -987,6 +1001,34 @@ pub fn wrap_event_subscriber(
     Arc::new(move |event: &Event| {
         let ffi_event = FfiEvent(event.clone());
         unsafe { cb(ud.ptr, &ffi_event) };
+    })
+}
+
+/// Wrap a C event metadata injector callback into a Rust closure.
+pub fn wrap_event_metadata_injector_fn(
+    cb: FfiEventMetadataInjectorFn,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> EventMetadataInjectorFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |event: Arc<Event>| {
+        let ud = ud.clone();
+        Box::pin(async move {
+            clear_last_error();
+            let ffi_event = FfiEvent((*event).clone());
+            let result_ptr = unsafe { cb(ud.ptr, &ffi_event) };
+            let result =
+                json_result_from_ptr(result_ptr, "event metadata injector callback returned null")
+                    .and_then(|value| {
+                        serde_json::from_value::<BTreeMap<String, Json>>(value).map_err(|error| {
+                            FlowError::Internal(format!(
+                                "invalid event metadata injector result: {error}"
+                            ))
+                        })
+                    });
+            unsafe { nemo_relay_string_free_internal(result_ptr) };
+            result
+        })
     })
 }
 

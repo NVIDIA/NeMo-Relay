@@ -1788,8 +1788,7 @@ fn validate_event_metadata_attributes(attributes: &BTreeMap<String, Json>) -> Re
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum OtelAttributePrimitiveKind {
     Boolean,
-    Integer,
-    Double,
+    Number,
     String,
 }
 
@@ -1799,12 +1798,12 @@ fn otel_compatible_attribute_number_kind(
     if let Some(value) = value.as_u64() {
         return i64::try_from(value)
             .is_ok()
-            .then_some(OtelAttributePrimitiveKind::Integer);
+            .then_some(OtelAttributePrimitiveKind::Number);
     }
     if value.as_i64().is_some() {
-        return Some(OtelAttributePrimitiveKind::Integer);
+        return Some(OtelAttributePrimitiveKind::Number);
     }
-    value.as_f64().map(|_| OtelAttributePrimitiveKind::Double)
+    value.as_f64().map(|_| OtelAttributePrimitiveKind::Number)
 }
 
 fn is_otel_compatible_attribute_number(value: &serde_json::Number) -> bool {

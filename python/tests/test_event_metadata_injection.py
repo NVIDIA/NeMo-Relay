@@ -68,7 +68,9 @@ async def test_global_python_injectors_support_sync_async_and_failure_safe_outpu
     }
 
 
-async def test_python_injectors_require_homogeneous_numeric_lists(subscribed_events):
+async def test_python_injectors_accept_numeric_lists_with_integer_and_fractional_values(
+    subscribed_events,
+):
     integers_name = f"python-integers-{uuid4()}"
     doubles_name = f"python-doubles-{uuid4()}"
     mixed_name = f"python-mixed-numbers-{uuid4()}"
@@ -100,6 +102,7 @@ async def test_python_injectors_require_homogeneous_numeric_lists(subscribed_eve
     assert event.metadata == {
         "python.injector.doubles": [1.0, 2.5],
         "python.injector.integers": [1, 2],
+        "python.injector.mixed_numbers": [1, 2.5],
     }
 
 

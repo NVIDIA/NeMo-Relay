@@ -176,10 +176,13 @@ extern int32_t nemo_relay_deregister_llm_stream_execution_intercept(const char* 
 
 // Subscribers
 typedef void (*NemoRelayEventSubscriberFn)(void* user_data, const FfiEvent* event);
+typedef char* (*NemoRelayEventMetadataInjectorFn)(void* user_data, const FfiEvent* event);
 typedef char* (*NemoRelayEventSanitizeFn)(void* user_data, const FfiEvent* event, const char* fields_json);
 extern int32_t nemo_relay_register_subscriber(const char* name, NemoRelayEventSubscriberFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_subscriber(const char* name);
 extern int32_t nemo_relay_flush_subscribers(void);
+extern int32_t nemo_relay_register_event_metadata_injector(const char* name, int32_t priority, NemoRelayEventMetadataInjectorFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_deregister_event_metadata_injector(const char* name);
 extern int32_t nemo_relay_register_mark_sanitize_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_deregister_mark_sanitize_guardrail(const char* name);
 extern int32_t nemo_relay_register_scope_sanitize_start_guardrail(const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -188,6 +191,8 @@ extern int32_t nemo_relay_register_scope_sanitize_end_guardrail(const char* name
 extern int32_t nemo_relay_deregister_scope_sanitize_end_guardrail(const char* name);
 
 // Scope-local tool guardrails
+extern int32_t nemo_relay_scope_register_event_metadata_injector(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventMetadataInjectorFn cb, void* user_data, NemoRelayFreeFn free_fn);
+extern int32_t nemo_relay_scope_deregister_event_metadata_injector(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_mark_sanitize_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
 extern int32_t nemo_relay_scope_deregister_mark_sanitize_guardrail(const char* scope_uuid, const char* name);
 extern int32_t nemo_relay_scope_register_scope_sanitize_start_guardrail(const char* scope_uuid, const char* name, int32_t priority, NemoRelayEventSanitizeFn cb, void* user_data, NemoRelayFreeFn free_fn);
@@ -296,6 +301,7 @@ extern void nemo_relay_otel_metric_subscriber_free(void*);
 
 // Go trampoline forward declarations (defined via //export in callbacks.go)
 extern char* goToolSanitizeTrampoline(void*, const char*, const char*);
+extern char* goEventMetadataInjectorTrampoline(void*, const FfiEvent*);
 extern char* goEventSanitizeTrampoline(void*, const FfiEvent*, const char*);
 extern char* goToolConditionalTrampoline(void*, const char*, const char*);
 extern char* goToolExecTrampoline(void*, const char*);
@@ -1425,6 +1431,32 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 // ---------------------------------------------------------------------------
 // Guardrail/Intercept registration (Tool)
 // ---------------------------------------------------------------------------
+
+// RegisterEventMetadataInjector registers a global event metadata injector.
+// Injectors run in ascending priority order and may only add metadata keys that
+// are not already present on the event.
+func RegisterEventMetadataInjector(name string, priority int32, fn EventMetadataInjectorFunc) error {
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
+	id := registerClosure(fn)
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_register_event_metadata_injector(
+		cName,
+		C.int32_t(priority),
+		C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// DeregisterEventMetadataInjector removes a global event metadata injector.
+func DeregisterEventMetadataInjector(name string) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_deregister_event_metadata_injector(cName))
+}
 
 func registerEventSanitizer(name string, priority int32, fn EventSanitizeFunc, kind int) error {
 	id := registerClosure(fn)
@@ -2879,6 +2911,40 @@ func (s *OpenTelemetryMetricSubscriber) Close() {
 // ---------------------------------------------------------------------------
 // Scope-local guardrail/intercept registration (Tool)
 // ---------------------------------------------------------------------------
+
+// ScopeRegisterEventMetadataInjector registers an event metadata injector
+// owned by an active scope.
+func ScopeRegisterEventMetadataInjector(scopeUUID, name string, priority int32, fn EventMetadataInjectorFunc) error {
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
+	id := registerClosure(fn)
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_register_event_metadata_injector(
+		cScopeUUID,
+		cName,
+		C.int32_t(priority),
+		C.NemoRelayEventMetadataInjectorFn(C.goEventMetadataInjectorTrampoline),
+		id,
+		C.NemoRelayFreeFn(C.goFreeTrampoline),
+	))
+}
+
+// ScopeDeregisterEventMetadataInjector removes an event metadata injector
+// owned by an active scope.
+func ScopeDeregisterEventMetadataInjector(scopeUUID, name string) error {
+	cScopeUUID := C.CString(scopeUUID)
+	defer C.free(unsafe.Pointer(cScopeUUID))
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	return checkStatus(C.nemo_relay_scope_deregister_event_metadata_injector(
+		cScopeUUID,
+		cName,
+	))
+}
 
 func registerScopeEventSanitizer(scopeUUID, name string, priority int32, fn EventSanitizeFunc, kind int) error {
 	id := registerClosure(fn)
