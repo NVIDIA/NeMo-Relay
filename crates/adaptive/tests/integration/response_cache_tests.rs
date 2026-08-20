@@ -811,7 +811,7 @@ async fn logical_strategy_reuses_across_reworded_tool_descriptions() {
     let request_with_tool = |description: &str| LlmRequest {
         headers: serde_json::Map::new(),
         content: json!({
-            "model": "gpt-4o",
+            "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             "messages": [{"role": "user", "content": "what is the weather?"}],
             "temperature": 0.0,
             "tools": [{"type": "function", "function": {

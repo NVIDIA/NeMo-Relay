@@ -1307,6 +1307,8 @@ fn decode_round_trip_guards_fall_back_to_raw_tool_and_message_shapes() {
 
 // --- `logical` key strategy (structural tool-schema hash) ---------
 
+const LOGICAL_KEY_MODEL: &str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+
 fn tool(name: &str, description: &str, param: &str, param_type: &str) -> Json {
     json!({
         "type": "function",
@@ -1324,13 +1326,13 @@ fn tool(name: &str, description: &str, param: &str, param_type: &str) -> Json {
 #[test]
 fn logical_ignores_tool_description_and_order() {
     let a = request(json!({
-        "model": "m",
+        "model": LOGICAL_KEY_MODEL,
         "messages": [{"role": "user", "content": "hi"}],
         "tools": [tool("get_weather", "Get the weather.", "city", "string"),
                   tool("get_time", "Get the time.", "tz", "string")]
     }));
     let b = request(json!({
-        "model": "m",
+        "model": LOGICAL_KEY_MODEL,
         "messages": [{"role": "user", "content": "hi"}],
         "tools": [tool("get_time", "Return the current time.", "tz", "string"),
                   tool("get_weather", "Look up weather, reworded.", "city", "string")]
@@ -1365,15 +1367,15 @@ fn structural_tool_schema_sorts_on_canonical_bytes() {
 fn logical_differs_on_changed_tool_interface() {
     let cfg = logical_config();
     let base = request(json!({
-        "model": "m", "messages": [{"role": "user", "content": "hi"}],
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
         "tools": [tool("get_weather", "d", "city", "string")]
     }));
     let renamed = request(json!({
-        "model": "m", "messages": [{"role": "user", "content": "hi"}],
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
         "tools": [tool("get_weather", "d", "location", "string")]
     }));
     let retyped = request(json!({
-        "model": "m", "messages": [{"role": "user", "content": "hi"}],
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
         "tools": [tool("get_weather", "d", "city", "number")]
     }));
     assert_ne!(
@@ -1393,7 +1395,7 @@ fn logical_differs_on_distinct_builtin_tools() {
     let cfg = logical_config();
     let with_builtin = |tool: Json| {
         request(json!({
-            "model": "gpt-4o",
+            "model": LOGICAL_KEY_MODEL,
             "input": "search the docs",
             "store": false,
             "tools": [tool]
@@ -1419,7 +1421,7 @@ fn logical_differs_on_changed_parameter_enum() {
     let cfg = logical_config();
     let with_units = |units: Json| {
         request(json!({
-            "model": "m", "messages": [{"role": "user", "content": "hi"}],
+            "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
             "tools": [{"type": "function", "function": {
                 "name": "get_weather",
                 "parameters": {"type": "object", "properties": {
@@ -1444,7 +1446,7 @@ fn logical_and_exact_do_not_collide() {
     // Tool-less, so both strategies key the identical body and only the
     // strategy field in the key document separates them.
     let req = request(json!({
-        "model": "m", "messages": [{"role": "user", "content": "hi"}]
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}]
     }));
     assert_ne!(
         key_of("openai", &req, &logical_config()),
