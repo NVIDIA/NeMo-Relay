@@ -15,14 +15,17 @@ worker_protocol = "grpc-v1"
 enabled = false
 
 [capabilities]
-items = ["plugin_worker"]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
 
 [source]
 manifest_root = "."
 artifact = "nemo_relay_python_grpc_worker_example/worker.py"
 
 [integrity]
-sha256 = "sha256:7bcc2fb993336c84fc319b0c5669c83ee9257822160ab258e2f15d2429fbd97b"
+sha256 = "sha256:8fe6ded5b590bd6a712c2ee2ac7d8da2620fdab1d5de05f212197372f0ab2b8d"
 
 [load]
 runtime = "python"

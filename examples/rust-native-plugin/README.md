@@ -5,117 +5,36 @@ SPDX-License-Identifier: Apache-2.0
 
 # Rust Native Dynamic Plugin
 
-This example shows a trusted in-process Rust dynamic plugin using the
-high-level `nemo-relay-plugin` SDK. It builds as a `cdylib`, exports a stable
-native ABI entry symbol, validates JSON config, registers middleware and
-subscribers, emits runtime marks/scopes, and creates an isolated scope stack.
-Typed middleware returns futures driven by the SDK-owned Tokio executor; the
-subscriber remains synchronous. The middleware demonstrates timers, async I/O,
-codec use across an await, concurrent opt-in `next` calls, and stream
-transformation. Set `native_concurrent_next` to `true` in an LLM request's
-content to exercise the concurrent continuation path.
+This project is the complete native plugin used by the authoring guide. Its
+configuration, observation, request policy, execution wrappers, and runtime
+helpers live in separate source modules. Together they register the subscriber,
+all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
+the current typed 0.8.0 SDK.
 
-The example intentionally depends on `nemo-relay-plugin`, not on the host
-`nemo-relay` runtime crate. Rust DTOs stay inside the plugin crate; the
-dynamic-library boundary remains the stable C ABI.
-
-## Build
-
-Run this command from the example directory:
+Run the focused tests and build the shared library from this directory. The
+configuration tests isolate validation and schema contracts. The lifecycle test
+builds a fresh `cdylib`, materializes a digest-checked manifest, activates the
+plugin in a host, executes middleware, observes its runtime mark, and clears
+the callbacks before unloading the library:
 
 ```bash
+cargo test
 cargo build
 ```
 
-Before you register the plugin, copy `relay-plugin.toml` to a local manifest and
-replace both occurrences of `<platform-library-file>` with the file name that
-`cargo build` creates for your platform:
+Copy `relay-plugin.toml` to `relay-plugin.local.toml` and replace
+`<platform-library-file>` with the debug artifact name:
 
-| Platform | Library path |
+| Platform | Library Path |
 |---|---|
 | macOS | `target/debug/libnemo_relay_rust_native_plugin_example.dylib` |
 | Linux | `target/debug/libnemo_relay_rust_native_plugin_example.so` |
 | Windows | `target/debug/nemo_relay_rust_native_plugin_example.dll` |
 
-The copied manifest must use the same relative path for `source.artifact` and
-`load.library`. Calculate the library's SHA-256 digest and replace
-`<artifact-sha256>` with the lowercase hexadecimal value:
+Calculate the artifact digest with `shasum -a 256`, `sha256sum`, or
+`Get-FileHash -Algorithm SHA256`, then replace `<artifact-sha256>` while keeping
+the `sha256:` prefix. The same relative artifact path must appear in
+`source.artifact` and `load.library`.
 
-| Platform | Digest command |
-|---|---|
-| macOS | `shasum -a 256 <library-path>` |
-| Linux | `sha256sum <library-path>` |
-| Windows PowerShell | `(Get-FileHash <library-path> -Algorithm SHA256).Hash.ToLower()` |
-
-Keep the `sha256:` prefix in the manifest. For example, a digest of `abc123`
-is written as `sha256:abc123`.
-
-## Register With Relay
-
-After materializing the library path and digest, run these commands from the
-repository root using the copied manifest path:
-
-```bash
-nemo-relay plugins add ./examples/rust-native-plugin/relay-plugin.local.toml
-nemo-relay plugins enable examples.rust_native_policy
-```
-
-You can also reference the manifest manually from `plugins.toml`:
-
-```toml
-[[plugins.dynamic]]
-manifest = "./examples/rust-native-plugin/relay-plugin.local.toml"
-
-[plugins.dynamic.config]
-tag = "demo"
-block_tools = false
-block_llms = false
-emit_isolated_scope = true
-
-[plugins.dynamic.config.executor]
-worker_threads = 4
-```
-
-The manifest declares the `config_schema` capability and references
-`config.schema.json`. After adding the plugin, use the editor for the same
-configuration target (`--user`, `--project`, or `--global`) to configure the
-fields without loading the native library. Schemas with
-`additionalProperties: false` must include the SDK-owned `executor` object and
-its positive `worker_threads` field whenever the plugin uses typed middleware:
-
-```bash
-nemo-relay plugins edit
-```
-
-The editor reads the schema file relative to `relay-plugin.toml`. It does not
-run the plugin during schema discovery.
-
-Start the gateway normally after the dynamic record is enabled:
-
-```bash
-nemo-relay --bind 127.0.0.1:4040
-```
-
-## What the Example Registers
-
-The example registers the following runtime behavior:
-
-- A subscriber that emits a mark when it sees non-plugin scope starts.
-- Tool sanitize request/response guardrails for observability payload tagging.
-- Conditional execution guardrails for tools and LLMs controlled by config.
-- Request and execution intercepts for tools that mutate JSON payloads and call
-  continuations.
-- LLM sanitize request/response guardrails.
-- An LLM request intercept that rewrites the request and schedules a mark. Relay
-  emits that mark after the LLM start event with the LLM scope as its parent.
-- LLM execution and stream execution intercepts.
-- Runtime mark and scope events.
-- A plugin-owned isolated scope stack for non-correlated visibility.
-
-Native plugins are not sandboxed. They run in the Relay process and must not
-unwind across ABI callbacks.
-
-Request intercepts do not own an LLM lifecycle because they run before Relay
-creates the LLM scope. `register_llm_request_intercept` returns one
-`LlmRequestInterceptOutcome`, whose `pending_marks` Relay emits in interceptor
-order after the LLM start event and before provider execution.
+The strict schema documents every feature group and the SDK-owned
+`executor.worker_threads` override.

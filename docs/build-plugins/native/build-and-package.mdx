@@ -1,0 +1,167 @@
+---
+title: "Build and Package"
+description: "Build, validate, register, exercise, and unload the Rust native example."
+position: 21
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The repository example builds a `cdylib` against the current 0.8.0 SDK and packages it
+with a strict schema. Run every command in this procedure from
+`examples/rust-native-plugin` unless a step says otherwise.
+
+## Build the Library
+
+The example crate exposes both `cdylib` and `rlib`. Relay loads the `cdylib`; the `rlib`
+lets the example integration tests call validation helpers without loading an unsafe
+dynamic boundary. The dependencies use the current 0.8.0 public SDK rather than a Git
+revision or an older package line. The `path = "../../crates/plugin"` override exists
+only because this checked example builds inside the NeMo Relay repository. A standalone
+plugin depends on the published `nemo-relay-plugin = "0.8.0"` package without `path`.
+
+The checked example uses the following package and dependency configuration:
+
+```toml
+[package]
+name = "nemo-relay-rust-native-plugin-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+futures = "0.3"
+nemo-relay-plugin = { version = "0.8.0", path = "../../crates/plugin" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "macros", "time"] }
+```
+
+Build and materialize the platform-specific library as follows:
+
+1. Run the example tests and build the debug library.
+
+   ```bash
+   cargo test
+   cargo build
+   ```
+
+2. Copy `relay-plugin.toml` to `relay-plugin.local.toml`. Replace
+   `<platform-library-file>` in `source.artifact` and `load.library` with the file Cargo
+   produced: `libnemo_relay_rust_native_plugin_example.dylib` on macOS,
+   `libnemo_relay_rust_native_plugin_example.so` on Linux, or
+   `nemo_relay_rust_native_plugin_example.dll` on Windows.
+
+3. Calculate the artifact SHA-256 from the example directory. Use
+   `shasum -a 256 target/debug/<platform-library-file>` on macOS,
+   `sha256sum target/debug/<platform-library-file>` on Linux, or
+   `Get-FileHash -Algorithm SHA256 target/debug/<platform-library-file>` in PowerShell.
+   Put the lowercase result after the existing `sha256:` prefix.
+
+At this point, success means the tests pass, the library exists at both manifest paths,
+and the digest describes those exact bytes.
+
+## Understand the Manifest
+
+The checked [manifest](/build-plugins/package-discoverable-plugins) template declares
+the plugin identity, version contracts, schema,
+library path, and exported symbol:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.rust_native_policy"
+kind = "rust_dynamic"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+artifact = "target/debug/<platform-library-file>"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+library = "target/debug/<platform-library-file>"
+symbol = "nemo_relay_register_plugin"
+```
+
+The `source.artifact` and `load.library` paths must identify the same library. Replace
+`<artifact-sha256>` with the lowercase digest of those bytes. The exported descriptor's
+plugin kind must exactly match `plugin.id`. The schema includes
+the SDK-owned `executor.worker_threads` property because this example registers typed
+async middleware and allows a component override. `additionalProperties: false` prevents
+an operator typo from silently becoming inactive configuration.
+
+The native-only schema fragment below gives the SDK executor override a strict positive
+integer. `executor_config_for_component` performs the corresponding runtime validation,
+so direct activation and package validation agree.
+
+```json
+{
+  "executor": {
+    "description": "Overrides the SDK-owned Tokio executor for this component.",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "worker_threads": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 2
+      }
+    }
+  }
+}
+```
+
+## Validate and Activate
+
+Use the following procedure to validate the package, activate it, and remove it safely:
+
+1. From the repository root, validate the local manifest before adding it.
+
+   ```bash
+   nemo-relay plugins validate ./examples/rust-native-plugin/relay-plugin.local.toml
+   ```
+
+2. Register and enable the package in the user configuration.
+
+   ```bash
+   nemo-relay plugins add --user ./examples/rust-native-plugin/relay-plugin.local.toml
+   nemo-relay plugins enable examples.rust_native_policy
+   ```
+
+3. Add the shared scenario configuration under the dynamic record, including
+   `executor.worker_threads = 2`. Start Relay with the package enabled, inspect the
+   activation report, and execute the documented tool and LLM calls.
+
+4. Change `requests.mode` to an unsupported value and validate again. Then restore the
+   valid value, add an unknown property, and verify that static package validation
+   rejects the schema violation. During component validation, confirm that the plugin's
+   diagnostic also reports the field rather than ignoring it.
+
+5. Disable and remove the package after clearing the active component.
+
+   ```bash
+   nemo-relay plugins disable examples.rust_native_policy
+   nemo-relay plugins remove examples.rust_native_policy
+   ```
+
+Success means manifest and schema validation fail before loading altered or invalid
+artifacts, a valid component produces an active runtime report, representative calls
+show the configured behavior, and removal occurs only after the host reports that the
+component registrations have been cleared.

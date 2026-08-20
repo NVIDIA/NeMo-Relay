@@ -25,59 +25,22 @@ Use `nemo-relay-worker` to author Rust workers. Depend on this crate directly
 only when implementing another worker SDK, a custom host, or protocol-level
 tooling.
 
-Relay 0.8 establishes the canonical tool-result contract as the `grpc-v1`
-baseline. Workers built for an earlier Relay release must be rebuilt, and their
-manifests must declare a `compat.relay` range beginning at `0.8.0` or later.
-The protocol identifier and protobuf package remain `grpc-v1` and
-`nemo.relay.worker.v1`, respectively. However, the generated protobuf API
-changes at the tool-result boundary: `ToolNext` returns
-`ToolExecutionResultResponse`, and `ToolExecutionInterceptResult.outcome` is a
-typed `ToolExecutionInterceptOutcome`. Rebuild every worker against the Relay
-0.8 protocol definitions.
+Relay 0.8 establishes canonical tool results as the `grpc-v1` baseline. Workers built
+for earlier releases must regenerate their bindings, rebuild, and declare
+`compat.relay` beginning at `0.8.0`. `ToolNext` returns `ToolExecutionResultResponse`,
+and tool execution intercepts use structural `ToolExecutionInterceptOutcome` messages.
 
-## Why Use It?
+## Protocol Surface
 
-- **Share the stable transport contract**: Use the `grpc-v1` service and
-  message definitions accepted by Relay worker manifests.
-- **Use generated Tonic bindings**: Access versioned client and server types
-  from `v1` without generating protobuf code in a consumer project.
-- **Keep data ownership clear**: Use structural protobuf wrappers for tool
-  results while preserving open application payloads as lossless JSON bytes.
-  Other Relay DTOs continue to use JSON envelopes backed by
-  `nemo-relay-types`.
-
-## What You Get
-
-- **`WORKER_PROTOCOL_GRPC_V1`**: The stable `grpc-v1` protocol identifier.
-- **`v1` module**: Generated `PluginWorker` and `RelayHostRuntime` gRPC
-  clients, servers, services, and messages.
-- **JSON envelope helpers**: `json_envelope` and `decode_json_envelope` for
-  serializing Relay DTOs into protocol payloads.
-- **JSON value helpers**: `json_value` and `decode_json_value` for the opaque
-  application values inside structural tool-result messages.
-
-## Structural Tool Result Contract
-
-The `grpc-v1` tool-result boundary uses these generated message types:
-
-| Protocol Location | Protobuf Type |
-| --- | --- |
-| Successful `RelayHostRuntime.ToolNext` response | `ToolExecutionResultResponse.value` containing `ToolExecutionResult` |
-| `ToolExecutionInterceptResult.outcome` | `ToolExecutionInterceptOutcome` |
-
-Both messages define `result` and optional `annotation` fields. Intercept
-outcomes also carry their ordered `pending_marks` as one JSON array. Arbitrary
-JSON values use `JsonValue`, whose bytes contain exactly one JSON value; this
-preserves JSON integers and other application data without the numeric coercion
-of `google.protobuf.Value`. Hosts and SDKs reject a missing required `result`
-or invalid JSON bytes. JSON null annotations normalize to absence.
-- **Additive mark options**: `EmitMarkRequest.data_schema` carries a
-  `nemo.relay.DataSchema@1` envelope and `severity` carries the canonical log
-  severity string. Omitting both is wire-compatible with legacy workers.
-- **Runtime diagnostics**: Authenticated `GetRuntimeDiagnostics` returns the
-  bounded active-host `{ code, message, count }` snapshot. Older hosts return
-  gRPC `UNIMPLEMENTED`; current SDKs surface that as an explicit unsupported
-  runtime-diagnostics error.
+| Surface | Role |
+|---|---|
+| `WORKER_PROTOCOL_GRPC_V1` | Identifies the stable protocol accepted by Relay worker manifests. |
+| `v1` module | Exposes generated `PluginWorker` and `RelayHostRuntime` Tonic clients, servers, services, and messages without regenerating protobuf in a consumer. |
+| JSON envelope helpers | Serialize Relay DTOs through `json_envelope` and `decode_json_envelope`, keeping protobuf responsible for transport flow rather than runtime data modeling. |
+| JSON value helpers | Serialize application-owned fields inside structural tool-result messages through `json_value` and `decode_json_value`. |
+| Tool results | `ToolNext` returns `ToolExecutionResultResponse`, and `ToolExecutionInterceptResult` returns `ToolExecutionInterceptOutcome`. Both preserve the application result and optional annotation. Intercept outcomes also include ordered pending marks. These fields use lossless protobuf `JsonValue` wrappers rather than `google.protobuf.Value`. |
+| Mark options | `EmitMarkRequest.data_schema` carries a `nemo.relay.DataSchema@1` envelope and `severity` carries the log severity. Omitting both preserves legacy behavior. |
+| Runtime diagnostics | Authenticated `GetRuntimeDiagnostics` returns a bounded active-host `{ code, message, count }` snapshot. Older hosts return gRPC `UNIMPLEMENTED`. |
 
 ## Installation
 
@@ -104,9 +67,3 @@ fn main() -> Result<(), serde_json::Error> {
     Ok(())
 }
 ```
-
-## Documentation
-
-- [NeMo Relay documentation](https://docs.nvidia.com/nemo/relay)
-- [Build Plugins guide](https://docs.nvidia.com/nemo/relay/build-plugins/about)
-- [Rust worker SDK](https://github.com/NVIDIA/NeMo-Relay/blob/main/crates/worker/README.md)

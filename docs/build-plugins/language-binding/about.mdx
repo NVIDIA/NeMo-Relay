@@ -1,180 +1,263 @@
 ---
-title: "Language Binding Plugins"
-description: "Build in-process, code-driven NeMo Relay plugins in Rust, Python, or Node.js."
-position: 2
+title: "About Language Binding Plugins"
+description: "Build application-owned plugins in Rust, Python, or Node.js."
+position: 5
 ---
-import { MermaidStyles } from "@/components/MermaidStyles";
-
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+A language-binding plugin is application code that registers a stable plugin kind with
+the Relay runtime already loaded by Rust, Python, or Node.js. It has no manifest, shared
+library, worker process, integrity digest, or separately managed environment. That makes
+it the most direct choice for behavior owned and deployed by one application.
 
-Use this guide to build an in-process, code-driven plugin in Rust, Python, or
-Node.js. The application registers the plugin kind with the loaded language
-binding, then initializes it with the same component configuration model used
-by built-in plugins.
+The checked `examples/language-binding-plugin` project implements one
+`documentation-plugin` in all three bindings. Every version follows the same sequence:
 
-This model does not load a shared library or start a worker process. For those
-models, use [Native Dynamic Plugins (Rust)](/build-plugins/dynamic-plugins/native-dynamic/about),
-[gRPC Worker Plugins (Rust)](/build-plugins/dynamic-plugins/grpc-worker/rust/about), or [gRPC
-Worker Plugins (Python)](/build-plugins/dynamic-plugins/grpc-worker/python/about).
+1. Validate the same JSON-compatible component settings.
+2. Install equivalent event and request behavior.
+3. Print the activation report and exercise managed tool, model, stream, and event paths.
+4. Clear registrations and deregister the kind.
 
-## What You Build
+## The Smallest Useful Language-Binding Plugin
 
-Define the plugin's purpose, stable kind name, configuration boundary, runtime
-surfaces, and activation lifecycle. Then use the focused guides to validate and
-register the resulting plugin contract.
+These complete programs contain the same boundary in each binding: the plugin validates
+component-local JSON, installs component-owned middleware, the host activates a
+`PluginConfig`, and cleanup tears the behavior down.
 
-<Note>
-NeMo Relay plugin configuration keys use `snake_case` in every language and file
-format. Node.js helper function names are `camelCase`, but the objects passed to
-`plugin.initialize(...)` use the same canonical `snake_case` keys as Python,
-Rust, JSON, and TOML plugin configuration.
+<Tabs>
+<Tab title="Python" language="python">
+```python
+import asyncio
+import nemo_relay
+from nemo_relay import plugin, tools
 
-</Note>
+class AddTagPlugin:
+    def validate(self, config):
+        tag = config.get("tag")
+        if not isinstance(tag, str) or not tag:
+            return [{
+                "level": "error",
+                "code": "example.invalid_tag",
+                "component": "example.add-tag",
+                "field": "tag",
+                "message": "tag must be a non-empty string",
+            }]
+        return []
 
-## Before You Start
+    def register(self, config, context):
+        tag = config["tag"]
+        context.register_tool_request_intercept(
+            "add-tag",
+            20,
+            False,
+            lambda _name, request: {**request, "plugin_tag": tag},
+        )
 
-You need:
+async def main():
+    plugin.register("example.add-tag", AddTagPlugin())
+    config = plugin.PluginConfig(components=[
+        plugin.ComponentSpec(
+            kind="example.add-tag",
+            enabled=True,
+            config={"tag": "documentation"},
+        )
+    ])
+    try:
+        report = await plugin.initialize(config)
+        print("activation:", report)
+        result = await tools.execute(
+            "lookup",
+            {"id": 7},
+            lambda request: nemo_relay.ToolExecutionResult(request),
+        )
+        assert result.result == {"id": 7, "plugin_tag": "documentation"}
+    finally:
+        await plugin.clear_async()
+        plugin.deregister("example.add-tag")
 
-- A reusable behavior that belongs outside one application call site.
-- A stable plugin kind name.
-- A JSON-compatible config shape.
-- A decision about which runtime surfaces the plugin installs.
-- A teardown plan for tests and applications that need to clear active configuration.
-
-## Plugin Shape and Requirements
-
-A plugin needs a stable shape before operators can activate it from config:
-
-| Requirement | Why It Matters |
-|---|---|
-| Stable `kind` | The plugin registry uses this string to match config to implementation. |
-| JSON-compatible config | Config must move across Python, Node.js, Rust, files, tests, and deployment systems. |
-| Validation hook | Operators need diagnostics before runtime behavior changes. |
-| Registration hook | Register runtime behavior through `PluginContext` so Relay can qualify names and roll back failed setup. |
-| Runtime ownership | The plugin should clearly own subscribers, middleware, or a small bundle of related surfaces. |
-
-Keep runtime objects out of config. Create provider clients, callbacks, file
-handles, caches, and credentials in plugin code, or resolve them from safe
-references during registration.
-
-## What a Plugin Can Install
-
-A plugin can install one or more of these runtime surfaces:
-
-- **Subscribers:** Event subscribers.
-- **Event sanitizers:** Mark, scope-start, and scope-end observability-field
-  sanitizers.
-- **Tool middleware:** Sanitize-request and sanitize-response guardrails,
-  conditional-execution guardrails, request intercepts, and execution
-  intercepts.
-- **LLM middleware:** Sanitize-request and sanitize-response guardrails,
-  conditional-execution guardrails, request intercepts, execution intercepts,
-  and stream execution intercepts.
-
-LLM sanitize guardrails always receive the request or response first, followed
-by a structured context whose `codec` is `none`, `builtin(id)`, `runtime(id)`,
-or `opaque`. Every callback declares `(payload, context)` and may omit the LLM
-event payload by returning no value. In-process sanitizer contexts can resolve
-the active codec for normalized processing. Worker sanitizer contexts resolve
-an invocation-scoped asynchronous codec proxy, so workers can perform the same
-directional normalization without receiving a host-process object.
-
-Start with one surface. Add a bundle only when one configuration document clearly controls related behavior, such as a subscriber plus the request intercepts needed to add correlation metadata.
-
-## Registration Lifecycle
-
-The diagram below shows how plugin configuration turns into registered runtime behavior.
-
-<MermaidStyles />
-
-```mermaid
-flowchart TB
-    Kind[Plugin kind<br/>registered once]
-    Config[Plugin config<br/>version + components + policy]
-    Validate{{Validate component config}}
-    Diagnostics[/Structured diagnostics/]
-    Initialize[Initialize enabled components]
-    Context[PluginContext<br/>component-scoped registrar]
-    Runtime[Runtime registrations<br/>subscribers + middleware]
-    Rollback[Rollback partial setup<br/>if initialization fails]
-
-    Kind --> Validate
-    Config --> Validate
-    Validate --> Diagnostics
-    Validate -->|valid or warning-only| Initialize
-    Initialize --> Context
-    Context --> Runtime
-    Initialize -->|error| Rollback
-    Context -->|registration error| Rollback
+asyncio.run(main())
 ```
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+import { createRequire } from 'node:module';
 
-The lifecycle works in stages. Register the plugin kind, validate component
-config, and initialize enabled components. `PluginContext` installs runtime
-behavior. If registration fails partway through, Relay rolls back the partial
-setup.
+const require = createRequire(import.meta.url);
+const relay = require('nemo-relay-node');
+const plugin = require('nemo-relay-node/plugin');
 
-## Keep the First Plugin Small
-
-The easiest first plugin is one of these:
-
-- A subscriber-oriented plugin that exports events.
-- A request-intercept plugin that adds one provider header.
-- A sanitize guardrail plugin that redacts one field family.
-- A policy plugin that registers one conditional-execution guardrail.
-
-Avoid a first plugin that combines unrelated subscribers, request transforms, and
-policy checks. Multi-surface bundles are useful later, but they need stronger
-validation and rollout controls. Refer to [Adaptive Configuration](/configure-plugins/adaptive/configuration)
-when you need Adaptive behavior.
-
-## Minimal Config Contract
-
-The top-level config document has `version`, `components`, and `policy`. Each
-component chooses a plugin kind and passes component-local JSON configuration to
-that plugin. The following document shows the complete shape:
-
-```json
-{
-  "version": 1,
-  "components": [
-    {
-      "kind": "header-plugin",
-      "enabled": true,
-      "config": {
-        "header_name": "x-tenant",
-        "value": "tenant-a"
-      }
+const addTagPlugin = {
+  validate(config) {
+    const { tag } = config;
+    if (typeof tag !== 'string' || tag.length === 0) {
+      return [{
+        level: 'error',
+        code: 'example.invalid_tag',
+        component: 'example.add-tag',
+        field: 'tag',
+        message: 'tag must be a non-empty string',
+      }];
     }
-  ],
-  "policy": {
-    "unknown_component": "warn",
-    "unknown_field": "warn",
-    "unsupported_value": "error"
+    return [];
+  },
+  register(config, context) {
+    context.registerToolRequestIntercept('add-tag', 20, false, (_name, request) => ({
+      ...request,
+      plugin_tag: config.tag,
+    }));
+  },
+};
+
+plugin.register('example.add-tag', addTagPlugin);
+const config = {
+  version: 1,
+  components: [plugin.ComponentSpec('example.add-tag', { tag: 'documentation' })],
+};
+
+try {
+  const report = await plugin.initialize(config);
+  console.log('activation:', report);
+  const result = await relay.toolCallExecute('lookup', { id: 7 }, (request) => ({ result: request }));
+  if (result.result.plugin_tag !== 'documentation') {
+    throw new Error('plugin did not rewrite the request');
   }
+} finally {
+  await relay.flushSubscribers();
+  plugin.clear();
+  plugin.deregister('example.add-tag');
 }
 ```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
-Use this document as the boundary between operator intent and plugin implementation. Keep business logic in the plugin code, not in the config parser.
+use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
+use nemo_relay::plugin::{
+    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginComponentSpec, PluginConfig,
+    PluginRegistrationContext, Result as PluginResult, clear_plugin_configuration,
+    deregister_plugin, initialize_plugins, register_plugin,
+};
+use serde_json::{Map, Value as Json, json};
 
-## Design Checklist
+struct AddTagPlugin;
 
-Before you write the plugin implementation, answer these questions:
+impl Plugin for AddTagPlugin {
+    fn plugin_kind(&self) -> &str {
+        "example.add-tag"
+    }
 
-- What is the stable plugin `kind`?
-- What runtime surface does it install first?
-- Which config fields are required?
-- Which fields are safe to expose as JSON?
-- What diagnostic should appear when each required field is missing?
-- What should happen when the component is disabled?
-- What should happen when registration fails halfway through?
+    fn validate(&self, config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
+        match config.get("tag") {
+            Some(Json::String(tag)) if !tag.is_empty() => Vec::new(),
+            _ => vec![ConfigDiagnostic {
+                level: DiagnosticLevel::Error,
+                code: "example.invalid_tag".into(),
+                component: Some(self.plugin_kind().into()),
+                field: Some("tag".into()),
+                message: "tag must be a non-empty string".into(),
+            }],
+        }
+    }
 
-## Next Steps
+    fn register<'a>(
+        &'a self,
+        config: &Map<String, Json>,
+        context: &'a mut PluginRegistrationContext,
+    ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
+        let tag = config["tag"].as_str().expect("validated tag").to_owned();
+        Box::pin(async move {
+            context.register_tool_request_intercept(
+                "add-tag",
+                20,
+                false,
+                Arc::new(move |_name, mut request| {
+                    let tag = tag.clone();
+                    Box::pin(async move {
+                        request["plugin_tag"] = Json::String(tag);
+                        Ok(request)
+                    })
+                }),
+            )?;
+            Ok(())
+        })
+    }
+}
 
-Use these links to continue from this workflow into the next related task.
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    register_plugin(Arc::new(AddTagPlugin))?;
+    let mut component = PluginComponentSpec::new("example.add-tag");
+    component.config = json!({ "tag": "documentation" })
+        .as_object()
+        .expect("object config")
+        .clone();
+    let config = PluginConfig { components: vec![component], ..PluginConfig::default() };
 
-- Define validation behavior with [Validate Plugin Configuration](/build-plugins/language-binding/validate-configuration).
-- Register runtime behavior with [Register Plugin Behavior](/build-plugins/language-binding/register-behavior).
-- Add rollout controls with [Design Plugin Configuration](/build-plugins/language-binding/advanced-configuration).
-- Review complete examples in [Code Examples](/build-plugins/language-binding/code-examples).
+    let result = async {
+        let report = initialize_plugins(config).await?;
+        println!("activation: {report:?}");
+        let result = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("lookup")
+                .args(json!({ "id": 7 }))
+                .func(Arc::new(|request| {
+                    Box::pin(async move { Ok(ToolExecutionResult::new(request)) })
+                }))
+                .build(),
+        )
+        .await?;
+        assert_eq!(result.result["plugin_tag"], "documentation");
+        Ok::<_, Box<dyn std::error::Error>>(())
+    }
+    .await;
+
+    clear_plugin_configuration()?;
+    assert!(deregister_plugin("example.add-tag"));
+    result
+}
+```
+</Tab>
+</Tabs>
+
+The host passes only `{"tag": "documentation"}` to both hooks. `register` does not
+receive the surrounding document, `enabled`, or another component's settings. Relay
+records the registration against this component, which is why clearing configuration
+can remove it without the plugin keeping a global deregistration handle.
+
+## How the Bindings Differ
+
+| Concern | Python | Node.js | Rust |
+|---|---|---|---|
+| Plugin identity | `plugin.register(kind, implementation)` supplies the kind. | `plugin.register(kind, implementation)` supplies the kind. | `Plugin::plugin_kind()` supplies the kind passed to `register_plugin`. |
+| Validation | `validate` is optional in the protocol, but a published component should implement it. | `validate` is optional in the interface, but a published component should implement it. | `validate` is required. Override `validate_with_policy` when component diagnostics should honor the host's non-default policy. |
+| Registration hook | Runs synchronously. Installed middleware callbacks can be synchronous or asynchronous according to their typed API. | Runs synchronously. Installed middleware callbacks can return values or promises according to their declarations. | Returns a `Send` future, so initialization can await resource setup and registration. |
+| Clearing | Use `await clear_async()` inside an event loop; synchronous `clear()` deliberately rejects that situation. | Await `relay.flushSubscribers()` when queued publication is still active, then use `clear()` to remove active registrations synchronously. | `clear_plugin_configuration()` removes active registrations and can report teardown failure. |
+| Deregistration | `deregister(kind)` returns whether a kind was removed. | `deregister(kind)` returns whether a kind was removed. | `deregister_plugin(kind)` removes the implementation from future lookup. |
+
+Configuration keys remain `snake_case` in all three examples. Only Node.js API methods
+such as `listKinds` or `registerLlmRequestIntercept` use `camelCase`.
+
+## Follow the Complete Workflow
+
+Follow these pages in order to build, activate, exercise, and remove the same plugin in
+each language binding:
+
+1. [Validate Configuration](/build-plugins/language-binding/validate-configuration)
+   turns wrong types, unsupported modes, unknown fields, and disabled-invalid components
+   into stable diagnostics before runtime state changes.
+2. [Register Behavior](/build-plugins/language-binding/register-behavior) connects valid
+   feature groups to component-owned registrations and verifies rollback.
+3. [Advanced Configuration](/build-plugins/language-binding/advanced-configuration)
+   covers multiple instances, host policy, reports, clearing, deregistration, and async
+   lifecycle differences.
+4. [Runnable Examples](/build-plugins/language-binding/code-examples) gives the clean
+   commands and expected output for Rust, Python, and Node.js.
+
+Success means the same operator intent produces the same visible behavior in each
+binding: invalid configuration is inert, valid configuration reports activation,
+representative calls show the plugin effect, and teardown removes both active behavior
+and future kind lookup when requested.
