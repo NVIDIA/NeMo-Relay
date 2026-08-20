@@ -13,6 +13,12 @@ intervening release in sequence.
 
 ## Upgrade to NeMo Relay 0.8
 
+### Update Exhaustive Cache Configuration Literals
+
+Rust code that constructs `ResponseCacheConfig` with an exhaustive struct
+literal must add `tools: None`. Prefer `..ResponseCacheConfig::default()` when
+the literal should remain compatible with new optional cache surfaces.
+
 ### Move Hermes Agent to Its Native Relay Integration
 
 NeMo Relay 0.8 removes Hermes Agent from the Relay CLI. The `nemo-relay hermes`
