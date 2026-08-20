@@ -562,6 +562,31 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
 }
 
 #[test]
+fn unadvertised_export_activation_policy_registration_is_ignored() {
+    let policy = registration(
+        RegistrationSurface::ExportActivationPolicy,
+        "export_activation_policy",
+    );
+    let subscriber = registration(RegistrationSurface::Subscriber, "subscriber");
+    let mut registrations = vec![policy.clone(), subscriber.clone()];
+
+    filter_unadvertised_export_activation_policy(
+        "fixture_worker",
+        &[RegistrationSurface::Subscriber as i32],
+        &mut registrations,
+    );
+    assert_eq!(registrations, vec![subscriber]);
+
+    let mut advertised = vec![policy.clone()];
+    filter_unadvertised_export_activation_policy(
+        "fixture_worker",
+        &[RegistrationSurface::ExportActivationPolicy as i32],
+        &mut advertised,
+    );
+    assert_eq!(advertised, vec![policy]);
+}
+
+#[test]
 fn relay_compatibility_and_blocking_helpers_cover_local_edges() {
     enable_operational_logs();
     assert!(

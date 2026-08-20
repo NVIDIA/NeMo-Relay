@@ -615,11 +615,16 @@ fn load_one_worker_plugin(
         .map_err(|err| {
             PluginError::RegistrationFailed(format!("worker registration RPC failed: {err}"))
         })?;
-        let register = register.into_inner();
+        let mut register = register.into_inner();
         if let Some(error) = register.error {
             return Err(worker_error_to_plugin(error, "worker registration failed"));
         }
         validate_registration_plan(&spec.plugin_id, &register)?;
+        filter_unadvertised_export_activation_policy(
+            &spec.plugin_id,
+            &handshake.supported_surfaces,
+            &mut register.registrations,
+        );
         register.registrations
     };
     if registrations.iter().any(|registration| {
@@ -3389,6 +3394,30 @@ fn validate_registration_plan(
         }
     }
     Ok(())
+}
+
+fn filter_unadvertised_export_activation_policy(
+    plugin_id: &str,
+    supported_surfaces: &[i32],
+    registrations: &mut Vec<Registration>,
+) {
+    let policy_surface = RegistrationSurface::ExportActivationPolicy as i32;
+    if supported_surfaces.contains(&policy_surface) {
+        return;
+    }
+    registrations.retain(|registration| {
+        if registration.surface != policy_surface {
+            return true;
+        }
+        log::warn!(
+            target: "nemo_relay.worker",
+            event = "worker_registration_surface_unadvertised",
+            plugin_id,
+            surface = "export_activation_policy";
+            "Worker export activation policy registration ignored because the surface was not advertised"
+        );
+        false
+    });
 }
 
 fn diagnostics_have_errors(diagnostics: &[ConfigDiagnostic]) -> bool {
