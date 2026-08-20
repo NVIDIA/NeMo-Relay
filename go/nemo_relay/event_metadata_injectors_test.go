@@ -33,6 +33,8 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 			"go.injected.global":    event.Kind(),
 			"go.injected.collision": "first",
 			"go.existing":           "replacement",
+			"go.injected.integers":  []int64{1, 2},
+			"go.injected.doubles":   []float64{1.25, 2.5},
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -52,6 +54,16 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = DeregisterEventMetadataInjector("go-event-metadata-failure") })
+
+	if err := RegisterEventMetadataInjector("go-event-metadata-mixed-numbers", 40, func(Event) (EventMetadata, error) {
+		return EventMetadata{
+			"go.invalid.mixed_numbers": []any{1, 2.5},
+			"go.invalid.sentinel":      "must-be-omitted",
+		}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = DeregisterEventMetadataInjector("go-event-metadata-mixed-numbers") })
 
 	scope, err := PushScope("go-event-metadata-scope", ScopeTypeCustom)
 	if err != nil {
@@ -73,6 +85,7 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 	}
 
 	for _, name := range []string{
+		"go-event-metadata-mixed-numbers",
 		"go-event-metadata-failure",
 		"go-event-metadata-later",
 		"go-event-metadata-first",
@@ -112,6 +125,19 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 	}
 	if metadata := decodeEventMetadata(t, events[1]); metadata["go.existing"] != "original" {
 		t.Fatalf("existing metadata was overwritten: %#v", metadata)
+	}
+	metadata := decodeEventMetadata(t, events[1])
+	if _, ok := metadata["go.injected.integers"]; !ok {
+		t.Fatalf("homogeneous integer metadata was omitted: %#v", metadata)
+	}
+	if _, ok := metadata["go.injected.doubles"]; !ok {
+		t.Fatalf("homogeneous double metadata was omitted: %#v", metadata)
+	}
+	if _, ok := metadata["go.invalid.mixed_numbers"]; ok {
+		t.Fatalf("mixed numeric metadata was accepted: %#v", metadata)
+	}
+	if _, ok := metadata["go.invalid.sentinel"]; ok {
+		t.Fatalf("invalid callback output was partially applied: %#v", metadata)
 	}
 	if metadata := decodeEventMetadata(t, events[3]); len(metadata) != 0 {
 		t.Fatalf("cleanup event retained injector metadata: %#v", metadata)

@@ -131,9 +131,16 @@ unsafe extern "C" fn event_metadata_injector_cb(
     event: *const FfiEvent,
 ) -> *mut c_char {
     let name = unsafe { take_string(nemo_relay_event_name(event)) }.unwrap_or_default();
-    CString::new(json!({"ffi.injected": name}).to_string())
-        .unwrap()
-        .into_raw()
+    CString::new(
+        json!({
+            "ffi.injected": name,
+            "ffi.integers": [1, 2],
+            "ffi.doubles": [1.25, 2.5],
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
 }
 
 unsafe extern "C" fn event_metadata_local_injector_cb(
@@ -160,6 +167,21 @@ unsafe extern "C" fn event_metadata_injector_invalid_cb(
     CString::new("[]").unwrap().into_raw()
 }
 
+unsafe extern "C" fn event_metadata_injector_mixed_numbers_cb(
+    _user_data: *mut libc::c_void,
+    _event: *const FfiEvent,
+) -> *mut c_char {
+    CString::new(
+        json!({
+            "ffi.invalid.mixed_numbers": [1, 2.5],
+            "ffi.invalid.sentinel": "must-be-omitted",
+        })
+        .to_string(),
+    )
+    .unwrap()
+    .into_raw()
+}
+
 #[test]
 fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
     let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
@@ -181,6 +203,7 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
         let global_name = cstring(&unique_name("ffi_event_metadata_global"));
         let failure_name = cstring(&unique_name("ffi_event_metadata_failure"));
         let invalid_name = cstring(&unique_name("ffi_event_metadata_invalid"));
+        let mixed_numbers_name = cstring(&unique_name("ffi_event_metadata_mixed_numbers"));
         assert_status!(
             nemo_relay_register_event_metadata_injector(
                 global_name.as_ptr(),
@@ -206,6 +229,16 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
                 invalid_name.as_ptr(),
                 30,
                 event_metadata_injector_invalid_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                mixed_numbers_name.as_ptr(),
+                40,
+                event_metadata_injector_mixed_numbers_cb,
                 ptr::null_mut(),
                 None,
             ),
@@ -253,7 +286,12 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
         );
         nemo_relay_scope_handle_free(scope);
 
-        for name in [&global_name, &failure_name, &invalid_name] {
+        for name in [
+            &global_name,
+            &failure_name,
+            &invalid_name,
+            &mixed_numbers_name,
+        ] {
             assert_status!(
                 nemo_relay_deregister_event_metadata_injector(name.as_ptr()),
                 NemoRelayStatus::Ok
@@ -299,6 +337,10 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
             mark["metadata"]["ffi.injected"],
             json!("ffi-event-metadata-mark")
         );
+        assert_eq!(mark["metadata"]["ffi.integers"], json!([1, 2]));
+        assert_eq!(mark["metadata"]["ffi.doubles"], json!([1.25, 2.5]));
+        assert!(mark["metadata"].get("ffi.invalid.mixed_numbers").is_none());
+        assert!(mark["metadata"].get("ffi.invalid.sentinel").is_none());
         assert_eq!(mark["metadata"]["ffi.local"], json!(true));
         assert_eq!(
             scope_end["metadata"]["ffi.injected"],
