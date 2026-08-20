@@ -2,7 +2,7 @@
 title: "nemo_relay.plugin"
 sidebar-title: "plugin"
 description: "Generic plugin configuration and registration helpers."
-position: 11
+position: 12
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -40,6 +40,14 @@ def register_subscriber(name: str, callback: Callable[[Event], None]) -> None
 ```
 
 Register an infallible event subscriber for this component.
+
+##### `register_event_metadata_injector`
+
+```python
+def register_event_metadata_injector(name: str, priority: int, callback: EventMetadataInjectorCallback) -> None
+```
+
+Register an event metadata injector for this component.
 
 ##### `register_mark_sanitize_guardrail`
 

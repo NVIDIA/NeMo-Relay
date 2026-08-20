@@ -1011,6 +1011,24 @@ The optional `collector` callback is invoked with each intercepted chunk as JSON
 export declare function llmStreamCallExecute(name: string, request: Json, func: (...args: any[]) => any, collector?: (arg: Json) => any | undefined | null, finalizer?: () => any | undefined | null, handle?: ScopeHandle | undefined | null, attributes?: number | undefined | null, data?: Json | undefined | null, metadata?: Json | undefined | null, modelName?: string | undefined | null, codecDecode?: (arg: Json) => any, codecEncode?: (arg: Json) => any, responseCodecDecode?: (arg: Json) => any): Promise<LlmStream>
 ```
 
+### `registerEventMetadataInjector`
+
+Register a global event metadata injector.
+
+The callback receives an immutable event snapshot and may return additions directly or in a Promise. Relay validates and merges accepted additions before event sanitizers run.
+
+```ts
+export declare function registerEventMetadataInjector(name: string, priority: number, injector: (event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>): void
+```
+
+### `deregisterEventMetadataInjector`
+
+Deregister a global event metadata injector by name.
+
+```ts
+export declare function deregisterEventMetadataInjector(name: string): boolean
+```
+
 ### `registerMarkSanitizeGuardrail`
 
 Register an event sanitize guardrail.
@@ -1311,6 +1329,22 @@ The Promise rejects if the blocking task fails or the core subscriber flush retu
 
 ```ts
 export declare function flushSubscribers(): Promise<void>
+```
+
+### `scopeRegisterEventMetadataInjector`
+
+Register an event metadata injector owned by an active scope.
+
+```ts
+export declare function scopeRegisterEventMetadataInjector(scopeUuid: string, name: string, priority: number, injector: (event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>): void
+```
+
+### `scopeDeregisterEventMetadataInjector`
+
+Deregister a scope-local event metadata injector by name.
+
+```ts
+export declare function scopeDeregisterEventMetadataInjector(scopeUuid: string, name: string): boolean
 ```
 
 ### `scopeRegisterMarkSanitizeGuardrail`

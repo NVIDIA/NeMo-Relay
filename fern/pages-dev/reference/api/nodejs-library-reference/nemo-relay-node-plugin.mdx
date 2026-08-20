@@ -294,6 +294,12 @@ export interface PluginContext {
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.
    */
   registerSubscriber(name: string, callback: (event: Json) => void | Promise<void>): void;
+  /** Register an event metadata injector for this component. */
+  registerEventMetadataInjector(
+    name: string,
+    priority: number,
+    callback: (event: Json) => EventMetadata | Promise<EventMetadata>,
+  ): void;
   /** Register a mark event sanitizer for this component. */
   registerMarkSanitizeGuardrail(
     name: string,
@@ -659,5 +665,29 @@ Execution lane for a dynamically loaded Relay plugin.
 
 ```ts
 export type DynamicPluginKind = 'rust_dynamic' | 'worker';
+```
+
+### `EventMetadataScalar`
+
+Scalar value accepted in event metadata additions.
+
+```ts
+export type EventMetadataScalar = string | number | boolean;
+```
+
+### `EventMetadataValue`
+
+Flat value accepted in event metadata additions. After JSON conversion, numeric arrays must contain only integer values or only floating-point values.
+
+```ts
+export type EventMetadataValue = EventMetadataScalar | string[] | number[] | boolean[];
+```
+
+### `EventMetadata`
+
+Metadata additions returned by an event metadata injector.
+
+```ts
+export type EventMetadata = Record<string, EventMetadataValue>;
 ```
 

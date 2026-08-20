@@ -2,7 +2,7 @@
 title: "nemo_relay.scope_local"
 sidebar-title: "scope_local"
 description: "Scope-local middleware and subscriber registration."
-position: 13
+position: 14
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -14,6 +14,22 @@ Module `nemo_relay.scope_local`.
 Scope-local middleware and subscriber registration.
 
 ## Functions
+
+### `register_event_metadata_injector`
+
+```python
+def register_event_metadata_injector(scope_handle: ScopeHandle, name: str, priority: int, injector: EventMetadataInjectorCallback) -> None
+```
+
+Register an event metadata injector owned by an active scope.
+
+### `deregister_event_metadata_injector`
+
+```python
+def deregister_event_metadata_injector(scope_handle: ScopeHandle, name: str) -> bool
+```
+
+Remove a scope-local event metadata injector by registration name.
 
 ### `register_mark_sanitize`
 
