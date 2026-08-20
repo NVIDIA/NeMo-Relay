@@ -22,10 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
-use crate::api::export_activation::{
-    ExportActivationPolicyFn, deregister_export_activation_policy,
-    register_export_activation_policy,
-};
+use crate::api::export_activation::{ExportActivationPolicyFn, ExportActivationPolicyRegistry};
 use crate::api::registry::{
     deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
@@ -405,10 +402,20 @@ impl PluginRegistration {
 /// Each `register_*` call both installs the middleware/subscriber into the
 /// NeMo Relay runtime and records the inverse deregistration closure so the host
 /// can roll back partial setup on failure.
-#[derive(Default)]
 pub struct PluginRegistrationContext {
     registrations: Vec<PluginRegistration>,
     namespace: Option<String>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
+}
+
+impl Default for PluginRegistrationContext {
+    fn default() -> Self {
+        Self {
+            registrations: Vec::new(),
+            namespace: None,
+            export_activation_policies: Arc::new(ExportActivationPolicyRegistry::default()),
+        }
+    }
 }
 
 impl PluginRegistrationContext {
@@ -422,7 +429,34 @@ impl PluginRegistrationContext {
         Self {
             registrations: vec![],
             namespace: Some(namespace.into()),
+            export_activation_policies: Arc::new(ExportActivationPolicyRegistry::default()),
         }
+    }
+
+    pub(crate) fn with_namespace_and_export_activation_policies(
+        namespace: impl Into<String>,
+        export_activation_policies: Arc<ExportActivationPolicyRegistry>,
+    ) -> Self {
+        Self {
+            registrations: Vec::new(),
+            namespace: Some(namespace.into()),
+            export_activation_policies,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_export_activation_policies(
+        export_activation_policies: Arc<ExportActivationPolicyRegistry>,
+    ) -> Self {
+        Self {
+            registrations: Vec::new(),
+            namespace: None,
+            export_activation_policies,
+        }
+    }
+
+    pub(crate) fn export_activation_policies(&self) -> Arc<ExportActivationPolicyRegistry> {
+        Arc::clone(&self.export_activation_policies)
     }
 
     /// Returns the runtime-qualified name for a plugin-local registration.
@@ -443,16 +477,20 @@ impl PluginRegistrationContext {
         provider: &str,
         callback: ExportActivationPolicyFn,
     ) -> Result<()> {
-        register_export_activation_policy(provider, callback).map_err(|error| {
-            PluginError::RegistrationFailed(format!("export activation policy: {error}"))
-        })?;
+        self.export_activation_policies
+            .register(provider, callback)
+            .map_err(|error| {
+                PluginError::RegistrationFailed(format!("export activation policy: {error}"))
+            })?;
 
         let provider = provider.to_string();
+        let export_activation_policies = Arc::clone(&self.export_activation_policies);
         self.registrations.push(PluginRegistration::new(
             "export_activation_policy",
             provider.clone(),
             Box::new(move || {
-                deregister_export_activation_policy(&provider)
+                export_activation_policies
+                    .deregister(&provider)
                     .map(|_| ())
                     .map_err(|error| {
                         PluginError::RegistrationFailed(format!(
@@ -1517,10 +1555,12 @@ async fn initialize_plugins_with_diagnostics(
     run_owned_plugin_mutation("plugin initialization", move || async move {
         let lease = LegacyPluginMutationLease::acquire()?;
         let rollback_failures = Arc::new(Mutex::new(Vec::new()));
+        let export_activation_policies = Arc::new(ExportActivationPolicyRegistry::default());
         let initialization = tokio::spawn(initialize_plugins_exact_inner(
             config,
             Some(Arc::clone(&rollback_failures)),
             diagnostics,
+            export_activation_policies,
         ))
         .await
         .map_err(|error| {
@@ -1638,15 +1678,23 @@ pub(crate) async fn initialize_plugins_exact_for_host(
     owner_id: u64,
     rollback_failures: Arc<Mutex<Vec<String>>>,
     diagnostics: Vec<ConfigDiagnostic>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<ConfigReport> {
     verify_plugin_host_owner(owner_id)?;
-    initialize_plugins_exact_inner(config, Some(rollback_failures), diagnostics).await
+    initialize_plugins_exact_inner(
+        config,
+        Some(rollback_failures),
+        diagnostics,
+        export_activation_policies,
+    )
+    .await
 }
 
 async fn initialize_plugins_exact_inner(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     diagnostics: Vec<ConfigDiagnostic>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<ConfigReport> {
     let enabled_component_count = config
         .components
@@ -1685,6 +1733,7 @@ async fn initialize_plugins_exact_inner(
                 previous_state,
                 rollback_failures,
                 enabled_component_count,
+                export_activation_policies,
             )
             .await
         }
@@ -1694,6 +1743,7 @@ async fn initialize_plugins_exact_inner(
                 report,
                 rollback_failures,
                 enabled_component_count,
+                export_activation_policies,
             )
             .await
         }
@@ -1705,10 +1755,20 @@ async fn activate_initial_plugin_configuration(
     report: ConfigReport,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     enabled_component_count: usize,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<ConfigReport> {
-    let registrations =
-        initialize_plugin_components_catching_panics(config.clone(), rollback_failures).await?;
-    store_active_plugin_configuration(config, report.clone(), registrations)?;
+    let registrations = initialize_plugin_components_catching_panics(
+        config.clone(),
+        rollback_failures,
+        Arc::clone(&export_activation_policies),
+    )
+    .await?;
+    store_active_plugin_configuration_with_export_activation_policies(
+        config,
+        report.clone(),
+        registrations,
+        export_activation_policies,
+    )?;
     log::info!(
         target: "nemo_relay.plugin",
         event = "plugin_configuration_activated",
@@ -1724,6 +1784,7 @@ async fn replace_plugin_configuration(
     mut previous_state: ActivePluginConfiguration,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     enabled_component_count: usize,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<ConfigReport> {
     install_previous_configuration_for_teardown(&previous_state)?;
     let teardown = rollback_registrations_checked(&mut previous_state.registrations);
@@ -1741,6 +1802,7 @@ async fn replace_plugin_configuration(
         previous_state,
         rollback_failures,
         enabled_component_count,
+        export_activation_policies,
     )
     .await
 }
@@ -1756,6 +1818,7 @@ fn install_previous_configuration_for_teardown(
         report: previous_state.report.clone(),
         runtime_diagnostics: previous_state.runtime_diagnostics.clone(),
         registrations: Vec::new(),
+        export_activation_policies: Arc::clone(&previous_state.export_activation_policies),
     });
     Ok(())
 }
@@ -1791,12 +1854,22 @@ async fn activate_replacement_or_restore(
     previous_state: ActivePluginConfiguration,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     enabled_component_count: usize,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<ConfigReport> {
-    match initialize_plugin_components_catching_panics(config.clone(), rollback_failures.clone())
-        .await
+    match initialize_plugin_components_catching_panics(
+        config.clone(),
+        rollback_failures.clone(),
+        Arc::clone(&export_activation_policies),
+    )
+    .await
     {
         Ok(registrations) => {
-            store_active_plugin_configuration(config, report.clone(), registrations)?;
+            store_active_plugin_configuration_with_export_activation_policies(
+                config,
+                report.clone(),
+                registrations,
+                export_activation_policies,
+            )?;
             log::info!(
                 target: "nemo_relay.plugin",
                 event = "plugin_configuration_replaced",
@@ -1816,9 +1889,11 @@ async fn restore_previous_plugin_configuration(
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
     err: PluginError,
 ) -> Result<ConfigReport> {
+    let export_activation_policies = Arc::new(ExportActivationPolicyRegistry::default());
     match initialize_plugin_components_catching_panics(
         previous_state.config.clone(),
         rollback_failures,
+        Arc::clone(&export_activation_policies),
     )
     .await
     {
@@ -1828,6 +1903,7 @@ async fn restore_previous_plugin_configuration(
                 previous_state.report,
                 previous_state.runtime_diagnostics,
                 registrations,
+                export_activation_policies,
             )?;
             log::warn!(
                 target: "nemo_relay.plugin",
@@ -1854,14 +1930,17 @@ async fn restore_previous_plugin_configuration(
 async fn initialize_plugin_components_catching_panics(
     config: PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<Vec<PluginRegistration>> {
-    tokio::spawn(async move { initialize_plugin_components(&config, rollback_failures).await })
-        .await
-        .map_err(|error| {
-            PluginError::Internal(format!(
-                "plugin component initialization task failed: {error}"
-            ))
-        })?
+    tokio::spawn(async move {
+        initialize_plugin_components(&config, rollback_failures, export_activation_policies).await
+    })
+    .await
+    .map_err(|error| {
+        PluginError::Internal(format!(
+            "plugin component initialization task failed: {error}"
+        ))
+    })?
 }
 
 /// Validates and activates `config` layered on top of the discovered
@@ -2637,11 +2716,13 @@ struct ActivePluginConfiguration {
     report: ConfigReport,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 }
 
 async fn initialize_plugin_components(
     config: &PluginConfig,
     rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<Vec<PluginRegistration>> {
     ensure_builtin_plugins_registered()?;
     let totals = plugin_component_totals(config);
@@ -2670,8 +2751,11 @@ async fn initialize_plugin_components(
             totals.get(component.kind.as_str()).copied().unwrap_or(1),
         );
 
-        let mut pending =
-            PendingPluginRegistrationContext::new(namespace, rollback_failures.clone());
+        let mut pending = PendingPluginRegistrationContext::new(
+            namespace,
+            rollback_failures.clone(),
+            Arc::clone(&export_activation_policies),
+        );
         plugin
             .register(&component.config, &mut pending.context)
             .await?;
@@ -2718,9 +2802,16 @@ struct PendingPluginRegistrationContext {
 }
 
 impl PendingPluginRegistrationContext {
-    fn new(namespace: String, rollback_failures: Option<Arc<Mutex<Vec<String>>>>) -> Self {
+    fn new(
+        namespace: String,
+        rollback_failures: Option<Arc<Mutex<Vec<String>>>>,
+        export_activation_policies: Arc<ExportActivationPolicyRegistry>,
+    ) -> Self {
         Self {
-            context: PluginRegistrationContext::with_namespace(namespace),
+            context: PluginRegistrationContext::with_namespace_and_export_activation_policies(
+                namespace,
+                export_activation_policies,
+            ),
             rollback_failures,
         }
     }
@@ -2753,16 +2844,32 @@ fn record_rollback_failures(
     }
 }
 
+#[cfg(test)]
 fn store_active_plugin_configuration(
     config: PluginConfig,
     report: ConfigReport,
     registrations: Vec<PluginRegistration>,
+) -> Result<()> {
+    store_active_plugin_configuration_with_export_activation_policies(
+        config,
+        report,
+        registrations,
+        Arc::new(ExportActivationPolicyRegistry::default()),
+    )
+}
+
+fn store_active_plugin_configuration_with_export_activation_policies(
+    config: PluginConfig,
+    report: ConfigReport,
+    registrations: Vec<PluginRegistration>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<()> {
     store_active_plugin_configuration_with_runtime_diagnostics(
         config,
         report,
         BTreeMap::new(),
         registrations,
+        export_activation_policies,
     )
 }
 
@@ -2771,6 +2878,7 @@ fn store_active_plugin_configuration_with_runtime_diagnostics(
     report: ConfigReport,
     runtime_diagnostics: BTreeMap<String, RuntimeDiagnosticsSnapshotEntry>,
     registrations: Vec<PluginRegistration>,
+    export_activation_policies: Arc<ExportActivationPolicyRegistry>,
 ) -> Result<()> {
     let mut guard = ACTIVE_PLUGIN_CONFIGURATION.lock().map_err(|err| {
         PluginError::Internal(format!("active plugin configuration lock poisoned: {err}"))
@@ -2780,6 +2888,7 @@ fn store_active_plugin_configuration_with_runtime_diagnostics(
         report,
         runtime_diagnostics,
         registrations,
+        export_activation_policies,
     });
     if let Ok(mut guard) = LAST_FAILED_RUNTIME_DIAGNOSTICS_REPORT.lock() {
         *guard = None;

@@ -37,8 +37,8 @@ use uuid::Uuid;
 
 use crate::api::event::{Event, LogSeverity, ScopeCategory, ValidatedMetricMeasurement};
 use crate::api::export_activation::{
-    ExportActivationDecision, ExportActivationRequest, ExportActivationTargetKind,
-    evaluate_export_activation_policy,
+    ExportActivationDecision, ExportActivationPolicyRegistry, ExportActivationRequest,
+    ExportActivationTargetKind,
 };
 use crate::api::runtime::{EventSubscriberFn, current_scope_stack, global_context};
 use crate::api::scope::ScopeType;
@@ -1161,12 +1161,14 @@ async fn register_atof_exporter(
     mut section: AtofSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    let export_activation_policies = ctx.export_activation_policies();
     let mut allowed_sinks = Vec::with_capacity(section.sinks.len());
     for (index, sink) in section.sinks.into_iter().enumerate() {
         let allowed = match &sink {
             AtofSinkSectionConfig::File(_) => true,
             AtofSinkSectionConfig::Stream(stream) => {
                 export_target_allowed(
+                    &export_activation_policies,
                     stream.activation_policy.as_ref(),
                     ExportActivationTargetKind::AtofStream,
                     &format!("atof.sinks[{index}]"),
@@ -1275,6 +1277,7 @@ async fn register_atif_dispatcher(
     mut section: AtifSectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    let export_activation_policies = ctx.export_activation_policies();
     validate_atif_filename_template(&section.filename_template)
         .map_err(PluginError::InvalidConfig)?;
 
@@ -1291,7 +1294,14 @@ async fn register_atif_dispatcher(
                 ExportActivationTargetKind::AtifS3,
             ),
         };
-        if export_target_allowed(policy, kind, &format!("atif.storage[{index}]")).await {
+        if export_target_allowed(
+            &export_activation_policies,
+            policy,
+            kind,
+            &format!("atif.storage[{index}]"),
+        )
+        .await
+        {
             allowed_storage.push(entry);
         }
     }
@@ -1447,6 +1457,7 @@ async fn register_opentelemetry(
     section: OpenTelemetrySectionConfig,
     ctx: &mut PluginRegistrationContext,
 ) -> PluginResult<()> {
+    let export_activation_policies = ctx.export_activation_policies();
     let OpenTelemetrySectionConfig {
         endpoints,
         logs,
@@ -1473,6 +1484,7 @@ async fn register_opentelemetry(
     let mut allowed_traces = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.into_iter().enumerate() {
         if export_target_allowed(
+            &export_activation_policies,
             endpoint.activation_policy.as_ref(),
             ExportActivationTargetKind::OtlpTrace,
             &format!("opentelemetry.traces[{index}]"),
@@ -1485,6 +1497,7 @@ async fn register_opentelemetry(
     let mut allowed_logs = Vec::new();
     for (index, endpoint) in log_endpoints.unwrap_or_default().into_iter().enumerate() {
         if export_target_allowed(
+            &export_activation_policies,
             endpoint.activation_policy.as_ref(),
             ExportActivationTargetKind::OtlpLog,
             &format!("opentelemetry.logs.endpoints[{index}]"),
@@ -1497,6 +1510,7 @@ async fn register_opentelemetry(
     let mut allowed_metrics = Vec::new();
     for (index, endpoint) in metric_endpoints.unwrap_or_default().into_iter().enumerate() {
         if export_target_allowed(
+            &export_activation_policies,
             endpoint.activation_policy.as_ref(),
             ExportActivationTargetKind::OtlpMetric,
             &format!("opentelemetry.metrics.endpoints[{index}]"),
@@ -4983,6 +4997,7 @@ fn observability_registration_error(error: impl std::fmt::Display) -> PluginErro
 }
 
 async fn export_target_allowed(
+    export_activation_policies: &ExportActivationPolicyRegistry,
     policy: Option<&ExportActivationPolicyConfig>,
     target_kind: ExportActivationTargetKind,
     field: &str,
@@ -4996,7 +5011,7 @@ async fn export_target_allowed(
     };
     let outcome = tokio::time::timeout(
         Duration::from_millis(policy.timeout_millis),
-        evaluate_export_activation_policy(&policy.provider, request),
+        export_activation_policies.evaluate(&policy.provider, request),
     )
     .await;
     let (allowed, reason) = match outcome {

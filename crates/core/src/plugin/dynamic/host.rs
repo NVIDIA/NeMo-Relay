@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
+use crate::api::export_activation::ExportActivationPolicyRegistry;
 use crate::plugin::{
     ConfigReport, PluginComponentSpec, PluginConfig, PluginHostLease, Result,
     acquire_plugin_host_lease, clear_plugin_configuration_for_host,
@@ -57,6 +58,7 @@ pub struct DynamicPluginActivationSpec {
 #[must_use = "dropping the activation clears and unloads its dynamic plugins"]
 pub struct PluginHostActivation {
     active: bool,
+    export_activation_policies: Option<Arc<ExportActivationPolicyRegistry>>,
     native: Option<NativePluginActivation>,
     #[cfg(feature = "worker-grpc")]
     worker: Option<WorkerPluginActivation>,
@@ -201,12 +203,14 @@ impl PluginHostActivation {
         policy_components.append(&mut regular_components);
         config.components = policy_components;
         let rollback_failures = Arc::new(Mutex::new(Vec::new()));
+        let export_activation_policies = Arc::new(ExportActivationPolicyRegistry::default());
         let owner_id = claim.owner_id();
         let initialization = tokio::spawn(initialize_plugins_exact_for_host(
             config,
             owner_id,
             Arc::clone(&rollback_failures),
             diagnostics,
+            Arc::clone(&export_activation_policies),
         ))
         .await
         .map_err(|error| {
@@ -261,6 +265,7 @@ impl PluginHostActivation {
         Ok((
             Self {
                 active: true,
+                export_activation_policies: Some(export_activation_policies),
                 native,
                 #[cfg(feature = "worker-grpc")]
                 worker,
@@ -309,6 +314,7 @@ impl PluginHostActivation {
             self.retain_loaded_runtimes();
             return Err(retained_runtime_error(errors));
         }
+        self.export_activation_policies.take();
 
         let mut runtime_outcome = DynamicPluginTeardownOutcome::success();
         if let Some(native) = &mut self.native {

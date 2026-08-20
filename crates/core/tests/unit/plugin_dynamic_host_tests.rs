@@ -26,6 +26,7 @@ fn unsafe_kind_deregistration_retains_runtime_and_owner() {
     let owner_id = claim.owner_id();
     let mut activation = PluginHostActivation {
         active: true,
+        export_activation_policies: None,
         native: Some(NativePluginActivation::with_plugin_kind_for_test(
             "fixture.poisoned",
         )),

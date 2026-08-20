@@ -1735,8 +1735,11 @@ fn test_pending_rollbacks_ignore_delivery_only_errors() {
         )]);
     }
     {
-        let mut pending =
-            PendingPluginRegistrationContext::new("fixture.".into(), Some(Arc::clone(&failures)));
+        let mut pending = PendingPluginRegistrationContext::new(
+            "fixture.".into(),
+            Some(Arc::clone(&failures)),
+            Arc::new(ExportActivationPolicyRegistry::default()),
+        );
         pending
             .context
             .add_registration(PluginRegistration::new_with_outcome(

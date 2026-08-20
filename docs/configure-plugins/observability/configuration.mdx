@@ -108,6 +108,13 @@ that exporter. The callback receives only the target kind and the opaque
 or other exporter settings to the policy. The decision remains fixed until
 plugin reconfiguration or restart.
 
+Configuration layering finishes before policy providers register. Each
+resolved plugin activation owns one provider namespace, and every target in
+that activation resolves its provider manifest ID against that namespace.
+Provider implementations do not shadow one another by configuration layer;
+layered targets can reference the same provider with different opaque `config`
+values. A later activation receives a new provider namespace.
+
 Policies are available on OTLP trace, log, and metric endpoints; ATOF stream
 sinks; and ATIF HTTP and S3 targets. Local ATOF and ATIF file destinations do
 not accept policies. Derived OTLP log and metric endpoints inherit the trace

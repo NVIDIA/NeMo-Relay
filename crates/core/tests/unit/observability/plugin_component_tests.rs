@@ -5030,7 +5030,9 @@ async fn export_activation_policy_is_evaluated_once_before_otel_construction() {
         timeout_millis: 5_000,
         config: json!({"region": "local"}),
     });
-    let mut observability_context = PluginRegistrationContext::new();
+    let mut observability_context = PluginRegistrationContext::with_export_activation_policies(
+        provider_context.export_activation_policies(),
+    );
     register_opentelemetry(
         OpenTelemetrySectionConfig {
             enabled: true,
@@ -5092,7 +5094,9 @@ async fn unavailable_and_timed_out_export_policies_fail_closed() {
         timeout_millis: 1,
         config: Json::Null,
     });
-    let mut context = PluginRegistrationContext::new();
+    let mut context = PluginRegistrationContext::with_export_activation_policies(
+        provider_context.export_activation_policies(),
+    );
     register_opentelemetry(
         OpenTelemetrySectionConfig {
             enabled: true,
@@ -5141,7 +5145,9 @@ async fn denied_and_failed_export_policies_fail_closed() {
             timeout_millis: 5_000,
             config: Json::Null,
         });
-        let mut context = PluginRegistrationContext::new();
+        let mut context = PluginRegistrationContext::with_export_activation_policies(
+            provider_context.export_activation_policies(),
+        );
         register_opentelemetry(
             OpenTelemetrySectionConfig {
                 enabled: true,
@@ -5160,19 +5166,24 @@ async fn denied_and_failed_export_policies_fail_closed() {
 }
 
 #[test]
-fn duplicate_export_activation_provider_is_rejected_and_rollback_releases_it() {
+fn export_activation_provider_uniqueness_is_scoped_to_one_activation() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let callback = Arc::new(|_| Box::pin(async { Ok(ExportActivationDecision::Allow) }) as _);
     let mut first = PluginRegistrationContext::new();
     first
         .register_export_activation_policy("test.duplicate-policy", callback.clone())
         .unwrap();
-    let mut duplicate = PluginRegistrationContext::new();
+    let registry = first.export_activation_policies();
+    let mut duplicate = PluginRegistrationContext::with_export_activation_policies(registry);
     assert!(
         duplicate
             .register_export_activation_policy("test.duplicate-policy", callback.clone())
             .is_err()
     );
+    let mut independent_activation = PluginRegistrationContext::new();
+    independent_activation
+        .register_export_activation_policy("test.duplicate-policy", callback.clone())
+        .unwrap();
 
     let mut first_registrations = first.into_registrations();
     rollback_registrations(&mut first_registrations);
@@ -5181,6 +5192,8 @@ fn duplicate_export_activation_provider_is_rejected_and_rollback_releases_it() {
         .unwrap();
     let mut duplicate_registrations = duplicate.into_registrations();
     rollback_registrations(&mut duplicate_registrations);
+    let mut independent_registrations = independent_activation.into_registrations();
+    rollback_registrations(&mut independent_registrations);
 }
 
 #[tokio::test]
