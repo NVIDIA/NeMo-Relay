@@ -208,7 +208,7 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
             nemo_relay_register_event_metadata_injector(
                 global_name.as_ptr(),
                 10,
-                event_metadata_injector_cb,
+                Some(event_metadata_injector_cb),
                 ptr::null_mut(),
                 None,
             ),
@@ -218,7 +218,7 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
             nemo_relay_register_event_metadata_injector(
                 failure_name.as_ptr(),
                 20,
-                event_metadata_injector_fail_cb,
+                Some(event_metadata_injector_fail_cb),
                 ptr::null_mut(),
                 None,
             ),
@@ -228,7 +228,7 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
             nemo_relay_register_event_metadata_injector(
                 invalid_name.as_ptr(),
                 30,
-                event_metadata_injector_invalid_cb,
+                Some(event_metadata_injector_invalid_cb),
                 ptr::null_mut(),
                 None,
             ),
@@ -238,7 +238,7 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
             nemo_relay_register_event_metadata_injector(
                 mixed_numbers_name.as_ptr(),
                 40,
-                event_metadata_injector_mixed_numbers_cb,
+                Some(event_metadata_injector_mixed_numbers_cb),
                 ptr::null_mut(),
                 None,
             ),
@@ -268,7 +268,7 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
                 scope_uuid.as_ptr(),
                 local_name.as_ptr(),
                 5,
-                event_metadata_local_injector_cb,
+                Some(event_metadata_local_injector_cb),
                 ptr::null_mut(),
                 None,
             ),
@@ -354,6 +354,87 @@ fn test_ffi_event_metadata_injector_registries_and_failure_paths() {
             nemo_relay_deregister_subscriber(subscriber_name.as_ptr()),
             NemoRelayStatus::Ok
         );
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_event_metadata_injector_rejects_null_callbacks() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let global_name = cstring(&unique_name("ffi_event_metadata_null_global"));
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_register_event_metadata_injector(
+                global_name.as_ptr(),
+                10,
+                Some(event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_deregister_event_metadata_injector(global_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+
+        let scope_name = cstring("ffi-event-metadata-null-scope");
+        let mut scope = ptr::null_mut();
+        assert_status!(
+            nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+        let scope_uuid = cstring(&take_string(nemo_relay_scope_handle_uuid(scope)).unwrap());
+        let local_name = cstring(&unique_name("ffi_event_metadata_null_local"));
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_scope_register_event_metadata_injector(
+                scope_uuid.as_ptr(),
+                local_name.as_ptr(),
+                10,
+                Some(event_metadata_local_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_pop_scope(scope, ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
         nemo_relay_scope_stack_free(stack);
     }
 }

@@ -207,7 +207,11 @@ pub type NemoRelayEventSubscriberCb =
 /// The returned string must contain a JSON object whose properties are proposed
 /// metadata additions. It transfers to Relay and is freed exactly once. Return
 /// null after setting the last error message to report a callback failure.
-pub type NemoRelayEventMetadataInjectorCb =
+pub type NemoRelayEventMetadataInjectorCb = Option<
+    unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent) -> *mut c_char,
+>;
+
+type FfiEventMetadataInjectorFn =
     unsafe extern "C" fn(user_data: *mut libc::c_void, event: *const FfiEvent) -> *mut c_char;
 
 /// Callback for mark and scope event sanitizers.
@@ -1002,7 +1006,7 @@ pub fn wrap_event_subscriber(
 
 /// Wrap a C event metadata injector callback into a Rust closure.
 pub fn wrap_event_metadata_injector_fn(
-    cb: NemoRelayEventMetadataInjectorCb,
+    cb: FfiEventMetadataInjectorFn,
     user_data: *mut libc::c_void,
     free_fn: NemoRelayFreeFn,
 ) -> EventMetadataInjectorFn {

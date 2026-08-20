@@ -1436,6 +1436,9 @@ func LlmStreamCallExecute(name string, request interface{}, fn LLMExecutionFunc,
 // Injectors run in ascending priority order and may only add metadata keys that
 // are not already present on the event.
 func RegisterEventMetadataInjector(name string, priority int32, fn EventMetadataInjectorFunc) error {
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
 	id := registerClosure(fn)
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
@@ -2912,6 +2915,9 @@ func (s *OpenTelemetryMetricSubscriber) Close() {
 // ScopeRegisterEventMetadataInjector registers an event metadata injector
 // owned by an active scope.
 func ScopeRegisterEventMetadataInjector(scopeUUID, name string, priority int32, fn EventMetadataInjectorFunc) error {
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
 	id := registerClosure(fn)
 	cScopeUUID := C.CString(scopeUUID)
 	defer C.free(unsafe.Pointer(cScopeUUID))

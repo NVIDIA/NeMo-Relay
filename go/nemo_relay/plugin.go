@@ -593,6 +593,9 @@ func (ctx *PluginContext) RegisterEventMetadataInjector(name string, priority in
 	if ctx == nil || ctx.ptr == nil {
 		return errors.New(errPluginContextClosed)
 	}
+	if fn == nil {
+		return errEventMetadataInjectorCallbackNil
+	}
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))
 	userData := registerClosure(fn)

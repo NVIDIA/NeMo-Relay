@@ -6,6 +6,7 @@ package nemo_relay
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -127,11 +128,11 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 		t.Fatalf("existing metadata was overwritten: %#v", metadata)
 	}
 	metadata := decodeEventMetadata(t, events[1])
-	if _, ok := metadata["go.injected.integers"]; !ok {
-		t.Fatalf("homogeneous integer metadata was omitted: %#v", metadata)
+	if got, want := metadata["go.injected.integers"], []any{float64(1), float64(2)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("homogeneous integer metadata = %#v, want %#v", got, want)
 	}
-	if _, ok := metadata["go.injected.doubles"]; !ok {
-		t.Fatalf("homogeneous double metadata was omitted: %#v", metadata)
+	if got, want := metadata["go.injected.doubles"], []any{1.25, 2.5}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("homogeneous double metadata = %#v, want %#v", got, want)
 	}
 	if _, ok := metadata["go.invalid.mixed_numbers"]; ok {
 		t.Fatalf("mixed numeric metadata was accepted: %#v", metadata)
@@ -221,6 +222,57 @@ func TestEventMetadataInjectorRegistrationErrorsReleaseCallbacks(t *testing.T) {
 	if err := DeregisterEventMetadataInjector("go-event-metadata-duplicate"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestEventMetadataInjectorNilCallbacksDoNotRegister(t *testing.T) {
+	runTestInIsolatedWorkingDirectory(t, func(t *testing.T) {
+		runTestWithScopeStack(t, func(t *testing.T) {
+			baseline := registeredClosureCount()
+
+			if err := RegisterEventMetadataInjector("go-event-metadata-nil-global", 0, nil); !errors.Is(err, errEventMetadataInjectorCallbackNil) {
+				t.Fatalf("RegisterEventMetadataInjector() error = %v, want %v", err, errEventMetadataInjectorCallbackNil)
+			}
+			if current := registeredClosureCount(); current != baseline {
+				t.Fatalf("nil global callback changed registry size: baseline=%d current=%d", baseline, current)
+			}
+
+			scope, err := PushScope("go-event-metadata-nil-scope", ScopeTypeCustom)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := ScopeRegisterEventMetadataInjector(scope.UUID(), "go-event-metadata-nil-local", 0, nil); !errors.Is(err, errEventMetadataInjectorCallbackNil) {
+				t.Fatalf("ScopeRegisterEventMetadataInjector() error = %v, want %v", err, errEventMetadataInjectorCallbackNil)
+			}
+			if current := registeredClosureCount(); current != baseline {
+				t.Fatalf("nil scope callback changed registry size: baseline=%d current=%d", baseline, current)
+			}
+			if err := PopScope(scope); err != nil {
+				t.Fatal(err)
+			}
+
+			const kind = "go.event.metadata.nil.plugin"
+			if err := RegisterPlugin(kind, PluginFuncs{RegisterFunc: func(_ map[string]any, ctx *PluginContext) error {
+				return ctx.RegisterEventMetadataInjector("nil", 0, nil)
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = DeregisterPlugin(kind) })
+
+			pluginBaseline := registeredClosureCount()
+			if _, err := InitializePlugins(PluginConfig{
+				Version: 1,
+				Components: []PluginComponentSpec{{
+					Kind:    kind,
+					Enabled: true,
+				}},
+			}); err == nil {
+				t.Fatal("expected nil plugin callback registration to fail")
+			}
+			if current := registeredClosureCount(); current != pluginBaseline {
+				t.Fatalf("nil plugin callback changed registry size: baseline=%d current=%d", pluginBaseline, current)
+			}
+		})
+	})
 }
 
 func decodeEventMetadata(t *testing.T, event Event) map[string]any {

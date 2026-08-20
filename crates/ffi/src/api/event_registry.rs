@@ -82,6 +82,10 @@ pub unsafe extern "C" fn nemo_relay_register_event_metadata_injector(
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let Some(cb) = cb else {
+        set_last_error("event metadata injector callback is null");
+        return NemoRelayStatus::NullPointer;
+    };
     let callback = wrap_event_metadata_injector_fn(cb, user_data, free_fn);
     let name = match c_str_to_string(name) {
         Ok(value) => value,
@@ -125,6 +129,10 @@ pub unsafe extern "C" fn nemo_relay_scope_register_event_metadata_injector(
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
     clear_last_error();
+    let Some(cb) = cb else {
+        set_last_error("event metadata injector callback is null");
+        return NemoRelayStatus::NullPointer;
+    };
     let callback = wrap_event_metadata_injector_fn(cb, user_data, free_fn);
     let uuid = match parse_scope_uuid(scope_uuid) {
         Ok(value) => value,

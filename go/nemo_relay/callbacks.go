@@ -101,6 +101,8 @@ import (
 // The ID is passed as void* user_data to C callbacks.
 // ---------------------------------------------------------------------------
 
+var errEventMetadataInjectorCallbackNil = errors.New("event metadata injector callback is nil")
+
 var (
 	closureRegistryMu sync.Mutex
 	closureRegistry   = make(map[uintptr]interface{})

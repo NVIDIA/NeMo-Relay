@@ -291,7 +291,7 @@ fn test_ffi_plugin_context_event_metadata_injector_is_rolled_back() {
                 &mut ctx,
                 injector_name.as_ptr(),
                 10,
-                plugin_event_metadata_injector_cb,
+                Some(plugin_event_metadata_injector_cb),
                 ptr::null_mut(),
                 None,
             ),
@@ -335,6 +335,44 @@ fn test_ffi_plugin_context_event_metadata_injector_is_rolled_back() {
             NemoRelayStatus::Ok
         );
     }
+}
+
+#[test]
+fn test_ffi_plugin_context_event_metadata_injector_rejects_null_callback() {
+    let _guard = TEST_MUTEX.lock().unwrap_or_else(|error| error.into_inner());
+    reset_globals();
+
+    let injector_name = cstring("metadata");
+    let mut registrations = PluginRegistrationContext::with_namespace("ffi_plugin_null::");
+    let mut ctx = FfiPluginContext(&mut registrations as *mut _);
+
+    unsafe {
+        assert_status!(
+            nemo_relay_plugin_context_register_event_metadata_injector(
+                &mut ctx,
+                injector_name.as_ptr(),
+                10,
+                None,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_plugin_context_register_event_metadata_injector(
+                &mut ctx,
+                injector_name.as_ptr(),
+                10,
+                Some(plugin_event_metadata_injector_cb),
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+    }
+
+    let mut registrations = registrations.into_registrations();
+    rollback_registrations(&mut registrations);
 }
 
 #[test]

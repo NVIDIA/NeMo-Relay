@@ -558,11 +558,15 @@ pub unsafe extern "C" fn nemo_relay_plugin_context_register_event_metadata_injec
     free_fn: NemoRelayFreeFn,
 ) -> NemoRelayStatus {
     clear_last_error();
-    let callback = wrap_event_metadata_injector_fn(cb, user_data, free_fn);
     if ctx.is_null() {
         set_last_error("plugin context is null");
         return NemoRelayStatus::NullPointer;
     }
+    let Some(cb) = cb else {
+        set_last_error("event metadata injector callback is null");
+        return NemoRelayStatus::NullPointer;
+    };
+    let callback = wrap_event_metadata_injector_fn(cb, user_data, free_fn);
     let name = match c_str_to_string(name) {
         Ok(value) => value,
         Err(status) => return status,
