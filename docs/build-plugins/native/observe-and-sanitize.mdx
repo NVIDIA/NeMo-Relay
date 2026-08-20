@@ -6,7 +6,7 @@ position: 22
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
-The example's `observe` feature group installs a subscriber, mark sanitizer,
+The example's `observe` feature group installs an Event metadata injector, subscriber, mark sanitizer,
 scope-start sanitizer, scope-end sanitizer, tool request and response sanitizers, and LLM
 request and response sanitizers. The group is enabled independently and receives the
 configured `tag` and `redact_keys`, so operators can see exactly which behavior one
@@ -91,6 +91,33 @@ pub(crate) fn register(
 The local name is unique only within this component. The closure clones owned strings
 and arrays into each async callback; it never borrows the component configuration after
 `register` returns.
+
+## Inject Event Metadata
+
+Register a component-owned callback to propose metadata for every Event while the
+plugin is active. The callback receives an immutable Event snapshot and returns flat
+key/value additions:
+
+```rust
+use std::collections::BTreeMap;
+
+use nemo_relay_plugin::Json;
+
+context.register_event_metadata_injector(
+    "documentation_event_metadata_injector",
+    5,
+    |_event| async move {
+        Ok(BTreeMap::from([(
+            "app.source".into(),
+            Json::String("plugin".into()),
+        )]))
+    },
+)?;
+```
+
+Relay validates and merges accepted additions before Event sanitizers run. A callback
+error omits that callback's additions without dropping the Event. Clearing the plugin
+component removes the registration.
 
 ## Keep Real Values Separate from Event Values
 
@@ -211,7 +238,7 @@ context.register_llm_sanitize_response_guardrail(
 
 ## Verify Observation Behavior
 
-Use the following procedure to verify all eight observation registrations without
+Use the following procedure to verify all nine observation registrations without
 confusing observability changes with execution changes:
 
 1. Activate the example with `observe.enabled = true`, `redact_keys = ["secret"]`, and
@@ -226,5 +253,5 @@ confusing observability changes with execution changes:
 5. Clear the component and emit another mark. Confirm that neither sanitization nor the
    example subscriber runs.
 
-Success means all eight observation registrations produce observable evidence, codec
+Success means all nine observation registrations produce observable evidence, codec
 and fallback paths both redact safely, and no sanitizer accidentally changes execution.

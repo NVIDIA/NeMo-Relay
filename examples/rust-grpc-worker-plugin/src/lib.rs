@@ -3,6 +3,8 @@
 
 mod config;
 
+use std::collections::BTreeMap;
+
 use futures_util::StreamExt;
 use nemo_relay_worker::{
     ConfigDiagnostic, EventSanitizeFields, Json, JsonStream, LlmOptimizationContribution,
@@ -56,6 +58,16 @@ pub fn default_example_config() -> Json {
 }
 
 fn register_observation(context: &mut PluginContext, config: &ExampleConfig) {
+    context.register_event_metadata_injector(
+        "documentation_event_metadata_injector",
+        5,
+        |_event| async move {
+            Ok(BTreeMap::from([(
+                "external.injector.transport".into(),
+                Json::String("rust_grpc_worker".into()),
+            )]))
+        },
+    );
     context.register_subscriber("documentation_subscriber", |_event| {});
 
     let sanitize_fields = |mut fields: EventSanitizeFields, keys: &[String], tag: &str| {

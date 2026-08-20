@@ -85,6 +85,12 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
             .iter()
             .any(|event| event.name() == "example.native.request.seen")
     );
+    assert!(events.lock().expect("event lock should not be poisoned").iter().any(|event| {
+        event
+            .metadata()
+            .and_then(|metadata| metadata.get("external.injector.transport"))
+            == Some(&json!("rust_native_plugin"))
+    }));
 
     activation
         .clear()

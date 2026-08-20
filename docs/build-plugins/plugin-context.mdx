@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 `PluginContext` is the component-scoped bridge between validated configuration and the
 Relay runtime. It qualifies each registration name, applies priority and chain controls,
-tracks ownership for rollback, and exposes the same 15 registration surfaces to
+tracks ownership for rollback, and exposes the same 16 registration surfaces to
 language-binding, native typed, and worker plugins.
 
 ## Registration Surface
@@ -16,6 +16,7 @@ language-binding, native typed, and worker plugins.
 | Family | Registration | Callback Responsibility |
 |---|---|---|
 | Events | Subscriber | Observe each emitted event. Native subscribers are synchronous; other binding and worker callback forms follow their SDK contract. A subscriber must not mutate the event. |
+| Events | Metadata injector | Return flat key/value additions for `Event.metadata` without mutating the Event snapshot. |
 | Events | Mark sanitizer | Return replacement `data`, `category_profile`, and `metadata` fields for the emitted mark event. |
 | Events | Scope-start sanitizer | Return replacement observability fields for the emitted scope-start event. |
 | Events | Scope-end sanitizer | Return replacement observability fields for the emitted scope-end event. |

@@ -16,6 +16,7 @@ demonstrations.
 | Family | Python Callback Form | Rust Callback Form | Required Result |
 |---|---|---|---|
 | Subscriber | Sync or async event callback. An async callback can await the worker runtime. | Synchronous `Fn(&Event)` callback. Keep its work bounded. | No result; observe only. |
+| Event metadata injector | Sync or async callback over an immutable Event snapshot. | Async closure over an immutable Event snapshot. | Flat key/value additions for `Event.metadata`. |
 | Event sanitizers | Sync or async callback over event and sanitizable fields. | Closure returning a future of `EventSanitizeFields`. | Replacement data, category profile, and metadata. |
 | Tool sanitizers and policy | Sync or async callback, normalized by the SDK. | Closure returning a boxed or inferred future. | Sanitized JSON or an optional block reason. |
 | Tool request intercept | Sync or async callback. | Async closure. | Complete rewritten JSON request. |
@@ -25,11 +26,54 @@ demonstrations.
 | Unary LLM execution | Async callback with `LlmNext`. | Async closure with cloneable `LlmNext`. | Provider-response JSON. |
 | Stream LLM execution | Async generator or async callback returning an async iterator. | Async closure returning a `JsonStream`. | Chunks produced lazily until completion, error, or cancellation. |
 
-Subscribers plus three event sanitizers, five tool registrations, and six LLM
-registrations make 15 surfaces. Registration names are component-local;
+The Event metadata injector, subscriber, three event sanitizers, five tool registrations,
+and six LLM registrations make 16 surfaces. Registration names are component-local;
 [priority and `break_chain`](/build-plugins/fundamentals/plugin-context) are sent in
 registration metadata and enforced by the host after it merges visible
 [middleware](/about-nemo-relay/concepts/middleware).
+
+## Inject Event Metadata
+
+Choose a worker language to register a callback that proposes metadata additions:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+async def add_plugin_context(event):
+    del event
+    return {"app.source": "plugin"}
+
+ctx.register_event_metadata_injector(
+    "plugin-context",
+    add_plugin_context,
+    priority=0,
+)
+```
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+use std::collections::BTreeMap;
+
+use nemo_relay_worker::Json;
+
+context.register_event_metadata_injector(
+    "plugin-context",
+    0,
+    |_event| async move {
+        Ok(BTreeMap::from([(
+            "app.source".into(),
+            Json::String("plugin".into()),
+        )]))
+    },
+);
+```
+</Tab>
+</Tabs>
+
+Relay sends the immutable Event snapshot through the existing unary `Invoke` RPC. It
+validates and merges accepted additions before Event sanitizers run. A callback error
+omits that callback's additions without dropping the Event. Stopping the worker removes
+the registration.
 
 ## Register Synchronous and Asynchronous Callbacks
 

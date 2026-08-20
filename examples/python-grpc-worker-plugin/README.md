@@ -23,7 +23,7 @@ uv run --locked --group test pytest
 
 Each test owns one contract and can be selected independently. The suite builds
 this directory as a wheel in a clean temporary project, checks the mandatory
-source digest and JSON Schema, validates configuration, asserts all 15
+source digest and JSON Schema, validates configuration, asserts all 16
 registrations, and then exercises each policy, sanitizer, request rewrite,
 continuation, stream, mark, and scope behavior separately.
 

@@ -33,7 +33,7 @@ The following rows describe the plugin authoring surfaces available through this
 
 | Surface | Role |
 |---|---|
-| `WorkerPlugin` and `PluginContext` | Define validation and install all 15 worker-owned subscriber and middleware registrations. |
+| `WorkerPlugin` and `PluginContext` | Define validation and install all 16 worker-owned subscriber and middleware registrations. |
 | `serve_plugin` | Starts an AsyncIO gRPC server from the Relay-managed environment and authenticated local activation endpoints. |
 | Typed runtime helpers | Share JSON, event, scope, middleware, continuation, and diagnostic contracts with the Relay host. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |

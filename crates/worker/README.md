@@ -31,7 +31,7 @@ result.
 | Surface | Role |
 |---|---|
 | `WorkerPlugin` | Defines plugin identity, validation, registration, and multiple-component behavior in the worker process. |
-| `PluginContext` | Installs typed handlers for all 15 supported registration surfaces. |
+| `PluginContext` | Installs typed handlers for all 16 supported registration surfaces. |
 | `PluginRuntime` and continuations | Emit marks, manage scopes, and call the remaining tool or LLM execution chain through the authenticated host service. |
 | Canonical tool results | Preserve application results and opaque annotations across tool callbacks and continuations. |
 | `serve_plugin` | Starts the Tokio gRPC server from the activation identity, local endpoints, and token supplied by Relay. |

@@ -84,6 +84,12 @@ async fn built_worker_validates_registers_executes_and_shuts_down() {
             .iter()
             .any(|event| event.name() == "example.rust_worker.request.seen")
     );
+    assert!(events.lock().expect("event lock should not be poisoned").iter().any(|event| {
+        event
+            .metadata()
+            .and_then(|metadata| metadata.get("external.injector.transport"))
+            == Some(&json!("rust_grpc_worker"))
+    }));
 
     activation
         .clear()

@@ -191,6 +191,7 @@ async def test_manifest_entrypoint_serves_worker(example: Any, monkeypatch: pyte
 def test_register_installs_all_protocol_surfaces(example: Any) -> None:
     context, _runtime = register_example(example)
     registration_methods = {
+        "register_event_metadata_injector",
         "register_subscriber",
         "register_mark_sanitize_guardrail",
         "register_scope_sanitize_start_guardrail",
@@ -209,6 +210,16 @@ def test_register_installs_all_protocol_surfaces(example: Any) -> None:
     }
 
     assert all(getattr(context, method).call_count >= 1 for method in registration_methods)
+
+
+async def test_event_metadata_injector_adds_transport_metadata(example: Any) -> None:
+    context, _runtime = register_example(example)
+    injector = callback(context, "register_event_metadata_injector")
+
+    assert await injector({"name": "external-plugin-event-metadata-injection-example"}) == {
+        "external.injector.transport": "python_grpc_worker"
+    }
+    assert await injector({"name": "unrelated"}) == {}
 
 
 def test_runtime_registration_does_not_depend_on_request_configuration(example: Any) -> None:

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
+
 use nemo_relay_plugin::{
     Event, EventSanitizeFields, Json, LlmRequest, PluginContext, PluginRuntime, ScopeCategory,
 };
@@ -16,6 +18,17 @@ pub(crate) fn register(
     if !config.observe.enabled {
         return Ok(());
     }
+
+    context.register_event_metadata_injector(
+        "documentation_event_metadata_injector",
+        5,
+        |_event| async move {
+            Ok(BTreeMap::from([(
+                "external.injector.transport".into(),
+                Json::String("rust_native_plugin".into()),
+            )]))
+        },
+    )?;
 
     context.register_subscriber("documentation_subscriber", {
         let runtime = runtime.clone();

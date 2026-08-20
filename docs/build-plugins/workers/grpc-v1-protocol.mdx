@@ -81,6 +81,7 @@ the schema identifiers in the JSON envelope table later on this page.
 | Value | Surface | Invocation Result |
 |---:|---|---|
 | 1 | Subscriber | Empty result. |
+| 2 | Event metadata injector | JSON object containing proposed metadata additions. |
 | 10 | Tool sanitize request guardrail | Sanitized JSON. |
 | 11 | Tool sanitize response guardrail | Sanitized JSON. |
 | 12 | Tool conditional execution guardrail | Optional block reason. |
@@ -103,6 +104,7 @@ a valid registration.
 enum RegistrationSurface {
   REGISTRATION_SURFACE_UNSPECIFIED = 0;
   SUBSCRIBER = 1;
+  EVENT_METADATA_INJECTOR = 2;
   TOOL_SANITIZE_REQUEST_GUARDRAIL = 10;
   TOOL_SANITIZE_RESPONSE_GUARDRAIL = 11;
   TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = 12;
@@ -124,6 +126,12 @@ An invocation names the activation, invocation, registration, surface, optional
 continuation, captured scope, and token. Its payload is exactly one event, tool
 invocation, or LLM invocation. LLM sanitizer invocations additionally carry codec
 identity and an opaque invocation-scoped codec capability.
+
+For `EVENT_METADATA_INJECTOR`, Relay sends the immutable Event snapshot in
+`InvokeRequest.event`. The worker returns an `InvokeResponse.json` object containing
+proposed additions to `Event.metadata`. Relay validates and merges accepted additions
+before Event sanitizers run. A `WorkerError` omits that callback's additions without
+dropping the Event.
 
 ```proto
 message InvokeRequest {

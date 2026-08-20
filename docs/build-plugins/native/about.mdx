@@ -47,7 +47,7 @@ attributed to a particular plugin.
 ## What the SDK Owns
 
 The Rust SDK exports the stable entry symbol, converts host-owned JSON handles into
-typed DTOs, registers all 15 plugin surfaces, and drives async middleware on one
+typed DTOs, registers all 16 plugin surfaces, and drives async middleware on one
 SDK-owned multi-thread Tokio runtime per configured component. A plugin can set a
 default executor size and accept a positive `executor.worker_threads` component
 override. The default is two workers; change it only after measuring queued async work
