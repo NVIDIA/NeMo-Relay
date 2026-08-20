@@ -18,6 +18,9 @@ from nemo_relay.adaptive import (
     ResponseCacheConfig,
     StateConfig,
     TelemetryConfig,
+    ToolCacheConfig,
+    ToolClass,
+    ToolOverride,
     ToolParallelismConfig,
 )
 
@@ -217,6 +220,36 @@ class TestDynamicConfigContract:
         codes = {diag["code"] for diag in report["diagnostics"]}
         assert "response_cache.invalid_ttl" in codes
         assert "response_cache.invalid_bypass_rate" in codes
+
+    def test_tool_cache_config_serializes_and_omits_unset_optionals(self):
+        tools = ToolCacheConfig(
+            enabled=True,
+            cache_errors=True,
+            classes={
+                "read_only": ToolClass(
+                    cacheable=True,
+                    tool_version="class-v1",
+                    members=["docs_lookup"],
+                )
+            },
+            overrides={"docs_lookup": ToolOverride(tool_version="v1")},
+        )
+        serialized = ResponseCacheConfig(tools=tools).to_dict()["tools"]
+        assert serialized == {
+            "enabled": True,
+            "cache_errors": True,
+            "priority": 100,
+            "default": {"cacheable": False, "arg_skip": [], "members": []},
+            "classes": {
+                "read_only": {
+                    "cacheable": True,
+                    "tool_version": "class-v1",
+                    "arg_skip": [],
+                    "members": ["docs_lookup"],
+                }
+            },
+            "overrides": {"docs_lookup": {"tool_version": "v1"}},
+        }
 
     def test_canonical_cache_telemetry_helper_supports_openai_provider(self):
         event = adaptive_module.build_cache_telemetry_event(

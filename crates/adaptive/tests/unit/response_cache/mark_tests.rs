@@ -3,7 +3,7 @@
 
 //! Unit tests for response-cache savings marks in the NeMo Relay adaptive crate.
 
-use std::time::Duration;
+use std::{hint::black_box, time::Duration};
 
 use nemo_relay::codec::model_pricing::{
     PricingCatalog, PricingResolver, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -17,6 +17,55 @@ impl Drop for ResetPricingResolverGuard {
     fn drop(&mut self) {
         let _ = reset_active_pricing_resolver();
     }
+}
+
+#[test]
+fn cache_surfaces_have_stable_metadata_values() {
+    assert_eq!(CacheSurface::Llm.as_str(), "llm");
+    assert_eq!(CacheSurface::Tool.as_str(), "tool");
+}
+
+#[test]
+fn cache_mark_labels_have_stable_telemetry_values() {
+    assert_eq!(black_box(CacheMarkStatus::Bypass).as_str(), "bypass");
+    assert_eq!(black_box(CacheMarkStatus::Hit).as_str(), "hit");
+    assert_eq!(black_box(CacheMarkStatus::Miss).as_str(), "miss");
+    assert_eq!(
+        black_box(CacheReason::CanonicalizationFailed).as_str(),
+        "canonicalization_failed"
+    );
+    assert_eq!(black_box(CacheReason::CachedError).as_str(), "cached_error");
+    assert_eq!(
+        black_box(CacheReason::NondeterministicTemperature).as_str(),
+        "nondeterministic_temperature"
+    );
+    assert_eq!(black_box(CacheReason::ReplayLossy).as_str(), "replay_lossy");
+    assert_eq!(black_box(CacheReason::Sampled).as_str(), "sampled");
+    assert_eq!(
+        black_box(CacheReason::StatefulConversation).as_str(),
+        "stateful_conversation"
+    );
+    assert_eq!(
+        black_box(CacheReason::StatefulPreviousResponseId).as_str(),
+        "stateful_previous_response_id"
+    );
+    assert_eq!(
+        black_box(CacheReason::StatefulStore).as_str(),
+        "stateful_store"
+    );
+    assert_eq!(black_box(CacheReason::StoreError).as_str(), "store_error");
+    assert_eq!(
+        black_box(CacheReason::StreamNoCodec).as_str(),
+        "stream_no_codec"
+    );
+    assert_eq!(
+        black_box(CacheReason::UnparseableBody).as_str(),
+        "unparseable_body"
+    );
+    assert_eq!(
+        black_box(CacheReason::UnrepresentableNumber).as_str(),
+        "unrepresentable_number"
+    );
 }
 
 #[test]
@@ -88,4 +137,69 @@ fn savings_from_counts_anthropic_input_output_tokens() {
         Some(125),
         "anthropic input+output tokens must be counted for savings"
     );
+}
+
+#[test]
+fn normalized_savings_uses_entry_model_and_derives_missing_total_tokens() {
+    // Providers can omit a model in the payload while the cache knows the
+    // request model. A Chat response with prompt/completion tokens but no
+    // total must still report its complete saved-token count.
+    let entry = CacheEntry::new(
+        json!({
+            "id": "chatcmpl_1",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 5}
+        }),
+        Duration::from_secs(60),
+        "sha256:chat".to_string(),
+        Some("model-recorded-with-request".to_string()),
+        Some("openai".to_string()),
+    );
+
+    assert_eq!(savings_from(&entry).0, Some(12));
+}
+
+#[test]
+fn normalized_empty_usage_falls_back_to_no_savings() {
+    // A recognized response with an empty usage object is not a zero-token
+    // hit: it is missing accounting, so diagnostics must leave savings unset.
+    let entry = CacheEntry::new(
+        json!({
+            "id": "chatcmpl_2",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop"
+            }],
+            "usage": {}
+        }),
+        Duration::from_secs(60),
+        "sha256:empty-usage".to_string(),
+        None,
+        None,
+    );
+
+    assert_eq!(normalized_savings(&entry), None);
+    assert_eq!(savings_from(&entry), (None, None));
+}
+
+#[test]
+fn raw_usage_probe_derives_total_from_prompt_and_completion_tokens() {
+    // Unknown provider shapes still expose standard OpenAI-style usage fields;
+    // raw fallback must preserve their useful savings diagnostics.
+    let entry = CacheEntry::new(
+        json!({"usage": {"prompt_tokens": 11, "completion_tokens": 4}}),
+        Duration::from_secs(60),
+        "sha256:raw".to_string(),
+        None,
+        None,
+    );
+
+    assert_eq!(savings_from(&entry), (Some(15), None));
 }

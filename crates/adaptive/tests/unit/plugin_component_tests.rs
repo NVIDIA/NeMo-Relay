@@ -379,6 +379,42 @@ fn validate_adaptive_plugin_config_reports_component_specific_unknown_fields() {
     }));
 }
 
+#[test]
+fn response_cache_tool_policy_validation_checks_nested_classes_and_overrides() {
+    let config = json!({
+        "version": 1,
+        "response_cache": {
+            "tools": {
+                "default": {"unexpected_default": true},
+                "classes": {
+                    "read_only": {"unexpected_class": true}
+                },
+                "overrides": {
+                    "docs_lookup": {"unexpected_override": true}
+                }
+            }
+        },
+        "policy": {"unknown_field": "warn"}
+    });
+
+    let diagnostics = validate_adaptive_plugin_config(config.as_object().unwrap());
+    for (component, field) in [
+        ("response_cache.tools.default", "unexpected_default"),
+        ("response_cache.tools.classes.read_only", "unexpected_class"),
+        (
+            "response_cache.tools.overrides.docs_lookup",
+            "unexpected_override",
+        ),
+    ] {
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "adaptive.unknown_field"
+                && diagnostic.component.as_deref() == Some(component)
+                && diagnostic.field.as_deref() == Some(field)
+                && diagnostic.level == DiagnosticLevel::Warning
+        }));
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn adaptive_plugin_registers_runtime_and_rolls_back_registration() {
     let _guard = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;

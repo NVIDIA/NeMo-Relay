@@ -7,7 +7,13 @@ use super::*;
 use serde_json::json;
 
 #[cfg(feature = "redis-backend")]
-use std::net::TcpListener;
+use std::io::{Read, Write};
+#[cfg(feature = "redis-backend")]
+use std::net::{TcpListener, TcpStream};
+#[cfg(feature = "redis-backend")]
+use std::thread;
+#[cfg(feature = "redis-backend")]
+use std::time::Duration;
 
 fn entry(key: &str, created: u64, expires: u64) -> CacheEntry {
     CacheEntry {
@@ -21,6 +27,73 @@ fn entry(key: &str, created: u64, expires: u64) -> CacheEntry {
 }
 
 const BIG: usize = 1 << 20; // 1 MiB — never evicts in these tests
+
+#[cfg(feature = "redis-backend")]
+fn read_redis_command(stream: &mut TcpStream) -> Vec<u8> {
+    fn read_line(stream: &mut TcpStream, request: &mut Vec<u8>) -> String {
+        let start = request.len();
+        loop {
+            let mut byte = [0_u8; 1];
+            stream.read_exact(&mut byte).expect("read RESP command");
+            request.push(byte[0]);
+            if request.ends_with(b"\r\n") {
+                return std::str::from_utf8(&request[start..request.len() - 2])
+                    .expect("RESP command must be UTF-8")
+                    .to_string();
+            }
+        }
+    }
+
+    let mut request = Vec::new();
+    let count = read_line(stream, &mut request)
+        .strip_prefix('*')
+        .expect("RESP command array")
+        .parse::<usize>()
+        .expect("RESP command count");
+    for _ in 0..count {
+        let length = read_line(stream, &mut request)
+            .strip_prefix('$')
+            .expect("RESP bulk string")
+            .parse::<usize>()
+            .expect("RESP bulk string length");
+        let mut argument = vec![0_u8; length + 2];
+        stream
+            .read_exact(&mut argument)
+            .expect("RESP bulk string value");
+        assert!(argument.ends_with(b"\r\n"));
+        request.extend(argument);
+    }
+    request
+}
+
+#[cfg(feature = "redis-backend")]
+fn start_redis_test_server(response: Vec<u8>) -> (String, thread::JoinHandle<Vec<u8>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind test Redis peer");
+    let url = format!(
+        "redis://{}/",
+        listener.local_addr().expect("test Redis address")
+    );
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept Redis client");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("set Redis test peer read timeout");
+        // redis-rs identifies itself with two `CLIENT SETINFO` commands before
+        // it allows normal commands on a new connection.
+        for _ in 0..2 {
+            let setup = read_redis_command(&mut stream);
+            assert!(setup.windows(6).any(|window| window == b"CLIENT"));
+            stream
+                .write_all(b"+OK\r\n")
+                .expect("acknowledge Redis client setup");
+        }
+        let command = read_redis_command(&mut stream);
+        stream.write_all(&response).expect("write Redis response");
+        stream.flush().expect("flush Redis response");
+        command
+    });
+    (url, server)
+}
 
 #[cfg(feature = "redis-backend")]
 #[tokio::test(start_paused = true)]
@@ -233,4 +306,103 @@ async fn repeated_replacement_compacts_stale_insertion_order_nodes() {
     assert_eq!(guard.map.len(), 1);
     assert_eq!(guard.order.len(), 4);
     assert_eq!(guard.next_generation, 70);
+}
+
+#[test]
+fn evicting_an_empty_queue_is_a_noop() {
+    // An eviction loop can reach an empty queue after stale nodes have been
+    // skipped. It must report that nothing was removed rather than underflowing
+    // the byte accounting.
+    let mut inner = Inner::default();
+    assert!(!evict_oldest(&mut inner));
+    assert!(inner.map.is_empty());
+    assert_eq!(inner.total_bytes, 0);
+}
+
+#[tokio::test]
+async fn an_unknown_backend_is_rejected_before_initialization() {
+    let mut config = ResponseCacheConfig::default();
+    config.backend.kind = "not-a-cache".to_string();
+
+    let error = match build_store(&config).await {
+        Ok(_) => panic!("an unknown response-cache backend must be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        AdaptiveError::InvalidConfig(message)
+            if message == "response_cache: unknown backend kind 'not-a-cache'"
+    ));
+}
+
+#[cfg(feature = "redis-backend")]
+#[tokio::test]
+async fn redis_backend_requires_a_url_before_connecting() {
+    // This validates configuration locally and never attempts a network
+    // connection, so it remains deterministic in the unit-test suite.
+    let mut config = ResponseCacheConfig::default();
+    config.backend.kind = "redis".to_string();
+
+    let error = match build_store(&config).await {
+        Ok(_) => panic!("a Redis backend without a URL must be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        AdaptiveError::InvalidConfig(message)
+            if message == "response_cache: redis backend requires backend.config.url"
+    ));
+}
+
+#[cfg(feature = "redis-backend")]
+#[tokio::test]
+async fn redis_get_treats_an_entry_past_its_own_expiry_as_a_miss() {
+    // Redis can retain a value briefly longer than the response-cache TTL.
+    // The entry stamp remains authoritative, so a stale serialized entry must
+    // not be served even when Redis returns it.
+    let expired = entry("expired", 0, 1);
+    let encoded = serde_json::to_vec(&expired).expect("serialize cache entry");
+    let mut response = format!("${}\r\n", encoded.len()).into_bytes();
+    response.extend(encoded);
+    response.extend(b"\r\n");
+    let (url, server) = start_redis_test_server(response);
+
+    let store = RedisCacheStore::new(&url, "response-cache:")
+        .await
+        .expect("connect test Redis peer");
+    assert!(
+        store.get("expired").await.expect("Redis GET").is_none(),
+        "an entry whose embedded expiry elapsed must be a miss"
+    );
+
+    let command = server.join().expect("test Redis server");
+    assert!(command.windows(3).any(|window| window == b"GET"));
+    assert!(
+        command
+            .windows(b"response-cache:expired".len())
+            .any(|window| window == b"response-cache:expired")
+    );
+}
+
+#[cfg(feature = "redis-backend")]
+#[tokio::test]
+async fn configured_redis_backend_pings_and_reports_its_kind() {
+    // This minimal RESP peer validates the configured store's operational
+    // health path without relying on a host Redis service.
+    let (url, server) = start_redis_test_server(b"+PONG\r\n".to_vec());
+    let mut config = ResponseCacheConfig::default();
+    config.backend.kind = "redis".to_string();
+    config
+        .backend
+        .config
+        .insert("url".to_string(), Json::String(url));
+
+    let store = build_store(&config)
+        .await
+        .expect("configured Redis backend builds");
+    assert_eq!(store.backend_kind(), "redis");
+    store.health().await.expect("Redis PING succeeds");
+
+    let command = server.join().expect("test Redis server");
+    assert!(command.windows(4).any(|window| window == b"PING"));
 }

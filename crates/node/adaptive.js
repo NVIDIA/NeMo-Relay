@@ -150,8 +150,8 @@ function acgConfig(config = {}) {
 /**
  * Create response-cache settings with defaults applied.
  *
- * Merges caller-supplied overrides onto the opt-in LLM response-cache config
- * shape (exact-match) used by the adaptive plugin. This is a section of
+ * Merges caller-supplied overrides onto the opt-in LLM response and tool-result
+ * cache config shape (exact-match) used by the adaptive plugin. This is a section of
  * the adaptive component, not a standalone plugin kind.
  *
  * @param {object} [config={}] - Partial response-cache settings to override.
@@ -185,16 +185,59 @@ const RESPONSE_CACHE_PLUGIN_FIELDS = {
   headerAllowlist: 'header_allowlist',
 };
 
+const TOOL_CLASS_PLUGIN_FIELDS = {
+  ttlSeconds: 'ttl_seconds',
+  bypassRate: 'bypass_rate',
+  toolVersion: 'tool_version',
+  argSkip: 'arg_skip',
+};
+
+const TOOL_OVERRIDE_PLUGIN_FIELDS = {
+  ...TOOL_CLASS_PLUGIN_FIELDS,
+};
+
+const TOOL_CACHE_PLUGIN_FIELDS = {
+  cacheErrors: 'cache_errors',
+};
+
+function mapPluginFields(config, fields) {
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return config;
+  return Object.fromEntries(Object.entries(config).map(([key, value]) => [fields[key] ?? key, value]));
+}
+
+function mapPluginRecord(config, fields) {
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return config;
+  return Object.fromEntries(Object.entries(config).map(([key, value]) => [key, mapPluginFields(value, fields)]));
+}
+
+function toToolCachePluginConfig(config) {
+  const serialized = mapPluginFields(config, TOOL_CACHE_PLUGIN_FIELDS);
+  if (serialized === config) return config;
+  if (serialized.default !== undefined) {
+    serialized.default = mapPluginFields(serialized.default, TOOL_CLASS_PLUGIN_FIELDS);
+  }
+  if (serialized.classes !== undefined) {
+    serialized.classes = mapPluginRecord(serialized.classes, TOOL_CLASS_PLUGIN_FIELDS);
+  }
+  if (serialized.overrides !== undefined) {
+    serialized.overrides = mapPluginRecord(serialized.overrides, TOOL_OVERRIDE_PLUGIN_FIELDS);
+  }
+  return serialized;
+}
+
+function toResponseCachePluginConfig(config) {
+  const serialized = mapPluginFields(config, RESPONSE_CACHE_PLUGIN_FIELDS);
+  if (serialized === config) return config;
+  if (serialized.tools !== undefined) {
+    serialized.tools = toToolCachePluginConfig(serialized.tools);
+  }
+  return serialized;
+}
+
 function toPluginConfig(config) {
   const { responseCache, ...rest } = config;
   if (responseCache === undefined) return config;
-  const serialized =
-    responseCache !== null && typeof responseCache === 'object' && !Array.isArray(responseCache)
-      ? Object.fromEntries(
-          Object.entries(responseCache).map(([key, value]) => [RESPONSE_CACHE_PLUGIN_FIELDS[key] ?? key, value]),
-        )
-      : responseCache;
-  return { ...rest, response_cache: serialized };
+  return { ...rest, response_cache: toResponseCachePluginConfig(responseCache) };
 }
 
 class AdaptiveRuntime extends lib.AdaptiveRuntime {

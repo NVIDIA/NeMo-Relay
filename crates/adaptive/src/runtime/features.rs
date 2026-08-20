@@ -42,7 +42,9 @@ use crate::error::{AdaptiveError, Result};
 use crate::intercepts::create_tool_execution_intercept_with_mode;
 use crate::learner::latency::LatencySensitivityLearner;
 use crate::learner::traits::Learner;
-use crate::response_cache::{build_store, make_intercept, make_stream_intercept};
+use crate::response_cache::{
+    build_store, make_intercept, make_stream_intercept, make_tool_intercept,
+};
 use crate::runtime::backend::build_backend;
 use crate::runtime::validation::validate_config;
 use crate::storage::traits::StorageBackendDyn;
@@ -484,7 +486,7 @@ impl AdaptiveRuntime {
         }
         // The response cache is independent of the learning-state backend: it has
         // its own CacheStore and installs buffered and streaming LLM execution
-        // intercepts.
+        // intercepts plus an opt-in tool execution intercept.
         if let Some(config) = self.config.response_cache.clone() {
             pending.push(Box::new(ResponseCacheFeature::new(config, self.runtime_id)));
         }
@@ -785,6 +787,7 @@ impl AdaptiveFeature for AcgFeature {
 struct ResponseCacheFeature {
     name: String,
     stream_name: String,
+    tool_name: String,
     priority: i32,
     config: ResponseCacheConfig,
 }
@@ -794,6 +797,7 @@ impl ResponseCacheFeature {
         Self {
             name: format!("adaptive_{runtime_id}_response_cache_llm_execution"),
             stream_name: format!("adaptive_{runtime_id}_response_cache_llm_stream_execution"),
+            tool_name: format!("adaptive_{runtime_id}_response_cache_tool_execution"),
             priority: config.priority,
             config,
         }
@@ -806,9 +810,6 @@ impl AdaptiveFeature for ResponseCacheFeature {
         ctx: &'a mut RegistrationContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            // Build the backend once, shared by both intercepts. A Redis backend
-            // that is unreachable at startup disables this optional feature;
-            // the intercepts themselves fail open on later store errors.
             let store = match build_store(&self.config).await {
                 Ok(store) => store,
                 Err(AdaptiveError::Storage(error)) => {
@@ -816,7 +817,7 @@ impl AdaptiveFeature for ResponseCacheFeature {
                         target: "nemo_relay.runtime",
                         event = "adaptive_response_cache_store_init_failed";
                         "Adaptive runtime could not initialize the optional response cache; \
-                         managed LLM calls will run live: {error}"
+                         managed LLM and tool calls will run live: {error}"
                     );
                     return Ok(());
                 }
@@ -831,8 +832,17 @@ impl AdaptiveFeature for ResponseCacheFeature {
             ctx.register_llm_stream_execution_intercept(
                 &self.stream_name,
                 self.priority,
-                make_stream_intercept(store, config),
-            )
+                make_stream_intercept(store.clone(), config.clone()),
+            )?;
+            if let Some(tools) = self.config.tools.clone().filter(|tools| tools.enabled) {
+                let priority = tools.priority;
+                ctx.register_tool_execution_intercept(
+                    &self.tool_name,
+                    priority,
+                    make_tool_intercept(store, config, Arc::new(tools)),
+                )?;
+            }
+            Ok(())
         })
     }
 }

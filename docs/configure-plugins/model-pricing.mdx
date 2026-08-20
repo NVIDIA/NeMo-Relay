@@ -1,6 +1,6 @@
 ---
 title: "Model Pricing"
-description: "Configure file and inline pricing catalogs for managed LLM cost estimates."
+description: "Configure file and inline pricing catalogs for LLM cost estimates."
 position: 2
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -8,8 +8,10 @@ SPDX-License-Identifier: Apache-2.0 */}
 
 
 Use the built-in `pricing` component to configure model pricing catalogs for
-cost estimates on managed LLM responses. Relay leaves cost absent when no
-configured source matches the provider, model, and token usage.
+cost estimates on managed or manually observed LLM responses. Manual lifecycle
+end events must supply a response codec or normalized response annotation with
+model and token usage. Relay leaves cost absent when no configured source
+matches the provider, model, and token usage.
 
 ## Configuration
 

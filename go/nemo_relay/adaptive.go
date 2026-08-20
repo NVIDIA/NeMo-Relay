@@ -67,7 +67,7 @@ type AcgConfig struct {
 	StabilityThresholds *AcgStabilityThresholds `json:"stability_thresholds,omitempty"`
 }
 
-// ResponseCacheConfig configures the opt-in LLM response cache: a section
+// ResponseCacheConfig configures the opt-in LLM response and tool-result cache: a section
 // of the adaptive config (a sibling to acg/adaptive_hints/tool_parallelism), not a
 // standalone plugin kind. The Rust core validates and installs it from the adaptive
 // runtime; this struct only has to carry the section through to the FFI validator.
@@ -94,6 +94,42 @@ type ResponseCacheConfig struct {
 	// Backend selects the cache's own storage backend (distinct from the adaptive
 	// state backend). Defaults to in-memory when nil.
 	Backend *ResponseCacheBackendConfig `json:"backend,omitempty"`
+	// Tools configures the optional tool-result cache.
+	Tools *ResponseCacheToolsConfig `json:"tools,omitempty"`
+}
+
+// ResponseCacheToolsConfig configures caching for read-only, stable tools.
+type ResponseCacheToolsConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Priority is the execution-intercept priority. Nil delegates to Rust's
+	// default (100); a pointer to 0 selects outermost.
+	Priority *int32 `json:"priority,omitempty"`
+	// CacheErrors lets error-shaped tool results be cached (default false).
+	CacheErrors bool                              `json:"cache_errors"`
+	Default     *ResponseCacheToolClass           `json:"default,omitempty"`
+	Classes     map[string]ResponseCacheToolClass `json:"classes,omitempty"`
+	// Overrides keys are exact tool names or prefix*, *suffix, and *contains* patterns.
+	Overrides map[string]ResponseCacheToolOverride `json:"overrides,omitempty"`
+}
+
+// ResponseCacheToolClass defines a shared tool-cache policy.
+type ResponseCacheToolClass struct {
+	Cacheable   bool     `json:"cacheable,omitempty"`
+	TTLSeconds  *uint64  `json:"ttl_seconds,omitempty"`
+	BypassRate  *float64 `json:"bypass_rate,omitempty"`
+	ToolVersion *string  `json:"tool_version,omitempty"`
+	ArgSkip     []string `json:"arg_skip,omitempty"`
+	// Members contains exact tool names or prefix*, *suffix, and *contains* patterns.
+	Members []string `json:"members,omitempty"`
+}
+
+// ResponseCacheToolOverride refines a resolved tool-cache policy.
+type ResponseCacheToolOverride struct {
+	Cacheable   *bool     `json:"cacheable,omitempty"`
+	TTLSeconds  *uint64   `json:"ttl_seconds,omitempty"`
+	BypassRate  *float64  `json:"bypass_rate,omitempty"`
+	ToolVersion *string   `json:"tool_version,omitempty"`
+	ArgSkip     *[]string `json:"arg_skip,omitempty"`
 }
 
 // ResponseCacheBackendConfig selects the response-cache backend kind and options.
@@ -209,6 +245,15 @@ func NewRedisResponseCacheBackend(url, keyPrefix string) ResponseCacheBackendCon
 			"url":        url,
 			"key_prefix": keyPrefix,
 		},
+	}
+}
+
+// NewResponseCacheToolsConfig returns a disabled tool-result cache config.
+func NewResponseCacheToolsConfig() ResponseCacheToolsConfig {
+	priority := int32(100)
+	return ResponseCacheToolsConfig{
+		CacheErrors: false,
+		Priority:    &priority,
 	}
 }
 

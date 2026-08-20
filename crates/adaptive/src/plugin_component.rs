@@ -338,6 +338,7 @@ fn validate_response_cache_section(
             "key_strategy",
             "header_allowlist",
             "backend",
+            "tools",
         ],
     );
     if let Some(backend_json) = response_cache_json.get("backend").and_then(Json::as_object) {
@@ -361,6 +362,9 @@ fn validate_response_cache_section(
             );
         }
     }
+    if let Some(tools_json) = response_cache_json.get("tools").and_then(Json::as_object) {
+        validate_response_cache_tools_fields(diagnostics, policy, tools_json);
+    }
 }
 
 fn validate_response_cache_backend_config_fields(
@@ -381,6 +385,79 @@ fn validate_response_cache_backend_config_fields(
         backend_config,
         known_fields,
     );
+}
+
+fn validate_response_cache_tools_fields(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    policy: &ConfigPolicy,
+    tools_json: &Map<String, Json>,
+) {
+    const CLASS_FIELDS: &[&str] = &[
+        "cacheable",
+        "ttl_seconds",
+        "bypass_rate",
+        "tool_version",
+        "arg_skip",
+        "members",
+    ];
+    const OVERRIDE_FIELDS: &[&str] = &[
+        "cacheable",
+        "ttl_seconds",
+        "bypass_rate",
+        "tool_version",
+        "arg_skip",
+    ];
+
+    validate_unknown_fields(
+        diagnostics,
+        policy,
+        Some("response_cache.tools".to_string()),
+        tools_json,
+        &[
+            "enabled",
+            "priority",
+            "cache_errors",
+            "default",
+            "classes",
+            "overrides",
+        ],
+    );
+
+    if let Some(default_json) = tools_json.get("default").and_then(Json::as_object) {
+        validate_unknown_fields(
+            diagnostics,
+            policy,
+            Some("response_cache.tools.default".to_string()),
+            default_json,
+            CLASS_FIELDS,
+        );
+    }
+    if let Some(classes_json) = tools_json.get("classes").and_then(Json::as_object) {
+        for (class_name, class_value) in classes_json {
+            if let Some(class_object) = class_value.as_object() {
+                validate_unknown_fields(
+                    diagnostics,
+                    policy,
+                    Some(format!("response_cache.tools.classes.{class_name}")),
+                    class_object,
+                    CLASS_FIELDS,
+                );
+            }
+        }
+    }
+    if let Some(overrides_json) = tools_json.get("overrides").and_then(Json::as_object) {
+        for (tool_name, override_value) in overrides_json {
+            if let Some(override_object) = override_value.as_object() {
+                validate_unknown_fields(
+                    diagnostics,
+                    policy,
+                    Some(format!("response_cache.tools.overrides.{tool_name}")),
+                    override_object,
+                    OVERRIDE_FIELDS,
+                );
+            }
+        }
+    }
 }
 
 fn validate_backend_config_fields(

@@ -5,13 +5,14 @@
 
 use super::*;
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use crate::acg::profile::{BlockStabilityScore, StabilityClass};
 use crate::acg::prompt_ir::SpanId;
 use crate::acg::stability::StabilityAnalysisResult;
 use crate::config::{BackendSpec, StateConfig};
 use crate::intercepts::AGENT_HINTS_HEADER_KEY;
+use crate::response_cache::config::ToolCacheConfig;
 use crate::trie::accumulator::AccumulatorState;
 use crate::trie::serialization::TrieEnvelope;
 use crate::types::metadata::{AgentHints, MetadataEnvelope, ParallelHint};
@@ -26,13 +27,15 @@ use nemo_relay::api::registry::{
     deregister_llm_stream_execution_intercept, deregister_tool_execution_intercept,
     register_llm_execution_intercept, register_llm_request_intercept,
     register_llm_stream_execution_intercept, register_tool_execution_intercept,
+    scope_deregister_llm_request_intercept, scope_register_llm_request_intercept,
 };
-use nemo_relay::api::runtime::LlmJsonStream;
 use nemo_relay::api::runtime::ToolExecutionNextFn;
 use nemo_relay::api::runtime::global_context;
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmStreamExecutionNextFn, NemoRelayContextState,
 };
+use nemo_relay::api::runtime::{LlmJsonStream, create_scope_stack, set_thread_scope_stack};
+use nemo_relay::api::scope::{PopScopeParams, PushScopeParams, ScopeType, pop_scope, push_scope};
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::api::tool::tool_call_execute;
 use nemo_relay::error::FlowError;
@@ -46,6 +49,28 @@ fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();
     *state = NemoRelayContextState::new();
+}
+
+struct CoverageLogger;
+
+impl log::Log for CoverageLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, _record: &log::Record<'_>) {}
+
+    fn flush(&self) {}
+}
+
+static COVERAGE_LOGGER: CoverageLogger = CoverageLogger;
+static COVERAGE_LOGGER_INIT: Once = Once::new();
+
+fn enable_warning_logs() {
+    COVERAGE_LOGGER_INIT.call_once(|| {
+        let _ = log::set_logger(&COVERAGE_LOGGER);
+    });
+    log::set_max_level(log::LevelFilter::Warn);
 }
 
 fn sample_plan(agent_id: &str) -> ExecutionPlan {
@@ -296,6 +321,13 @@ impl StorageBackendDyn for SeedFailBackend {
     ) -> Pin<Box<dyn Future<Output = Result<Option<AccumulatorState>>> + Send + 'a>> {
         Box::pin(async { Ok(None) })
     }
+
+    fn load_stability<'a>(
+        &'a self,
+        _agent_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<StabilityAnalysisResult>>> + Send + 'a>> {
+        Box::pin(async { Err(AdaptiveError::Storage("ACG seed failed".into())) })
+    }
 }
 
 struct PartiallyFailingFeature;
@@ -506,10 +538,15 @@ async fn telemetry_feature_registers_subscriber_and_starts_drain_task() {
 
     rollback_registrations(&mut registrations);
     assert_subscriber_absent(&name);
-
-    if let Some(handle) = runtime.drain_handle.take() {
-        handle.abort();
-    }
+    let handle = runtime
+        .drain_handle
+        .take()
+        .expect("telemetry registration must start a drain task");
+    drop(runtime);
+    tokio::time::timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("drain task must stop after its subscriber is deregistered")
+        .expect("drain task must complete cleanly");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -644,9 +681,14 @@ async fn tool_parallelism_feature_registers_execution_intercept() {
 async fn adaptive_runtime_register_survives_hot_cache_seed_failures() {
     let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
     reset_global();
+    enable_warning_logs();
 
     let config = AdaptiveConfig {
         adaptive_hints: Some(AdaptiveHintsComponentConfig::default()),
+        acg: Some(AcgComponentConfig {
+            provider: "passthrough".to_string(),
+            ..AcgComponentConfig::default()
+        }),
         ..AdaptiveConfig::default()
     };
     let report = validate_config(&config);
@@ -948,6 +990,43 @@ async fn acg_feature_registers_execution_and_stream_intercepts() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn acg_feature_reports_execution_registration_conflicts() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let mut feature = AcgFeature::new(
+        AcgComponentConfig {
+            provider: "passthrough".to_string(),
+            ..AcgComponentConfig::default()
+        },
+        runtime.hot_cache.clone(),
+        runtime.bound_scopes.clone(),
+        "agent-acg-conflict".to_string(),
+        Uuid::now_v7(),
+    );
+    let execution_name = feature.execution_name.clone();
+    register_llm_execution_intercept(
+        &execution_name,
+        1,
+        Arc::new(|_name, request, next| next(request)),
+    )
+    .unwrap();
+
+    let error = {
+        let mut ctx = RegistrationContext::new(&mut runtime);
+        let error = feature.register(&mut ctx).await.unwrap_err();
+        let mut registrations = ctx.finish();
+        rollback_registrations(&mut registrations);
+        error
+    };
+    assert!(error.to_string().contains(&execution_name));
+    deregister_llm_execution_intercept(&execution_name).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_abort_handle() {
     let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
     reset_global();
@@ -977,11 +1056,261 @@ async fn adaptive_runtime_register_feature_rolls_back_partial_registrations_and_
     assert_subscriber_absent("partial_feature");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn response_cache_feature_registers_llm_stream_and_enabled_tool_intercepts() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let mut feature = ResponseCacheFeature::new(
+        ResponseCacheConfig {
+            namespace: "response-cache-feature-registration".into(),
+            priority: 17,
+            tools: Some(ToolCacheConfig {
+                enabled: true,
+                priority: 19,
+                ..ToolCacheConfig::default()
+            }),
+            ..ResponseCacheConfig::default()
+        },
+        Uuid::now_v7(),
+    );
+    let execution_name = feature.name.clone();
+    let stream_name = feature.stream_name.clone();
+    let tool_name = feature.tool_name.clone();
+
+    let mut ctx = RegistrationContext::new(&mut runtime);
+    feature.register(&mut ctx).await.unwrap();
+
+    assert_llm_execution_intercept_registered(&execution_name);
+    assert_llm_stream_execution_intercept_registered(&stream_name);
+    assert_tool_execution_intercept_registered(&tool_name);
+
+    let mut registrations = ctx.finish();
+    rollback_registrations(&mut registrations);
+    assert_llm_execution_intercept_absent(&execution_name);
+    assert_llm_stream_execution_intercept_absent(&stream_name);
+    assert_tool_execution_intercept_absent(&tool_name);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn response_cache_feature_propagates_invalid_store_configuration() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut config = ResponseCacheConfig {
+        namespace: "response-cache-invalid-store".into(),
+        ..ResponseCacheConfig::default()
+    };
+    config.backend.kind = "unsupported-store".into();
+    let mut feature = ResponseCacheFeature::new(config, Uuid::now_v7());
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+
+    let error = {
+        let mut ctx = RegistrationContext::new(&mut runtime);
+        feature.register(&mut ctx).await.unwrap_err()
+    };
+    assert!(matches!(
+        error,
+        AdaptiveError::InvalidConfig(message)
+            if message.contains("unknown backend kind 'unsupported-store'")
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn response_cache_feature_cleans_up_when_llm_registration_conflicts() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let mut feature = ResponseCacheFeature::new(
+        ResponseCacheConfig {
+            namespace: "response-cache-execution-conflict".into(),
+            ..ResponseCacheConfig::default()
+        },
+        Uuid::now_v7(),
+    );
+    let name = feature.name.clone();
+    register_llm_execution_intercept(&name, 1, Arc::new(|_name, request, next| next(request)))
+        .unwrap();
+
+    let error = {
+        let mut ctx = RegistrationContext::new(&mut runtime);
+        let error = feature.register(&mut ctx).await.unwrap_err();
+        let mut registrations = ctx.finish();
+        rollback_registrations(&mut registrations);
+        error
+    };
+    assert!(error.to_string().contains(&name));
+    deregister_llm_execution_intercept(&name).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn response_cache_feature_cleans_up_when_stream_registration_conflicts() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let mut feature = ResponseCacheFeature::new(
+        ResponseCacheConfig {
+            namespace: "response-cache-stream-conflict".into(),
+            ..ResponseCacheConfig::default()
+        },
+        Uuid::now_v7(),
+    );
+    let execution_name = feature.name.clone();
+    let stream_name = feature.stream_name.clone();
+    register_llm_stream_execution_intercept(
+        &stream_name,
+        1,
+        Arc::new(|_name, request, next| next(request)),
+    )
+    .unwrap();
+
+    let error = {
+        let mut ctx = RegistrationContext::new(&mut runtime);
+        let error = feature.register(&mut ctx).await.unwrap_err();
+        let mut registrations = ctx.finish();
+        rollback_registrations(&mut registrations);
+        error
+    };
+    assert!(error.to_string().contains(&stream_name));
+    assert_llm_execution_intercept_absent(&execution_name);
+    deregister_llm_stream_execution_intercept(&stream_name).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn response_cache_feature_cleans_up_when_tool_registration_conflicts() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    let mut feature = ResponseCacheFeature::new(
+        ResponseCacheConfig {
+            namespace: "response-cache-tool-conflict".into(),
+            tools: Some(ToolCacheConfig {
+                enabled: true,
+                ..ToolCacheConfig::default()
+            }),
+            ..ResponseCacheConfig::default()
+        },
+        Uuid::now_v7(),
+    );
+    let execution_name = feature.name.clone();
+    let stream_name = feature.stream_name.clone();
+    let tool_name = feature.tool_name.clone();
+    register_tool_execution_intercept(
+        &tool_name,
+        1,
+        Arc::new(|_name, args, next| Box::pin(async move { next(args).await.map(Into::into) })),
+    )
+    .unwrap();
+
+    let error = {
+        let mut ctx = RegistrationContext::new(&mut runtime);
+        let error = feature.register(&mut ctx).await.unwrap_err();
+        let mut registrations = ctx.finish();
+        rollback_registrations(&mut registrations);
+        error
+    };
+    assert!(error.to_string().contains(&tool_name));
+    assert_llm_execution_intercept_absent(&execution_name);
+    assert_llm_stream_execution_intercept_absent(&stream_name);
+    deregister_tool_execution_intercept(&tool_name).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bind_scope_requires_an_agent_id_and_acg_configuration_after_registration() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig::default())
+        .await
+        .unwrap();
+    runtime.registered = true;
+    let scope_uuid = Uuid::now_v7();
+
+    let error = runtime.bind_scope(scope_uuid).unwrap_err();
+    assert!(matches!(
+        error,
+        AdaptiveError::Internal(message) if message.contains("missing registered agent id")
+    ));
+
+    runtime.registered_agent_id = Some("agent-without-acg".to_string());
+    let error = runtime.bind_scope(scope_uuid).unwrap_err();
+    assert!(matches!(
+        error,
+        AdaptiveError::InvalidConfig(message) if message.contains("does not enable scope-bound ACG")
+    ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bind_scope_reports_duplicate_scope_intercept_registration() {
+    let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
+    reset_global();
+    set_thread_scope_stack(create_scope_stack());
+
+    let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
+        agent_id: Some("scope-conflict-agent".into()),
+        state: Some(StateConfig {
+            backend: BackendSpec::in_memory(),
+        }),
+        acg: Some(AcgComponentConfig::default()),
+        ..AdaptiveConfig::default()
+    })
+    .await
+    .unwrap();
+    runtime.register().await.unwrap();
+    let scope = push_scope(
+        PushScopeParams::builder()
+            .name("scope-conflict")
+            .scope_type(ScopeType::Agent)
+            .build(),
+    )
+    .unwrap();
+    let name = runtime.acg_scope_registration_name(scope.uuid);
+    scope_register_llm_request_intercept(
+        &scope.uuid,
+        &name,
+        1,
+        false,
+        Arc::new(|_name, request, annotated| {
+            Box::pin(async move {
+                Ok(nemo_relay::api::llm::LlmRequestInterceptOutcome::new(
+                    request, annotated,
+                ))
+            })
+        }),
+    )
+    .unwrap();
+
+    let error = runtime.bind_scope(scope.uuid).unwrap_err();
+    assert!(matches!(
+        error,
+        AdaptiveError::RegistrationFailed(message)
+            if message.contains("scope-bound ACG llm request intercept")
+    ));
+
+    assert!(scope_deregister_llm_request_intercept(&scope.uuid, &name).unwrap());
+    pop_scope(PopScopeParams::builder().handle_uuid(&scope.uuid).build()).unwrap();
+}
+
 #[cfg(feature = "redis-backend")]
 #[tokio::test(flavor = "current_thread")]
 async fn response_cache_store_initialization_failure_fails_open() {
     let _lock = crate::TEST_GLOBAL_CONTEXT_MUTEX.lock().await;
     reset_global();
+    enable_warning_logs();
 
     let mut response_cache = ResponseCacheConfig {
         namespace: "fail-open-test".into(),
@@ -991,7 +1320,7 @@ async fn response_cache_store_initialization_failure_fails_open() {
     response_cache
         .backend
         .config
-        .insert("url".into(), json!("redis://127.0.0.1:0/"));
+        .insert("url".into(), json!("not-a-redis-url"));
 
     let mut runtime = AdaptiveRuntime::new(AdaptiveConfig {
         response_cache: Some(response_cache),
