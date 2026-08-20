@@ -35,7 +35,7 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 			"go.injected.collision": "first",
 			"go.existing":           "replacement",
 			"go.injected.integers":  []int64{1, 2},
-			"go.injected.doubles":   []float64{1.25, 2.5},
+			"go.injected.doubles":   []float64{1, 2.5},
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
@@ -56,15 +56,15 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = DeregisterEventMetadataInjector("go-event-metadata-failure") })
 
-	if err := RegisterEventMetadataInjector("go-event-metadata-mixed-numbers", 40, func(Event) (EventMetadata, error) {
+	if err := RegisterEventMetadataInjector("go-event-metadata-mixed-values", 40, func(Event) (EventMetadata, error) {
 		return EventMetadata{
-			"go.invalid.mixed_numbers": []any{1, 2.5},
-			"go.invalid.sentinel":      "must-be-omitted",
+			"go.invalid.mixed_values": []any{1, "two"},
+			"go.invalid.sentinel":     "must-be-omitted",
 		}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = DeregisterEventMetadataInjector("go-event-metadata-mixed-numbers") })
+	t.Cleanup(func() { _ = DeregisterEventMetadataInjector("go-event-metadata-mixed-values") })
 
 	scope, err := PushScope("go-event-metadata-scope", ScopeTypeCustom)
 	if err != nil {
@@ -86,7 +86,7 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		"go-event-metadata-mixed-numbers",
+		"go-event-metadata-mixed-values",
 		"go-event-metadata-failure",
 		"go-event-metadata-later",
 		"go-event-metadata-first",
@@ -131,11 +131,11 @@ func testEventMetadataInjectorGlobalScopeLocalAndFailureBehavior(t *testing.T) {
 	if got, want := metadata["go.injected.integers"], []any{float64(1), float64(2)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("homogeneous integer metadata = %#v, want %#v", got, want)
 	}
-	if got, want := metadata["go.injected.doubles"], []any{1.25, 2.5}; !reflect.DeepEqual(got, want) {
+	if got, want := metadata["go.injected.doubles"], []any{float64(1), 2.5}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("homogeneous double metadata = %#v, want %#v", got, want)
 	}
-	if _, ok := metadata["go.invalid.mixed_numbers"]; ok {
-		t.Fatalf("mixed numeric metadata was accepted: %#v", metadata)
+	if _, ok := metadata["go.invalid.mixed_values"]; ok {
+		t.Fatalf("mixed primitive metadata was accepted: %#v", metadata)
 	}
 	if _, ok := metadata["go.invalid.sentinel"]; ok {
 		t.Fatalf("invalid callback output was partially applied: %#v", metadata)
