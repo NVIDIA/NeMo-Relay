@@ -2322,6 +2322,8 @@ type OpenTelemetryRuntimeDiagnostic struct {
 	Count   uint64 `json:"count"`
 }
 
+const openTelemetryEndpointRequiredMessage = "endpoint is required"
+
 func decodeOpenTelemetryRuntimeDiagnostics(out *C.char) ([]OpenTelemetryRuntimeDiagnostic, error) {
 	defer C.nemo_relay_string_free(out)
 	var diagnostics []OpenTelemetryRuntimeDiagnostic
@@ -2339,7 +2341,7 @@ func normalizeOpenTelemetryConfig(config OpenTelemetryConfig) (OpenTelemetryConf
 		return config, fmt.Errorf("type is required")
 	}
 	if config.Endpoint == "" {
-		return config, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf(openTelemetryEndpointRequiredMessage)
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2606,33 +2608,35 @@ type openTelemetrySignalCStrings struct {
 	instrumentationScope *C.char
 }
 
-func newOpenTelemetrySignalCStrings(
-	transport OpenTelemetryTransport,
-	endpoint string,
-	headers map[string]string,
-	resourceAttributes map[string]string,
-	serviceName string,
-	serviceNamespace string,
-	serviceVersion string,
-	instrumentationScope string,
-) (openTelemetrySignalCStrings, error) {
-	encodedHeaders, err := jsonMarshal(headers)
+type openTelemetrySignalConfig struct {
+	transport            OpenTelemetryTransport
+	endpoint             string
+	headers              map[string]string
+	resourceAttributes   map[string]string
+	serviceName          string
+	serviceNamespace     string
+	serviceVersion       string
+	instrumentationScope string
+}
+
+func newOpenTelemetrySignalCStrings(config openTelemetrySignalConfig) (openTelemetrySignalCStrings, error) {
+	encodedHeaders, err := jsonMarshal(config.headers)
 	if err != nil {
 		return openTelemetrySignalCStrings{}, err
 	}
-	encodedResources, err := jsonMarshal(resourceAttributes)
+	encodedResources, err := jsonMarshal(config.resourceAttributes)
 	if err != nil {
 		return openTelemetrySignalCStrings{}, err
 	}
 	return openTelemetrySignalCStrings{
-		transport:            C.CString(string(transport)),
-		endpoint:             C.CString(endpoint),
+		transport:            C.CString(string(config.transport)),
+		endpoint:             C.CString(config.endpoint),
 		headers:              C.CString(string(encodedHeaders)),
 		resourceAttributes:   C.CString(string(encodedResources)),
-		serviceName:          C.CString(serviceName),
-		serviceNamespace:     optionalCString(serviceNamespace),
-		serviceVersion:       optionalCString(serviceVersion),
-		instrumentationScope: C.CString(instrumentationScope),
+		serviceName:          C.CString(config.serviceName),
+		serviceNamespace:     optionalCString(config.serviceNamespace),
+		serviceVersion:       optionalCString(config.serviceVersion),
+		instrumentationScope: C.CString(config.instrumentationScope),
 	}, nil
 }
 
@@ -2659,7 +2663,7 @@ func normalizeOpenTelemetryLogConfig(config OpenTelemetryLogConfig) (OpenTelemet
 		config.Transport = OpenTelemetryTransportHTTPBinary
 	}
 	if config.Endpoint == "" {
-		return config, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf(openTelemetryEndpointRequiredMessage)
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2706,11 +2710,10 @@ func NewOpenTelemetryLogSubscriber(config OpenTelemetryLogConfig) (*OpenTelemetr
 	if err != nil {
 		return nil, err
 	}
-	common, err := newOpenTelemetrySignalCStrings(
+	common, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{
 		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
-		config.ServiceName, config.ServiceNamespace, config.ServiceVersion,
-		config.InstrumentationScope,
-	)
+		config.ServiceName, config.ServiceNamespace, config.ServiceVersion, config.InstrumentationScope,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -2786,7 +2789,7 @@ func normalizeOpenTelemetryMetricConfig(config OpenTelemetryMetricConfig) (OpenT
 		config.Transport = OpenTelemetryTransportHTTPBinary
 	}
 	if config.Endpoint == "" {
-		return config, fmt.Errorf("endpoint is required")
+		return config, fmt.Errorf(openTelemetryEndpointRequiredMessage)
 	}
 	if config.ServiceName == "" {
 		config.ServiceName = "unknown_service"
@@ -2833,11 +2836,10 @@ func NewOpenTelemetryMetricSubscriber(config OpenTelemetryMetricConfig) (*OpenTe
 	if err != nil {
 		return nil, err
 	}
-	common, err := newOpenTelemetrySignalCStrings(
+	common, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{
 		config.Transport, config.Endpoint, config.Headers, config.ResourceAttributes,
-		config.ServiceName, config.ServiceNamespace, config.ServiceVersion,
-		config.InstrumentationScope,
-	)
+		config.ServiceName, config.ServiceNamespace, config.ServiceVersion, config.InstrumentationScope,
+	})
 	if err != nil {
 		return nil, err
 	}

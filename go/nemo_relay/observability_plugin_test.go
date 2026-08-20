@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const observabilityDevProject = "observability-dev"
+
 const (
 	ClearPluginConfigurationFailed = "ClearPluginConfiguration failed"
 	InitializePluginsFailed        = "InitializePlugins failed"
@@ -87,8 +89,8 @@ func TestObservabilityConfigHelpers(t *testing.T) {
 	metrics := NewObservabilityOpenTelemetryMetricConfig()
 	metrics.Enabled = true
 	metricEndpoint := NewObservabilityOpenTelemetrySignalEndpointConfig("https://collector.example/custom/metrics")
-	metricEndpoint.Headers["x-nv-project"] = "observability-dev"
-	metricEndpoint.ResourceAttributes["nv.project"] = "observability-dev"
+	metricEndpoint.Headers["x-nv-project"] = observabilityDevProject
+	metricEndpoint.ResourceAttributes["nv.project"] = observabilityDevProject
 	metrics.Endpoints = ObservabilityOpenTelemetrySignalEndpoints(metricEndpoint)
 	otel.Logs = &logs
 	otel.Metrics = &metrics
@@ -185,8 +187,8 @@ func assertWrappedObservabilityConfig(t *testing.T, wrapped PluginComponentSpec)
 	metricEndpoint := metricEndpoints[0].(map[string]any)
 	if metrics["temporality"] != "cumulative" || metrics["cardinality_limit"] != float64(2000) ||
 		metricEndpoint["endpoint"] != "https://collector.example/custom/metrics" ||
-		metricEndpoint["headers"].(map[string]any)["x-nv-project"] != "observability-dev" ||
-		metricEndpoint["resource_attributes"].(map[string]any)["nv.project"] != "observability-dev" {
+		metricEndpoint["headers"].(map[string]any)["x-nv-project"] != observabilityDevProject ||
+		metricEndpoint["resource_attributes"].(map[string]any)["nv.project"] != observabilityDevProject {
 		t.Fatalf("expected OpenTelemetry metric settings in serialized config: %#v", metrics)
 	}
 }

@@ -9,7 +9,7 @@ use nemo_relay::plugin::{
 use serde_json::Value as Json;
 
 use crate::config::{AdaptiveConfig, BackendSpec, ResponseCacheConfig};
-use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
+use crate::response_cache::config::{KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig, ToolClass};
 use crate::response_cache::tool::{is_supported_tool_pattern, wildcard_patterns_overlap};
 
 pub fn validate_config(config: &AdaptiveConfig) -> ConfigReport {
@@ -235,50 +235,7 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
 
     let mut owning_class: HashMap<&str, &str> = HashMap::new();
     for (class_name, class) in &tools.classes {
-        validate_tool_policy(
-            report,
-            &format!("classes.{class_name}"),
-            class.ttl_seconds,
-            class.bypass_rate,
-        );
-        for member in &class.members {
-            if !is_supported_tool_pattern(member) {
-                report.diagnostics.push(response_cache_error(
-                    "response_cache.tool_invalid_pattern",
-                    Some("tools.classes"),
-                    format!(
-                        "tool member '{member}' in class '{class_name}' must be an exact name, \
-                         'prefix*', '*suffix', or '*contains*'"
-                    ),
-                ));
-            }
-            if let Some(previous) = owning_class.get(member.as_str()) {
-                if *previous != class_name.as_str() {
-                    report.diagnostics.push(response_cache_error(
-                        "response_cache.tool_multiple_classes",
-                        Some("tools.classes"),
-                        format!(
-                            "tool member '{member}' appears in multiple classes ('{previous}' and \
-                             '{class_name}'); a member — exact name or pattern — may appear in at \
-                             most one class"
-                        ),
-                    ));
-                }
-            } else {
-                owning_class.insert(member.as_str(), class_name.as_str());
-            }
-            if class.cacheable && member == "*" {
-                report.diagnostics.push(response_cache_error(
-                    "response_cache.tool_catch_all_member",
-                    Some("tools.classes"),
-                    format!(
-                        "class '{class_name}' lists the catch-all member '{member}' with \
-                         cacheable = true, which caches every tool; use a named class to \
-                         classify cacheable tools"
-                    ),
-                ));
-            }
-        }
+        validate_tool_cache_class(report, class_name, class, &mut owning_class);
     }
 
     validate_conflicting_tool_class_patterns(report, tools);
@@ -313,6 +270,58 @@ fn validate_tool_cache(report: &mut ConfigReport, tools: &ToolCacheConfig) {
     }
 
     validate_conflicting_tool_override_patterns(report, tools);
+}
+
+fn validate_tool_cache_class<'a>(
+    report: &mut ConfigReport,
+    class_name: &'a str,
+    class: &'a ToolClass,
+    owning_class: &mut HashMap<&'a str, &'a str>,
+) {
+    validate_tool_policy(
+        report,
+        &format!("classes.{class_name}"),
+        class.ttl_seconds,
+        class.bypass_rate,
+    );
+    for member in &class.members {
+        if !is_supported_tool_pattern(member) {
+            report.diagnostics.push(response_cache_error(
+                "response_cache.tool_invalid_pattern",
+                Some("tools.classes"),
+                format!(
+                    "tool member '{member}' in class '{class_name}' must be an exact name, \
+                     'prefix*', '*suffix', or '*contains*'"
+                ),
+            ));
+        }
+        if let Some(previous) = owning_class.get(member.as_str()) {
+            if *previous != class_name {
+                report.diagnostics.push(response_cache_error(
+                    "response_cache.tool_multiple_classes",
+                    Some("tools.classes"),
+                    format!(
+                        "tool member '{member}' appears in multiple classes ('{previous}' and \
+                         '{class_name}'); a member — exact name or pattern — may appear in at \
+                         most one class"
+                    ),
+                ));
+            }
+        } else {
+            owning_class.insert(member.as_str(), class_name);
+        }
+        if class.cacheable && member == "*" {
+            report.diagnostics.push(response_cache_error(
+                "response_cache.tool_catch_all_member",
+                Some("tools.classes"),
+                format!(
+                    "class '{class_name}' lists the catch-all member '{member}' with \
+                     cacheable = true, which caches every tool; use a named class to \
+                     classify cacheable tools"
+                ),
+            ));
+        }
+    }
 }
 
 fn validate_conflicting_tool_class_patterns(report: &mut ConfigReport, tools: &ToolCacheConfig) {
