@@ -28,6 +28,18 @@ describe('observability plugin helpers', () => {
       timeout_millis: 30000,
       config: { allowed_countries: ['US', 'CA'] },
     });
+    assert.deepEqual(
+      observability.exportActivationPolicy({
+        provider: 'com.example.runtime-policy',
+        timeout_millis: undefined,
+        config: undefined,
+      }),
+      {
+        provider: 'com.example.runtime-policy',
+        timeout_millis: 30000,
+        config: null,
+      },
+    );
     assert.equal(
       observability.openTelemetryEndpoint({
         type: 'full',

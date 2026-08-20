@@ -65,9 +65,9 @@ function exportActivationPolicy(config) {
     throw new TypeError('Export activation policy timeout_millis must be between 1000 and 300000');
   }
   return {
-    timeout_millis: 30000,
-    config: null,
     ...config,
+    timeout_millis: timeout,
+    config: config.config ?? null,
   };
 }
 
