@@ -1800,9 +1800,6 @@ fn otel_compatible_attribute_number_kind(
             .is_ok()
             .then_some(OtelAttributePrimitiveKind::Number);
     }
-    if value.as_i64().is_some() {
-        return Some(OtelAttributePrimitiveKind::Number);
-    }
     value.as_f64().map(|_| OtelAttributePrimitiveKind::Number)
 }
 
