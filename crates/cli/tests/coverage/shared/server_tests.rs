@@ -1905,17 +1905,19 @@ async fn plugin_activation_covers_empty_invalid_and_missing_manifest_paths() {
     .expect("invalid config should fail activation");
     assert!(invalid.to_string().contains("invalid plugin config"));
 
-    let native = PluginActivation::initialize(
+    let dynamic_switchyard = PluginActivation::initialize(
         None,
         vec![dynamic_component_without_manifest(
-            "acme.native-missing",
+            "switchyard",
             DynamicPluginKind::RustDynamic,
         )],
     )
     .await
     .err()
-    .expect("native plugin without a manifest should fail activation");
-    assert!(native.to_string().contains("native dynamic plugin"));
+    .expect("dynamic Switchyard plugin without a manifest should reach dynamic activation");
+    let dynamic_switchyard = dynamic_switchyard.to_string();
+    assert!(dynamic_switchyard.contains("native dynamic plugin"));
+    assert!(!dynamic_switchyard.contains("removed in NeMo Relay 0.8"));
 
     let worker = PluginActivation::initialize(
         None,
