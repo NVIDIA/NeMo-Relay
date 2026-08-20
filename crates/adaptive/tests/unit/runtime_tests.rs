@@ -618,6 +618,9 @@ async fn adaptive_runtime_bind_scope_requires_registration_and_passes_through_wi
     runtime
         .bind_scope(scope.uuid)
         .expect("registered runtime should bind acg to the active scope");
+    runtime
+        .bind_scope(scope.uuid)
+        .expect("binding an already-bound scope should be idempotent");
     let request = LlmRequest {
         headers: Map::new(),
         content: serde_json::json!({

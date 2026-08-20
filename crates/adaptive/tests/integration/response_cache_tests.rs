@@ -16,19 +16,25 @@ use nemo_relay::api::llm::{
     LlmCallExecuteParams, LlmRequest, LlmStreamCallExecuteParams, llm_call_execute,
     llm_stream_call_execute,
 };
+use nemo_relay::api::registry::{
+    deregister_tool_execution_intercept, register_tool_execution_intercept,
+};
 use nemo_relay::api::runtime::{
     LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    NemoRelayContextState, global_context,
+    NemoRelayContextState, ToolExecutionNextFn, global_context,
 };
 use nemo_relay::api::scope::ScopeType;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
+use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{
-    PluginConfig, clear_plugin_configuration, initialize_plugins_exact, validate_plugin_config,
+    DiagnosticLevel, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
+    validate_plugin_config,
 };
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
     AcgComponentConfig, AdaptiveConfig, BackendSpec, ResponseCacheConfig, StateConfig,
+    ToolCacheConfig, ToolClass, ToolOverride,
 };
 use serde_json::{Value as Json, json};
 use tokio::sync::Mutex;
@@ -39,7 +45,7 @@ mod response_cache_common;
 use response_cache_common::{activate_cache, call, chat_request};
 
 static TEST_MUTEX: Mutex<()> = Mutex::const_new(());
-const SWITCHYARD_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
+const ROUTING_BACKEND_HEADER: &str = "x-nemo-relay-internal-dispatch-backend";
 
 fn reset_global() {
     let _ = clear_plugin_configuration();
@@ -79,7 +85,7 @@ fn chat_request_for_backend(prompt: &str, backend: &str) -> LlmRequest {
     let mut request = chat_request(prompt);
     request
         .headers
-        .insert(SWITCHYARD_BACKEND_HEADER.to_string(), json!(backend));
+        .insert(ROUTING_BACKEND_HEADER.to_string(), json!(backend));
     request
 }
 
@@ -269,7 +275,7 @@ async fn a_different_request_is_a_miss() {
 }
 
 #[tokio::test]
-async fn switchyard_backends_use_independent_buffered_entries() {
+async fn routing_backends_use_independent_buffered_entries() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     activate_cache(scoped_cache_config()).await;
@@ -549,6 +555,7 @@ async fn invalid_config_is_rejected_by_validation() {
         response_cache: Some(ResponseCacheConfig {
             ttl_seconds: 0,
             bypass_rate: 2.0,
+            key_strategy: "semantic".to_string(),
             namespace: "invalid-config-test".to_string(),
             ..ResponseCacheConfig::default()
         }),
@@ -572,6 +579,13 @@ async fn invalid_config_is_rejected_by_validation() {
             .iter()
             .any(|diagnostic| diagnostic.code == "response_cache.invalid_bypass_rate"),
         "bypass_rate out of range must produce a diagnostic"
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.unsupported_key_strategy"),
+        "an unsupported key strategy must produce a diagnostic"
     );
 }
 
@@ -623,6 +637,81 @@ async fn unknown_and_unavailable_backends_are_rejected_by_validation() {
             redis.diagnostics
         );
     }
+}
+
+#[tokio::test]
+async fn response_cache_validation_diagnostics_identify_the_invalid_setting() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    let mut cache = ResponseCacheConfig {
+        namespace: "diagnostic-contract-test".to_string(),
+        key_strategy: "semantic".to_string(),
+        tools: Some(ToolCacheConfig {
+            enabled: true,
+            default: ToolClass {
+                bypass_rate: Some(-0.01),
+                ..ToolClass::default()
+            },
+            ..ToolCacheConfig::default()
+        }),
+        ..ResponseCacheConfig::default()
+    };
+    cache.backend.kind = "redis".to_string();
+
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![
+            ComponentSpec::new(AdaptiveConfig {
+                response_cache: Some(cache),
+                ..AdaptiveConfig::default()
+            })
+            .into(),
+        ],
+        ..PluginConfig::default()
+    });
+
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "response_cache.unsupported_key_strategy"
+                && diagnostic.level == DiagnosticLevel::Error
+                && diagnostic.component.as_deref() == Some("response_cache")
+                && diagnostic.field.as_deref() == Some("key_strategy")
+        }),
+        "an unsupported key strategy must identify its setting: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "response_cache.tool_invalid_bypass_rate"
+                && diagnostic.level == DiagnosticLevel::Error
+                && diagnostic.field.as_deref() == Some("tools")
+        }),
+        "an invalid tool bypass rate must identify the tools section: {:?}",
+        report.diagnostics
+    );
+
+    #[cfg(not(feature = "redis-backend"))]
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "response_cache.backend_unavailable"
+                && diagnostic.level == DiagnosticLevel::Error
+                && diagnostic.field.as_deref() == Some("backend.kind")
+        }),
+        "redis must be rejected when its backend feature is not compiled: {:?}",
+        report.diagnostics
+    );
+
+    #[cfg(feature = "redis-backend")]
+    assert!(
+        report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "response_cache.missing_redis_url"
+                && diagnostic.level == DiagnosticLevel::Error
+                && diagnostic.field.as_deref() == Some("backend.config.url")
+        }),
+        "redis must identify a missing connection URL when its backend feature is compiled: {:?}",
+        report.diagnostics
+    );
 }
 
 #[tokio::test]
@@ -933,7 +1022,7 @@ async fn streaming_repeat_is_a_hit_that_skips_the_provider_and_replays_the_aggre
 }
 
 #[tokio::test]
-async fn switchyard_backends_use_independent_streaming_entries() {
+async fn routing_backends_use_independent_streaming_entries() {
     let _guard = TEST_MUTEX.lock().await;
     reset_global();
     activate_cache(scoped_cache_config()).await;
@@ -1826,4 +1915,738 @@ async fn redis_backend_shares_entries_across_store_instances() {
 
     writer.delete(key).await.expect("delete");
     assert!(reader.get(key).await.expect("get").is_none());
+}
+
+fn counting_tool(calls: Arc<AtomicUsize>, result: Json) -> ToolExecutionNextFn {
+    Arc::new(move |_args: Json| {
+        let calls = Arc::clone(&calls);
+        let result = result.clone();
+        Box::pin(async move {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(result.into())
+        })
+    })
+}
+
+async fn tool_call(name: &str, tool: &ToolExecutionNextFn, args: Json) -> Json {
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name(name)
+            .args(args)
+            .func(tool.clone())
+            .build(),
+    )
+    .await
+    .unwrap()
+    .result
+}
+
+fn one_cacheable_class(members: &[&str]) -> ToolCacheConfig {
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "read_only".to_string(),
+        ToolClass {
+            cacheable: true,
+            members: members.iter().map(|member| member.to_string()).collect(),
+            ..ToolClass::default()
+        },
+    );
+    ToolCacheConfig {
+        enabled: true,
+        classes,
+        ..ToolCacheConfig::default()
+    }
+}
+
+fn cache_with_tools(tools: ToolCacheConfig) -> ResponseCacheConfig {
+    ResponseCacheConfig {
+        namespace: "tool-cache-integration-test".to_string(),
+        tools: Some(tools),
+        ..ResponseCacheConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn classified_tool_repeat_is_a_hit_that_skips_the_tool() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "the answer is 42"}));
+
+    let first = tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+    let second = tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a classified-cacheable tool must run once; the repeat is served from cache"
+    );
+    assert_eq!(first, second, "a hit returns the stored result unchanged");
+}
+
+#[tokio::test]
+async fn an_effectful_class_is_never_cached() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "effectful".to_string(),
+        ToolClass {
+            cacheable: false,
+            members: vec!["send_email".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    activate_cache(cache_with_tools(ToolCacheConfig {
+        enabled: true,
+        classes,
+        ..ToolCacheConfig::default()
+    }))
+    .await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"sent": true}));
+
+    tool_call("send_email", &tool, json!({"to": "a@b.c"})).await;
+    tool_call("send_email", &tool, json!({"to": "a@b.c"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "an effectful (cacheable=false) tool must run every time — a hit would skip the side effect"
+    );
+}
+
+#[tokio::test]
+async fn disabled_tools_section_does_not_cache() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut tools = one_cacheable_class(&["docs_lookup"]);
+    tools.enabled = false;
+    activate_cache(cache_with_tools(tools)).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "x"}));
+
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "with tools.enabled = false the tool intercept is not installed"
+    );
+}
+
+#[tokio::test]
+async fn conventional_error_shaped_tool_results_are_not_cached_by_default() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(
+        Arc::clone(&calls),
+        json!({"type": "tool_result", "is_error": true, "content": "not found"}),
+    );
+
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "an Anthropic-style in-band tool error must run live again unless cache_errors is enabled"
+    );
+}
+
+#[tokio::test]
+async fn conventional_error_shaped_tool_results_can_be_cached_when_opted_in() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    let mut tools = one_cacheable_class(&["lookup"]);
+    tools.cache_errors = true;
+    activate_cache(cache_with_tools(tools)).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(
+        Arc::clone(&calls),
+        json!({"type": "tool_result", "is_error": true, "content": "not found"}),
+    );
+
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+    tool_call("lookup", &tool, json!({"q": "missing"})).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "cache_errors=true explicitly permits caching Anthropic-style in-band error results"
+    );
+}
+
+#[tokio::test]
+async fn tool_callback_errors_emit_misses_and_are_never_cached() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
+
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let sink = Arc::clone(&captured);
+    register_subscriber(
+        "response_cache_tool_callback_error_capture",
+        Arc::new(move |event: &Event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool: ToolExecutionNextFn = {
+        let calls = Arc::clone(&calls);
+        Arc::new(move |_args| {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(FlowError::Internal("tool unavailable".to_string()))
+            })
+        })
+    };
+
+    for _ in 0..2 {
+        let error = tool_call_execute(
+            ToolCallExecuteParams::builder()
+                .name("lookup")
+                .args(json!({"q": "missing"}))
+                .func(tool.clone())
+                .build(),
+        )
+        .await
+        .expect_err("a tool callback error must reach the caller");
+        assert!(matches!(error, FlowError::Internal(message) if message == "tool unavailable"));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    flush_subscribers().unwrap();
+    let misses = captured
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("miss")
+                && event
+                    .metadata()
+                    .and_then(|metadata| metadata.get("nemo_relay.response_cache.surface"))
+                    .and_then(Json::as_str)
+                    == Some("tool")
+        })
+        .count();
+    assert_eq!(misses, 2, "each failed call must still report a cache miss");
+    deregister_subscriber("response_cache_tool_callback_error_capture").unwrap();
+}
+
+#[tokio::test]
+async fn execution_intercepts_outside_the_cache_run_on_hits() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+
+    let outer_runs = Arc::new(AtomicUsize::new(0));
+    register_tool_execution_intercept(
+        "response_cache_outer_tool_execution_test",
+        40,
+        Arc::new({
+            let outer_runs = Arc::clone(&outer_runs);
+            move |_name, args, next| {
+                let outer_runs = Arc::clone(&outer_runs);
+                Box::pin(async move {
+                    outer_runs.fetch_add(1, Ordering::SeqCst);
+                    next(args).await.map(Into::into)
+                })
+            }
+        }),
+    )
+    .unwrap();
+    activate_cache(cache_with_tools(one_cacheable_class(&["lookup"]))).await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"answer": "cached"}));
+    tool_call("lookup", &tool, json!({"q": "relay"})).await;
+    tool_call("lookup", &tool, json!({"q": "relay"})).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the second call must hit");
+    assert_eq!(
+        outer_runs.load(Ordering::SeqCst),
+        2,
+        "a lower-priority execution intercept wraps the cache and runs on hits"
+    );
+    deregister_tool_execution_intercept("response_cache_outer_tool_execution_test").unwrap();
+}
+
+#[tokio::test]
+async fn tool_hit_emits_a_surface_tool_mark_with_saved_invocations() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    activate_cache(cache_with_tools(one_cacheable_class(&["docs_lookup"]))).await;
+
+    let captured = Arc::new(StdMutex::new(Vec::<Event>::new()));
+    let sink = Arc::clone(&captured);
+    register_subscriber(
+        "response_cache_tool_capture",
+        Arc::new(move |event: &Event| sink.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tool = counting_tool(Arc::clone(&calls), json!({"doc": "x"}));
+
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await; // miss
+    tool_call("docs_lookup", &tool, json!({"q": "rust"})).await; // hit
+    flush_subscribers().unwrap();
+
+    let events = captured.lock().unwrap();
+    let hit_mark = events
+        .iter()
+        .find(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("hit")
+        })
+        .expect("a response_cache tool hit mark should be emitted");
+    let metadata = hit_mark.metadata().expect("hit mark has metadata");
+    assert_eq!(
+        metadata
+            .get("nemo_relay.response_cache.surface")
+            .and_then(Json::as_str),
+        Some("tool"),
+        "the tool hit mark must be tagged surface = tool"
+    );
+    assert_eq!(
+        metadata
+            .get("nemo_relay.response_cache.saved_invocations")
+            .and_then(Json::as_u64),
+        Some(1),
+        "a tool hit reports one saved invocation"
+    );
+    let miss_mark = events
+        .iter()
+        .find(|event| {
+            event.name() == "response_cache"
+                && event
+                    .data()
+                    .and_then(|data| data.get("status"))
+                    .and_then(Json::as_str)
+                    == Some("miss")
+        })
+        .expect("a response_cache tool miss mark should be emitted");
+    assert!(
+        !miss_mark
+            .metadata()
+            .expect("miss mark has metadata")
+            .as_object()
+            .expect("miss mark metadata is an object")
+            .contains_key("nemo_relay.response_cache.saved_invocations"),
+        "a tool miss must not report saved invocations"
+    );
+
+    drop(events);
+    deregister_subscriber("response_cache_tool_capture").unwrap();
+}
+
+#[tokio::test]
+async fn invalid_tool_config_is_rejected_by_validation() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "class_a".to_string(),
+        ToolClass {
+            cacheable: true,
+            members: vec!["dup".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    classes.insert(
+        "class_b".to_string(),
+        ToolClass {
+            cacheable: true,
+            ttl_seconds: Some(0),
+            bypass_rate: Some(1.1),
+            members: vec!["dup".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "docs_lookup".to_string(),
+        ToolOverride {
+            bypass_rate: Some(-0.1),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            default: ToolClass {
+                cacheable: true,
+                members: vec!["safe_lookup".to_string()],
+                ..ToolClass::default()
+            },
+            classes,
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_multiple_classes"),
+        "a tool in multiple classes must be rejected: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_ttl"),
+        "a zero class TTL must be rejected: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_bypass_rate"),
+        "out-of-range class and override bypass rates must be rejected: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_default_members"),
+        "members on the default bucket must be rejected: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_cacheable_default"),
+        "a cacheable default bucket must be rejected: {:?}",
+        report.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn wildcard_member_validation_rules() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    let validate = |classes: std::collections::BTreeMap<String, ToolClass>| {
+        let adaptive = AdaptiveConfig {
+            response_cache: Some(cache_with_tools(ToolCacheConfig {
+                enabled: true,
+                classes,
+                ..ToolCacheConfig::default()
+            })),
+            ..AdaptiveConfig::default()
+        };
+        validate_plugin_config(&PluginConfig {
+            components: vec![ComponentSpec::new(adaptive).into()],
+            ..PluginConfig::default()
+        })
+    };
+    let cacheable_class = |members: &[&str]| ToolClass {
+        cacheable: true,
+        members: members.iter().map(|member| member.to_string()).collect(),
+        ..ToolClass::default()
+    };
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("class_a".to_string(), cacheable_class(&["docs_*"]));
+    classes.insert("class_b".to_string(), cacheable_class(&["docs_*"]));
+    let report = validate(classes);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_multiple_classes"),
+        "an identical pattern in two classes must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert(
+        "read_only".to_string(),
+        cacheable_class(&["docs_*", "docs_*"]),
+    );
+    let report = validate(classes);
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_multiple_classes"),
+        "a repeated member inside one class is inert, not a cross-class conflict: {:?}",
+        report.diagnostics
+    );
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("class_a".to_string(), cacheable_class(&["docs_*"]));
+    classes.insert("class_b".to_string(), cacheable_class(&["*_lookup"]));
+    let report = validate(classes);
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code.starts_with("response_cache.tool")),
+        "distinct overlapping patterns must validate cleanly: {:?}",
+        report.diagnostics
+    );
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("safe".to_string(), cacheable_class(&["*_email"]));
+    classes.insert(
+        "effectful".to_string(),
+        ToolClass {
+            cacheable: false,
+            members: vec!["send_*".to_string()],
+            ..ToolClass::default()
+        },
+    );
+    let report = validate(classes);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_conflicting_classes"),
+        "opposite cacheability on overlapping wildcard classes must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut classes = std::collections::BTreeMap::new();
+    classes.insert("everything".to_string(), cacheable_class(&["*"]));
+    let report = validate(classes);
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_member"),
+        "a cacheable '*' member must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    for invalid_pattern in ["**", "docs_*_lookup", "docs**"] {
+        let mut classes = std::collections::BTreeMap::new();
+        classes.insert("invalid".to_string(), cacheable_class(&[invalid_pattern]));
+        let report = validate(classes);
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_pattern"),
+            "unsupported pattern '{invalid_pattern}' must be rejected: {:?}",
+            report.diagnostics
+        );
+    }
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "*".to_string(),
+        ToolOverride {
+            cacheable: Some(true),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_catch_all_override"),
+        "a cacheable '*' override must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "docs_*_lookup".to_string(),
+        ToolOverride {
+            cacheable: Some(true),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_pattern"),
+        "an unsupported override pattern must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "*_email".to_string(),
+        ToolOverride {
+            cacheable: Some(true),
+            ..ToolOverride::default()
+        },
+    );
+    overrides.insert(
+        "send_*".to_string(),
+        ToolOverride {
+            cacheable: Some(false),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_conflicting_overrides"),
+        "opposite cacheability on overlapping wildcard overrides must be rejected: {:?}",
+        report.diagnostics
+    );
+
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "docs_*".to_string(),
+        ToolOverride {
+            cacheable: Some(false),
+            ..ToolOverride::default()
+        },
+    );
+    overrides.insert(
+        "*_private".to_string(),
+        ToolOverride {
+            ttl_seconds: Some(60),
+            ..ToolOverride::default()
+        },
+    );
+    let adaptive = AdaptiveConfig {
+        response_cache: Some(cache_with_tools(ToolCacheConfig {
+            enabled: true,
+            default: ToolClass {
+                cacheable: true,
+                ..ToolClass::default()
+            },
+            overrides,
+            ..ToolCacheConfig::default()
+        })),
+        ..AdaptiveConfig::default()
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![ComponentSpec::new(adaptive).into()],
+        ..PluginConfig::default()
+    });
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "response_cache.tool_conflicting_overrides"),
+        "a wildcard override that inherits cacheability must not outrank an explicit deny: {:?}",
+        report.diagnostics
+    );
+}
+
+#[tokio::test]
+async fn unknown_tool_field_warns_but_valid_class_names_do_not() {
+    let _guard = TEST_MUTEX.lock().await;
+    reset_global();
+    register_adaptive_component().unwrap();
+
+    let adaptive_json = json!({
+        "response_cache": {
+            "tools": {
+                "enabled": true,
+                "cache_errors": false,
+                "classes": {
+                    "read_only": {
+                        "cacheable": true,
+                        "tool_version": "class-v1",
+                        "members": ["docs_lookup"],
+                        "not_a_field": 7
+                    }
+                }
+            }
+        }
+    });
+    let component = nemo_relay::plugin::PluginComponentSpec {
+        kind: "adaptive".to_string(),
+        enabled: true,
+        config: adaptive_json.as_object().unwrap().clone(),
+    };
+    let report = validate_plugin_config(&PluginConfig {
+        components: vec![component],
+        ..PluginConfig::default()
+    });
+
+    let unknown_field_diags: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "adaptive.unknown_field")
+        .collect();
+    assert_eq!(
+        unknown_field_diags.len(),
+        1,
+        "exactly one unknown-field warning (the bogus field), not the class name: {:?}",
+        report.diagnostics
+    );
+    assert_eq!(
+        unknown_field_diags[0].field.as_deref(),
+        Some("not_a_field"),
+        "the warning must point at the bogus field, never the class name"
+    );
 }

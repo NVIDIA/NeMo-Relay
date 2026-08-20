@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
 import threading
 import typing
 
@@ -229,7 +230,7 @@ class NemoRelayCallbackHandler(BaseCallbackHandler):
 
 
 def _prepare_output(output: dict[str, typing.Any] | None) -> nemo_relay.Json | None:
-    """Serialize a callback output, degrading to ``None`` if it cannot be serialized.
+    """Convert a callback output to Relay JSON, degrading to ``None`` on failure.
 
     Losing an output payload costs one scope's telemetry detail. Letting the failure
     escape would cost the scope itself, since the run has ended and nothing else will
@@ -238,7 +239,34 @@ def _prepare_output(output: dict[str, typing.Any] | None) -> nemo_relay.Json | N
     if output is None:
         return None
     try:
-        return _prepare_lc_payloads(output)
+        prepared = _prepare_lc_payloads(output)
+        _validate_json_value(prepared)
+        return typing.cast(nemo_relay.Json, prepared)
     except Exception:
         _logger.error("NeMo Relay: preparing scope output failed", exc_info=True)
         return None
+
+
+def _validate_json_value(value: typing.Any) -> None:
+    """Raise when ``value`` is outside the JSON shape accepted by Relay."""
+    if value is None or isinstance(value, str | bool):
+        return
+    if isinstance(value, int):
+        if -(1 << 63) <= value < (1 << 64):
+            return
+        raise ValueError("integer is outside Relay's JSON range")
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return
+        raise ValueError("non-finite float is not valid Relay JSON")
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_value(item)
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError("Relay JSON object keys must be strings")
+            _validate_json_value(item)
+        return
+    raise TypeError(f"{type(value).__name__} is not valid Relay JSON")

@@ -17,7 +17,8 @@ use serde_json::json;
 
 use nemo_relay::api::event::{Event, PendingMarkSpec, ScopeCategory};
 use nemo_relay::api::llm::{
-    LlmCallExecuteParams, LlmStreamCallExecuteParams, llm_call_execute, llm_stream_call_execute,
+    LlmCallEndParams, LlmCallExecuteParams, LlmCallParams, LlmStreamCallExecuteParams, llm_call,
+    llm_call_end, llm_call_execute, llm_stream_call_execute,
 };
 use nemo_relay::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
 use nemo_relay::api::optimization::record_llm_optimization_contribution;
@@ -1401,6 +1402,67 @@ impl LlmResponseCodec for FailingResponseCodec {
     fn decode_response(&self, _response: &Json) -> Result<AnnotatedLlmResponse> {
         Err(FlowError::Internal("decode failed".into()))
     }
+}
+
+#[test]
+fn test_manual_llm_responses_receive_estimated_cost() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    let _pricing_guard = ResetPricingResolverGuard;
+    reset_global();
+    setup_isolated_thread();
+    install_mock_response_pricing();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&events);
+    register_subscriber(
+        "manual_response_pricing_sub",
+        Arc::new(move |event: &Event| captured.lock().unwrap().push(event.clone())),
+    )
+    .unwrap();
+
+    let request = make_llm_request(json!({"messages": [{"role": "user", "content": "hello"}]}));
+    let response = json!({"ok": true});
+    for supply_annotation in [false, true] {
+        let handle = llm_call(
+            LlmCallParams::builder()
+                .name("openai")
+                .request(&request)
+                .build(),
+        )
+        .unwrap();
+        let annotated_response = supply_annotation
+            .then(|| Arc::new(MockResponseCodec.decode_response(&response).unwrap()));
+        let response_codec =
+            (!supply_annotation).then(|| Arc::new(MockResponseCodec) as Arc<dyn LlmResponseCodec>);
+        llm_call_end(
+            LlmCallEndParams::builder()
+                .handle(&handle)
+                .response(response.clone())
+                .annotated_response_opt(annotated_response)
+                .response_codec_opt(response_codec)
+                .build(),
+        )
+        .unwrap();
+    }
+
+    let captured = captured_events_snapshot(&events);
+    let end_events = captured
+        .iter()
+        .filter(|event| is_scope_event(event, ScopeType::Llm, ScopeCategory::End))
+        .collect::<Vec<_>>();
+    assert_eq!(end_events.len(), 2);
+    for event in end_events {
+        assert_eq!(
+            event
+                .annotated_response()
+                .and_then(|response| response.usage.as_ref())
+                .and_then(|usage| usage.cost.as_ref())
+                .and_then(|cost| cost.total),
+            Some(0.000_435)
+        );
+    }
+
+    deregister_subscriber("manual_response_pricing_sub").unwrap();
 }
 
 #[tokio::test]

@@ -27,14 +27,7 @@ use nemo_relay::plugin::{
     PluginComponentSpec, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
 };
 use nemo_relay_adaptive::plugin_component::register_adaptive_component;
-#[cfg(feature = "switchyard")]
-use nemo_relay_adaptive::{AdaptiveConfig, plugin_component::ADAPTIVE_PLUGIN_KIND};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
-#[cfg(feature = "switchyard")]
-use nemo_relay_switchyard::{
-    SWITCHYARD_PLUGIN_KIND, SwitchyardConfig, register_switchyard_component,
-    validate_switchyard_atof_configuration,
-};
 use reqwest::Client;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
@@ -847,6 +840,8 @@ enum ServerPluginActivation {
     Dynamic(PluginActivation),
 }
 
+const REMOVED_SWITCHYARD_MESSAGE: &str = "the built-in Switchyard service integration was removed in NeMo Relay >=0.8.0; remove this `[[components]]` entry and follow the NeMo Relay Switchyard migration guide for the Switchyard-owned dynamic plugin: https://docs.nvidia.com/nemo/relay/reference/migration-guides#migrate-to-the-switchyard-owned-dynamic-plugin";
+
 impl ServerPluginActivation {
     fn clear(self) -> Result<(), CliError> {
         match self {
@@ -861,12 +856,7 @@ impl ServerPluginActivation {
 pub(crate) enum PluginComponentSetupError {
     Adaptive(String),
     PiiRedaction(String),
-    #[cfg(feature = "switchyard")]
-    Switchyard(String),
-    #[cfg(feature = "switchyard")]
-    SwitchyardAtof(String),
-    #[cfg(feature = "switchyard")]
-    SwitchyardResponseCache(String),
+    RemovedSwitchyard,
 }
 
 impl PluginComponentSetupError {
@@ -874,12 +864,7 @@ impl PluginComponentSetupError {
         match self {
             Self::Adaptive(_) => "Adaptive plugin",
             Self::PiiRedaction(_) => "PII redaction plugin",
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(_) => "Switchyard plugin",
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardAtof(_) => "Switchyard ATOF",
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardResponseCache(_) => "Switchyard response cache",
+            Self::RemovedSwitchyard => "Switchyard migration",
         }
     }
 
@@ -888,12 +873,7 @@ impl PluginComponentSetupError {
             Self::Adaptive(error) | Self::PiiRedaction(error) => {
                 format!("registration failed: {error}")
             }
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(error) => format!("registration failed: {error}"),
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardAtof(error) => error.clone(),
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardResponseCache(error) => error.clone(),
+            Self::RemovedSwitchyard => REMOVED_SWITCHYARD_MESSAGE.into(),
         }
     }
 }
@@ -910,27 +890,13 @@ impl std::fmt::Display for PluginComponentSetupError {
                     "PII redaction plugin registration failed: {error}"
                 )
             }
-            #[cfg(feature = "switchyard")]
-            Self::Switchyard(error) => {
-                write!(formatter, "Switchyard plugin registration failed: {error}")
-            }
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardAtof(error) => {
-                write!(formatter, "Switchyard ATOF validation failed: {error}")
-            }
-            #[cfg(feature = "switchyard")]
-            Self::SwitchyardResponseCache(error) => {
-                write!(
-                    formatter,
-                    "Switchyard response-cache validation failed: {error}"
-                )
-            }
+            Self::RemovedSwitchyard => formatter.write_str(REMOVED_SWITCHYARD_MESSAGE),
         }
     }
 }
 
 pub(crate) fn register_and_validate_plugin_components(
-    _plugin_config: &PluginConfig,
+    plugin_config: &PluginConfig,
 ) -> Vec<PluginComponentSetupError> {
     let mut errors = Vec::new();
     if let Err(error) = register_adaptive_component() {
@@ -939,55 +905,14 @@ pub(crate) fn register_and_validate_plugin_components(
     if let Err(error) = register_pii_redaction_component() {
         errors.push(PluginComponentSetupError::PiiRedaction(error.to_string()));
     }
-    #[cfg(feature = "switchyard")]
-    if let Err(error) = register_switchyard_component() {
-        errors.push(PluginComponentSetupError::Switchyard(error.to_string()));
-    }
-    #[cfg(feature = "switchyard")]
-    if let Err(error) = validate_switchyard_atof_configuration(_plugin_config) {
-        errors.push(PluginComponentSetupError::SwitchyardAtof(error));
-    }
-    #[cfg(feature = "switchyard")]
-    if let Err(error) = validate_switchyard_response_cache_order(_plugin_config) {
-        errors.push(PluginComponentSetupError::SwitchyardResponseCache(error));
+    if plugin_config
+        .components
+        .iter()
+        .any(|component| component.kind == "switchyard")
+    {
+        errors.push(PluginComponentSetupError::RemovedSwitchyard);
     }
     errors
-}
-
-#[cfg(feature = "switchyard")]
-fn validate_switchyard_response_cache_order(config: &PluginConfig) -> Result<(), String> {
-    let Some(switchyard_component) = config
-        .components
-        .iter()
-        .find(|component| component.enabled && component.kind == SWITCHYARD_PLUGIN_KIND)
-    else {
-        return Ok(());
-    };
-    let Some(adaptive_component) = config
-        .components
-        .iter()
-        .find(|component| component.enabled && component.kind == ADAPTIVE_PLUGIN_KIND)
-    else {
-        return Ok(());
-    };
-
-    let switchyard: SwitchyardConfig =
-        serde_json::from_value(Value::Object(switchyard_component.config.clone()))
-            .map_err(|error| format!("invalid Switchyard plugin config: {error}"))?;
-    let adaptive: AdaptiveConfig =
-        serde_json::from_value(Value::Object(adaptive_component.config.clone()))
-            .map_err(|error| format!("invalid adaptive plugin config: {error}"))?;
-    let Some(response_cache) = adaptive.response_cache else {
-        return Ok(());
-    };
-    if switchyard.priority >= response_cache.priority {
-        return Err(format!(
-            "Switchyard priority {} must be lower than response_cache priority {} so backend \
-             selection happens before cache key derivation",
-            switchyard.priority, response_cache.priority
-        ));
-    }
-    Ok(())
 }
 
 async fn initialize_plugin_host(

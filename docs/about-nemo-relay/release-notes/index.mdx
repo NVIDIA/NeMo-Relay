@@ -118,6 +118,11 @@ Migration guidance for upgrading from 0.7 to 0.8 is available in the
   NeMo Relay is built into Hermes Agent, and Hermes Agent understands NeMo Relay
   plugin configurations. No separate observability plugin or Relay CLI setup is
   required.
+- Removed the experimental, service-backed Switchyard integration, including
+  the `nemo-relay-switchyard` crate, CLI `switchyard` feature, built-in
+  `switchyard` component, and service examples. Switchyard 0.3.0 will distribute
+  and document the Switchyard-owned dynamic plugin. Refer to the
+  [Switchyard migration guide](/reference/migration-guides#migrate-to-the-switchyard-owned-dynamic-plugin).
 
 Refer to [Migration Guides](/reference/migration-guides#move-project-configuration-to-a-supported-location)
 for destination paths and explicit-file alternatives.
@@ -146,9 +151,6 @@ for destination paths and explicit-file alternatives.
 - Codex 0.143 does not expose `SessionEnd`, and Codex multi-agent v2 encrypts
   delegated-task payloads that Relay cannot decrypt or reliably link.
 - The Node.js binding and package workflows require Node.js 24 or later.
-- The deprecated Switchyard plugin is experimental, excluded from default CLI
-  builds, and requires a separately managed compatible service and a named
-  authenticated ATOF HTTP stream sink. It is scheduled for removal in 0.8.
 - OpenClaw has public hook-backed telemetry. Its security and optimization
   coverage is partial because it does not own a managed execution path.
 - The built-in `nemo_guardrails` plugin is deprecated and scheduled for removal

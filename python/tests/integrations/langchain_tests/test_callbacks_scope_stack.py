@@ -579,6 +579,38 @@ async def test_a_transient_pop_failure_keeps_the_completion_for_a_later_close(
     nemo_relay.scope.pop(request)
 
 
+async def test_a_pop_value_error_keeps_the_original_completion(
+    handler: NemoRelayCallbackHandler,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A non-output validation failure must not trigger an output-less retry."""
+    run_id = uuid4()
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+    _start(handler, run_id, "A")
+
+    real_pop = nemo_relay.scope.pop
+    attempted_outputs: list[nemo_relay.Json | None] = []
+
+    def reject_pop(handle: nemo_relay.ScopeHandle, **kwargs: typing.Any) -> None:
+        attempted_outputs.append(kwargs.get("output"))
+        raise ValueError("timestamp datetime must be timezone-aware")
+
+    monkeypatch.setattr(nemo_relay.scope, "pop", reject_pop)
+
+    with caplog.at_level("ERROR"):
+        _end(handler, run_id, "A")
+
+    assert attempted_outputs == [{"done": "A"}]
+    assert len(handler._completed) == 1
+    assert next(iter(handler._completed.values())).output == {"done": "A"}
+
+    monkeypatch.setattr(nemo_relay.scope, "pop", real_pop)
+    handler._close_completed_scopes()
+    assert handler._completed == {}
+    nemo_relay.scope.pop(request)
+
+
 async def test_an_unserializable_output_does_not_strand_the_scope(
     handler: NemoRelayCallbackHandler,
     caplog: pytest.LogCaptureFixture,
@@ -605,6 +637,78 @@ async def test_an_unserializable_output_does_not_strand_the_scope(
     assert any(record.levelname == "ERROR" for record in caplog.records)
     nemo_relay.scope.pop(request)
     assert nemo_relay.scope.get_handle().uuid == baseline.uuid
+
+
+async def test_invalid_output_does_not_block_the_completion_queue(
+    handler: NemoRelayCallbackHandler,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A permanently invalid output cannot strand every completed scope below it."""
+    parent_run, run_a, run_b = uuid4(), uuid4(), uuid4()
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+
+    _start(handler, parent_run, "parent")
+    _start(handler, run_a, "A", parent_run_id=parent_run)
+    _start(handler, run_b, "B", parent_run_id=parent_run)
+
+    _end(handler, run_a, "A")
+    assert len(handler._completed) == 1
+
+    with caplog.at_level("ERROR"):
+        handler.on_chain_end({"unsupported": object()}, run_id=run_b)
+
+    assert handler._completed == {}
+    assert nemo_relay.scope.get_handle().name == "parent"
+    assert any(record.levelname == "ERROR" for record in caplog.records)
+
+    _end(handler, parent_run, "parent")
+    assert handler._completed == {}
+    nemo_relay.scope.pop(request)
+
+
+async def test_pydantic_output_is_serialized_before_scope_close(
+    handler: NemoRelayCallbackHandler,
+    subscribed_events: list[nemo_relay.Event],
+):
+    """Structured outputs retain their fields without blocking scope closure."""
+    from pydantic import BaseModel
+
+    class StructuredResult(BaseModel):
+        answer: str
+        confidence: float
+        request_id: UUID
+
+    run_id = uuid4()
+    request_id = UUID("12345678-1234-5678-1234-567812345678")
+    request = nemo_relay.scope.push("request", nemo_relay.ScopeType.Agent)
+    _start(handler, run_id, "A")
+
+    handler.on_chain_end(
+        {
+            "structured_response": StructuredResult(
+                answer="complete",
+                confidence=0.95,
+                request_id=request_id,
+            )
+        },
+        run_id=run_id,
+    )
+
+    await nemo_relay.subscribers.flush_async()
+    scope_end = next(
+        event
+        for event in subscribed_events
+        if isinstance(event, nemo_relay.ScopeEvent) and event.scope_category == "end" and event.name == "A"
+    )
+    assert scope_end.data == {
+        "structured_response": {
+            "answer": "complete",
+            "confidence": 0.95,
+            "request_id": str(request_id),
+        }
+    }
+    assert handler._completed == {}
+    nemo_relay.scope.pop(request)
 
 
 async def test_a_failed_run_completes_its_scope_the_same_way(
