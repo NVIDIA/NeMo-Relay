@@ -215,6 +215,7 @@ fn stale_async_clear_completion_keeps_the_newer_state() {
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)]
 fn plugin_context_registers_all_runtime_hooks_and_drains_registrations() {
     let _python = crate::test_support::init_python_test();
     Python::attach(|py| {
@@ -226,6 +227,9 @@ def subscriber(event):
 
 def event_sanitize(event, fields):
     return fields
+
+def event_metadata(event):
+    return {"python.plugin": event.name}
 
 def tool_fn(name, value):
     return value
@@ -269,6 +273,13 @@ async def tool_execution_intercept(name, value, next):
             .register_subscriber(
                 "subscriber",
                 helpers.getattr("subscriber").unwrap().unbind(),
+            )
+            .unwrap();
+        context
+            .register_event_metadata_injector(
+                "event_metadata",
+                1,
+                helpers.getattr("event_metadata").unwrap().unbind(),
             )
             .unwrap();
         context
@@ -379,7 +390,7 @@ async def tool_execution_intercept(name, value, next):
             .unwrap();
 
         let registrations = context.drain_registrations().unwrap();
-        assert_eq!(registrations.len(), 15);
+        assert_eq!(registrations.len(), 16);
         assert!(
             registrations
                 .iter()
@@ -387,6 +398,7 @@ async def tool_execution_intercept(name, value, next):
         );
 
         assert!(deregister_subscriber("demo.subscriber").unwrap());
+        assert!(deregister_event_metadata_injector("demo.event_metadata").unwrap());
         assert!(deregister_mark_sanitize_guardrail("demo.mark_sanitize").unwrap());
         assert!(deregister_scope_sanitize_start_guardrail("demo.scope_start_sanitize").unwrap());
         assert!(deregister_scope_sanitize_end_guardrail("demo.scope_end_sanitize").unwrap());

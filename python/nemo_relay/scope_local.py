@@ -19,6 +19,12 @@ Example::
         nemo_relay.scope_local.register_tool_sanitize_request(handle, "redact", 10, redact)
 """
 
+from __future__ import annotations
+
+from nemo_relay import EventMetadataInjectorCallback, ScopeHandle
+from nemo_relay._native import (
+    scope_deregister_event_metadata_injector as _deregister_event_metadata_injector,
+)
 from nemo_relay._native import (
     scope_deregister_llm_conditional_execution_guardrail as _deregister_llm_conditional_execution,
 )
@@ -63,6 +69,9 @@ from nemo_relay._native import (
 )
 from nemo_relay._native import (
     scope_deregister_tool_sanitize_response_guardrail as _deregister_tool_sanitize_response,
+)
+from nemo_relay._native import (
+    scope_register_event_metadata_injector as _register_event_metadata_injector,
 )
 from nemo_relay._native import (
     scope_register_llm_conditional_execution_guardrail as _register_llm_conditional_execution,
@@ -113,6 +122,21 @@ from nemo_relay._native import (
 # ---------------------------------------------------------------------------
 # Mark and scope event guardrails (scope-local)
 # ---------------------------------------------------------------------------
+
+
+def register_event_metadata_injector(
+    scope_handle: ScopeHandle,
+    name: str,
+    priority: int,
+    injector: EventMetadataInjectorCallback,
+) -> None:
+    """Register an event metadata injector owned by an active scope."""
+    _register_event_metadata_injector(scope_handle.uuid, name, priority, injector)
+
+
+def deregister_event_metadata_injector(scope_handle: ScopeHandle, name: str) -> bool:
+    """Remove a scope-local event metadata injector by registration name."""
+    return _deregister_event_metadata_injector(scope_handle.uuid, name)
 
 
 def register_mark_sanitize(scope_handle, name, priority, guardrail):
@@ -671,6 +695,9 @@ def deregister_subscriber(scope_handle, name):
 
 
 __all__ = [
+    # Injector registrations
+    "register_event_metadata_injector",
+    "deregister_event_metadata_injector",
     # Mark and scope event guardrails
     "register_mark_sanitize",
     "deregister_mark_sanitize",

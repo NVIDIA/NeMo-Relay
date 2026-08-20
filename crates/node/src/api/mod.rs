@@ -35,8 +35,9 @@ use nemo_relay::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
 use nemo_relay::api::runtime::{
-    EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn, LlmStreamInner,
-    ScopeStackHandle as CoreScopeStackHandle, ToolExecutionNextFn,
+    EventMetadataInjectorFn, EventSanitizeFn, LlmExecutionNextFn, LlmJsonStream,
+    LlmStreamExecutionNextFn, LlmStreamInner, ScopeStackHandle as CoreScopeStackHandle,
+    ToolExecutionNextFn,
 };
 use nemo_relay::api::runtime::{
     TASK_SCOPE_STACK, capture_propagation_context as capture_propagation_context_handle,
@@ -820,6 +821,45 @@ fn add_plugin_event_sanitizer(
     context.set_named_property(property, function)
 }
 
+fn add_plugin_event_metadata_injector(
+    env: &Env,
+    context: &mut JsObject,
+    namespace_prefix: String,
+    registrations: Arc<StdMutex<Vec<PluginRegistration>>>,
+) -> napi::Result<()> {
+    let function = env.create_function_from_closure(
+        "__nemo_relay_plugin_register_event_metadata_injector",
+        move |ctx| {
+            let name = format!("{}{}", namespace_prefix, ctx.get::<String>(0)?);
+            let priority = ctx.get::<i32>(1)?;
+            let callback = ctx.get::<JsFunction>(2)?;
+            core_registry_api::register_event_metadata_injector(
+                &name,
+                priority,
+                node_event_metadata_injector_fn(ctx.env, &callback)?,
+            )
+            .map_err(to_napi_err)?;
+
+            let name_clone = name.clone();
+            registrations.lock().unwrap().push(PluginRegistration::new(
+                "plugin",
+                name_clone.clone(),
+                Box::new(move || {
+                    core_registry_api::deregister_event_metadata_injector(&name_clone)
+                        .map(|_| ())
+                        .map_err(|error| {
+                            PluginError::RegistrationFailed(format!(
+                                "event metadata injector deregistration failed: {error}"
+                            ))
+                        })
+                }),
+            ));
+            ctx.env.get_undefined()
+        },
+    )?;
+    context.set_named_property("registerEventMetadataInjector", function)
+}
+
 fn build_plugin_context(
     env: &Env,
     namespace_prefix: String,
@@ -861,6 +901,13 @@ fn build_plugin_context(
         },
     )?;
     context.set_named_property("registerSubscriber", register_subscriber)?;
+
+    add_plugin_event_metadata_injector(
+        env,
+        &mut context,
+        namespace_prefix.clone(),
+        registrations.clone(),
+    )?;
 
     add_plugin_event_sanitizer(
         env,
@@ -1561,6 +1608,16 @@ fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSan
     // deterministically once that work finishes.
     let callback = Arc::new(crate::promise_call::PromiseAwareFn::new(env, func)?);
     Ok(callable::wrap_js_event_sanitize_promise_fn(callback))
+}
+
+fn node_event_metadata_injector_fn(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<EventMetadataInjectorFn> {
+    let callback = Arc::new(crate::promise_call::PromiseAwareFn::new(env, func)?);
+    Ok(callable::wrap_js_event_metadata_injector_promise_fn(
+        callback,
+    ))
 }
 
 type NodeLlmCodec = (
@@ -3083,8 +3140,37 @@ pub fn llm_stream_call_execute(
 }
 
 // ---------------------------------------------------------------------------
-// Tool guardrail registrations
+// Event metadata injector and event guardrail registrations
 // ---------------------------------------------------------------------------
+
+/// Register a global event metadata injector.
+///
+/// The callback receives an immutable event snapshot and may return additions
+/// directly or in a Promise. Relay validates and merges accepted additions
+/// before event sanitizers run.
+#[napi]
+pub fn register_event_metadata_injector(
+    env: Env,
+    name: String,
+    priority: i32,
+    #[napi(
+        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
+    )]
+    injector: JsFunction,
+) -> Result<()> {
+    core_registry_api::register_event_metadata_injector(
+        &name,
+        priority,
+        node_event_metadata_injector_fn(&env, &injector)?,
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a global event metadata injector by name.
+#[napi]
+pub fn deregister_event_metadata_injector(name: String) -> Result<bool> {
+    core_registry_api::deregister_event_metadata_injector(&name).map_err(to_napi_err)
+}
 
 macro_rules! napi_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
@@ -3628,8 +3714,39 @@ pub fn flush_subscribers(env: Env) -> Result<JsObject> {
 }
 
 // ---------------------------------------------------------------------------
-// Scope-local guardrail registrations — Tool
+// Scope-local event metadata injector and event guardrail registrations
 // ---------------------------------------------------------------------------
+
+/// Register an event metadata injector owned by an active scope.
+#[napi]
+pub fn scope_register_event_metadata_injector(
+    env: Env,
+    scope_uuid: String,
+    name: String,
+    priority: i32,
+    #[napi(
+        ts_arg_type = "(event: Json) => import('./plugin').EventMetadata | Promise<import('./plugin').EventMetadata>"
+    )]
+    injector: JsFunction,
+) -> Result<()> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|error| napi::Error::from_reason(format!("invalid UUID: {error}")))?;
+    core_registry_api::scope_register_event_metadata_injector(
+        &uuid,
+        &name,
+        priority,
+        node_event_metadata_injector_fn(&env, &injector)?,
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a scope-local event metadata injector by name.
+#[napi]
+pub fn scope_deregister_event_metadata_injector(scope_uuid: String, name: String) -> Result<bool> {
+    let uuid = uuid::Uuid::parse_str(&scope_uuid)
+        .map_err(|error| napi::Error::from_reason(format!("invalid UUID: {error}")))?;
+    core_registry_api::scope_deregister_event_metadata_injector(&uuid, &name).map_err(to_napi_err)
+}
 
 macro_rules! napi_scope_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {

@@ -1315,9 +1315,27 @@ fn llm_stream_call_execute<'py>(
 }
 
 // ---------------------------------------------------------------------------
-// Guardrail registrations (macro-generated)
+// Event metadata injector and guardrail registrations
 // ---------------------------------------------------------------------------
 
+#[pyfunction]
+fn register_event_metadata_injector(
+    name: &str,
+    priority: i32,
+    injector: Py<PyAny>,
+) -> PyResult<()> {
+    core_registry_api::register_event_metadata_injector(
+        name,
+        priority,
+        py_callable::wrap_py_event_metadata_injector_fn(injector),
+    )
+    .map_err(to_py_err)
+}
+
+#[pyfunction]
+fn deregister_event_metadata_injector(name: &str) -> PyResult<bool> {
+    core_registry_api::deregister_event_metadata_injector(name).map_err(to_py_err)
+}
 macro_rules! py_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         #[pyfunction]
@@ -1806,6 +1824,28 @@ fn parse_uuid(scope_uuid: &str) -> PyResult<Uuid> {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("invalid UUID: {e}")))
 }
 
+#[pyfunction]
+fn scope_register_event_metadata_injector(
+    scope_uuid: &str,
+    name: &str,
+    priority: i32,
+    injector: Py<PyAny>,
+) -> PyResult<()> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core_registry_api::scope_register_event_metadata_injector(
+        &uuid,
+        name,
+        priority,
+        py_callable::wrap_py_event_metadata_injector_fn(injector),
+    )
+    .map_err(to_py_err)
+}
+
+#[pyfunction]
+fn scope_deregister_event_metadata_injector(scope_uuid: &str, name: &str) -> PyResult<bool> {
+    let uuid = parse_uuid(scope_uuid)?;
+    core_registry_api::scope_deregister_event_metadata_injector(&uuid, name).map_err(to_py_err)
+}
 macro_rules! py_scope_event_guardrail_api {
     ($register_name:ident, $deregister_name:ident, $core_register:path, $core_deregister:path) => {
         #[pyfunction]
@@ -2241,6 +2281,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
 
     // Mark and scope event guardrails
+    m.add_function(wrap_pyfunction!(register_event_metadata_injector, m)?)?;
+    m.add_function(wrap_pyfunction!(deregister_event_metadata_injector, m)?)?;
     m.add_function(wrap_pyfunction!(register_mark_sanitize_guardrail, m)?)?;
     m.add_function(wrap_pyfunction!(deregister_mark_sanitize_guardrail, m)?)?;
     m.add_function(wrap_pyfunction!(
@@ -2337,6 +2379,11 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         scope_deregister_tool_conditional_execution_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(scope_register_event_metadata_injector, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        scope_deregister_event_metadata_injector,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(scope_register_mark_sanitize_guardrail, m)?)?;
