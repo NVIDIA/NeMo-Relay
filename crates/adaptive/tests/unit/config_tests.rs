@@ -210,14 +210,6 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
         response_cache.field("bypass_rate").unwrap().kind,
         EditorFieldKind::Float
     );
-    assert_eq!(
-        response_cache.field("key_strategy").unwrap().kind,
-        EditorFieldKind::Enum
-    );
-    assert_eq!(
-        response_cache.field("key_strategy").unwrap().enum_values,
-        &["exact_request", "logical"]
-    );
     assert!(
         response_cache.field("skip_keys").is_none(),
         "exact-match cache config must not expose arbitrary key omission"
@@ -254,6 +246,16 @@ fn test_adaptive_editor_schema_covers_canonical_options() {
         tools.field("default").unwrap().kind,
         EditorFieldKind::Section
     );
+}
+
+#[test]
+fn test_response_cache_key_strategy_editor_field_is_typed() {
+    let schema = AdaptiveConfig::editor_schema();
+    let response_cache = schema.field("response_cache").unwrap().schema().unwrap();
+    let key_strategy = response_cache.field("key_strategy").unwrap();
+
+    assert_eq!(key_strategy.kind, EditorFieldKind::Enum);
+    assert_eq!(key_strategy.enum_values, &["exact_request", "logical"]);
 }
 
 #[test]
