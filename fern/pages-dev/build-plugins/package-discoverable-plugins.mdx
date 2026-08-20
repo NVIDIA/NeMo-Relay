@@ -1,0 +1,193 @@
+---
+title: "Package Discoverable Plugins"
+description: "Package a native library or grpc-v1 worker for validated Relay discovery."
+position: 10
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+A discoverable plugin is a package containing one `relay-plugin.toml` manifest, its
+native library or worker entrypoint, and an optional component JSON Schema. The manifest
+lets Relay validate compatibility and integrity before code is loaded or a process is
+started. Runtime activation still comes from a component in `plugins.toml` or an
+equivalent binding configuration.
+
+## Manifest Responsibilities
+
+| Block | What It Controls |
+|---|---|
+| `[plugin]` | Stable package identity and plugin kind. |
+| `[compat]` | Supported Relay range plus the native manifest API or worker protocol contract. A typed native plugin that uses the 0.8 SDK should declare a Relay range beginning at 0.8.0. |
+| `[defaults]` and `[capabilities]` | Initial enabled state and the features the package declares, such as `plugin_native`, `plugin_worker`, and `config_schema`. |
+| `[config_schema]` | An optional JSON Schema path resolved relative to the manifest. Packages that use it also declare the `config_schema` capability. |
+| `[source]` | The artifact covered by integrity verification and, for managed Python workers, the package root used to create the environment. |
+| `[integrity]` | The SHA-256 digest of `source.artifact`, plus optional signature evidence. |
+| `[load]` | The native library and symbol, Python module entrypoint, or Rust or custom-command executable entrypoint that Relay starts. |
+
+For native packages, `compat.native_api = "1"` is the authored manifest contract. It is
+not the [C host-table ABI number](/build-plugins/native/native-abi-reference). The
+current SDK requests ABI v4 and the host retains frozen v3 and v2 compatibility for
+older compiled plugins. For workers, declare `compat.worker_protocol = "grpc-v1"`; the
+[handshake](/build-plugins/workers/grpc-v1-protocol) still negotiates the exact
+protocol, surfaces, authentication token, and lifecycle at startup.
+
+## Start from a Complete Manifest
+
+These are the complete manifest shapes used by the checked examples. The path in
+`source.artifact` is the file whose bytes the digest covers. The native loader opens that
+same library; a worker loader either starts the compiled program or imports the Python
+entrypoint from the managed environment.
+
+<Tabs>
+<Tab title="Python Worker" language="toml">
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.python_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+manifest_root = "."
+artifact = "nemo_relay_python_grpc_worker_example/worker.py"
+
+[integrity]
+sha256 = "sha256:<worker-source-sha256>"
+
+[load]
+runtime = "python"
+entrypoint = "nemo_relay_python_grpc_worker_example.worker:main"
+```
+</Tab>
+<Tab title="Native Rust" language="toml">
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.rust_native_policy"
+kind = "rust_dynamic"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+native_api = "1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_native", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+artifact = "target/debug/<platform-library-file>"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+library = "target/debug/<platform-library-file>"
+symbol = "nemo_relay_register_plugin"
+```
+</Tab>
+<Tab title="Rust Worker" language="toml">
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.rust_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+artifact = "target/debug/<platform-worker-file>"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+runtime = "rust"
+entrypoint = "target/debug/<platform-worker-file>"
+```
+</Tab>
+</Tabs>
+
+The Python package has one extra responsibility: `source.manifest_root` identifies the
+directory Relay installs into its managed environment. The digest still covers only the
+declared artifact, so regenerate it whenever `worker.py` changes. A compiled worker has
+no managed Python environment and starts the executable named by `load.entrypoint`.
+
+Relay 0.8 keeps `grpc-v1` as the worker protocol identifier, but changes its tool-result
+messages. Both worker manifests therefore begin their Relay compatibility range at
+`0.8.0`. Rebuild SDK workers and regenerate bindings in a custom worker before packaging;
+the unchanged protocol name does not make an earlier worker wire-compatible.
+
+## Package and Register the Artifact
+
+Use the following procedure to turn the checked manifest template into an artifact that
+Relay can validate and activate:
+
+1. Build the shared library or worker from a clean checkout and place the entrypoint at
+   the relative path declared by `relay-plugin.toml`.
+2. Validate the
+   [component schema](/build-plugins/fundamentals/configuration-and-validation) against
+   valid, invalid, and disabled example configurations. Keep unknown-field behavior
+   aligned between the schema and the plugin's validation callback.
+3. Generate the artifact digest with `shasum -a 256 <artifact>` on macOS,
+   `sha256sum <artifact>` on Linux, or `Get-FileHash -Algorithm SHA256 <artifact>` in
+   PowerShell. Do this after the final `source.artifact` bytes are in place; changing
+   that artifact invalidates the digest.
+
+   For example, this Linux command materializes a usable Rust worker manifest without
+   changing the checked template:
+
+   ```bash
+   cp relay-plugin.toml relay-plugin.local.toml
+   sed -i 's#<platform-worker-file>#nemo-relay-rust-grpc-worker-plugin-example#g' \
+     relay-plugin.local.toml
+   digest="$(sha256sum target/debug/nemo-relay-rust-grpc-worker-plugin-example | cut -d' ' -f1)"
+   sed -i "s#sha256:<artifact-sha256>#sha256:$digest#" relay-plugin.local.toml
+   ```
+
+   The local manifest is deliberately untracked. Rebuilding the executable changes its
+   bytes, so recalculate the digest before every validation attempt.
+4. Validate the materialized manifest. For the compiled example above, run
+   `nemo-relay plugins validate ./relay-plugin.local.toml`. The Python example keeps its
+   checked digest and uses `./relay-plugin.toml` directly. A successful command confirms
+   manifest structure, compatibility syntax, entrypoint resolution, schema loading, and
+   integrity metadata without activating the component.
+5. Register the same path with `nemo-relay plugins add --user <materialized-manifest>`, or
+   add an explicit `[[plugins.dynamic]]` reference to the intended `plugins.toml`.
+6. Activate a valid component, inspect the runtime report, execute a representative
+   managed call, then clear and unload or stop the plugin.
+
+Success means package validation passes before activation, tampering causes integrity
+validation to fail, the runtime report identifies the dynamic component, and teardown
+removes its registrations before the library unloads or worker exits. The operator-side
+trust policy and file layout are documented in [Configure Discoverable Plugins](/configure-plugins/discoverable-plugins).
