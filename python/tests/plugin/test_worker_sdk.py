@@ -407,7 +407,7 @@ class RecordingHostStub:
                     local_name="opentelemetry",
                     effective_name="__nemo_relay_plugin__observability__opentelemetry",
                     owner=pb.RuntimeRegistrationOwner(
-                        kind=pb.PLUGIN,
+                        kind=pb.RUNTIME_REGISTRATION_OWNER_KIND_PLUGIN,
                         plugin_kind="observability",
                     ),
                 )

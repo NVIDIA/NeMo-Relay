@@ -2860,9 +2860,9 @@ def _runtime_registration_kind(surface: int) -> RuntimeRegistrationKind:
 
 def _runtime_registration_owner_kind(value: int) -> RuntimeRegistrationOwnerKind:
     mapping = {
-        pb.CORE: RuntimeRegistrationOwnerKind.CORE,
-        pb.GLOBAL_API: RuntimeRegistrationOwnerKind.GLOBAL_API,
-        pb.PLUGIN: RuntimeRegistrationOwnerKind.PLUGIN,
+        pb.RUNTIME_REGISTRATION_OWNER_KIND_CORE: RuntimeRegistrationOwnerKind.CORE,
+        pb.RUNTIME_REGISTRATION_OWNER_KIND_GLOBAL_API: RuntimeRegistrationOwnerKind.GLOBAL_API,
+        pb.RUNTIME_REGISTRATION_OWNER_KIND_PLUGIN: RuntimeRegistrationOwnerKind.PLUGIN,
     }
     try:
         return mapping[value]
