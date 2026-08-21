@@ -1216,14 +1216,19 @@ pub struct NemoRelayNativeHostApiV4 {
     /// Returns a bounded snapshot of active host runtime diagnostics.
     pub get_runtime_diagnostics: NemoRelayNativeGetRuntimeDiagnosticsFn,
     /// Creates an activation-owned runtime capability from a registration context.
+    ///
+    /// On success, `out` receives one owned reference. Every owned reference must
+    /// be released exactly once with `plugin_runtime_release`.
     pub plugin_context_runtime: unsafe extern "C" fn(
         ctx: *mut NemoRelayNativePluginContext,
         out: *mut *const NemoRelayNativePluginRuntime,
     ) -> NemoRelayStatus,
     /// Retains a runtime capability for a cloned SDK handle.
+    ///
+    /// A successful call creates one additional owned reference.
     pub plugin_runtime_retain:
         unsafe extern "C" fn(runtime: *const NemoRelayNativePluginRuntime) -> NemoRelayStatus,
-    /// Releases a runtime capability reference.
+    /// Releases one owned runtime capability reference.
     pub plugin_runtime_release: unsafe extern "C" fn(runtime: *const NemoRelayNativePluginRuntime),
     /// Lists global runtime registrations as JSON.
     pub plugin_runtime_list_registrations: unsafe extern "C" fn(
@@ -1261,6 +1266,8 @@ pub struct NemoRelayNativeHostApiV4 {
 
 unsafe impl Send for NemoRelayNativeHostApiV3 {}
 unsafe impl Sync for NemoRelayNativeHostApiV3 {}
+// SAFETY: the v4 host table is immutable after construction. Its function
+// pointers and inherited host metadata may be invoked from any plugin thread.
 unsafe impl Send for NemoRelayNativeHostApiV4 {}
 unsafe impl Sync for NemoRelayNativeHostApiV4 {}
 
@@ -1358,6 +1365,9 @@ pub struct PluginRuntime {
     capability: *const NemoRelayNativePluginRuntime,
 }
 
+// SAFETY: PluginRuntime holds an immutable host table and a retained,
+// thread-safe host capability. Clone and Drop use the host's atomic reference
+// management operations.
 unsafe impl Send for PluginRuntime {}
 unsafe impl Sync for PluginRuntime {}
 

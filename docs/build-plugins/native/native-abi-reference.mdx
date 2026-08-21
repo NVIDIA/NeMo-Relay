@@ -93,6 +93,12 @@ and unwinding must never cross the boundary. Release host strings with the match
 operation and retain plugin state until the host releases the registration and every
 callback-owned reference derived from it.
 
+A successful `plugin_context_runtime` call returns one owned runtime-capability
+reference. Each successful `plugin_runtime_retain` call creates another owned reference,
+and the plugin must pass every owned reference to `plugin_runtime_release` exactly once.
+Activation teardown makes runtime operations unavailable, but it does not release
+references retained by plugin code; those references must still be released.
+
 ```rust
 #[repr(i32)]
 pub enum NemoRelayStatus {
