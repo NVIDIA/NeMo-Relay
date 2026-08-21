@@ -3,6 +3,7 @@
 
 //! Integration tests for coverage sweeps in the NeMo Relay FFI crate.
 
+use super::ffi_coverage_support::{ValidationFixtures, assert_otel_signal_lifecycle};
 use super::*;
 use std::ptr;
 
@@ -1208,11 +1209,11 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
 
     unsafe {
         let stack = fresh_scope_stack();
-        let invalid_utf8 = [0xffu8, 0];
-        let invalid = invalid_utf8.as_ptr() as *const c_char;
-        let malformed_json = cstring("{");
-        let invalid_timestamp = i64::MAX;
-        let scope_name = cstring("ffi_integration_validation_scope");
+        let fixtures = ValidationFixtures::new("integration");
+        let invalid = fixtures.invalid_utf8();
+        let malformed_json = &fixtures.malformed_json;
+        let invalid_timestamp = fixtures.invalid_timestamp;
+        let scope_name = &fixtures.scope_name;
 
         assert_status!(
             api::nemo_relay_get_handle(ptr::null_mut()),
@@ -1234,20 +1235,22 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
         );
 
         let mut scope = ptr::null_mut();
-        assert_status!(
-            api::nemo_relay_push_scope(
-                scope_name.as_ptr(),
-                NemoRelayScopeType::Custom,
-                ptr::null(),
-                0,
-                ptr::null(),
-                ptr::null(),
-                malformed_json.as_ptr(),
-                ptr::null(),
-                &mut scope,
-            ),
-            NemoRelayStatus::InvalidJson
-        );
+        for (data, metadata, input) in fixtures.push_scope_json_cases() {
+            assert_status!(
+                api::nemo_relay_push_scope(
+                    scope_name.as_ptr(),
+                    NemoRelayScopeType::Custom,
+                    ptr::null(),
+                    0,
+                    data,
+                    metadata,
+                    input,
+                    ptr::null(),
+                    &mut scope,
+                ),
+                NemoRelayStatus::InvalidJson
+            );
+        }
         assert_status!(
             api::nemo_relay_push_scope(
                 scope_name.as_ptr(),
@@ -1276,44 +1279,32 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
             ),
             NemoRelayStatus::Ok
         );
-        for (output, metadata, timestamp, expected) in [
-            (
-                malformed_json.as_ptr(),
-                ptr::null(),
-                ptr::null(),
-                NemoRelayStatus::InvalidJson,
-            ),
-            (
-                ptr::null(),
-                malformed_json.as_ptr(),
-                ptr::null(),
-                NemoRelayStatus::InvalidJson,
-            ),
-            (
-                ptr::null(),
-                ptr::null(),
-                ptr::from_ref(&invalid_timestamp),
-                NemoRelayStatus::InvalidArg,
-            ),
-        ] {
+        for (output, metadata, timestamp, expected) in fixtures.pop_scope_cases() {
             assert_status!(
                 api::nemo_relay_pop_scope(scope, output, metadata, timestamp),
                 expected
             );
         }
 
-        let event_name = cstring("ffi_integration_validation_event");
-        let invalid_schema = cstring(r#"{"name":1,"version":false}"#);
-        for (schema, metadata) in [
-            (malformed_json.as_ptr(), ptr::null()),
-            (invalid_schema.as_ptr(), ptr::null()),
-            (ptr::null(), malformed_json.as_ptr()),
-        ] {
+        let event_name = &fixtures.event_name;
+        assert_status!(
+            api::nemo_relay_event_v2(
+                invalid,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidUtf8
+        );
+        for (data, schema, metadata) in fixtures.event_json_cases() {
             assert_status!(
                 api::nemo_relay_event_v2(
                     event_name.as_ptr(),
                     scope,
-                    ptr::null(),
+                    data,
                     schema,
                     metadata,
                     ptr::null(),
@@ -1335,71 +1326,15 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
             NemoRelayStatus::InvalidArg
         );
 
-        let metric_name = cstring("ffi_integration_validation_metric");
-        let measurements = cstring(
-            r#"[{"name":"example.validation.value","kind":"counter","value_type":"u64","value":1}]"#,
-        );
-        let wrong_shape = cstring(r#"{"name":"not-an-array"}"#);
-        for (name, values, metadata, timestamp, expected) in [
-            (
-                invalid,
-                measurements.as_ptr(),
-                ptr::null(),
-                ptr::null(),
-                NemoRelayStatus::InvalidUtf8,
-            ),
-            (
-                metric_name.as_ptr(),
-                ptr::null(),
-                ptr::null(),
-                ptr::null(),
-                NemoRelayStatus::NullPointer,
-            ),
-            (
-                metric_name.as_ptr(),
-                wrong_shape.as_ptr(),
-                ptr::null(),
-                ptr::null(),
-                NemoRelayStatus::InvalidJson,
-            ),
-            (
-                metric_name.as_ptr(),
-                measurements.as_ptr(),
-                malformed_json.as_ptr(),
-                ptr::null(),
-                NemoRelayStatus::InvalidJson,
-            ),
-            (
-                metric_name.as_ptr(),
-                measurements.as_ptr(),
-                ptr::null(),
-                ptr::from_ref(&invalid_timestamp),
-                NemoRelayStatus::InvalidArg,
-            ),
-        ] {
+        let metric_name = &fixtures.metric_name;
+        for (name, values, metadata, timestamp, expected) in fixtures.metric_json_cases() {
             assert_status!(
                 api::nemo_relay_metric_json(name, scope, values, metadata, timestamp),
                 expected
             );
         }
 
-        let instrument_name = cstring("example.integration.validation");
-        let unit = cstring("{item}");
-        let description = cstring("integration validation");
-        let attributes = cstring(r#"{"source":"integration"}"#);
-        let base_measurement = types::NemoRelayMetricMeasurement {
-            name: instrument_name.as_ptr(),
-            kind: types::NEMO_RELAY_METRIC_KIND_COUNTER,
-            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_I64,
-            u64_value: 0,
-            i64_value: -7,
-            f64_value: 0.0,
-            unit: unit.as_ptr(),
-            description: description.as_ptr(),
-            attributes_json: attributes.as_ptr(),
-            boundaries: ptr::null(),
-            boundaries_len: 0,
-        };
+        let base_measurement = fixtures.base_measurement();
         assert_status!(
             api::nemo_relay_metric(
                 metric_name.as_ptr(),
@@ -1437,13 +1372,12 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
                 NemoRelayStatus::InvalidUtf8
             );
         }
-        let boundaries = [0.0, 1.0, 10.0];
         let histogram = types::NemoRelayMetricMeasurement {
             kind: types::NEMO_RELAY_METRIC_KIND_HISTOGRAM,
             value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_F64,
             f64_value: 2.5,
-            boundaries: boundaries.as_ptr(),
-            boundaries_len: boundaries.len(),
+            boundaries: fixtures.boundaries.as_ptr(),
+            boundaries_len: fixtures.boundaries.len(),
             ..base_measurement
         };
         assert_status!(
@@ -1457,18 +1391,7 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
             ),
             NemoRelayStatus::Ok
         );
-        for (metadata, timestamp, expected) in [
-            (
-                malformed_json.as_ptr(),
-                ptr::null(),
-                NemoRelayStatus::InvalidJson,
-            ),
-            (
-                ptr::null(),
-                ptr::from_ref(&invalid_timestamp),
-                NemoRelayStatus::InvalidArg,
-            ),
-        ] {
+        for (metadata, timestamp, expected) in fixtures.native_metric_status_cases() {
             assert_status!(
                 api::nemo_relay_metric(
                     metric_name.as_ptr(),
@@ -1512,8 +1435,8 @@ fn test_ffi_lifecycle_validation_paths_from_integration_binary() {
             api::nemo_relay_metric_json(
                 metric_name.as_ptr(),
                 scope,
-                measurements.as_ptr(),
-                ptr::null(),
+                fixtures.measurements.as_ptr(),
+                fixtures.metadata.as_ptr(),
                 ptr::null(),
             ),
             NemoRelayStatus::Ok
@@ -1834,6 +1757,11 @@ fn test_ffi_otel_projection_validation_from_integration_binary() {
             NemoRelayStatus::NullPointer
         );
         assert_status!(
+            nemo_relay_otel_subscriber_runtime_diagnostics_json(subscriber, &mut diagnostics),
+            NemoRelayStatus::Ok
+        );
+        assert!(returned_json(diagnostics).is_array());
+        assert_status!(
             nemo_relay_otel_subscriber_shutdown(subscriber),
             NemoRelayStatus::Ok
         );
@@ -1869,6 +1797,20 @@ fn test_ffi_observability_component_and_atof_validation_from_integration_binary(
             ),
             NemoRelayStatus::InvalidJson
         );
+        assert_status!(
+            nemo_relay_observability_default_config_json(&mut out_json),
+            NemoRelayStatus::Ok
+        );
+        let valid_config = cstring(&take_string(out_json).expect("expected default config JSON"));
+        assert_status!(
+            nemo_relay_observability_component_spec_json(
+                valid_config.as_ptr(),
+                true,
+                &mut out_json,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(out_json)["kind"], json!("observability"));
 
         let valid_atof_config = cstring(r#"{"type":"file","filename":"events.jsonl"}"#);
         let invalid_atof_config = cstring(r#"{"mode":17}"#);
@@ -1898,6 +1840,16 @@ fn test_ffi_observability_component_and_atof_validation_from_integration_binary(
         assert_status!(
             nemo_relay_atof_exporter_path(exporter, ptr::null_mut()),
             NemoRelayStatus::NullPointer
+        );
+        let mut path = ptr::null_mut();
+        assert_status!(
+            nemo_relay_atof_exporter_path(exporter, &mut path),
+            NemoRelayStatus::Ok
+        );
+        let path = take_string(path).expect("expected ATOF exporter path");
+        assert!(
+            path.ends_with("events.jsonl"),
+            "unexpected exporter path: {path}"
         );
         let invalid_utf8 = [0xffu8, 0];
         let invalid = invalid_utf8.as_ptr() as *const c_char;
@@ -1930,109 +1882,74 @@ fn test_ffi_typed_otel_signal_options_from_integration_binary() {
         let instrumentation_scope = cstring("ffi.integration");
         let minimum_severity = cstring("warn");
         let temporality = cstring("delta");
-        let invalid_utf8 = [0xffu8, 0];
-        let invalid = invalid_utf8.as_ptr() as *const c_char;
-
-        let mut log_subscriber = ptr::null_mut();
-        assert_status!(
-            nemo_relay_otel_log_subscriber_create(
-                transport.as_ptr(),
-                log_endpoint.as_ptr(),
-                headers.as_ptr(),
-                resources.as_ptr(),
-                service_name.as_ptr(),
-                service_namespace.as_ptr(),
-                service_version.as_ptr(),
-                instrumentation_scope.as_ptr(),
-                250,
-                minimum_severity.as_ptr(),
-                64,
-                16,
-                10,
-                &mut log_subscriber,
-            ),
-            NemoRelayStatus::Ok
-        );
-        assert_status!(
-            nemo_relay_otel_log_subscriber_register(log_subscriber, invalid),
-            NemoRelayStatus::InvalidUtf8
-        );
+        let fixtures = ValidationFixtures::new("typed_otel_integration");
+        let invalid = fixtures.invalid_utf8();
         let log_name = cstring(&unique_name("ffi_typed_log_integration"));
-        assert_status!(
-            nemo_relay_otel_log_subscriber_register(log_subscriber, log_name.as_ptr()),
-            NemoRelayStatus::Ok
+        assert_otel_signal_lifecycle(
+            &log_name,
+            |out| {
+                nemo_relay_otel_log_subscriber_create(
+                    transport.as_ptr(),
+                    log_endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resources.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    250,
+                    minimum_severity.as_ptr(),
+                    64,
+                    16,
+                    10,
+                    out,
+                )
+            },
+            |subscriber| {
+                assert_status!(
+                    nemo_relay_otel_log_subscriber_register(subscriber, invalid),
+                    NemoRelayStatus::InvalidUtf8
+                );
+            },
+            |subscriber, name| nemo_relay_otel_log_subscriber_register(subscriber, name),
+            |name| nemo_relay_otel_log_subscriber_deregister(name),
+            |subscriber| nemo_relay_otel_log_subscriber_shutdown(subscriber),
+            |subscriber| nemo_relay_otel_log_subscriber_force_flush(subscriber),
+            |subscriber| types::nemo_relay_otel_log_subscriber_free(subscriber),
         );
-        assert_status!(
-            nemo_relay_otel_log_subscriber_register(log_subscriber, log_name.as_ptr()),
-            NemoRelayStatus::Internal
-        );
-        assert_status!(
-            nemo_relay_otel_log_subscriber_deregister(log_name.as_ptr()),
-            NemoRelayStatus::Ok
-        );
-        assert_status!(
-            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
-            NemoRelayStatus::Ok
-        );
-        assert_status!(
-            nemo_relay_otel_log_subscriber_force_flush(log_subscriber),
-            NemoRelayStatus::Internal
-        );
-        assert_status!(
-            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
-            NemoRelayStatus::Internal
-        );
-        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
 
-        let mut metric_subscriber = ptr::null_mut();
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_create(
-                transport.as_ptr(),
-                metric_endpoint.as_ptr(),
-                headers.as_ptr(),
-                resources.as_ptr(),
-                service_name.as_ptr(),
-                service_namespace.as_ptr(),
-                service_version.as_ptr(),
-                instrumentation_scope.as_ptr(),
-                250,
-                20,
-                temporality.as_ptr(),
-                256,
-                128,
-                &mut metric_subscriber,
-            ),
-            NemoRelayStatus::Ok
-        );
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_register(metric_subscriber, invalid),
-            NemoRelayStatus::InvalidUtf8
-        );
         let metric_name = cstring(&unique_name("ffi_typed_metric_integration"));
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_register(metric_subscriber, metric_name.as_ptr()),
-            NemoRelayStatus::Ok
+        assert_otel_signal_lifecycle(
+            &metric_name,
+            |out| {
+                nemo_relay_otel_metric_subscriber_create(
+                    transport.as_ptr(),
+                    metric_endpoint.as_ptr(),
+                    headers.as_ptr(),
+                    resources.as_ptr(),
+                    service_name.as_ptr(),
+                    service_namespace.as_ptr(),
+                    service_version.as_ptr(),
+                    instrumentation_scope.as_ptr(),
+                    250,
+                    20,
+                    temporality.as_ptr(),
+                    256,
+                    128,
+                    out,
+                )
+            },
+            |subscriber| {
+                assert_status!(
+                    nemo_relay_otel_metric_subscriber_register(subscriber, invalid),
+                    NemoRelayStatus::InvalidUtf8
+                );
+            },
+            |subscriber, name| nemo_relay_otel_metric_subscriber_register(subscriber, name),
+            |name| nemo_relay_otel_metric_subscriber_deregister(name),
+            |subscriber| nemo_relay_otel_metric_subscriber_shutdown(subscriber),
+            |subscriber| nemo_relay_otel_metric_subscriber_force_flush(subscriber),
+            |subscriber| types::nemo_relay_otel_metric_subscriber_free(subscriber),
         );
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_register(metric_subscriber, metric_name.as_ptr()),
-            NemoRelayStatus::Internal
-        );
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_deregister(metric_name.as_ptr()),
-            NemoRelayStatus::Ok
-        );
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
-            NemoRelayStatus::Ok
-        );
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_force_flush(metric_subscriber),
-            NemoRelayStatus::Internal
-        );
-        assert_status!(
-            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
-            NemoRelayStatus::Internal
-        );
-        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
     }
 }

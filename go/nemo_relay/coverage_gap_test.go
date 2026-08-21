@@ -275,17 +275,45 @@ func TestRemainingPublicDefaultsAndPropagationCoverage(t *testing.T) {
 		t.Fatal("expected missing scope metadata injector deregistration to fail")
 	}
 
+	expectedMetricTimestamp := time.Unix(1_700_000_000, 0)
+	observedMetricTimestamp := make(chan string, 1)
+	subscriberName := "go_metric_timestamp_coverage_" + time.Now().Format("150405.000000")
+	if err := RegisterSubscriber(subscriberName, func(event Event) {
+		if event.Name() == "go_metric_timestamp_coverage" {
+			observedMetricTimestamp <- event.Timestamp()
+		}
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber(subscriberName)
+
 	runTestWithScopeStack(t, func(t *testing.T) {
 		err := EmitMetric("go_metric_timestamp_coverage", []MetricMeasurement{{
 			Name:      "example.go.timestamp",
 			Kind:      MetricKindCounter,
 			ValueType: MetricValueTypeU64,
 			Value:     uint64(1),
-		}}, WithMetricTimestamp(time.Unix(1_700_000_000, 0)))
+		}}, WithMetricTimestamp(expectedMetricTimestamp))
 		if err != nil {
 			t.Fatalf("EmitMetric with timestamp failed: %v", err)
 		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
+		}
 	})
+
+	select {
+	case timestamp := <-observedMetricTimestamp:
+		observed, err := time.Parse(time.RFC3339Nano, timestamp)
+		if err != nil {
+			t.Fatalf("failed to parse metric timestamp %q: %v", timestamp, err)
+		}
+		if !observed.Equal(expectedMetricTimestamp) {
+			t.Fatalf("metric timestamp = %s, expected %s", observed, expectedMetricTimestamp)
+		}
+	default:
+		t.Fatal("expected metric event with supplied timestamp")
+	}
 }
 
 func assertAdaptiveJSONUnmarshalFailures(t *testing.T) {
