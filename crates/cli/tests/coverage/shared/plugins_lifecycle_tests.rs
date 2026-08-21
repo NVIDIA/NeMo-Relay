@@ -59,6 +59,26 @@ fn activation_snapshots_fall_back_to_the_system_temp_directory_for_an_empty_pare
     );
 }
 
+#[test]
+fn activation_snapshots_fall_back_to_the_system_temp_directory_when_unset() {
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, None)]);
+
+    assert_eq!(
+        activation_snapshot_root().unwrap().parent(),
+        Some(std::env::temp_dir().as_path())
+    );
+}
+
+#[test]
+fn activation_snapshots_reject_a_parent_that_is_not_a_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let parent = temp.path().join("parent-file");
+    std::fs::write(&parent, b"file").unwrap();
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(parent.as_os_str()))]);
+
+    assert!(activation_snapshot_root().is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn python_venv_launcher_detection_only_preserves_bin_python_links() {
