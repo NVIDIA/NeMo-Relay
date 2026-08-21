@@ -40,6 +40,10 @@ pub use nemo_relay_types::api::event::{
     PendingMarkSpec,
 };
 pub use nemo_relay_types::api::llm::{LlmRequest, LlmRequestInterceptOutcome};
+pub use nemo_relay_types::api::registry::{
+    RuntimeRegistrationIdentity, RuntimeRegistrationKind, RuntimeRegistrationOwner,
+    RuntimeRegistrationOwnerKind,
+};
 pub use nemo_relay_types::api::scope::ScopeType;
 pub use nemo_relay_types::api::tool::{ToolExecutionInterceptOutcome, ToolExecutionResult};
 pub use nemo_relay_types::codec::identity::{BuiltinLlmCodec, LlmCodecIdentity};
@@ -97,78 +101,6 @@ pub struct RuntimeDiagnostic {
     pub message: String,
     /// Total number of occurrences recorded for this condition.
     pub count: u64,
-}
-
-/// A runtime registration surface that a worker-owned gate can select.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RuntimeRegistrationKind {
-    /// Lifecycle event subscriber.
-    Subscriber,
-    /// Event metadata injector.
-    EventMetadataInjector,
-    /// Mark event sanitizer.
-    MarkSanitizeGuardrail,
-    /// Scope-start event sanitizer.
-    ScopeSanitizeStartGuardrail,
-    /// Scope-end event sanitizer.
-    ScopeSanitizeEndGuardrail,
-    /// Tool request observability sanitizer.
-    ToolSanitizeRequestGuardrail,
-    /// Tool response observability sanitizer.
-    ToolSanitizeResponseGuardrail,
-    /// Tool execution gate.
-    ToolConditionalExecutionGuardrail,
-    /// Tool request intercept.
-    ToolRequestIntercept,
-    /// Tool execution intercept.
-    ToolExecutionIntercept,
-    /// LLM request observability sanitizer.
-    LlmSanitizeRequestGuardrail,
-    /// LLM response observability sanitizer.
-    LlmSanitizeResponseGuardrail,
-    /// LLM execution gate.
-    LlmConditionalExecutionGuardrail,
-    /// LLM request intercept.
-    LlmRequestIntercept,
-    /// Non-streaming LLM execution intercept.
-    LlmExecutionIntercept,
-    /// Streaming LLM execution intercept.
-    LlmStreamExecutionIntercept,
-}
-
-/// Owner category for a discovered runtime registration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeRegistrationOwnerKind {
-    /// Registration installed by Relay core.
-    Core,
-    /// Registration installed through the global API.
-    GlobalApi,
-    /// Registration installed by a plugin.
-    Plugin,
-}
-
-/// Owner metadata for a discovered runtime registration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeRegistrationOwner {
-    /// Owner category.
-    pub kind: RuntimeRegistrationOwnerKind,
-    /// Plugin kind for plugin-owned registrations.
-    pub plugin_kind: Option<String>,
-    /// Component ordinal when multiple components share one kind.
-    pub component_ordinal: Option<u32>,
-}
-
-/// Structured identity for a global gateable runtime registration.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeRegistrationIdentity {
-    /// Registration surface.
-    pub kind: RuntimeRegistrationKind,
-    /// Name authored by the registration owner.
-    pub local_name: String,
-    /// Runtime-qualified name used for gate matching.
-    pub effective_name: String,
-    /// Registration owner metadata.
-    pub owner: RuntimeRegistrationOwner,
 }
 
 /// Opaque activation-owned key for removing a worker-created gate.

@@ -49,6 +49,21 @@ use nemo_relay_plugin::{
 use serde_json::{Map, json};
 
 #[test]
+fn runtime_registration_dtos_reexport_shared_types() {
+    let identity = nemo_relay_plugin::RuntimeRegistrationIdentity {
+        kind: nemo_relay_plugin::RuntimeRegistrationKind::Subscriber,
+        local_name: "subscriber".into(),
+        effective_name: "subscriber".into(),
+        owner: nemo_relay_plugin::RuntimeRegistrationOwner {
+            kind: nemo_relay_plugin::RuntimeRegistrationOwnerKind::GlobalApi,
+            plugin_kind: None,
+            component_ordinal: None,
+        },
+    };
+    let _: nemo_relay_types::api::registry::RuntimeRegistrationIdentity = identity;
+}
+
+#[test]
 fn async_abi_discriminants_reject_unknown_values() {
     use NemoRelayNativeAsyncMiddlewareKind as Kind;
 

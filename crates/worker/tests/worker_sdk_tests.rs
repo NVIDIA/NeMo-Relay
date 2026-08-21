@@ -73,6 +73,21 @@ const REQUIRED_WORKER_ENVS: &[&str] = &[
 ];
 static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[test]
+fn runtime_registration_dtos_reexport_shared_types() {
+    let identity = nemo_relay_worker::RuntimeRegistrationIdentity {
+        kind: nemo_relay_worker::RuntimeRegistrationKind::Subscriber,
+        local_name: "subscriber".into(),
+        effective_name: "subscriber".into(),
+        owner: nemo_relay_worker::RuntimeRegistrationOwner {
+            kind: nemo_relay_worker::RuntimeRegistrationOwnerKind::GlobalApi,
+            plugin_kind: None,
+            component_ordinal: None,
+        },
+    };
+    let _: nemo_relay_types::api::registry::RuntimeRegistrationIdentity = identity;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn worker_service_enforces_auth_and_reports_registrations() {
     let (handle, mut client) = spawn_worker(
