@@ -13,6 +13,20 @@ implements `WorkerPlugin`, registers all
 create the authenticated `grpc-v1` server from the
 activation environment Relay provides.
 
+## Configure the Snapshot Location
+
+Relay copies the worker runtime closure into an isolated activation snapshot before
+starting the worker. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts
+Relay to use an existing directory of your choice:
+
+```powershell
+$env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
+```
+
+```bash
+export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
+```
+
 ## Build and Calculate Integrity
 
 Build the executable and materialize its platform-specific manifest as follows:

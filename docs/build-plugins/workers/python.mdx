@@ -60,6 +60,20 @@ The module entrypoint is an async function, not a server factory or a prebound p
 Relay supplies the authenticated endpoint and activation credentials when it starts the
 managed command.
 
+## Configure the Snapshot Location
+
+Relay copies the worker runtime closure into an isolated activation snapshot before
+starting the worker. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts
+Relay to use an existing directory of your choice:
+
+```powershell
+$env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
+```
+
+```bash
+export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
+```
+
 ```python
 from nemo_relay_plugin import DiagnosticLevel, WorkerPlugin, serve_plugin
 

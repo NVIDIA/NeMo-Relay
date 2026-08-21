@@ -22,6 +22,28 @@ use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use sha2::{Digest, Sha256};
 
+#[test]
+fn activation_snapshots_use_a_short_directory_prefix() {
+    let snapshot_root = activation_snapshot_root();
+    let snapshot_name = snapshot_root.file_name().unwrap().to_string_lossy();
+
+    assert!(snapshot_name.starts_with("nrs-"), "{snapshot_name}");
+    assert!(snapshot_name.len() < "nemo-relay-plugin-snapshot-".len() + 32);
+}
+
+#[test]
+fn activation_snapshots_use_the_configured_parent_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let snapshots = temp.path().join("snapshots");
+    std::fs::create_dir(&snapshots).unwrap();
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    assert_eq!(
+        activation_snapshot_root().parent(),
+        Some(snapshots.as_path())
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn python_venv_launcher_detection_only_preserves_bin_python_links() {
@@ -186,6 +208,7 @@ impl EnvScope {
             ("HOME", Some(temp.path().as_os_str())),
             ("XDG_CONFIG_HOME", Some(xdg.as_os_str())),
             ("NEMO_RELAY_PYTHON", None),
+            (ACTIVATION_SNAPSHOT_DIR_ENV, None),
         ])
     }
 

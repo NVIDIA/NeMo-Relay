@@ -68,6 +68,8 @@ use self::target::PluginTarget;
 use self::trust::{EvaluatedDynamicPluginTrust, evaluate_dynamic_plugin_trust};
 
 const VALIDATION_MESSAGE: &str = "validated by CLI";
+const ACTIVATION_SNAPSHOT_DIR_ENV: &str = "NEMO_RELAY_PLUGIN_SNAPSHOT_DIR";
+const ACTIVATION_SNAPSHOT_DIRECTORY_PREFIX: &str = "nrs";
 
 #[cfg(test)]
 pub(crate) fn attest_test_python_environment(
@@ -563,10 +565,7 @@ impl DynamicPluginActivationSnapshot {
         validate_python_entrypoint_artifact(&manifest, &original_manifest_ref)
             .map_err(CliError::Config)?;
 
-        let root = std::env::temp_dir().join(format!(
-            "nemo-relay-plugin-snapshot-{}",
-            uuid::Uuid::now_v7().simple()
-        ));
+        let root = activation_snapshot_root();
         fs::create_dir(&root).map_err(|error| {
             CliError::Config(format!(
                 "failed to create dynamic plugin activation snapshot {}: {error}",
@@ -799,6 +798,17 @@ impl DynamicPluginActivationSnapshot {
     pub(crate) fn identity_file(&self, logical_path: &Path) -> Option<&Path> {
         self.identity_files.get(logical_path).map(PathBuf::as_path)
     }
+}
+
+fn activation_snapshot_root() -> PathBuf {
+    let parent = std::env::var_os(ACTIVATION_SNAPSHOT_DIR_ENV)
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    parent.join(format!(
+        "{ACTIVATION_SNAPSHOT_DIRECTORY_PREFIX}-{}",
+        uuid::Uuid::now_v7().simple()
+    ))
 }
 
 fn snapshot_python_environment(
