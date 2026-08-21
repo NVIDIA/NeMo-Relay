@@ -545,7 +545,7 @@ impl NativeHostPluginRuntime {
             Ok(gates) => gates,
             Err(error) => {
                 log::error!(
-                    target: "nemo_relay.native",
+                    target: "nemo_relay.plugin",
                     event = "native_gate_ownership_lock_poisoned";
                     "Native gate ownership lock was poisoned during cleanup; recovering owned gates"
                 );
