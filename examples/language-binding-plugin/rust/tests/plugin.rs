@@ -57,6 +57,13 @@ async fn register_only() -> RegisteredPlugin {
 
 async fn activate_with(plugin_config: nemo_relay::plugin::PluginConfig) -> ActivePlugin {
     let registration = register_only().await;
+    activate_registered(registration, plugin_config).await
+}
+
+async fn activate_registered(
+    registration: RegisteredPlugin,
+    plugin_config: nemo_relay::plugin::PluginConfig,
+) -> ActivePlugin {
     let report = initialize_plugins_exact(plugin_config)
         .await
         .unwrap_or_else(|error| panic!("plugin activation should succeed: {error}"));
@@ -211,6 +218,7 @@ async fn activation_reports_no_diagnostics() {
 #[tokio::test]
 async fn registration_control_is_owned_by_activation() {
     const TARGET: &str = "documentation-controlled-subscriber";
+    let registration = register_only().await;
     let observed = Arc::new(AtomicUsize::new(0));
     let captured = Arc::clone(&observed);
     register_subscriber(
@@ -224,7 +232,7 @@ async fn registration_control_is_owned_by_activation() {
     let mut configuration = config("enforce");
     configuration.components[0].config["registration_control"]["enabled"] = json!(true);
 
-    let active = activate_with(configuration).await;
+    let active = activate_registered(registration, configuration).await;
     flush_subscribers().expect("activation events should flush");
     let baseline = observed.load(Ordering::SeqCst);
     tool_call_execute(
