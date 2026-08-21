@@ -5,14 +5,273 @@
 //! intercepts, and subscribers.
 
 use crate::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, LlmConditionalFn, LlmExecutionFn,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, LlmConditionalFn,
+    LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn,
+    LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::runtime::{current_scope_stack, global_context};
 use crate::api::shared::ensure_runtime_owner;
 use crate::error::{FlowError, Result};
 use crate::registry::RegistryEntry;
+pub use nemo_relay_types::api::registry::{
+    RuntimeRegistrationIdentity, RuntimeRegistrationKind, RuntimeRegistrationOwner,
+    RuntimeRegistrationOwnerKind,
+};
+use std::collections::{BTreeMap, BTreeSet};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{OnceLock, RwLock};
+
+#[derive(Clone)]
+struct ConditionalMiddlewareGuardrail {
+    kinds: BTreeSet<RuntimeRegistrationKind>,
+    registration_name: String,
+    callback: ConditionalMiddlewareGuardrailFn,
+}
+
+static CONDITIONAL_MIDDLEWARE_GUARDRAILS: OnceLock<
+    RwLock<BTreeMap<String, ConditionalMiddlewareGuardrail>>,
+> = OnceLock::new();
+
+fn conditional_middleware_guardrails()
+-> &'static RwLock<BTreeMap<String, ConditionalMiddlewareGuardrail>> {
+    CONDITIONAL_MIDDLEWARE_GUARDRAILS.get_or_init(|| RwLock::new(BTreeMap::new()))
+}
+
+/// Register a global conditional middleware guardrail.
+pub fn register_conditional_middleware_guardrail(
+    name: &str,
+    kinds: BTreeSet<RuntimeRegistrationKind>,
+    registration_name: &str,
+    guardrail: ConditionalMiddlewareGuardrailFn,
+) -> Result<()> {
+    ensure_runtime_owner()?;
+    if kinds.is_empty() {
+        return Err(FlowError::InvalidArgument(
+            "conditional middleware guardrail kinds must not be empty".to_string(),
+        ));
+    }
+    let mut gates = conditional_middleware_guardrails()
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    if gates.contains_key(name) {
+        return Err(FlowError::AlreadyExists(format!(
+            "{name} conditional middleware guardrail already exists"
+        )));
+    }
+    gates.insert(
+        name.to_string(),
+        ConditionalMiddlewareGuardrail {
+            kinds,
+            registration_name: registration_name.to_string(),
+            callback: guardrail,
+        },
+    );
+    Ok(())
+}
+
+/// Deregister a global conditional middleware guardrail.
+pub fn deregister_conditional_middleware_guardrail(name: &str) -> Result<bool> {
+    ensure_runtime_owner()?;
+    let mut gates = conditional_middleware_guardrails()
+        .write()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    Ok(gates.remove(name).is_some())
+}
+
+/// Return whether one global runtime registration is enabled by every
+/// matching conditional middleware guardrail.
+pub(crate) fn runtime_registration_is_enabled(
+    kind: RuntimeRegistrationKind,
+    effective_name: &str,
+) -> bool {
+    let Some(registry) = CONDITIONAL_MIDDLEWARE_GUARDRAILS.get() else {
+        return true;
+    };
+    let matching = match registry.read() {
+        Ok(gates) => gates
+            .iter()
+            .filter(|(_, gate)| {
+                gate.kinds.contains(&kind) && gate.registration_name == effective_name
+            })
+            .map(|(name, gate)| (name.clone(), gate.kinds.clone(), gate.callback.clone()))
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            log::error!(
+                target: "nemo_relay.runtime",
+                event = "conditional_middleware_guardrail_registry_failed",
+                registration_kind = kind.as_str(),
+                registration_name = effective_name;
+                "Conditional middleware guardrail registry read failed; enabling target: {error}"
+            );
+            return true;
+        }
+    };
+
+    for (gate_name, kinds, callback) in matching {
+        match catch_unwind(AssertUnwindSafe(|| callback(&kinds, effective_name))) {
+            Ok(None) => {}
+            Ok(Some(reason)) => {
+                log::debug!(
+                    target: "nemo_relay.runtime",
+                    event = "runtime_registration_disabled",
+                    gate = gate_name.as_str(),
+                    registration_kind = kind.as_str(),
+                    registration_name = effective_name,
+                    reason = reason.as_str();
+                    "Conditional middleware guardrail disabled runtime registration"
+                );
+                return false;
+            }
+            Err(_) => log::error!(
+                target: "nemo_relay.runtime",
+                event = "conditional_middleware_guardrail_panicked",
+                gate = gate_name.as_str(),
+                registration_kind = kind.as_str(),
+                registration_name = effective_name;
+                "Conditional middleware guardrail panicked; enabling target"
+            ),
+        }
+    }
+    true
+}
+
+fn registration_identity(
+    kind: RuntimeRegistrationKind,
+    effective_name: &str,
+) -> RuntimeRegistrationIdentity {
+    const PREFIX: &str = "__nemo_relay_plugin__";
+    let Some(rest) = effective_name.strip_prefix(PREFIX) else {
+        return RuntimeRegistrationIdentity {
+            kind,
+            local_name: effective_name.to_string(),
+            effective_name: effective_name.to_string(),
+            owner: RuntimeRegistrationOwner {
+                kind: RuntimeRegistrationOwnerKind::GlobalApi,
+                plugin_kind: None,
+                component_ordinal: None,
+            },
+        };
+    };
+    let mut pieces = rest.split("__");
+    let plugin_kind = pieces.next().unwrap_or_default().to_string();
+    let second = pieces.next().unwrap_or_default();
+    let (component_ordinal, local_name) = match second.parse::<u32>() {
+        Ok(ordinal) => (Some(ordinal), pieces.collect::<Vec<_>>().join("__")),
+        Err(_) => {
+            let mut local = vec![second];
+            local.extend(pieces);
+            (None, local.join("__"))
+        }
+    };
+    RuntimeRegistrationIdentity {
+        kind,
+        local_name,
+        effective_name: effective_name.to_string(),
+        owner: RuntimeRegistrationOwner {
+            kind: RuntimeRegistrationOwnerKind::Plugin,
+            plugin_kind: Some(plugin_kind),
+            component_ordinal,
+        },
+    }
+}
+
+/// List a deterministic snapshot of global gateable runtime registrations.
+pub fn list_runtime_registrations(
+    kinds: Option<&BTreeSet<RuntimeRegistrationKind>>,
+) -> Result<Vec<RuntimeRegistrationIdentity>> {
+    ensure_runtime_owner()?;
+    let context = global_context();
+    let state = context
+        .read()
+        .map_err(|error| FlowError::Internal(error.to_string()))?;
+    let mut registrations = Vec::new();
+    macro_rules! collect_registry {
+        ($kind:expr, $field:ident) => {
+            if kinds.is_none_or(|selected| selected.contains(&$kind)) {
+                registrations.extend(
+                    state
+                        .$field
+                        .values()
+                        .map(|entry| registration_identity($kind, &entry.name)),
+                );
+            }
+        };
+    }
+    if kinds.is_none_or(|selected| selected.contains(&RuntimeRegistrationKind::Subscriber)) {
+        registrations.extend(
+            state
+                .event_subscribers
+                .keys()
+                .map(|name| registration_identity(RuntimeRegistrationKind::Subscriber, name)),
+        );
+    }
+    collect_registry!(
+        RuntimeRegistrationKind::EventMetadataInjector,
+        event_metadata_injectors
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::MarkSanitizeGuardrail,
+        mark_sanitize_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
+        scope_sanitize_start_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+        scope_sanitize_end_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+        tool_sanitize_request_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+        tool_sanitize_response_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+        tool_conditional_execution_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::ToolRequestIntercept,
+        tool_request_intercepts
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::ToolExecutionIntercept,
+        tool_execution_intercepts
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+        llm_sanitize_request_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+        llm_sanitize_response_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+        llm_conditional_execution_guardrails
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::LlmRequestIntercept,
+        llm_request_intercepts
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::LlmExecutionIntercept,
+        llm_execution_intercepts
+    );
+    collect_registry!(
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept,
+        llm_stream_execution_intercepts
+    );
+    registrations.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.effective_name.cmp(&right.effective_name))
+    });
+    Ok(registrations)
+}
 
 /// A priority-ordered registration record.
 ///

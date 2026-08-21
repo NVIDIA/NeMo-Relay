@@ -1078,12 +1078,16 @@ describe('Scope-local LLM intercepts', () => {
   it('scope-local llm execution intercept rejects invalid next request payloads', async () => {
     const scope = pushScope('sl_llm_exec_invalid_scope', ScopeType.Agent, null, null);
     scopeRegisterLlmExecutionIntercept(scope.uuid, 'sl_llm_exec_invalid', 10, async (_request, next) => {
-      return next({
+      const downstream = await next({
         headers: 1,
         content: {
           model: 'broken',
         },
       });
+      return (async function* () {
+        yield* downstream;
+        yield { wrappedByScopeStream: true };
+      })();
     });
 
     try {
@@ -1122,19 +1126,17 @@ describe('Scope-local LLM intercepts', () => {
   it('scope-local llm stream execution intercept composes with next', async () => {
     const scope = pushScope('sl_llm_stream_compose_scope', ScopeType.Agent, null, null);
     scopeRegisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_compose', 10, async (request, next) => {
-      const chunks = await next({
+      const downstream = await next({
         ...request,
         content: {
           ...request.content,
           touchedByScopeStream: true,
         },
       });
-      return [
-        ...chunks,
-        {
-          wrappedByScopeStream: true,
-        },
-      ];
+      return (async function* () {
+        yield* downstream;
+        yield { wrappedByScopeStream: true };
+      })();
     });
 
     try {
@@ -1165,14 +1167,7 @@ describe('Scope-local LLM intercepts', () => {
         seen.push(chunk);
       }
 
-      assert.deepEqual(seen, [
-        {
-          downstream: true,
-        },
-        {
-          wrappedByScopeStream: true,
-        },
-      ]);
+      assert.deepEqual(seen, [{ downstream: true }, { wrappedByScopeStream: true }]);
     } finally {
       scopeDeregisterLlmStreamExecutionIntercept(scope.uuid, 'sl_llm_stream_compose');
       popScope(scope);

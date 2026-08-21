@@ -30,7 +30,6 @@ use nemo_relay::api::runtime::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use tokio_stream::StreamExt;
 
 use nemo_relay::api::event::{
     CategoryProfile, DataSchema, Event, EventCategory,
@@ -193,6 +192,40 @@ pub(crate) fn safe_middleware_callback(env: &Env, func: &JsFunction) -> napi::Re
       message = String(error?.message ?? error);
     } catch {}
     return { ok: false, error: message };
+  }
+})"#,
+    )?;
+    let func_unknown = unsafe { JsUnknown::from_raw_unchecked(env.raw(), func.raw()) };
+    let wrapper_unknown = factory.call(None, &[func_unknown])?;
+    Ok(unsafe { wrapper_unknown.cast::<JsFunction>() })
+}
+
+/// Wrap a conditional registration gate so throws and invalid return values
+/// cross N-API as a JSON-compatible error envelope.
+pub(crate) fn safe_conditional_gate_callback(
+    env: &Env,
+    func: &JsFunction,
+) -> napi::Result<JsFunction> {
+    let factory: JsFunction = env.run_script(
+        r#"((fn) => function __nemo_relay_conditional_gate_wrapper(...args) {
+  try {
+    const returned = fn(...args);
+    const value = returned === undefined ? null : returned;
+    if (value === null || typeof value === 'string') {
+      return { ok: true, value };
+    }
+    return { ok: false, error: 'conditional middleware guardrail must return a string or null' };
+  } catch (error) {
+    let message = 'JavaScript callback threw';
+    try {
+      message = String(error?.message ?? error);
+    } catch {}
+    let exceptionType = 'Error';
+    try {
+      const name = String(error?.name ?? '').trim();
+      if (name) exceptionType = name;
+    } catch {}
+    return { ok: false, error: message, exceptionType };
   }
 })"#,
     )?;
@@ -1624,9 +1657,9 @@ pub fn wrap_js_llm_exec_intercept_fn(
 /// Wrap a JS function `(request, next) => result` for LLM stream execution intercept.
 ///
 /// The JS callback receives the `LlmRequest` serialized as a plain JSON object
-/// and a real `next(request)` function whose Promise resolves to an array of
-/// downstream JSON chunks. Returning an array preserves streaming semantics;
-/// returning any other JSON value produces a single-chunk stream.
+/// and a real `next(request)` function whose Promise resolves to a lazy
+/// async iterable. The callback can return it directly or wrap it with an async
+/// generator without materializing the downstream stream.
 pub fn wrap_js_llm_stream_exec_intercept_fn(
     func: Arc<PromiseAwareFn>,
 ) -> Arc<
@@ -1649,23 +1682,10 @@ pub fn wrap_js_llm_stream_exec_intercept_fn(
                         .map_err(|e| {
                             FlowError::Internal(format!("invalid LlmRequest from JS next: {e}"))
                         })?;
-                    let mut stream = next(next_request).await?;
-                    let mut chunks = Vec::new();
-                    while let Some(item) = stream.next().await {
-                        chunks.push(item?);
-                    }
-                    Ok(chunks)
+                    next(next_request).await
                 })
             });
-            Box::pin(async move {
-                let result = func.call_with_stream_next(req_json, next_stream).await?;
-                let chunks = match result {
-                    Json::Array(values) => values.into_iter().map(Ok).collect::<Vec<_>>(),
-                    value => vec![Ok(value)],
-                };
-                let stream = tokio_stream::iter(chunks);
-                Ok(LlmJsonStream::new(stream))
-            })
+            Box::pin(async move { func.call_with_stream_next(req_json, next_stream).await })
         },
     )
 }

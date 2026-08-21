@@ -57,7 +57,7 @@ impl OpenTelemetryRuntimeDiagnostics {
 
 #[derive(Debug, Default)]
 struct RuntimeDiagnosticState {
-    diagnostics: BTreeMap<&'static str, OpenTelemetryRuntimeDiagnostic>,
+    diagnostics: BTreeMap<String, OpenTelemetryRuntimeDiagnostic>,
 }
 
 /// Shared runtime-diagnostic recorder for one independently owned OTLP subscriber.
@@ -75,21 +75,22 @@ impl SignalRuntimeDiagnostics {
         }
     }
 
-    pub(super) fn record(&self, code: &'static str, message: String, count: u64) -> u64 {
+    pub(super) fn record(&self, code: impl Into<String>, message: String, count: u64) -> u64 {
+        let code = code.into();
         let count = count.max(1);
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let total = if let Some(diagnostic) = state.diagnostics.get_mut(code) {
+        let total = if let Some(diagnostic) = state.diagnostics.get_mut(&code) {
             diagnostic.message = truncate_runtime_diagnostic_message(message.clone());
             diagnostic.count = diagnostic.count.saturating_add(count);
             diagnostic.count
         } else if state.diagnostics.len() < MAX_RUNTIME_DIAGNOSTICS {
             state.diagnostics.insert(
-                code,
+                code.clone(),
                 OpenTelemetryRuntimeDiagnostic {
-                    code: code.to_string(),
+                    code: code.clone(),
                     message: truncate_runtime_diagnostic_message(message.clone()),
                     count,
                 },
@@ -100,7 +101,7 @@ impl SignalRuntimeDiagnostics {
         };
         drop(state);
 
-        record_signal_runtime_diagnostic(code, self.plugin_field.clone(), message, count);
+        record_signal_runtime_diagnostic(&code, self.plugin_field.clone(), message, count);
         total
     }
 

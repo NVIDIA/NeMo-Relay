@@ -15,12 +15,13 @@ use std::time::Duration;
 
 use crate::callable::{
     NemoRelayCodecDecodeFn, NemoRelayCodecEncodeFn, NemoRelayCollectorCb,
-    NemoRelayEventMetadataInjectorCb, NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb,
-    NemoRelayFinalizerCb, NemoRelayFreeFn, NemoRelayLlmConditionalCb, NemoRelayLlmExecCb,
-    NemoRelayLlmExecInterceptCb, NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb,
-    NemoRelayLlmSanitizeResponseCb, NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb,
-    NemoRelayToolConditionalCb, NemoRelayToolExecCb, NemoRelayToolExecInterceptCb,
-    NemoRelayToolSanitizeCb, wrap_codec_fn, wrap_collector_fn, wrap_event_metadata_injector_fn,
+    NemoRelayConditionalMiddlewareGuardrailCb, NemoRelayEventMetadataInjectorCb,
+    NemoRelayEventSanitizeCb, NemoRelayEventSubscriberCb, NemoRelayFinalizerCb, NemoRelayFreeFn,
+    NemoRelayLlmConditionalCb, NemoRelayLlmExecCb, NemoRelayLlmExecInterceptCb,
+    NemoRelayLlmRequestInterceptCb, NemoRelayLlmSanitizeRequestCb, NemoRelayLlmSanitizeResponseCb,
+    NemoRelayPluginRegisterCb, NemoRelayPluginValidateCb, NemoRelayToolConditionalCb,
+    NemoRelayToolExecCb, NemoRelayToolExecInterceptCb, NemoRelayToolSanitizeCb, wrap_codec_fn,
+    wrap_collector_fn, wrap_conditional_middleware_guardrail_fn, wrap_event_metadata_injector_fn,
     wrap_event_sanitize_fn, wrap_event_subscriber, wrap_finalizer_fn, wrap_llm_conditional_fn,
     wrap_llm_exec_fn, wrap_llm_exec_intercept_fn, wrap_llm_request_intercept_fn,
     wrap_llm_sanitize_request_fn, wrap_llm_sanitize_response_fn, wrap_llm_stream_exec_fn,
@@ -76,6 +77,7 @@ mod llm;
 mod llm_registry;
 mod observability;
 mod plugin;
+mod runtime_registry;
 mod scope;
 mod scope_registry;
 mod scope_stack;
@@ -88,6 +90,7 @@ pub use llm::*;
 pub use llm_registry::*;
 pub use observability::*;
 pub use plugin::*;
+pub use runtime_registry::*;
 pub use scope::*;
 pub use scope_registry::*;
 pub use scope_stack::*;

@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v11";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v12";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -112,6 +112,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
     scopeStack,
     propagationParentUuid,
     registerAbort,
+    streamResult,
+    streamPush,
+    streamEnd,
   ) {
     const controller = new AbortController();
     registerAbort(() => controller.abort());
@@ -148,21 +151,64 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
       }
       expireCallbackStore(token);
     };
+    const invokeNext = (value) => next(
+      jsonValue(value === undefined ? null : value),
+      eventSanitizerContext.getStore()?.scopeStack,
+    );
     const safeNext = next === undefined
       ? undefined
-      : (value) => next(
-        jsonValue(value === undefined ? null : value),
-        eventSanitizerContext.getStore()?.scopeStack,
-      );
+      : !streamResult
+        ? invokeNext
+        : async (value) => {
+        const downstream = await invokeNext(value);
+        return {
+          async *[Symbol.asyncIterator]() {
+            try {
+              for (;;) {
+                const chunk = await downstream.next();
+                if (chunk === null) return;
+                yield chunk;
+              }
+            } finally {
+              await downstream.close();
+            }
+          },
+        };
+      };
     const invoke = () => {
       Promise.resolve().then(() => (
         safeNext === undefined
           ? (spread ? fn(...arg0, controller.signal) : fn(arg0, controller.signal))
           : (spread ? fn(...arg0, safeNext, controller.signal) : fn(arg0, safeNext, controller.signal))
-      )).then((value) => jsonValue(value === undefined ? null : value)).then((value) => {
+      )).then(async (value) => {
+        if (!streamResult) {
+          settlePublication();
+          resolve(jsonValue(value === undefined ? null : value));
+          return;
+        }
+        if (value == null || typeof value[Symbol.asyncIterator] !== 'function') {
+          throw new TypeError('streaming execution intercept must return an AsyncIterable');
+        }
+        resolve();
+        const iterator = value[Symbol.asyncIterator]();
+        let exhausted = false;
+        try {
+          while (!controller.signal.aborted) {
+            const item = await iterator.next();
+            if (item.done) {
+              exhausted = true;
+              break;
+            }
+            await streamPush(jsonValue(item.value === undefined ? null : item.value));
+          }
+        } finally {
+          if (!exhausted && typeof iterator.return === 'function') {
+            await iterator.return();
+          }
+        }
+        streamEnd();
         settlePublication();
-        resolve(value);
-      }, (error) => {
+      }).catch((error) => {
         settlePublication();
         let message = 'unknown error';
         let exceptionType = 'Error';
@@ -229,6 +275,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         scopeStack,
         propagationParentUuid,
         registerAbort,
+        streamResult,
+        streamPush,
+        streamEnd,
       ) {
         if (error != null) {
           let message = 'unknown error';
@@ -259,6 +308,9 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
           scopeStack,
           propagationParentUuid,
           registerAbort,
+          streamResult,
+          streamPush,
+          streamEnd,
         );
       };
     },

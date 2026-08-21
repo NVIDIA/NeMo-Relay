@@ -303,13 +303,16 @@ export interface PluginContext {
   /**
    * Register an LLM streaming execution intercept for this component.
    *
-   * The `next` callback resolves to all downstream chunks. Returning an array
-   * preserves those chunks; any other JSON value produces one chunk.
+   * The `next` callback resolves to a lazy stream. Return that stream to
+   * preserve incremental downstream delivery.
    */
   registerLlmStreamExecutionIntercept(
     name: string,
     priority: number,
-    callback: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>,
+    callback: (
+      request: Json,
+      next: (request: Json) => Promise<AsyncIterable<Json>>,
+    ) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>,
   ): void;
   /** Register a tool request intercept for this component. */
   registerToolRequestIntercept(

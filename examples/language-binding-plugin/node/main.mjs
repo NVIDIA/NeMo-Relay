@@ -251,10 +251,14 @@ export const documentationPlugin = {
           pendingMarks: execution.emit_pending_marks ? [{ name: 'documentation-plugin.tool-complete' }] : [],
         };
       });
-      context.registerLlmExecutionIntercept('llm-execution', execution.priority, async (request, next) => next(request));
-      context.registerLlmStreamExecutionIntercept('llm-stream', execution.priority, async (request, next) =>
-        (await next(request)).map((chunk) => ({ ...chunk, plugin_stream: true })),
+      context.registerLlmExecutionIntercept('llm-execution', execution.priority, async (request, next) =>
+        next(request),
       );
+      context.registerLlmStreamExecutionIntercept('llm-stream', execution.priority, async function* (request, next) {
+        for await (const chunk of await next(request)) {
+          yield { ...chunk, plugin_stream: true };
+        }
+      });
     }
   },
 };

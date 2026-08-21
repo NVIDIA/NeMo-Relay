@@ -163,10 +163,14 @@ test('LLM policy blocks the configured model', () => {
 test('LLM stream chunks are transformed', async () => {
   const intercept = registeredCallbacks().get('registerLlmStreamExecutionIntercept');
 
-  const chunks = await intercept({ headers: {}, content: { model: 'allowed-model' } }, async () => [
-    { chunk: 1 },
-    { chunk: 2 },
-  ]);
+  const transformed = intercept({ headers: {}, content: { model: 'allowed-model' } }, async () =>
+    (async function* () {
+      yield { chunk: 1 };
+      yield { chunk: 2 };
+    })(),
+  );
+  const chunks = [];
+  for await (const chunk of transformed) chunks.push(chunk);
 
   assert.deepEqual(chunks, [
     { chunk: 1, plugin_stream: true },

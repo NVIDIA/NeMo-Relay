@@ -77,6 +77,21 @@ use serde_json::{Map, json};
 
 static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
+#[test]
+fn runtime_registration_dtos_reexport_shared_types() {
+    let identity = nemo_relay::api::registry::RuntimeRegistrationIdentity {
+        kind: nemo_relay::api::registry::RuntimeRegistrationKind::Subscriber,
+        local_name: "subscriber".into(),
+        effective_name: "subscriber".into(),
+        owner: nemo_relay::api::registry::RuntimeRegistrationOwner {
+            kind: nemo_relay::api::registry::RuntimeRegistrationOwnerKind::GlobalApi,
+            plugin_kind: None,
+            component_ordinal: None,
+        },
+    };
+    let _: nemo_relay_types::api::registry::RuntimeRegistrationIdentity = identity;
+}
+
 fn reset_global() {
     let ctx = global_context();
     let mut state = ctx.write().unwrap();

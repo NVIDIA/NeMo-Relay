@@ -460,6 +460,18 @@ typedef char *(*NemoRelayToolExecInterceptCb)(void *user_data,
                                               void *next_ctx);
 
 /**
+ * Callback for a conditional middleware guardrail. `kinds_json` is a JSON
+ * array of configured runtime-registration kind strings. `kinds_json` and
+ * `registration_name` are borrowed for the callback invocation only. Returns
+ * NULL to enable the target or a reason string allocated compatibly with
+ * `nemo_relay_string_free` to disable it. Ownership of a non-null return value
+ * transfers to Relay.
+ */
+typedef char *(*NemoRelayConditionalMiddlewareGuardrailCb)(void *user_data,
+                                                           const char *kinds_json,
+                                                           const char *registration_name);
+
+/**
  * Integer-backed typed severity for a mark exported as an OpenTelemetry log.
  *
  * This is intentionally not a Rust enum because foreign callers can supply any
@@ -2315,6 +2327,44 @@ NemoRelayStatus nemo_relay_plugin_context_register_tool_execution_intercept(stru
                                                                             NemoRelayToolExecInterceptCb cb,
                                                                             void *user_data,
                                                                             NemoRelayFreeFn free_fn);
+
+/**
+ * Register a global conditional middleware guardrail.
+ *
+ * # Safety
+ * String pointers must be valid for the call. Callback input strings are
+ * borrowed for each invocation only. A non-null callback result transfers
+ * ownership to Relay and must be allocated compatibly with
+ * `nemo_relay_string_free`. The callback and user data remain owned by Relay
+ * until deregistration.
+ */
+NemoRelayStatus nemo_relay_register_conditional_middleware_guardrail(const char *name,
+                                                                     const char *kinds_json,
+                                                                     const char *registration_name,
+                                                                     NemoRelayConditionalMiddlewareGuardrailCb cb,
+                                                                     void *user_data,
+                                                                     NemoRelayFreeFn free_fn);
+
+/**
+ * Deregister a global conditional middleware guardrail.
+ *
+ * # Safety
+ * `name` must point to a valid C string for the call.
+ */
+NemoRelayStatus nemo_relay_deregister_conditional_middleware_guardrail(const char *name,
+                                                                       bool *out_removed);
+
+/**
+ * List global gateable runtime registrations as JSON.
+ *
+ * On success, `out_json` receives a Relay-allocated string. The caller owns
+ * that string and must release it exactly once with `nemo_relay_string_free`.
+ *
+ * # Safety
+ * `out_json` must be a valid writable pointer. `kinds_json` may be null or a
+ * valid JSON array of registration kind strings.
+ */
+NemoRelayStatus nemo_relay_list_runtime_registrations(const char *kinds_json, char **out_json);
 
 /**
  * Retrieve the current scope handle from the thread-local scope stack.

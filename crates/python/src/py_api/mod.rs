@@ -8,6 +8,7 @@
 //! The Python wrapper modules (`nemo_relay.scope`, `nemo_relay.tools`, etc.)
 //! re-export these under shorter, idiomatic names.
 
+use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::panic::resume_unwind;
 use std::sync::Arc;
@@ -45,6 +46,7 @@ use nemo_relay::codec::traits::{LlmCodec, LlmResponseCodec};
 use nemo_relay::error::{FlowError, Result as FlowResult};
 use pyo3::IntoPyObjectExt;
 use pyo3::prelude::*;
+use pyo3::types::PySet;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 
@@ -72,6 +74,73 @@ fn metric_to_py_err(error: FlowError) -> PyErr {
         }
         other => to_py_err(other),
     }
+}
+
+fn runtime_registration_kind(kind: &str) -> PyResult<core_registry_api::RuntimeRegistrationKind> {
+    serde_json::from_value(serde_json::Value::String(kind.to_string())).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown runtime registration kind: {kind}"
+        ))
+    })
+}
+
+#[pyfunction]
+fn register_conditional_middleware_guardrail(
+    name: &str,
+    kinds: HashSet<String>,
+    registration_name: &str,
+    guardrail: Py<PyAny>,
+) -> PyResult<()> {
+    let kinds = kinds
+        .iter()
+        .map(|kind| runtime_registration_kind(kind))
+        .collect::<PyResult<BTreeSet<_>>>()?;
+    core_registry_api::register_conditional_middleware_guardrail(
+        name,
+        kinds,
+        registration_name,
+        Arc::new(move |kinds, effective_name| {
+            Python::attach(|py| {
+                let python_kinds = PySet::new(py, kinds.iter().map(|kind| kind.as_str()))?;
+                guardrail
+                    .call1(py, (python_kinds, effective_name))?
+                    .extract::<Option<String>>(py)
+            })
+            .unwrap_or_else(|error| {
+                Python::attach(|py| error.print(py));
+                None
+            })
+        }),
+    )
+    .map_err(to_py_err)
+}
+
+#[pyfunction]
+fn deregister_conditional_middleware_guardrail(name: &str) -> PyResult<bool> {
+    core_registry_api::deregister_conditional_middleware_guardrail(name).map_err(to_py_err)
+}
+
+#[pyfunction]
+#[pyo3(signature = (kinds = None))]
+fn list_runtime_registrations(
+    py: Python<'_>,
+    kinds: Option<HashSet<String>>,
+) -> PyResult<Py<PyAny>> {
+    let kinds = kinds
+        .map(|kinds| {
+            kinds
+                .iter()
+                .map(|kind| runtime_registration_kind(kind))
+                .collect::<PyResult<BTreeSet<_>>>()
+        })
+        .transpose()?;
+    let registrations =
+        core_registry_api::list_runtime_registrations(kinds.as_ref()).map_err(to_py_err)?;
+    json_to_py(
+        py,
+        &serde_json::to_value(registrations)
+            .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?,
+    )
 }
 
 #[pyfunction(name = "_shutdown_default_logging")]
@@ -2253,6 +2322,17 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(llm_call_end, m)?)?;
     m.add_function(wrap_pyfunction!(llm_call_execute, m)?)?;
     m.add_function(wrap_pyfunction!(llm_stream_call_execute, m)?)?;
+
+    // Global runtime registration eligibility
+    m.add_function(wrap_pyfunction!(
+        register_conditional_middleware_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        deregister_conditional_middleware_guardrail,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(list_runtime_registrations, m)?)?;
 
     // Tool guardrails
     m.add_function(wrap_pyfunction!(
