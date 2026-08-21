@@ -9,7 +9,7 @@ This project is the complete native plugin used by the authoring guide. Its
 configuration, observation, request policy, execution wrappers, and runtime
 helpers live in separate source modules. Together they register the subscriber,
 all three event sanitizers, five tool surfaces, and six LLM surfaces exposed by
-the current typed 0.8.0 SDK.
+the current typed 0.9.0 SDK.
 
 Run the focused tests and build the shared library from this directory. The
 configuration tests isolate validation and schema contracts. The lifecycle test

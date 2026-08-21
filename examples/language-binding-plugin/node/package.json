@@ -9,6 +9,6 @@
     "test": "node --test test-plugin.mjs"
   },
   "dependencies": {
-    "nemo-relay-node": "0.8.0"
+    "nemo-relay-node": "0.9.0"
   }
 }
