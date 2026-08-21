@@ -572,6 +572,12 @@ impl DynamicPluginActivationSnapshot {
                 root.display()
             ))
         })?;
+        let root = fs::canonicalize(&root).map_err(|error| {
+            CliError::Config(format!(
+                "failed to normalize dynamic plugin activation snapshot {}: {error}",
+                root.display()
+            ))
+        })?;
         let mut root_guard = SnapshotRootGuard(Some(root.clone()));
         #[cfg(unix)]
         fs::set_permissions(&root, {
@@ -602,6 +608,20 @@ impl DynamicPluginActivationSnapshot {
                 ))
             })?
             .to_path_buf();
+        let canonical_manifest_directory =
+            fs::canonicalize(&manifest_directory).map_err(|error| {
+                CliError::Config(format!(
+                    "failed to normalize dynamic plugin manifest directory {}: {error}",
+                    manifest_directory.display()
+                ))
+            })?;
+        if root.starts_with(&canonical_manifest_directory) {
+            return Err(CliError::Config(format!(
+                "dynamic plugin activation snapshot {} must not be inside plugin directory {}",
+                root.display(),
+                canonical_manifest_directory.display()
+            )));
+        }
         let runtime_root = root.join("runtime");
         let mut budget = SnapshotBudget::default();
         let mut copied_files = HashMap::new();

@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 
 #[test]
 fn activation_snapshots_use_a_short_directory_prefix() {
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, None)]);
     let snapshot_root = activation_snapshot_root().unwrap();
     let snapshot_name = snapshot_root.file_name().unwrap().to_string_lossy();
 
@@ -47,6 +48,31 @@ fn activation_snapshots_use_the_configured_parent_directory() {
         Some(snapshots.as_path())
     );
     assert!(snapshots.is_dir());
+}
+
+#[test]
+fn activation_snapshots_reject_a_parent_inside_the_plugin_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, "acme.snapshot-parent");
+    let snapshots = plugin_dir.join("snapshots");
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.snapshot-parent",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("must not be inside plugin directory"),
+        "{error}"
+    );
 }
 
 #[test]

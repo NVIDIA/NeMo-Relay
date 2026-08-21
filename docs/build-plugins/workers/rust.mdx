@@ -17,7 +17,8 @@ activation environment Relay provides.
 
 Relay copies the worker runtime closure into an isolated activation snapshot before
 starting the worker. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts
-Relay to use a directory of your choice; Relay creates it when it does not exist:
+Relay to use a directory of your choice; Relay creates it when it does not exist. Choose a
+location outside the plugin package directory:
 
 ```powershell
 $env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
