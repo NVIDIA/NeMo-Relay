@@ -4271,7 +4271,7 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
 
     let exporter = BlockingSpanExporter::default();
     let runtime_diagnostics =
-        SignalRuntimeDiagnostics::new(Some("opentelemetry.endpoints[2].endpoint".to_string()));
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.traces[2].endpoint".to_string()));
     let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
         exporter.clone(),
         "https://collector.example/v1/traces".to_string(),
@@ -4309,7 +4309,7 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
     assert_eq!(diagnostic.count, 2);
     assert_eq!(
         diagnostic.field.as_deref(),
-        Some("opentelemetry.endpoints[2].endpoint")
+        Some("opentelemetry.traces[2].endpoint")
     );
     assert!(
         diagnostic
@@ -4322,6 +4322,50 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
             .get("otel.spans_dropped")
             .map(|diagnostic| diagnostic.count),
         Some(2)
+    );
+}
+
+#[test]
+fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _ = crate::plugin::clear_plugin_configuration();
+    let _clear_guard = ClearPluginConfigurationGuard;
+    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+        crate::plugin::PluginConfig::default(),
+    ))
+    .unwrap();
+
+    let subscriber = OpenTelemetrySubscriber::new_for_plugin(
+        OpenTelemetryConfig::new(OpenTelemetryType::Full, "http://localhost:4318/v1/traces"),
+        2,
+    )
+    .unwrap();
+    let event = Event::Mark(MarkEvent::new(
+        BaseEvent::builder()
+            .name("invalid-metric")
+            .data(json!({"measurements": []}))
+            .data_schema(
+                DataSchema::builder()
+                    .name(METRIC_DATA_SCHEMA_NAME)
+                    .version("999")
+                    .build(),
+            )
+            .build(),
+        None,
+        None,
+    ));
+
+    (subscriber.subscriber())(&event);
+
+    let report = crate::plugin::active_plugin_report().unwrap();
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.metric_mark_invalid")
+        .expect("invalid metric diagnostic");
+    assert_eq!(
+        diagnostic.field.as_deref(),
+        Some("opentelemetry.traces[2].endpoint")
     );
 }
 
