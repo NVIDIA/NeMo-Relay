@@ -70,7 +70,35 @@ fn activation_snapshots_reject_a_parent_inside_the_plugin_directory() {
     .to_string();
 
     assert!(
-        error.contains("must not be inside plugin directory"),
+        error.contains("must not be inside an active plugin directory"),
+        "{error}"
+    );
+}
+
+#[test]
+fn activation_snapshots_reject_a_parent_inside_another_active_plugin_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    let other_plugin_dir = temp.path().join("other-plugin");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    std::fs::create_dir(&other_plugin_dir).unwrap();
+    let manifest_path = write_native_dynamic_manifest(&plugin_dir, "acme.snapshot-parent");
+    let snapshots = other_plugin_dir.join("snapshots");
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    let error = DynamicPluginActivationSnapshot::create_with_snapshot_source_directories(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.snapshot-parent",
+        DynamicPluginKind::RustDynamic,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+        &[other_plugin_dir.canonicalize().unwrap()],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("must not be inside an active plugin directory"),
         "{error}"
     );
 }

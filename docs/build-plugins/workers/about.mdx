@@ -54,7 +54,7 @@ dispatches validation, registration, invocation, cancellation, and shutdown.
 Before starting a worker, Relay copies its runtime closure into an isolated activation
 snapshot. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts Relay to
 use a directory of your choice; Relay creates it when it does not exist. Choose a location
-outside the plugin package directory. This applies to Python, Rust, and custom-command
+outside every active plugin package directory. This applies to Python, Rust, and custom-command
 workers; it is particularly useful when the system temporary directory is too long or a
 deployment requires snapshots on controlled storage.
 

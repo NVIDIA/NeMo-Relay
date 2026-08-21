@@ -546,12 +546,31 @@ pub(crate) struct DynamicPluginActivationSnapshot {
 }
 
 impl DynamicPluginActivationSnapshot {
+    #[cfg(test)]
     fn create(
         manifest_ref: &str,
         expected_plugin_id: &str,
         expected_kind: DynamicPluginKind,
         environment_ref: Option<&str>,
         host_policy: &crate::plugins::policy::DynamicPluginHostPolicy,
+    ) -> Result<Arc<Self>, CliError> {
+        Self::create_with_snapshot_source_directories(
+            manifest_ref,
+            expected_plugin_id,
+            expected_kind,
+            environment_ref,
+            host_policy,
+            &[],
+        )
+    }
+
+    fn create_with_snapshot_source_directories(
+        manifest_ref: &str,
+        expected_plugin_id: &str,
+        expected_kind: DynamicPluginKind,
+        environment_ref: Option<&str>,
+        host_policy: &crate::plugins::policy::DynamicPluginHostPolicy,
+        snapshot_source_directories: &[PathBuf],
     ) -> Result<Arc<Self>, CliError> {
         let (mut manifest, original_manifest_ref, manifest_bytes) =
             load_bounded_dynamic_plugin_manifest_bytes(manifest_ref)?;
@@ -615,11 +634,13 @@ impl DynamicPluginActivationSnapshot {
                     manifest_directory.display()
                 ))
             })?;
-        if root.starts_with(&canonical_manifest_directory) {
+        if std::iter::once(&canonical_manifest_directory)
+            .chain(snapshot_source_directories)
+            .any(|directory| root.starts_with(directory))
+        {
             return Err(CliError::Config(format!(
-                "dynamic plugin activation snapshot {} must not be inside plugin directory {}",
-                root.display(),
-                canonical_manifest_directory.display()
+                "dynamic plugin activation snapshot {} must not be inside an active plugin directory",
+                root.display()
             )));
         }
         let runtime_root = root.join("runtime");
@@ -1840,6 +1861,47 @@ fn active_dynamic_plugin_components_from_scopes(
     create_activation_snapshots: bool,
 ) -> Result<Vec<ActiveDynamicPluginComponent>, CliError> {
     let host_config_by_id = host_config_by_id(resolved);
+    let snapshot_source_directories = if create_activation_snapshots {
+        resolved
+            .dynamic_plugins
+            .iter()
+            .filter_map(|resolved_plugin| {
+                scopes
+                    .iter()
+                    .find(|scope| scope.plugins_toml_path == resolved_plugin.source)
+                    .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
+            })
+            .filter(|record| !record.is_tombstoned() && record.spec.enabled)
+            .map(|record| {
+                let manifest_ref = match record.metadata.kind {
+                    DynamicPluginKind::RustDynamic => manifest_ref_from_record(record)?,
+                    DynamicPluginKind::Worker => {
+                        record.source.manifest_ref.clone().ok_or_else(|| {
+                            CliError::Config(format!(
+                                "dynamic plugin '{}' has no manifest_ref in lifecycle state",
+                                record.metadata.id
+                            ))
+                        })?
+                    }
+                };
+                let manifest_path = Path::new(&manifest_ref);
+                let manifest_directory = manifest_path.parent().ok_or_else(|| {
+                    CliError::Config(format!(
+                        "dynamic plugin manifest {} has no parent directory",
+                        manifest_path.display()
+                    ))
+                })?;
+                fs::canonicalize(manifest_directory).map_err(|error| {
+                    CliError::Config(format!(
+                        "failed to normalize dynamic plugin manifest directory {}: {error}",
+                        manifest_directory.display()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
     let mut components = Vec::new();
 
     for resolved_plugin in &resolved.dynamic_plugins {
@@ -1870,12 +1932,13 @@ fn active_dynamic_plugin_components_from_scopes(
             manifest_ref
                 .as_deref()
                 .map(|manifest_ref| {
-                    DynamicPluginActivationSnapshot::create(
+                    DynamicPluginActivationSnapshot::create_with_snapshot_source_directories(
                         manifest_ref,
                         &record.metadata.id,
                         record.metadata.kind,
                         record.source.environment_ref.as_deref(),
                         &resolved.dynamic_plugin_policy,
+                        &snapshot_source_directories,
                     )
                 })
                 .transpose()?
