@@ -24,23 +24,38 @@ use sha2::{Digest, Sha256};
 
 #[test]
 fn activation_snapshots_use_a_short_directory_prefix() {
-    let snapshot_root = activation_snapshot_root();
+    let snapshot_root = activation_snapshot_root().unwrap();
     let snapshot_name = snapshot_root.file_name().unwrap().to_string_lossy();
 
     assert!(snapshot_name.starts_with("nrs-"), "{snapshot_name}");
-    assert!(snapshot_name.len() < "nemo-relay-plugin-snapshot-".len() + 32);
+    assert_eq!(snapshot_name.len(), "nrs-".len() + 32);
+    assert!(
+        snapshot_name["nrs-".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
 }
 
 #[test]
 fn activation_snapshots_use_the_configured_parent_directory() {
     let temp = tempfile::tempdir().unwrap();
     let snapshots = temp.path().join("snapshots");
-    std::fs::create_dir(&snapshots).unwrap();
     let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
 
     assert_eq!(
-        activation_snapshot_root().parent(),
+        activation_snapshot_root().unwrap().parent(),
         Some(snapshots.as_path())
+    );
+    assert!(snapshots.is_dir());
+}
+
+#[test]
+fn activation_snapshots_fall_back_to_the_system_temp_directory_for_an_empty_parent() {
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(OsStr::new("")))]);
+
+    assert_eq!(
+        activation_snapshot_root().unwrap().parent(),
+        Some(std::env::temp_dir().as_path())
     );
 }
 

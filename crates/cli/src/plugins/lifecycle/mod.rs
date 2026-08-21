@@ -565,7 +565,7 @@ impl DynamicPluginActivationSnapshot {
         validate_python_entrypoint_artifact(&manifest, &original_manifest_ref)
             .map_err(CliError::Config)?;
 
-        let root = activation_snapshot_root();
+        let root = activation_snapshot_root()?;
         fs::create_dir(&root).map_err(|error| {
             CliError::Config(format!(
                 "failed to create dynamic plugin activation snapshot {}: {error}",
@@ -800,15 +800,21 @@ impl DynamicPluginActivationSnapshot {
     }
 }
 
-fn activation_snapshot_root() -> PathBuf {
+fn activation_snapshot_root() -> Result<PathBuf, CliError> {
     let parent = std::env::var_os(ACTIVATION_SNAPSHOT_DIR_ENV)
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    parent.join(format!(
+    fs::create_dir_all(&parent).map_err(|error| {
+        CliError::Config(format!(
+            "failed to create dynamic plugin activation snapshot parent {}: {error}",
+            parent.display()
+        ))
+    })?;
+    Ok(parent.join(format!(
         "{ACTIVATION_SNAPSHOT_DIRECTORY_PREFIX}-{}",
         uuid::Uuid::now_v7().simple()
-    ))
+    )))
 }
 
 fn snapshot_python_environment(
