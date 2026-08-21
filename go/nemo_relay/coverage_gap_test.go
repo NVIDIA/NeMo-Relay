@@ -192,6 +192,14 @@ func TestGoBindingErrorAndDefaultContracts(t *testing.T) {
 
 func TestRemainingPublicDefaultsAndPropagationCoverage(t *testing.T) {
 	endpoint := "http://127.0.0.1:4318"
+	assertOpenTelemetrySignalDefaults(t, endpoint)
+	assertOpenTelemetrySignalMarshalFailures(t, endpoint)
+	assertPropagationCoverage(t)
+	assertMetricTimestampCoverage(t)
+}
+
+func assertOpenTelemetrySignalDefaults(t *testing.T, endpoint string) {
+	t.Helper()
 	logConfig, err := normalizeOpenTelemetryLogConfig(OpenTelemetryLogConfig{Endpoint: endpoint})
 	if err != nil {
 		t.Fatalf("normalize log defaults failed: %v", err)
@@ -228,11 +236,14 @@ func TestRemainingPublicDefaultsAndPropagationCoverage(t *testing.T) {
 			return err
 		},
 	} {
-		if err := normalize(); err == nil {
+		if normalize() == nil {
 			t.Fatalf("%s should fail", name)
 		}
 	}
+}
 
+func assertOpenTelemetrySignalMarshalFailures(t *testing.T, endpoint string) {
+	t.Helper()
 	oldMarshal := jsonMarshal
 	t.Cleanup(func() { jsonMarshal = oldMarshal })
 	jsonMarshal = func(any) ([]byte, error) {
@@ -253,7 +264,10 @@ func TestRemainingPublicDefaultsAndPropagationCoverage(t *testing.T) {
 		t.Fatal("expected signal resource marshal failure")
 	}
 	jsonMarshal = oldMarshal
+}
 
+func assertPropagationCoverage(t *testing.T) {
+	t.Helper()
 	rootUUID := propagationRootUUID
 	context := PropagationContext{
 		Version:    1,
@@ -271,10 +285,13 @@ func TestRemainingPublicDefaultsAndPropagationCoverage(t *testing.T) {
 		t.Fatal("expected invalid propagation context to fail")
 	}
 
-	if err := ScopeDeregisterEventMetadataInjector(propagationParentUUID, "missing-injector"); err == nil {
+	if ScopeDeregisterEventMetadataInjector(propagationParentUUID, "missing-injector") == nil {
 		t.Fatal("expected missing scope metadata injector deregistration to fail")
 	}
+}
 
+func assertMetricTimestampCoverage(t *testing.T) {
+	t.Helper()
 	expectedMetricTimestamp := time.Unix(1_700_000_000, 0)
 	observedMetricTimestamp := make(chan string, 1)
 	subscriberName := "go_metric_timestamp_coverage_" + time.Now().Format("150405.000000")

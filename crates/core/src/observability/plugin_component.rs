@@ -1423,35 +1423,15 @@ fn register_opentelemetry(
         warn_skipped_signal_endpoints("metrics", &resolution.endpoints);
     }
     let trace_subscribers = build_opentelemetry_subscribers(endpoints)?;
-    let log_subscribers = match (logs, log_resolution) {
-        (Some(section), Some(resolution)) => {
-            match build_opentelemetry_log_subscribers(section, resolution.endpoints) {
-                Ok(subscribers) => subscribers,
-                Err(error) => {
-                    let _ = shutdown_indexed_opentelemetry_providers(&trace_subscribers);
-                    return Err(error);
-                }
-            }
-        }
-        _ => Vec::new(),
-    };
-    let metric_subscribers = match (metrics, metric_resolution) {
-        (Some(section), Some(resolution)) => {
-            match build_opentelemetry_metric_subscribers(section, resolution.endpoints) {
-                Ok(subscribers) => subscribers,
-                Err(error) => {
-                    let _ = shutdown_indexed_opentelemetry_providers(&trace_subscribers);
-                    for subscriber in &log_subscribers {
-                        if let Some(value) = subscriber.value.as_active() {
-                            let _ = value.shutdown_provider();
-                        }
-                    }
-                    return Err(error);
-                }
-            }
-        }
-        _ => Vec::new(),
-    };
+    let signal_subscribers = build_opentelemetry_signal_subscribers(
+        logs,
+        log_resolution,
+        metrics,
+        metric_resolution,
+        &trace_subscribers,
+    )?;
+    let log_subscribers = signal_subscribers.logs;
+    let metric_subscribers = signal_subscribers.metrics;
     if !has_active_opentelemetry_resource(&trace_subscribers)
         && !has_active_opentelemetry_resource(&log_subscribers)
         && !has_active_opentelemetry_resource(&metric_subscribers)
@@ -1556,6 +1536,46 @@ fn register_opentelemetry(
         }),
     )?;
     Ok(())
+}
+
+struct OpenTelemetrySignalSubscribers {
+    logs: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryLogSubscriber>>>,
+    metrics: Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryMetricSubscriber>>>,
+}
+
+fn build_opentelemetry_signal_subscribers(
+    logs: Option<OpenTelemetryLogSectionConfig>,
+    log_resolution: Option<ResolvedSignalEndpoints>,
+    metrics: Option<OpenTelemetryMetricSectionConfig>,
+    metric_resolution: Option<ResolvedSignalEndpoints>,
+    trace_subscribers: &[IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>],
+) -> PluginResult<OpenTelemetrySignalSubscribers> {
+    let logs = match (logs, log_resolution) {
+        (Some(section), Some(resolution)) => {
+            build_opentelemetry_log_subscribers(section, resolution.endpoints).inspect_err(
+                |_| {
+                    let _ = shutdown_indexed_opentelemetry_providers(trace_subscribers);
+                },
+            )?
+        }
+        _ => Vec::new(),
+    };
+    let metrics = match (metrics, metric_resolution) {
+        (Some(section), Some(resolution)) => {
+            build_opentelemetry_metric_subscribers(section, resolution.endpoints).inspect_err(
+                |_| {
+                    let _ = shutdown_indexed_opentelemetry_providers(trace_subscribers);
+                    for subscriber in &logs {
+                        if let Some(value) = subscriber.value.as_active() {
+                            let _ = value.shutdown_provider();
+                        }
+                    }
+                },
+            )?
+        }
+        _ => Vec::new(),
+    };
+    Ok(OpenTelemetrySignalSubscribers { logs, metrics })
 }
 
 fn has_active_opentelemetry_resource<T>(resources: &[IndexedOpenTelemetryResource<T>]) -> bool {

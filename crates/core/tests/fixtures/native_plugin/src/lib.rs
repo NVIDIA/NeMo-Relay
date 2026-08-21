@@ -67,26 +67,7 @@ impl NativePlugin for FixtureNativePlugin {
             .get("event_metadata_injector_error")
             .and_then(Json::as_bool)
             .unwrap_or(false);
-        ctx.register_event_metadata_injector(
-            "fixture_event_metadata_injector",
-            0,
-            move |event| async move {
-                if event_metadata_injector_error {
-                    return Err("fixture Event metadata injector error requested".into());
-                }
-                let mut additions = BTreeMap::new();
-                if event
-                    .name()
-                    .starts_with("external-plugin-event-metadata-injection")
-                {
-                    additions.insert(
-                        "external.injector.transport".into(),
-                        json!("native_dynamic_rust"),
-                    );
-                }
-                Ok(additions)
-            },
-        )?;
+        register_fixture_event_metadata_injector(ctx, event_metadata_injector_error)?;
         if plugin_config
             .get("event_metadata_injector_only")
             .and_then(Json::as_bool)
@@ -331,6 +312,32 @@ impl NativePlugin for FixtureNativePlugin {
 
         Ok(())
     }
+}
+
+fn register_fixture_event_metadata_injector(
+    ctx: &mut PluginContext<'_>,
+    return_error: bool,
+) -> nemo_relay_plugin::Result<()> {
+    ctx.register_event_metadata_injector(
+        "fixture_event_metadata_injector",
+        0,
+        move |event| async move {
+            if return_error {
+                return Err("fixture Event metadata injector error requested".into());
+            }
+            let mut additions = BTreeMap::new();
+            if event
+                .name()
+                .starts_with("external-plugin-event-metadata-injection")
+            {
+                additions.insert(
+                    "external.injector.transport".into(),
+                    json!("native_dynamic_rust"),
+                );
+            }
+            Ok(additions)
+        },
+    )
 }
 
 fn mark_event_fields(mut fields: EventSanitizeFields, marker: &str) -> EventSanitizeFields {
