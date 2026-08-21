@@ -1364,6 +1364,22 @@ fn build_atif_storage(
     ))
 }
 
+#[derive(Clone)]
+struct IndexedOpenTelemetryResource<T> {
+    index: usize,
+    value: T,
+}
+
+struct SkippedSignalEndpoint {
+    index: usize,
+    message: String,
+}
+
+struct ResolvedSignalEndpoints {
+    endpoints: Vec<IndexedOpenTelemetryResource<OpenTelemetrySignalEndpointConfig>>,
+    skipped: Vec<SkippedSignalEndpoint>,
+}
+
 fn register_opentelemetry(
     section: OpenTelemetrySectionConfig,
     ctx: &mut PluginRegistrationContext,
@@ -1383,35 +1399,41 @@ fn register_opentelemetry(
         ));
     }
     validate_distinct_opentelemetry_destinations(&endpoints)?;
-    let log_endpoints = logs
+    let log_resolution = logs
         .as_ref()
         .map(|section| resolve_signal_endpoints("logs", section.endpoints.as_ref(), &endpoints))
         .transpose()?;
-    let metric_endpoints = metrics
+    let metric_resolution = metrics
         .as_ref()
         .map(|section| resolve_signal_endpoints("metrics", section.endpoints.as_ref(), &endpoints))
         .transpose()?;
+    if let Some(resolution) = &log_resolution {
+        warn_skipped_signal_endpoints("logs", &resolution.skipped);
+    }
+    if let Some(resolution) = &metric_resolution {
+        warn_skipped_signal_endpoints("metrics", &resolution.skipped);
+    }
     let trace_subscribers = build_opentelemetry_subscribers(endpoints)?;
-    let log_subscribers = match (logs, log_endpoints) {
-        (Some(section), Some(endpoints)) => {
-            match build_opentelemetry_log_subscribers(section, endpoints) {
+    let log_subscribers = match (logs, log_resolution) {
+        (Some(section), Some(resolution)) => {
+            match build_opentelemetry_log_subscribers(section, resolution.endpoints) {
                 Ok(subscribers) => subscribers,
                 Err(error) => {
-                    let _ = shutdown_opentelemetry_providers(&trace_subscribers);
+                    let _ = shutdown_indexed_opentelemetry_providers(&trace_subscribers);
                     return Err(error);
                 }
             }
         }
         _ => Vec::new(),
     };
-    let metric_subscribers = match (metrics, metric_endpoints) {
-        (Some(section), Some(endpoints)) => {
-            match build_opentelemetry_metric_subscribers(section, endpoints) {
+    let metric_subscribers = match (metrics, metric_resolution) {
+        (Some(section), Some(resolution)) => {
+            match build_opentelemetry_metric_subscribers(section, resolution.endpoints) {
                 Ok(subscribers) => subscribers,
                 Err(error) => {
-                    let _ = shutdown_opentelemetry_providers(&trace_subscribers);
+                    let _ = shutdown_indexed_opentelemetry_providers(&trace_subscribers);
                     for subscriber in &log_subscribers {
-                        let _ = subscriber.shutdown_provider();
+                        let _ = subscriber.value.shutdown_provider();
                     }
                     return Err(error);
                 }
@@ -1425,42 +1447,35 @@ fn register_opentelemetry(
                 .to_string(),
         ));
     }
-    for (signal, count) in [
-        ("traces", trace_subscribers.len()),
-        ("logs", log_subscribers.len()),
-        ("metrics", metric_subscribers.len()),
-    ] {
-        for index in 0..count {
-            log::info!(
-                target: "nemo_relay.plugin",
-                event = "plugin_resource_access_pending",
-                plugin_kind = OBSERVABILITY_PLUGIN_KIND,
-                resource_kind = "otlp_endpoint",
-                exporter = "opentelemetry",
-                signal,
-                resource_index = index,
-                permission = "write";
-                "Plugin resource access will be validated during export"
-            );
-        }
-    }
+    log_opentelemetry_resource_access("traces", &trace_subscribers);
+    log_opentelemetry_resource_access("logs", &log_subscribers);
+    log_opentelemetry_resource_access("metrics", &metric_subscribers);
     let trace_callbacks = trace_subscribers
         .iter()
-        .map(|subscriber| subscriber.subscriber())
+        .map(|subscriber| IndexedOpenTelemetryResource {
+            index: subscriber.index,
+            value: subscriber.value.subscriber(),
+        })
         .collect::<Vec<_>>();
     let log_callbacks = log_subscribers
         .iter()
-        .map(|subscriber| subscriber.subscriber())
+        .map(|subscriber| IndexedOpenTelemetryResource {
+            index: subscriber.index,
+            value: subscriber.value.subscriber(),
+        })
         .collect::<Vec<_>>();
     let metric_callbacks = metric_subscribers
         .iter()
         .map(|subscriber| {
-            let subscriber = Arc::clone(subscriber);
-            Arc::new(
-                move |event: &Event, measurements: &[ValidatedMetricMeasurement]| {
-                    subscriber.process_validated(event, measurements)
-                },
-            ) as MetricEventCallback
+            let value = Arc::clone(&subscriber.value);
+            IndexedOpenTelemetryResource {
+                index: subscriber.index,
+                value: Arc::new(
+                    move |event: &Event, measurements: &[ValidatedMetricMeasurement]| {
+                        value.process_validated(event, measurements)
+                    },
+                ) as MetricEventCallback,
+            }
         })
         .collect::<Vec<_>>();
     let metric_diagnostic_field = (!metric_callbacks.is_empty()).then_some("opentelemetry.metrics");
@@ -1510,10 +1525,29 @@ fn register_opentelemetry(
     Ok(())
 }
 
+fn log_opentelemetry_resource_access<T>(
+    signal: &str,
+    subscribers: &[IndexedOpenTelemetryResource<T>],
+) {
+    for subscriber in subscribers {
+        log::info!(
+            target: "nemo_relay.plugin",
+            event = "plugin_resource_access_pending",
+            plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+            resource_kind = "otlp_endpoint",
+            exporter = "opentelemetry",
+            signal,
+            resource_index = subscriber.index,
+            permission = "write";
+            "Plugin resource access will be validated during export"
+        );
+    }
+}
+
 fn shutdown_all_opentelemetry_subscribers(
-    traces: &[Arc<OpenTelemetrySubscriber>],
-    logs: &[Arc<OpenTelemetryLogSubscriber>],
-    metrics: &[Arc<OpenTelemetryMetricSubscriber>],
+    traces: &[IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>],
+    logs: &[IndexedOpenTelemetryResource<Arc<OpenTelemetryLogSubscriber>>],
+    metrics: &[IndexedOpenTelemetryResource<Arc<OpenTelemetryMetricSubscriber>>],
 ) -> Option<OpenTelemetryShutdownFailure> {
     let mut errors = Vec::new();
     if let Err(error) = flush_subscribers() {
@@ -1521,19 +1555,19 @@ fn shutdown_all_opentelemetry_subscribers(
             crate::observability::otel::OpenTelemetryError::Core(error),
         ));
     }
-    errors.extend(shutdown_opentelemetry_providers(traces));
+    errors.extend(shutdown_indexed_opentelemetry_providers(traces));
     for subscriber in logs {
         if let Some(issue) = signal_shutdown_issue(
-            subscriber.shutdown_provider(),
-            subscriber.delivery_failure_summary(),
+            subscriber.value.shutdown_provider(),
+            subscriber.value.delivery_failure_summary(),
         ) {
             errors.push(issue);
         }
     }
     for subscriber in metrics {
         if let Some(issue) = signal_shutdown_issue(
-            subscriber.shutdown_provider(),
-            subscriber.delivery_failure_summary(),
+            subscriber.value.shutdown_provider(),
+            subscriber.value.delivery_failure_summary(),
         ) {
             errors.push(issue);
         }
@@ -1542,25 +1576,20 @@ fn shutdown_all_opentelemetry_subscribers(
 }
 
 fn deliver_opentelemetry_event(
-    trace_callbacks: &[EventSubscriberFn],
-    log_callbacks: &[EventSubscriberFn],
-    metric_callbacks: &[MetricEventCallback],
+    trace_callbacks: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
+    log_callbacks: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
+    metric_callbacks: &[IndexedOpenTelemetryResource<MetricEventCallback>],
     rejected_metric_marks: &AtomicU64,
     metric_diagnostic_field: Option<&str>,
     event: &Event,
 ) {
     match classify_metric_mark(event) {
         MetricMarkClassification::NotMetric => {
-            deliver_opentelemetry_callbacks(trace_callbacks, 0, event);
-            deliver_opentelemetry_callbacks(log_callbacks, trace_callbacks.len(), event);
+            deliver_opentelemetry_callbacks(trace_callbacks, event);
+            deliver_opentelemetry_callbacks(log_callbacks, event);
         }
         MetricMarkClassification::Valid(measurements) => {
-            deliver_opentelemetry_metric_callbacks(
-                metric_callbacks,
-                trace_callbacks.len() + log_callbacks.len(),
-                event,
-                &measurements,
-            );
+            deliver_opentelemetry_metric_callbacks(metric_callbacks, event, &measurements);
         }
         MetricMarkClassification::Invalid(error) => {
             reject_opentelemetry_metric_mark(
@@ -1580,19 +1609,17 @@ type MetricEventCallback = Arc<
 >;
 
 fn deliver_opentelemetry_callbacks(
-    callbacks: &[EventSubscriberFn],
-    index_offset: usize,
+    callbacks: &[IndexedOpenTelemetryResource<EventSubscriberFn>],
     event: &Event,
 ) {
-    for (relative_index, callback) in callbacks.iter().enumerate() {
-        let index = index_offset + relative_index;
-        if catch_unwind(AssertUnwindSafe(|| callback(event))).is_err() {
+    for callback in callbacks {
+        if catch_unwind(AssertUnwindSafe(|| (callback.value)(event))).is_err() {
             log::error!(
                 target: "nemo_relay.plugin",
                 event = "opentelemetry_endpoint_callback_panicked",
                 plugin_kind = OBSERVABILITY_PLUGIN_KIND,
                 resource_kind = "otlp_endpoint",
-                resource_index = index;
+                resource_index = callback.index;
                 "OpenTelemetry endpoint callback panicked; delivery continued to remaining endpoints"
             );
         }
@@ -1600,20 +1627,18 @@ fn deliver_opentelemetry_callbacks(
 }
 
 fn deliver_opentelemetry_metric_callbacks(
-    callbacks: &[MetricEventCallback],
-    index_offset: usize,
+    callbacks: &[IndexedOpenTelemetryResource<MetricEventCallback>],
     event: &Event,
     measurements: &[ValidatedMetricMeasurement],
 ) {
-    for (relative_index, callback) in callbacks.iter().enumerate() {
-        let index = index_offset + relative_index;
-        if catch_unwind(AssertUnwindSafe(|| callback(event, measurements))).is_err() {
+    for callback in callbacks {
+        if catch_unwind(AssertUnwindSafe(|| (callback.value)(event, measurements))).is_err() {
             log::error!(
                 target: "nemo_relay.plugin",
                 event = "opentelemetry_endpoint_callback_panicked",
                 plugin_kind = OBSERVABILITY_PLUGIN_KIND,
                 resource_kind = "otlp_endpoint",
-                resource_index = index;
+                resource_index = callback.index;
                 "OpenTelemetry endpoint callback panicked; delivery continued to remaining endpoints"
             );
         }
@@ -1648,7 +1673,7 @@ fn reject_opentelemetry_metric_mark(
 
 fn build_opentelemetry_subscribers(
     endpoints: Vec<OpenTelemetryEndpointConfig>,
-) -> PluginResult<Vec<Arc<OpenTelemetrySubscriber>>> {
+) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>>> {
     let mut subscribers = Vec::with_capacity(endpoints.len());
     for (index, endpoint) in endpoints.into_iter().enumerate() {
         let subscriber = build_otel_config(index, endpoint).and_then(|config| {
@@ -1657,7 +1682,7 @@ fn build_opentelemetry_subscribers(
                 .map_err(observability_registration_error)
         });
         match subscriber {
-            Ok(subscriber) => subscribers.push(subscriber),
+            Ok(value) => subscribers.push(IndexedOpenTelemetryResource { index, value }),
             Err(error) => {
                 log::warn!(
                     target: "nemo_relay.plugin",
@@ -1677,7 +1702,8 @@ fn resolve_signal_endpoints(
     signal: &'static str,
     explicit: Option<&Vec<OpenTelemetrySignalEndpointConfig>>,
     traces: &[OpenTelemetryEndpointConfig],
-) -> PluginResult<Vec<OpenTelemetrySignalEndpointConfig>> {
+) -> PluginResult<ResolvedSignalEndpoints> {
+    let mut skipped = Vec::new();
     let endpoints = match explicit {
         Some(endpoints) if endpoints.is_empty() => {
             return Err(PluginError::InvalidConfig(format!(
@@ -1688,21 +1714,51 @@ fn resolve_signal_endpoints(
             for (index, endpoint) in endpoints.iter().enumerate() {
                 validate_explicit_signal_endpoint(signal, index, endpoint)?;
             }
-            endpoints.clone()
+            endpoints
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(index, value)| IndexedOpenTelemetryResource { index, value })
+                .collect()
         }
         None if traces.is_empty() => {
             return Err(PluginError::InvalidConfig(format!(
                 "enabled OpenTelemetry {signal} section has no explicit or derivable trace endpoints"
             )));
         }
-        None => traces
-            .iter()
-            .enumerate()
-            .map(|(index, endpoint)| derive_signal_endpoint(signal, index, endpoint))
-            .collect::<PluginResult<Vec<_>>>()?,
+        None => {
+            let mut endpoints = Vec::with_capacity(traces.len());
+            for (index, trace) in traces.iter().enumerate() {
+                match derive_signal_endpoint(signal, index, trace) {
+                    Ok(value) => {
+                        endpoints.push(IndexedOpenTelemetryResource { index, value });
+                    }
+                    Err(error) => skipped.push(SkippedSignalEndpoint {
+                        index,
+                        message: error.to_string(),
+                    }),
+                }
+            }
+            endpoints
+        }
     };
     validate_distinct_signal_destinations(signal, &endpoints)?;
-    Ok(endpoints)
+    Ok(ResolvedSignalEndpoints { endpoints, skipped })
+}
+
+fn warn_skipped_signal_endpoints(signal: &str, skipped: &[SkippedSignalEndpoint]) {
+    for endpoint in skipped {
+        log::warn!(
+            target: "nemo_relay.plugin",
+            event = "opentelemetry_endpoint_skipped",
+            plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+            resource_kind = "otlp_endpoint",
+            signal,
+            resource_index = endpoint.index;
+            "OpenTelemetry {signal} endpoint was skipped during activation; delivery continues to valid endpoints: {}",
+            endpoint.message
+        );
+    }
 }
 
 fn validate_explicit_signal_endpoint(
@@ -1800,17 +1856,17 @@ fn parse_signal_transport(
 
 fn validate_distinct_signal_destinations(
     signal: &str,
-    endpoints: &[OpenTelemetrySignalEndpointConfig],
+    endpoints: &[IndexedOpenTelemetryResource<OpenTelemetrySignalEndpointConfig>],
 ) -> PluginResult<()> {
-    for (index, endpoint) in endpoints.iter().enumerate() {
-        let effective = signal_destination(signal, endpoint);
-        for (other_index, other) in endpoints[..index].iter().enumerate() {
-            if endpoint.transport == other.transport
-                && effective.key == signal_destination(signal, other).key
+    for (position, endpoint) in endpoints.iter().enumerate() {
+        let effective = signal_destination(signal, &endpoint.value);
+        for other in &endpoints[..position] {
+            if endpoint.value.transport == other.value.transport
+                && effective.key == signal_destination(signal, &other.value).key
             {
                 return Err(PluginError::InvalidConfig(format!(
-                    "OpenTelemetry {signal}.endpoints[{other_index}] and {signal}.endpoints[{index}] use the same {} destination {:?}",
-                    endpoint.transport, effective.display
+                    "OpenTelemetry {signal}.endpoints[{}] and {signal}.endpoints[{}] use the same {} destination {:?}",
+                    other.index, endpoint.index, endpoint.value.transport, effective.display
                 )));
             }
         }
@@ -1837,8 +1893,8 @@ fn signal_destination(
 
 fn build_opentelemetry_log_subscribers(
     section: OpenTelemetryLogSectionConfig,
-    endpoints: Vec<OpenTelemetrySignalEndpointConfig>,
-) -> PluginResult<Vec<Arc<OpenTelemetryLogSubscriber>>> {
+    endpoints: Vec<IndexedOpenTelemetryResource<OpenTelemetrySignalEndpointConfig>>,
+) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryLogSubscriber>>>> {
     let minimum_severity = section
         .minimum_severity
         .parse::<LogSeverity>()
@@ -1855,15 +1911,17 @@ fn build_opentelemetry_log_subscribers(
         ));
     }
     let mut subscribers = Vec::with_capacity(endpoints.len());
-    for (index, endpoint) in endpoints.into_iter().enumerate() {
-        let result =
-            build_log_config(index, endpoint, &section, minimum_severity).and_then(|config| {
+    for endpoint in endpoints {
+        let index = endpoint.index;
+        let result = build_log_config(index, endpoint.value, &section, minimum_severity).and_then(
+            |config| {
                 OpenTelemetryLogSubscriber::new_for_plugin(config, index)
                     .map(Arc::new)
                     .map_err(observability_registration_error)
-            });
+            },
+        );
         match result {
-            Ok(subscriber) => subscribers.push(subscriber),
+            Ok(value) => subscribers.push(IndexedOpenTelemetryResource { index, value }),
             Err(error) => {
                 log::warn!(
                     target: "nemo_relay.plugin",
@@ -1882,8 +1940,8 @@ fn build_opentelemetry_log_subscribers(
 
 fn build_opentelemetry_metric_subscribers(
     section: OpenTelemetryMetricSectionConfig,
-    endpoints: Vec<OpenTelemetrySignalEndpointConfig>,
-) -> PluginResult<Vec<Arc<OpenTelemetryMetricSubscriber>>> {
+    endpoints: Vec<IndexedOpenTelemetryResource<OpenTelemetrySignalEndpointConfig>>,
+) -> PluginResult<Vec<IndexedOpenTelemetryResource<Arc<OpenTelemetryMetricSubscriber>>>> {
     let temporality = section
         .temporality
         .parse::<MetricTemporality>()
@@ -1900,15 +1958,16 @@ fn build_opentelemetry_metric_subscribers(
         ));
     }
     let mut subscribers = Vec::with_capacity(endpoints.len());
-    for (index, endpoint) in endpoints.into_iter().enumerate() {
+    for endpoint in endpoints {
+        let index = endpoint.index;
         let result =
-            build_metric_config(index, endpoint, &section, temporality).and_then(|config| {
+            build_metric_config(index, endpoint.value, &section, temporality).and_then(|config| {
                 OpenTelemetryMetricSubscriber::new_for_plugin(config, index)
                     .map(Arc::new)
                     .map_err(observability_registration_error)
             });
         match result {
-            Ok(subscriber) => subscribers.push(subscriber),
+            Ok(value) => subscribers.push(IndexedOpenTelemetryResource { index, value }),
             Err(error) => {
                 log::warn!(
                     target: "nemo_relay.plugin",
@@ -2123,12 +2182,25 @@ fn shutdown_failure_from_errors(
     })
 }
 
+#[cfg(test)]
 fn shutdown_opentelemetry_providers(
     subscribers: &[Arc<OpenTelemetrySubscriber>],
 ) -> Vec<OpenTelemetryShutdownIssue> {
     let mut errors = Vec::new();
     for subscriber in subscribers {
         if let Err(error) = subscriber.shutdown_provider() {
+            errors.push(OpenTelemetryShutdownIssue::trace(error));
+        }
+    }
+    errors
+}
+
+fn shutdown_indexed_opentelemetry_providers(
+    subscribers: &[IndexedOpenTelemetryResource<Arc<OpenTelemetrySubscriber>>],
+) -> Vec<OpenTelemetryShutdownIssue> {
+    let mut errors = Vec::new();
+    for subscriber in subscribers {
+        if let Err(error) = subscriber.value.shutdown_provider() {
             errors.push(OpenTelemetryShutdownIssue::trace(error));
         }
     }
@@ -3718,8 +3790,28 @@ fn validate_opentelemetry_signal_endpoints(
     // endpoint list must still satisfy the same path and collision contracts as
     // an active section.
     let validate_resolution = enabled || explicit.is_some_and(|endpoints| !endpoints.is_empty());
-    if validate_resolution && let Err(error) = resolve_signal_endpoints(signal, explicit, traces) {
-        push_otel_signal_diagnostic(diagnostics, policy, signal, "endpoints", &error.to_string());
+    if validate_resolution {
+        match resolve_signal_endpoints(signal, explicit, traces) {
+            Ok(resolution) => {
+                for endpoint in resolution.skipped {
+                    push_skipped_opentelemetry_endpoint_diagnostic(
+                        diagnostics,
+                        Some(format!("opentelemetry.{signal}")),
+                        Some(format!("endpoints[{}]", endpoint.index)),
+                        endpoint.message,
+                    );
+                }
+            }
+            Err(error) => {
+                push_otel_signal_diagnostic(
+                    diagnostics,
+                    policy,
+                    signal,
+                    "endpoints",
+                    &error.to_string(),
+                );
+            }
+        }
     }
 }
 
