@@ -75,8 +75,11 @@ pub type NemoRelayToolConditionalCb = unsafe extern "C" fn(
 ) -> *mut c_char;
 
 /// Callback for a conditional middleware guardrail. `kinds_json` is a JSON
-/// array of configured runtime-registration kind strings. Returns NULL to
-/// enable the target or an owned reason string to disable it.
+/// array of configured runtime-registration kind strings. `kinds_json` and
+/// `registration_name` are borrowed for the callback invocation only. Returns
+/// NULL to enable the target or a reason string allocated compatibly with
+/// `nemo_relay_string_free` to disable it. Ownership of a non-null return value
+/// transfers to Relay.
 pub type NemoRelayConditionalMiddlewareGuardrailCb = Option<
     unsafe extern "C" fn(
         user_data: *mut libc::c_void,

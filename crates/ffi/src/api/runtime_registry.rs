@@ -24,8 +24,11 @@ fn parse_kinds(
 /// Register a global conditional middleware guardrail.
 ///
 /// # Safety
-/// String pointers must be valid for the call. The callback and user data
-/// remain owned by Relay until deregistration.
+/// String pointers must be valid for the call. Callback input strings are
+/// borrowed for each invocation only. A non-null callback result transfers
+/// ownership to Relay and must be allocated compatibly with
+/// `nemo_relay_string_free`. The callback and user data remain owned by Relay
+/// until deregistration.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nemo_relay_register_conditional_middleware_guardrail(
     name: *const c_char,
@@ -90,6 +93,9 @@ pub unsafe extern "C" fn nemo_relay_deregister_conditional_middleware_guardrail(
 }
 
 /// List global gateable runtime registrations as JSON.
+///
+/// On success, `out_json` receives a Relay-allocated string. The caller owns
+/// that string and must release it exactly once with `nemo_relay_string_free`.
 ///
 /// # Safety
 /// `out_json` must be a valid writable pointer. `kinds_json` may be null or a
