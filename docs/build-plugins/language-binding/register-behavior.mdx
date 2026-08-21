@@ -179,9 +179,11 @@ context.registerLlmRequestIntercept(
 context.registerLlmStreamExecutionIntercept(
   'documentation-stream',
   execution.priority,
-  async (request, next) => (
-    (await next(request)).map((chunk) => ({ ...chunk, plugin_stream: true }))
-  ),
+  async function* (request, next) {
+    for await (const chunk of await next(request)) {
+      yield { ...chunk, plugin_stream: true };
+    }
+  },
 );
 ```
 </Tab>
