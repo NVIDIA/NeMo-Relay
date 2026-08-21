@@ -8,7 +8,7 @@
 // subset of their fields.
 #![allow(dead_code, unused_imports)]
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::ffi::c_void;
 use std::mem::{align_of, offset_of, size_of};
 use std::ptr::{self, NonNull};
@@ -436,6 +436,10 @@ static ASYNC_STREAM_REGISTRATION: Mutex<Option<RegisteredAsyncStream>> = Mutex::
 static ASYNC_PUSH_BACKPRESSURE: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_COMPLETION_RETAINS: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_TOOL_NEXT_RESULT: AtomicBool = AtomicBool::new(false);
+static UNAVAILABLE_RUNTIME_CONTEXT_CALLS: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_RUNTIME_RETAINS: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_RUNTIME_RELEASES: AtomicUsize = AtomicUsize::new(0);
+static UNAVAILABLE_CONTEXT_GATE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn native_abi_struct_sizes_are_self_describing() {
@@ -2177,6 +2181,7 @@ unsafe extern "C" fn unavailable_plugin_context_runtime(
     _ctx: *mut NemoRelayNativePluginContext,
     out: *mut *const NemoRelayNativePluginRuntime,
 ) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_CONTEXT_CALLS.fetch_add(1, Ordering::SeqCst);
     if !out.is_null() {
         unsafe { *out = ptr::null() };
     }
@@ -2186,12 +2191,14 @@ unsafe extern "C" fn unavailable_plugin_context_runtime(
 unsafe extern "C" fn unavailable_plugin_runtime_retain(
     _runtime: *const NemoRelayNativePluginRuntime,
 ) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_RETAINS.fetch_add(1, Ordering::SeqCst);
     NemoRelayStatus::NotFound
 }
 
 unsafe extern "C" fn unavailable_plugin_runtime_release(
     _runtime: *const NemoRelayNativePluginRuntime,
 ) {
+    UNAVAILABLE_RUNTIME_RELEASES.fetch_add(1, Ordering::SeqCst);
 }
 
 unsafe extern "C" fn unavailable_plugin_runtime_list_registrations(
@@ -2228,6 +2235,7 @@ unsafe extern "C" fn unavailable_plugin_context_register_gate(
     _registration_name: *const NemoRelayNativeString,
     _reason: *const NemoRelayNativeString,
 ) -> NemoRelayStatus {
+    UNAVAILABLE_CONTEXT_GATE_CALLS.fetch_add(1, Ordering::SeqCst);
     NemoRelayStatus::NotFound
 }
 
@@ -2336,6 +2344,10 @@ fn begin_test() -> MutexGuard<'static, ()> {
 
 fn reset_state() {
     ASYNC_COMPLETION_RETAINS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_CONTEXT_CALLS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_RETAINS.store(0, Ordering::SeqCst);
+    UNAVAILABLE_RUNTIME_RELEASES.store(0, Ordering::SeqCst);
+    UNAVAILABLE_CONTEXT_GATE_CALLS.store(0, Ordering::SeqCst);
     for registration in ASYNC_REGISTRATIONS.lock().unwrap().drain(..) {
         unsafe { registration.free() };
     }
@@ -2817,6 +2829,48 @@ fn plugin_runtime_rejects_malformed_runtime_diagnostics_json() {
         error.contains("invalid runtime diagnostics result"),
         "{error}"
     );
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_context_handles_an_unavailable_runtime_capability() {
+    let _guard = begin_test();
+    let host = test_host_v4();
+    let mut context = test_context(&host.v3.v1);
+    let runtime = context.runtime();
+    let kinds = BTreeSet::from([nemo_relay_plugin::RuntimeRegistrationKind::Subscriber]);
+
+    assert_eq!(UNAVAILABLE_RUNTIME_CONTEXT_CALLS.load(Ordering::SeqCst), 1);
+    assert!(
+        expect_string_err(runtime.list_runtime_registrations(None))
+            .contains("host does not support activation-owned runtime gate control")
+    );
+    assert!(
+        expect_string_err(runtime.register_conditional_middleware_guardrail(
+            "timer-gate",
+            &kinds,
+            "target-subscriber",
+            "timer active",
+        ))
+        .contains("host does not support activation-owned runtime gate control")
+    );
+
+    let cloned = runtime.clone();
+    drop(cloned);
+    drop(runtime);
+    assert_eq!(UNAVAILABLE_RUNTIME_RETAINS.load(Ordering::SeqCst), 0);
+    assert_eq!(UNAVAILABLE_RUNTIME_RELEASES.load(Ordering::SeqCst), 0);
+
+    let error = context
+        .register_conditional_middleware_guardrail(
+            "startup-gate",
+            &kinds,
+            "target-subscriber",
+            "disabled",
+        )
+        .unwrap_err();
+    assert!(error.contains("NotFound"), "{error}");
+    assert_eq!(UNAVAILABLE_CONTEXT_GATE_CALLS.load(Ordering::SeqCst), 1);
     assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
 }
 
