@@ -32,6 +32,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -105,6 +106,23 @@ impl SpanExporter for BlockingSpanExporter {
             state = changed.wait(state).unwrap();
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FailingThenRecoveringSpanExporter {
+    attempts: Arc<AtomicUsize>,
+}
+
+impl SpanExporter for FailingThenRecoveringSpanExporter {
+    async fn export(&self, _batch: Vec<SpanData>) -> OTelSdkResult {
+        if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+            Err(OTelSdkError::InternalFailure(
+                "collector unavailable".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -4323,6 +4341,49 @@ fn dropped_spans_are_recorded_in_the_active_plugin_report() {
             .map(|diagnostic| diagnostic.count),
         Some(2)
     );
+}
+
+#[test]
+fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        FailingThenRecoveringSpanExporter::default(),
+        "https://collector.example/v1/traces".to_string(),
+        runtime_diagnostics.clone(),
+        BatchConfigBuilder::default()
+            .with_max_export_batch_size(1)
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let tracer = provider.tracer("trace-export-failure-diagnostics-test");
+
+    tracer.start("first-export-fails").end();
+    assert!(provider.force_flush().is_err());
+
+    let diagnostics = runtime_diagnostics.snapshot();
+    let diagnostic = diagnostics
+        .get("otel.traces_export_failed")
+        .expect("trace export failure diagnostic");
+    assert_eq!(diagnostic.count, 1);
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/traces")
+    );
+    assert!(diagnostic.message.contains("collector unavailable"));
+
+    let repeated_flush = provider.force_flush().unwrap_err();
+    assert!(
+        repeated_flush
+            .to_string()
+            .contains("otel.traces_export_failed (1)")
+    );
+
+    tracer.start("recovery-export").end();
+    provider.force_flush().unwrap();
+    provider.shutdown().unwrap();
 }
 
 #[test]
