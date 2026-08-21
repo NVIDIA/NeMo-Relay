@@ -2230,7 +2230,11 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
     }));
     let error =
         futures::executor::block_on(initialize_plugins_exact(invalid_otel_transport)).unwrap_err();
-    assert!(error.to_string().contains("OpenTelemetry transport"));
+    assert!(
+        error
+            .to_string()
+            .contains("requires at least one valid trace, log, or metric endpoint")
+    );
 }
 
 #[test]
@@ -3651,7 +3655,7 @@ fn opentelemetry_endpoint_delivery_failure_does_not_block_other_endpoints() {
 }
 
 #[test]
-fn invalid_later_opentelemetry_endpoint_leaves_no_fanout_registration() {
+fn invalid_later_opentelemetry_endpoint_keeps_fanout_registration() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let config = plugin_config(json!({
@@ -3670,14 +3674,15 @@ fn invalid_later_opentelemetry_endpoint_leaves_no_fanout_registration() {
         }
     }));
 
-    assert!(futures::executor::block_on(initialize_plugins_exact(config)).is_err());
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
     assert!(
-        !global_context()
+        global_context()
             .read()
             .unwrap()
             .event_subscribers
             .contains_key("__nemo_relay_plugin__observability__opentelemetry")
     );
+    clear_plugin_configuration().unwrap();
 }
 
 #[test]

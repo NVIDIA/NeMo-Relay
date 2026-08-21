@@ -264,6 +264,10 @@ its `opentelemetry.endpoints[N]` field. Other valid endpoints continue to
 activate. Activation still fails when no trace, log, or metric endpoint can be
 registered.
 
+Relay also skips and logs any trace endpoint that fails during exporter
+construction. This includes malformed collector destinations that cannot be
+detected during configuration validation.
+
 Relay's thread-based batch processor exports serially, so it does not expose
 the SDK's concurrent-export setting. It also does not expose a separate batch
 processor export timeout; use the endpoint's `timeout_millis` to bound each
