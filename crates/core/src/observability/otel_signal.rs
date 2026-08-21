@@ -57,7 +57,7 @@ impl OpenTelemetryRuntimeDiagnostics {
 
 #[derive(Debug, Default)]
 struct RuntimeDiagnosticState {
-    diagnostics: BTreeMap<&'static str, RuntimeDiagnosticEntry>,
+    diagnostics: BTreeMap<String, RuntimeDiagnosticEntry>,
 }
 
 #[derive(Debug)]
@@ -81,14 +81,15 @@ impl SignalRuntimeDiagnostics {
         }
     }
 
-    pub(super) fn record(&self, code: &'static str, message: String, count: u64) -> u64 {
+    pub(super) fn record(&self, code: impl Into<String>, message: String, count: u64) -> u64 {
+        let code = code.into();
         let count = count.max(1);
         let message = truncate_runtime_diagnostic_message(message);
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let total = if let Some(diagnostic) = state.diagnostics.get_mut(code) {
+        let total = if let Some(diagnostic) = state.diagnostics.get_mut(&code) {
             diagnostic.diagnostic.count = diagnostic.diagnostic.count.saturating_add(count);
             if diagnostic.messages.insert(message.clone()) {
                 let combined = combine_runtime_diagnostic_messages(&diagnostic.messages);
@@ -103,10 +104,10 @@ impl SignalRuntimeDiagnostics {
             let mut messages = BTreeSet::new();
             messages.insert(message.clone());
             state.diagnostics.insert(
-                code,
+                code.clone(),
                 RuntimeDiagnosticEntry {
                     diagnostic: OpenTelemetryRuntimeDiagnostic {
-                        code: code.to_string(),
+                        code: code.clone(),
                         message: message.clone(),
                         count,
                     },
@@ -119,7 +120,7 @@ impl SignalRuntimeDiagnostics {
         };
         drop(state);
 
-        record_signal_runtime_diagnostic(code, self.plugin_field.clone(), message, count);
+        record_signal_runtime_diagnostic(&code, self.plugin_field.clone(), message, count);
         total
     }
 
