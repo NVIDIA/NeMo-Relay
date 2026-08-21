@@ -71,4 +71,30 @@ describe('conditional middleware guardrails', () => {
       lib.deregisterToolRequestIntercept(targetName);
     }
   });
+
+  it('treats an implicit undefined result as enabled', async () => {
+    const suffix = `${process.pid}-${Date.now()}-undefined`;
+    const targetName = `node-runtime-target-${suffix}`;
+    const gateName = `node-runtime-gate-${suffix}`;
+
+    lib.registerToolRequestIntercept(targetName, 0, false, (_name, args) => ({
+      ...args,
+      intercepted: true,
+    }));
+    try {
+      lib.registerConditionalMiddlewareGuardrail(
+        gateName,
+        ['tool_request_intercept'],
+        targetName,
+        () => {},
+      );
+      try {
+        assert.deepEqual(await lib.toolRequestIntercepts('tool', {}), { intercepted: true });
+      } finally {
+        lib.deregisterConditionalMiddlewareGuardrail(gateName);
+      }
+    } finally {
+      lib.deregisterToolRequestIntercept(targetName);
+    }
+  });
 });

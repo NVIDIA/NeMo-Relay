@@ -210,7 +210,8 @@ pub(crate) fn safe_conditional_gate_callback(
     let factory: JsFunction = env.run_script(
         r#"((fn) => function __nemo_relay_conditional_gate_wrapper(...args) {
   try {
-    const value = fn(...args);
+    const returned = fn(...args);
+    const value = returned === undefined ? null : returned;
     if (value === null || typeof value === 'string') {
       return { ok: true, value };
     }
@@ -220,7 +221,12 @@ pub(crate) fn safe_conditional_gate_callback(
     try {
       message = String(error?.message ?? error);
     } catch {}
-    return { ok: false, error: message };
+    let exceptionType = 'Error';
+    try {
+      const name = String(error?.name ?? '').trim();
+      if (name) exceptionType = name;
+    } catch {}
+    return { ok: false, error: message, exceptionType };
   }
 })"#,
     )?;
