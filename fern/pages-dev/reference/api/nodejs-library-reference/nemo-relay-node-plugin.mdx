@@ -289,6 +289,13 @@ Component-scoped registration context passed to plugin handlers.
 
 ```ts
 export interface PluginContext {
+  /** Register an activation-owned eligibility gate for a global runtime registration. */
+  registerConditionalMiddlewareGuardrail(
+    name: string,
+    kinds: RuntimeRegistrationKind[],
+    registrationName: string,
+    guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
+  ): void;
   /**
    * Register an event subscriber for this component. Callback failures are isolated and reported
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.

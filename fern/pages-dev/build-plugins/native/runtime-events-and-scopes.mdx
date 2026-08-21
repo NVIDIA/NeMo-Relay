@@ -125,6 +125,25 @@ owned by its activation, and Relay removes remaining gates during activation
 teardown. Use `PluginContext::register_conditional_middleware_guardrail` for a
 gate that must exist as part of the initial registration transaction.
 
+The following registration uses the example's validated, disabled-by-default
+`registration_control` group:
+
+```rust
+if config.registration_control.enabled {
+    context.register_conditional_middleware_guardrail(
+        "documentation_registration_control",
+        &config.registration_control.kinds.iter().copied().collect(),
+        &config.registration_control.registration_name,
+        &config.registration_control.reason,
+    )?;
+}
+```
+
+The native SDK installs the constant reason in the host. Relay does not enter the native
+library while it evaluates future snapshots. Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for the complete discovery, ordering, snapshot, and cleanup contract.
+
 ## Configure the SDK Executor
 
 `NativePlugin::executor_config` supplies the plugin-wide default. The SDK default and the

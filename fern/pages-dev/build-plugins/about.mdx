@@ -89,3 +89,8 @@ defines the operator-facing boundary, and [PluginContext](/build-plugins/fundame
 describes every registration surface. Each model-specific section then follows a
 complete path from invalid configuration through activation, representative execution,
 observable verification, and teardown.
+
+Plugins can also own gates that control whether another global runtime registration is
+included in future snapshots. Read
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+before adding this operational control to any delivery model.

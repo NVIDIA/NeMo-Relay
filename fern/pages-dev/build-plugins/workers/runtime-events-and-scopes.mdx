@@ -36,9 +36,11 @@ a middleware chain or publishes an event. A worker timer or health monitor can
 therefore register a constant-reason gate, retain its activation-owned handle,
 and deregister it later.
 
-The following Python worker flow discovers the observability plugin's
-OpenTelemetry subscriber and disables it for one timer interval:
+The following worker flows discover the observability plugin's OpenTelemetry subscriber
+and disable it for one timer interval:
 
+<Tabs>
+<Tab title="Python" language="python">
 ```python
 import asyncio
 
@@ -48,11 +50,16 @@ subscribers = await ctx.runtime.list_runtime_registrations(
     {RuntimeRegistrationKind.SUBSCRIBER}
 )
 opentelemetry = next(
-    registration
-    for registration in subscribers
-    if registration.local_name == "opentelemetry"
-    and registration.owner.plugin_kind == "observability"
+    (
+        registration
+        for registration in subscribers
+        if registration.local_name == "opentelemetry"
+        and registration.owner.plugin_kind == "observability"
+    ),
+    None,
 )
+if opentelemetry is None:
+    raise RuntimeError("OpenTelemetry subscriber was not found")
 
 gate = await ctx.runtime.register_conditional_middleware_guardrail(
     "pause-opentelemetry",
@@ -65,12 +72,84 @@ try:
 finally:
     await ctx.runtime.deregister_conditional_middleware_guardrail(gate)
 ```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+use std::collections::BTreeSet;
+use std::time::Duration;
+use nemo_relay_worker::{RuntimeRegistrationKind, WorkerSdkError};
+
+let kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+let opentelemetry = runtime
+    .list_runtime_registrations(Some(kinds.clone()))
+    .await?
+    .into_iter()
+    .find(|registration| {
+        registration.local_name == "opentelemetry"
+            && registration.owner.plugin_kind.as_deref() == Some("observability")
+    })
+    .ok_or_else(|| WorkerSdkError::Callback(
+        "OpenTelemetry subscriber was not found".into()
+    ))?;
+
+let gate = runtime
+    .register_conditional_middleware_guardrail(
+        "pause-opentelemetry",
+        kinds,
+        &opentelemetry.effective_name,
+        "worker timer active",
+    )
+    .await?;
+tokio::time::sleep(Duration::from_secs(30)).await;
+runtime.deregister_conditional_middleware_guardrail(&gate).await?;
+```
+</Tab>
+</Tabs>
 
 The worker can remove only gates owned by its activation. Relay removes any
 remaining owned gates during ordinary activation teardown. A worker can also
 call `PluginContext.register_conditional_middleware_guardrail` during
 registration to declare an initial host-resident gate; use `PluginRuntime` for
 timer-controlled changes after activation.
+
+Refer to [Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+for global-only behavior, effective-name discovery, all-matching-gate semantics, and
+the distinction between activation-owned and runtime-discovered gates.
+
+## Declare an Initial Gate
+
+Use the component context when the validated configuration requires the gate for the
+complete worker activation. The following examples install the same host-resident
+constant reason:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+ctx.register_conditional_middleware_guardrail(
+    "documentation_registration_control",
+    {RuntimeRegistrationKind.SUBSCRIBER},
+    registration_name,
+    "disabled by documentation plugin",
+)
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+ctx.register_conditional_middleware_guardrail(
+    "documentation_registration_control",
+    BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+    registration_name,
+    "disabled by documentation plugin",
+);
+```
+</Tab>
+</Tabs>
+
+Relay validates initial gate names, kinds, targets, and duplicate names before it commits
+the worker registrations. Failed registration returns no initial gates. Ordinary
+teardown removes every gate that remains owned by the worker activation.
 
 Use typed [mark](/about-nemo-relay/concepts/events) options when an exported mark needs
 a data schema or log severity. Use
