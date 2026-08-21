@@ -145,7 +145,13 @@ pub enum OpenTelemetryError {
     ExporterBuild(String),
     /// The underlying tracer provider returned an error.
     #[error("OpenTelemetry tracer provider error: {0}")]
-    Provider(String),
+    TraceProvider(String),
+    /// The underlying logger provider returned an error.
+    #[error("OpenTelemetry log provider error: {0}")]
+    LogProvider(String),
+    /// The underlying meter provider returned an error.
+    #[error("OpenTelemetry metric provider error: {0}")]
+    MetricProvider(String),
     /// Attribute mapping configuration was invalid.
     #[error("invalid attribute mappings: {0}")]
     InvalidAttributeMappings(String),
@@ -693,7 +699,7 @@ impl OpenTelemetrySubscriber {
     pub fn force_flush(&self) -> Result<()> {
         flush_subscribers()?;
         let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
+            OpenTelemetryError::TraceProvider("the subscriber state lock was poisoned".to_string())
         })?;
         guard.force_flush()
     }
@@ -712,7 +718,7 @@ impl OpenTelemetrySubscriber {
 
     pub(crate) fn shutdown_provider(&self) -> Result<()> {
         let guard = self.inner.processor.lock().map_err(|_| {
-            OpenTelemetryError::Provider("the subscriber state lock was poisoned".to_string())
+            OpenTelemetryError::TraceProvider("the subscriber state lock was poisoned".to_string())
         })?;
         let result = guard.shutdown();
         if result.is_ok() {
@@ -1194,13 +1200,13 @@ impl OtelEventProcessor {
     pub(super) fn force_flush(&self) -> Result<()> {
         self.provider
             .force_flush()
-            .map_err(|e| OpenTelemetryError::Provider(e.to_string()))
+            .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
     }
 
     fn shutdown(&self) -> Result<()> {
         self.provider
             .shutdown()
-            .map_err(|e| OpenTelemetryError::Provider(e.to_string()))
+            .map_err(|e| OpenTelemetryError::TraceProvider(e.to_string()))
     }
 
     fn process_start(&mut self, event: &Event) {

@@ -3684,9 +3684,11 @@ fn opentelemetry_shutdown_helper_retains_every_endpoint_failure() {
 #[test]
 fn signal_delivery_state_classifies_generic_sdk_shutdown_error_as_delivery() {
     let issue = signal_shutdown_issue(
-        Err(crate::observability::otel::OpenTelemetryError::Provider(
-            "generic SDK final-export failure".to_string(),
-        )),
+        Err(
+            crate::observability::otel::OpenTelemetryError::MetricProvider(
+                "generic SDK final-export failure".to_string(),
+            ),
+        ),
         Some("otel.metrics_export_failed (1)".to_string()),
     )
     .expect("delivery failure should produce a shutdown issue");

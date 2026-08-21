@@ -53,6 +53,26 @@ impl Drop for ClearPluginConfigurationGuard {
     }
 }
 
+#[test]
+fn provider_errors_identify_their_telemetry_signal() {
+    for (error, expected) in [
+        (
+            OpenTelemetryError::TraceProvider("trace failure".to_string()),
+            "OpenTelemetry tracer provider error: trace failure",
+        ),
+        (
+            OpenTelemetryError::LogProvider("log failure".to_string()),
+            "OpenTelemetry log provider error: log failure",
+        ),
+        (
+            OpenTelemetryError::MetricProvider("metric failure".to_string()),
+            "OpenTelemetry metric provider error: metric failure",
+        ),
+    ] {
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
 struct RestoreThreadScopeStackGuard(ThreadScopeStackBinding);
 
 impl Drop for RestoreThreadScopeStackGuard {
