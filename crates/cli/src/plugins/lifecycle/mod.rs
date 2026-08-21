@@ -1064,6 +1064,13 @@ fn copy_snapshot_directory_contents(
             source.display()
         ))
     })?;
+    if destination.starts_with(&canonical) {
+        return Err(CliError::Config(format!(
+            "dynamic plugin activation snapshot directory {} must not be inside a directory copied into the activation snapshot {}",
+            destination.display(),
+            canonical.display()
+        )));
+    }
     if ancestors.contains(&canonical) {
         return Err(CliError::Config(format!(
             "dynamic plugin runtime closure contains a directory symlink cycle at {}",
@@ -1872,18 +1879,12 @@ fn active_dynamic_plugin_components_from_scopes(
                     .and_then(|scope| scope.registry.get(&resolved_plugin.plugin_id))
             })
             .filter(|record| !record.is_tombstoned() && record.spec.enabled)
-            .map(|record| {
-                let manifest_ref = match record.metadata.kind {
-                    DynamicPluginKind::RustDynamic => manifest_ref_from_record(record)?,
-                    DynamicPluginKind::Worker => {
-                        record.source.manifest_ref.clone().ok_or_else(|| {
-                            CliError::Config(format!(
-                                "dynamic plugin '{}' has no manifest_ref in lifecycle state",
-                                record.metadata.id
-                            ))
-                        })?
-                    }
-                };
+            .filter_map(|record| match record.metadata.kind {
+                DynamicPluginKind::RustDynamic => Some(manifest_ref_from_record(record)),
+                DynamicPluginKind::Worker => record.source.manifest_ref.clone().map(Ok),
+            })
+            .map(|manifest_ref| {
+                let manifest_ref = manifest_ref?;
                 let manifest_path = Path::new(&manifest_ref);
                 let manifest_directory = manifest_path.parent().ok_or_else(|| {
                     CliError::Config(format!(

@@ -104,6 +104,71 @@ fn activation_snapshots_reject_a_parent_inside_another_active_plugin_directory()
 }
 
 #[test]
+fn activation_snapshots_reject_a_parent_inside_an_external_entrypoint_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let plugin_dir = temp.path().join("plugin");
+    let worker_dir = temp.path().join("worker-runtime");
+    std::fs::create_dir(&plugin_dir).unwrap();
+    std::fs::create_dir(&worker_dir).unwrap();
+    let worker = worker_dir.join("worker.sh");
+    std::fs::write(&worker, b"#!/bin/sh\nexit 0\n").unwrap();
+    let digest = Sha256::digest(std::fs::read(&worker).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let manifest_path = plugin_dir.join("relay-plugin.toml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r#"manifest_version = 1
+
+[plugin]
+id = "acme.external-entrypoint"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker"]
+
+[source]
+artifact = "../worker-runtime/worker.sh"
+
+[integrity]
+sha256 = "sha256:{digest}"
+
+[load]
+runtime = "command"
+entrypoint = "../worker-runtime/worker.sh"
+"#
+        ),
+    )
+    .unwrap();
+    let snapshots = worker_dir.join("snapshots");
+    let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(snapshots.as_os_str()))]);
+
+    let error = DynamicPluginActivationSnapshot::create(
+        manifest_path.to_string_lossy().as_ref(),
+        "acme.external-entrypoint",
+        DynamicPluginKind::Worker,
+        None,
+        &crate::plugins::policy::DynamicPluginHostPolicy::default(),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(
+        error.contains("must not be inside a directory copied into the activation snapshot"),
+        "{error}"
+    );
+}
+
+#[test]
 fn activation_snapshots_fall_back_to_the_system_temp_directory_for_an_empty_parent() {
     let _env = EnvScope::set(&[(ACTIVATION_SNAPSHOT_DIR_ENV, Some(OsStr::new("")))]);
 
