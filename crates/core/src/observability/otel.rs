@@ -1485,16 +1485,19 @@ impl OtelEventProcessor {
         event: &Event,
         protected_keys: &HashSet<String>,
     ) {
-        let issues = promote_event_metadata_attributes(
+        let mut issues = promote_event_metadata_attributes(
             attributes,
             event,
             &self.promote_metadata_prefixes,
             protected_keys,
         );
 
+        issues.sort_by(|left, right| left.key.cmp(&right.key));
         for issue in issues {
+            let diagnostic_code =
+                format!("otel.metadata_promotion_value_unsupported.{}", issue.key);
             let diagnostic_count = self.runtime_diagnostics.record(
-                "otel.metadata_promotion_value_unsupported",
+                diagnostic_code,
                 format!(
                     "OpenTelemetry metadata attribute {:?} was not promoted: {}",
                     issue.key, issue.reason

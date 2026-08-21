@@ -709,10 +709,78 @@ fn omits_scope_metadata_when_final_value_is_unsupported_across_trace_projections
 
         let diagnostics = runtime_diagnostics.snapshot();
         let diagnostic = diagnostics
-            .get("otel.metadata_promotion_value_unsupported")
+            .get("otel.metadata_promotion_value_unsupported.nv.source")
             .expect("unsupported final metadata diagnostic");
         assert_eq!(diagnostic.count, 1);
         assert!(diagnostic.message.contains("nv.source"));
+    }
+}
+
+#[test]
+fn reports_each_unsupported_metadata_key_with_a_deterministic_diagnostic_code() {
+    let (provider, exporter) = make_provider();
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    let mut processor =
+        OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+            provider,
+            "unsupported-metadata-promotion-keys-test".into(),
+            OpenTelemetryType::Full,
+            MarkProjection::default(),
+            default_mark_exclude_names(),
+            Vec::new(),
+            vec!["tenant.".to_string()],
+            runtime_diagnostics.clone(),
+        );
+    let uuid = Uuid::now_v7();
+    let unsupported_metadata = json!({
+        "tenant.plan": {"name": "enterprise"},
+        "tenant.flags": null,
+        "tenant.tags": [["nested"]],
+        "tenant.mixed": [1, "string"],
+    });
+
+    processor.process(&make_start_event_with_metadata(
+        uuid,
+        None,
+        "unsupported-metadata-promotion-keys-scope",
+        unsupported_metadata.clone(),
+    ));
+    processor.process(&make_end_event_with_metadata(
+        uuid,
+        None,
+        "unsupported-metadata-promotion-keys-scope",
+        ScopeType::Agent,
+        unsupported_metadata,
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span_attributes = attr_map(&spans[0].attributes);
+    for key in ["tenant.flags", "tenant.mixed", "tenant.plan", "tenant.tags"] {
+        assert!(!span_attributes.contains_key(key));
+    }
+
+    let diagnostics = runtime_diagnostics.snapshot();
+    let expected_keys = ["tenant.flags", "tenant.mixed", "tenant.plan", "tenant.tags"];
+    assert_eq!(
+        diagnostics
+            .entries()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        expected_keys
+            .iter()
+            .map(|key| format!("otel.metadata_promotion_value_unsupported.{key}"))
+            .collect::<Vec<_>>()
+    );
+    for key in expected_keys {
+        let code = format!("otel.metadata_promotion_value_unsupported.{key}");
+        let diagnostic = diagnostics
+            .get(&code)
+            .expect("metadata-key-specific promotion diagnostic");
+        assert_eq!(diagnostic.count, 2);
+        assert!(diagnostic.message.contains(key));
     }
 }
 
