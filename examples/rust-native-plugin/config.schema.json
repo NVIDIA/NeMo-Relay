@@ -2,10 +2,10 @@
   "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Rust Native Documentation Plugin",
-  "description": "Configures the observation, request policy, execution, runtime, and SDK executor groups demonstrated by the native example.",
+  "description": "Configures the observation, request policy, execution, runtime, conditional registration control, and SDK executor groups demonstrated by the native example.",
   "type": "object",
   "additionalProperties": false,
-  "x-nemo-relay-order": ["tag", "observe", "requests", "execution", "runtime", "executor"],
+  "x-nemo-relay-order": ["tag", "observe", "requests", "execution", "runtime", "registration_control", "executor"],
   "properties": {
     "tag": {
       "description": "Non-empty label attached to plugin-created metadata and runtime events.",
@@ -119,6 +119,37 @@
           "description": "Creates, binds, and drops an isolated scope stack during the tool request intercept.",
           "type": "boolean",
           "default": true
+        }
+      }
+    },
+    "registration_control": {
+      "description": "Optionally suppresses a matching global runtime registration for this component's activation lifetime.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Registers the activation-owned conditional middleware guardrail.",
+          "type": "boolean",
+          "default": false
+        },
+        "kinds": {
+          "description": "Non-empty set of runtime registration kinds eligible for suppression.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["subscriber", "event_metadata_injector", "mark_sanitize_guardrail", "scope_sanitize_start_guardrail", "scope_sanitize_end_guardrail", "tool_sanitize_request_guardrail", "tool_sanitize_response_guardrail", "tool_conditional_execution_guardrail", "tool_request_intercept", "tool_execution_intercept", "llm_sanitize_request_guardrail", "llm_sanitize_response_guardrail", "llm_conditional_execution_guardrail", "llm_request_intercept", "llm_execution_intercept", "llm_stream_execution_intercept"] },
+          "default": ["subscriber"]
+        },
+        "registration_name": {
+          "description": "Effective name of the global registration to suppress.",
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation-controlled-subscriber"
+        },
+        "reason": {
+          "description": "Non-empty constant reason returned while the registration is suppressed.",
+          "type": "string",
+          "minLength": 1,
+          "default": "disabled by documentation plugin"
         }
       }
     },

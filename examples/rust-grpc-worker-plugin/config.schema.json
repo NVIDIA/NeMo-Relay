@@ -119,6 +119,30 @@
           "default": true
         }
       }
+    },
+    "registration_control": {
+      "description": "Optionally suppresses a matching global runtime registration for this component's activation lifetime.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "kinds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["subscriber", "event_metadata_injector", "mark_sanitize_guardrail", "scope_sanitize_start_guardrail", "scope_sanitize_end_guardrail", "tool_sanitize_request_guardrail", "tool_sanitize_response_guardrail", "tool_conditional_execution_guardrail", "tool_request_intercept", "tool_execution_intercept", "llm_sanitize_request_guardrail", "llm_sanitize_response_guardrail", "llm_conditional_execution_guardrail", "llm_request_intercept", "llm_execution_intercept", "llm_stream_execution_intercept"] },
+          "default": ["subscriber"]
+        },
+        "registration_name": {
+          "type": "string",
+          "minLength": 1,
+          "default": "documentation-controlled-subscriber"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "default": "disabled by documentation plugin"
+        }
+      }
     }
   }
 }

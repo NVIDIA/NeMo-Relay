@@ -150,6 +150,9 @@ It connects plugin configuration to the active runtime.
 Depending on the component, a plugin can register middleware, subscribers, and
 runtime helpers. These are the same execution surfaces available elsewhere in
 Relay, but the component context gives them shared configuration and ownership.
+This includes activation-owned
+[conditional middleware guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+that temporarily control the eligibility of an existing global registration.
 
 This is what makes plugins a packaging mechanism rather than a separate runtime
 model. Plugins do not replace scopes, middleware, or subscribers. They install

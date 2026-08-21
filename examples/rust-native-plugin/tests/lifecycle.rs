@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 
 use nemo_relay::api::event::Event;
 use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
@@ -22,6 +22,7 @@ use tokio::sync::Mutex as AsyncMutex;
 static TEST_LOCK: AsyncMutex<()> = AsyncMutex::const_new(());
 const PLUGIN_ID: &str = "examples.rust_native_policy";
 const SUBSCRIBER: &str = "rust_native_example_lifecycle_events";
+const CONTROLLED_SUBSCRIBER: &str = "documentation-controlled-subscriber";
 
 #[tokio::test]
 async fn built_cdylib_validates_activates_runs_and_unloads() {
@@ -41,6 +42,15 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
         }),
     )
     .expect("test subscriber should register");
+    let controlled_events = Arc::new(AtomicUsize::new(0));
+    let captured_controlled_events = Arc::clone(&controlled_events);
+    register_subscriber(
+        CONTROLLED_SUBSCRIBER,
+        Arc::new(move |_| {
+            captured_controlled_events.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .expect("controlled subscriber should register");
 
     let config = documented_config();
     let (activation, report) = PluginHostActivation::activate(
@@ -56,6 +66,8 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     .await
     .expect("the materialized native manifest should activate");
     assert!(report.diagnostics.is_empty(), "{report:?}");
+    flush_subscribers().expect("activation events should flush");
+    let controlled_baseline = controlled_events.load(Ordering::SeqCst);
 
     let result = tool_call_execute(
         ToolCallExecuteParams::builder()
@@ -78,6 +90,11 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     assert_eq!(result.annotation, Some(json!({"source": "application"})));
 
     flush_subscribers().expect("native events should flush");
+    assert_eq!(
+        controlled_events.load(Ordering::SeqCst),
+        controlled_baseline,
+        "the activation-owned gate should suppress future subscriber snapshots"
+    );
     assert!(
         events
             .lock()
@@ -95,6 +112,19 @@ async fn built_cdylib_validates_activates_runs_and_unloads() {
     activation
         .clear()
         .expect("callbacks should clear before the library unloads");
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("restored_tool")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .build(),
+    )
+    .await
+    .expect("managed execution should continue after plugin clear");
+    flush_subscribers().expect("restored subscriber events should flush");
+    assert!(controlled_events.load(Ordering::SeqCst) > controlled_baseline);
+    deregister_subscriber(CONTROLLED_SUBSCRIBER)
+        .expect("controlled subscriber should deregister");
     deregister_subscriber(SUBSCRIBER).expect("test subscriber should deregister");
     assert!(!list_plugin_kinds().contains(&PLUGIN_ID.to_owned()));
 }
@@ -115,6 +145,12 @@ fn documented_config() -> Map<String, serde_json::Value> {
         },
         "execution": { "enabled": false, "priority": 30, "emit_pending_marks": true },
         "runtime": { "emit_marks": true, "emit_isolated_scope": true },
+        "registration_control": {
+            "enabled": true,
+            "kinds": ["subscriber"],
+            "registration_name": "documentation-controlled-subscriber",
+            "reason": "disabled by documentation plugin"
+        },
         "executor": { "worker_threads": 2 }
     })
     .as_object()

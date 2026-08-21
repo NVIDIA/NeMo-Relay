@@ -56,6 +56,15 @@ impl NativePlugin for ExampleNativePlugin {
         let config = ExampleConfig::parse(plugin_config)?;
         let plugin_runtime = context.runtime();
 
+        if config.registration_control.enabled {
+            context.register_conditional_middleware_guardrail(
+                "documentation_registration_control",
+                &config.registration_control.kinds.iter().copied().collect(),
+                &config.registration_control.registration_name,
+                &config.registration_control.reason,
+            )?;
+        }
+
         observe::register(context, &config, &plugin_runtime)?;
         requests::register(context, &config)?;
         execution::register(context, &config, &plugin_runtime)?;

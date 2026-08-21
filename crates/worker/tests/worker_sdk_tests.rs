@@ -336,6 +336,38 @@ async fn worker_service_rejects_duplicate_registration_names_on_one_surface() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn worker_service_validates_initial_conditional_middleware_guardrails() {
+    for (mode, expected) in [
+        (InvalidInitialGate::EmptyKinds, "has no registration kinds"),
+        (InvalidInitialGate::EmptyTarget, "names must not be empty"),
+        (
+            InvalidInitialGate::Duplicate,
+            "duplicate conditional middleware guardrail",
+        ),
+    ] {
+        let (handle, mut client) = spawn_worker(
+            Arc::new(InvalidInitialGatePlugin(mode)),
+            "http://127.0.0.1:9".into(),
+        )
+        .await;
+        let response = client
+            .register(Request::new(RegisterRequest {
+                activation_id: ACTIVATION_ID.into(),
+                plugin_id: PLUGIN_ID.into(),
+                auth_token: AUTH_TOKEN.into(),
+                config: Some(json_env(json!({}))),
+            }))
+            .await
+            .expect("invalid initial gate should return protocol data")
+            .into_inner();
+        assert!(response.registrations.is_empty());
+        assert!(response.conditional_middleware_guardrails.is_empty());
+        assert!(response.error.unwrap().message.contains(expected));
+        handle.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn worker_service_cancels_unary_and_stream_invocations_by_id() {
     let timeout = WORKER_TEST_TIMEOUT;
     let plugin = Arc::new(CancellationPlugin::default());
@@ -1759,6 +1791,50 @@ impl WorkerPlugin for DuplicateEventSanitizerPlugin {
     }
 }
 
+#[derive(Clone, Copy)]
+enum InvalidInitialGate {
+    EmptyKinds,
+    EmptyTarget,
+    Duplicate,
+}
+
+struct InvalidInitialGatePlugin(InvalidInitialGate);
+
+impl WorkerPlugin for InvalidInitialGatePlugin {
+    fn plugin_id(&self) -> &str {
+        PLUGIN_ID
+    }
+
+    fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
+        let kinds = match self.0 {
+            InvalidInitialGate::EmptyKinds => BTreeSet::new(),
+            InvalidInitialGate::EmptyTarget | InvalidInitialGate::Duplicate => {
+                BTreeSet::from([RuntimeRegistrationKind::Subscriber])
+            }
+        };
+        let target = if matches!(self.0, InvalidInitialGate::EmptyTarget) {
+            ""
+        } else {
+            "target-subscriber"
+        };
+        ctx.register_conditional_middleware_guardrail(
+            "initial-gate",
+            kinds.clone(),
+            target,
+            "disabled",
+        );
+        if matches!(self.0, InvalidInitialGate::Duplicate) {
+            ctx.register_conditional_middleware_guardrail(
+                "initial-gate",
+                kinds,
+                target,
+                "also disabled",
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct CancellationPlugin {
     unary_started: Arc<tokio::sync::Notify>,
@@ -1890,6 +1966,12 @@ impl WorkerPlugin for SurfacePlugin {
 
     fn register(&self, ctx: &mut PluginContext, _config: &Json) -> Result<()> {
         let runtime = ctx.runtime().expect("worker service provides runtime");
+        ctx.register_conditional_middleware_guardrail(
+            "initial-gate",
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "missing-target",
+            "initial gate",
+        );
         let events = self.events.clone();
         ctx.register_subscriber("subscriber", move |event| {
             events

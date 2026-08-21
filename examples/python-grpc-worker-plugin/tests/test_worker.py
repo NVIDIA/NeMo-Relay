@@ -107,7 +107,14 @@ def test_schema_declares_only_supported_groups() -> None:
     schema = json.loads((EXAMPLE_ROOT / manifest["config_schema"]["path"]).read_text(encoding="utf-8"))
 
     assert schema["additionalProperties"] is False
-    assert set(schema["properties"]) == {"tag", "observe", "requests", "execution", "runtime"}
+    assert set(schema["properties"]) == {
+        "tag",
+        "observe",
+        "requests",
+        "execution",
+        "runtime",
+        "registration_control",
+    }
 
 
 def test_project_builds_an_importable_wheel(tmp_path: Path) -> None:
@@ -139,6 +146,7 @@ def test_project_builds_an_importable_wheel(tmp_path: Path) -> None:
 
 def test_default_configuration_is_valid(example: Any) -> None:
     assert example.ExamplePythonWorker().validate(example.DEFAULT_CONFIG) == []
+    assert example.DEFAULT_CONFIG["registration_control"]["enabled"] is False
 
 
 def test_non_object_configuration_is_rejected(example: Any) -> None:
@@ -157,6 +165,20 @@ def test_wrong_type_is_rejected(example: Any) -> None:
     diagnostics = example.ExamplePythonWorker().validate({"requests": {"priority": "high"}})
 
     assert any(item.code == "examples.python_grpc_worker.invalid_type" for item in diagnostics)
+
+
+@pytest.mark.parametrize(
+    ("config", "field"),
+    [
+        ({"registration_control": {"kinds": []}}, "registration_control.kinds"),
+        ({"registration_control": {"registration_name": ""}}, "registration_control.registration_name"),
+        ({"registration_control": {"reason": ""}}, "registration_control.reason"),
+    ],
+)
+def test_invalid_registration_control_is_rejected(example: Any, config: dict[str, Any], field: str) -> None:
+    diagnostics = example.ExamplePythonWorker().validate(config)
+
+    assert any(item.code == "examples.python_grpc_worker.invalid_type" and item.field == field for item in diagnostics)
 
 
 def test_unknown_field_is_rejected(example: Any) -> None:
@@ -210,6 +232,21 @@ def test_register_installs_all_protocol_surfaces(example: Any) -> None:
     }
 
     assert all(getattr(context, method).call_count >= 1 for method in registration_methods)
+
+
+def test_enabled_registration_control_registers_expected_gate(example: Any) -> None:
+    context, _runtime = configured_context()
+    config = deepcopy(example.DEFAULT_CONFIG)
+    config["registration_control"]["enabled"] = True
+
+    example.ExamplePythonWorker().register(context, config)
+
+    context.register_conditional_middleware_guardrail.assert_called_once_with(
+        "documentation_registration_control",
+        {example.RuntimeRegistrationKind.SUBSCRIBER},
+        "documentation-controlled-subscriber",
+        "disabled by documentation plugin",
+    )
 
 
 async def test_event_metadata_injector_adds_transport_metadata(example: Any) -> None:

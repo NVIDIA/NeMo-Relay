@@ -19,6 +19,7 @@ from nemo_relay_plugin import (
     LlmRequestInterceptOutcome,
     PendingMarkSpec,
     PluginContext,
+    RuntimeRegistrationKind,
     ScopeType,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
@@ -41,6 +42,12 @@ DEFAULT_CONFIG: dict[str, Json] = {
     },
     "execution": {"enabled": True, "priority": 30, "emit_pending_marks": True},
     "runtime": {"emit_marks": True, "emit_isolated_scope": True},
+    "registration_control": {
+        "enabled": False,
+        "kinds": [RuntimeRegistrationKind.SUBSCRIBER.value],
+        "registration_name": "documentation-controlled-subscriber",
+        "reason": "disabled by documentation plugin",
+    },
 }
 
 GROUP_FIELDS = {
@@ -57,6 +64,7 @@ GROUP_FIELDS = {
     },
     "execution": {"enabled", "priority", "emit_pending_marks"},
     "runtime": {"emit_marks", "emit_isolated_scope"},
+    "registration_control": {"enabled", "kinds", "registration_name", "reason"},
 }
 
 
@@ -82,6 +90,15 @@ class ExamplePythonWorker(WorkerPlugin):
         requests = cast(dict[str, Json], settings["requests"])
         execution = cast(dict[str, Json], settings["execution"])
         runtime_settings = cast(dict[str, Json], settings["runtime"])
+        registration_control = cast(dict[str, Json], settings["registration_control"])
+
+        if registration_control["enabled"]:
+            ctx.register_conditional_middleware_guardrail(
+                "documentation_registration_control",
+                {RuntimeRegistrationKind(kind) for kind in cast(list[str], registration_control["kinds"])},
+                cast(str, registration_control["registration_name"]),
+                cast(str, registration_control["reason"]),
+            )
 
         if observe["enabled"]:
             self._register_observation(ctx, tag, observe)
@@ -331,6 +348,7 @@ def validate_config(config: Json) -> list[ConfigDiagnostic]:
         "execution.emit_pending_marks",
         "runtime.emit_marks",
         "runtime.emit_isolated_scope",
+        "registration_control.enabled",
     ):
         if not isinstance(_path(settings, path), bool):
             diagnostics.append(_diagnostic(DiagnosticLevel.ERROR, "invalid_type", path, f"{path} must be a boolean"))
@@ -344,7 +362,27 @@ def validate_config(config: Json) -> list[ConfigDiagnostic]:
             diagnostics.append(
                 _diagnostic(DiagnosticLevel.ERROR, "invalid_type", path, f"{path} must be an array of strings")
             )
+    kinds = _path(settings, "registration_control.kinds")
+    if (
+        not isinstance(kinds, list)
+        or not kinds
+        or not all(isinstance(item, str) and item in {kind.value for kind in RuntimeRegistrationKind} for item in kinds)
+    ):
+        diagnostics.append(
+            _diagnostic(
+                DiagnosticLevel.ERROR,
+                "invalid_type",
+                "registration_control.kinds",
+                "registration_control.kinds must be a non-empty array of supported registration kinds",
+            )
+        )
     for path in ("requests.header_name", "requests.header_value"):
+        value = _path(settings, path)
+        if not isinstance(value, str) or not value:
+            diagnostics.append(
+                _diagnostic(DiagnosticLevel.ERROR, "invalid_type", path, f"{path} must be a non-empty string")
+            )
+    for path in ("registration_control.registration_name", "registration_control.reason"):
         value = _path(settings, path)
         if not isinstance(value, str) or not value:
             diagnostics.append(

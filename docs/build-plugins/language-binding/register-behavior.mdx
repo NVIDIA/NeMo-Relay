@@ -12,6 +12,67 @@ example installs only the feature groups whose `enabled` values are true and rea
 configuration. It never calls a process-global middleware registrar from inside the
 plugin.
 
+An optional `registration_control` group in each complete example demonstrates an
+activation-owned conditional middleware guardrail. It is disabled by default. When
+enabled, the context qualifies the gate name and removes the gate automatically during
+rollback or teardown. Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+before selecting and storing the target name.
+
+## Register an Activation-Owned Gate
+
+The following examples register the same constant-result gate after configuration has
+supplied a discovered effective target name:
+
+<Tabs>
+<Tab title="Python" language="python">
+```python
+from nemo_relay.runtime_registrations import RuntimeRegistrationKind
+
+control = settings["registration_control"]
+if control["enabled"]:
+    context.register_conditional_middleware_guardrail(
+        "documentation-registration-control",
+        {RuntimeRegistrationKind(kind) for kind in control["kinds"]},
+        control["registration_name"],
+        lambda _kinds, _name: control["reason"],
+    )
+```
+</Tab>
+
+<Tab title="Node.js" language="node">
+```js
+const control = settings.registration_control;
+if (control.enabled) {
+  context.registerConditionalMiddlewareGuardrail(
+    'documentation-registration-control',
+    control.kinds,
+    control.registration_name,
+    () => control.reason,
+  );
+}
+```
+</Tab>
+
+<Tab title="Rust" language="rust">
+```rust
+if config.registration_control.enabled {
+    let reason = config.registration_control.reason.clone();
+    ctx.register_conditional_middleware_guardrail(
+        "documentation-registration-control",
+        config.registration_control.kinds.iter().copied().collect(),
+        &config.registration_control.registration_name,
+        Arc::new(move |_kinds, _name| Some(reason.clone())),
+    )?;
+}
+```
+</Tab>
+</Tabs>
+
+The component-local gate name does not need a plugin prefix. Relay qualifies the name
+and records its rollback operation. The target name is different: it must already be the
+effective name that discovery returned for the current runtime activation.
+
 ## Register Event Metadata Injectors
 
 An event metadata injector receives an event snapshot and returns flat metadata

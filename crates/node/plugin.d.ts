@@ -3,7 +3,7 @@
 
 /// <reference lib="esnext.disposable" />
 
-import type { EventSanitizeFields, Json, ToolExecutionResult } from './index';
+import type { EventSanitizeFields, Json, RuntimeRegistrationKind, ToolExecutionResult } from './index';
 import type { LlmCodec, LlmResponseCodec } from './typed';
 
 /** Codec identity available while a managed LLM event is sanitized. */
@@ -218,6 +218,13 @@ export type EventMetadata = Record<string, EventMetadataValue>;
 
 /** Component-scoped registration context passed to plugin handlers. */
 export interface PluginContext {
+  /** Register an activation-owned eligibility gate for a global runtime registration. */
+  registerConditionalMiddlewareGuardrail(
+    name: string,
+    kinds: RuntimeRegistrationKind[],
+    registrationName: string,
+    guardrail: (kinds: RuntimeRegistrationKind[], registrationName: string) => string | null,
+  ): void;
   /**
    * Register an event subscriber for this component. Callback failures are isolated and reported
    * through the Node binding's callback-error channel; flushSubscribers waits for returned promises.

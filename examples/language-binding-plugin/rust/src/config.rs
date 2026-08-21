@@ -3,6 +3,8 @@
 
 use std::collections::HashSet;
 
+use nemo_relay::api::registry::RuntimeRegistrationKind;
+
 use nemo_relay::plugin::{ConfigDiagnostic, ConfigPolicy, DiagnosticLevel, UnsupportedBehavior};
 use serde::Deserialize;
 use serde_json::{Map, Value as Json};
@@ -15,6 +17,7 @@ pub(crate) struct Settings {
     pub requests: Requests,
     pub execution: Execution,
     pub runtime: Runtime,
+    pub registration_control: RegistrationControl,
 }
 
 #[derive(Clone, Deserialize)]
@@ -52,6 +55,15 @@ pub(crate) struct Runtime {
     pub emit_isolated_scope: bool,
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(default)]
+pub(crate) struct RegistrationControl {
+    pub enabled: bool,
+    pub kinds: Vec<RuntimeRegistrationKind>,
+    pub registration_name: String,
+    pub reason: String,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -60,6 +72,7 @@ impl Default for Settings {
             requests: Requests::default(),
             execution: Execution::default(),
             runtime: Runtime::default(),
+            registration_control: RegistrationControl::default(),
         }
     }
 }
@@ -103,6 +116,17 @@ impl Default for Runtime {
         Self {
             emit_marks: true,
             emit_isolated_scope: true,
+        }
+    }
+}
+
+impl Default for RegistrationControl {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            kinds: vec![RuntimeRegistrationKind::Subscriber],
+            registration_name: "documentation-controlled-subscriber".into(),
+            reason: "disabled by documentation plugin".into(),
         }
     }
 }
@@ -158,6 +182,30 @@ pub(crate) fn validate(config: &Map<String, Json>, policy: &ConfigPolicy) -> Vec
             "requests.header_value must be a non-empty string",
         ));
     }
+    if settings.registration_control.kinds.is_empty() {
+        diagnostics.push(diagnostic(
+            DiagnosticLevel::Error,
+            "invalid_registration_control",
+            Some("registration_control.kinds"),
+            "registration_control.kinds must not be empty",
+        ));
+    }
+    for (field, value) in [
+        (
+            "registration_control.registration_name",
+            &settings.registration_control.registration_name,
+        ),
+        ("registration_control.reason", &settings.registration_control.reason),
+    ] {
+        if value.is_empty() {
+            diagnostics.push(diagnostic(
+                DiagnosticLevel::Error,
+                "invalid_registration_control",
+                Some(field),
+                format!("{field} must not be empty"),
+            ));
+        }
+    }
     diagnostics
 }
 
@@ -171,7 +219,14 @@ fn report_unknown_fields(
         UnsupportedBehavior::Warn => DiagnosticLevel::Warning,
         UnsupportedBehavior::Error => DiagnosticLevel::Error,
     };
-    const TOP_LEVEL: &[&str] = &["tag", "observe", "requests", "execution", "runtime"];
+    const TOP_LEVEL: &[&str] = &[
+        "tag",
+        "observe",
+        "requests",
+        "execution",
+        "runtime",
+        "registration_control",
+    ];
     const OBSERVE: &[&str] = &["enabled", "redact_keys"];
     const REQUESTS: &[&str] = &[
         "enabled",
@@ -185,12 +240,14 @@ fn report_unknown_fields(
     ];
     const EXECUTION: &[&str] = &["enabled", "priority", "emit_pending_marks"];
     const RUNTIME: &[&str] = &["emit_marks", "emit_isolated_scope"];
+    const REGISTRATION_CONTROL: &[&str] = &["enabled", "kinds", "registration_name", "reason"];
     report_unknown(config, "", TOP_LEVEL, level, diagnostics);
     for (group, allowed) in [
         ("observe", OBSERVE),
         ("requests", REQUESTS),
         ("execution", EXECUTION),
         ("runtime", RUNTIME),
+        ("registration_control", REGISTRATION_CONTROL),
     ] {
         if let Some(object) = config.get(group).and_then(Json::as_object) {
             report_unknown(object, group, allowed, level, diagnostics);

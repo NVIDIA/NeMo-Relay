@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use nemo_relay_worker::{ConfigDiagnostic, DiagnosticLevel, Json};
+use nemo_relay_worker::{ConfigDiagnostic, DiagnosticLevel, Json, RuntimeRegistrationKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
 
@@ -15,6 +15,7 @@ pub(crate) struct ExampleConfig {
     pub requests: RequestsConfig,
     pub execution: ExecutionConfig,
     pub runtime: RuntimeConfig,
+    pub registration_control: RegistrationControlConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -52,6 +53,15 @@ pub(crate) struct RuntimeConfig {
     pub emit_isolated_scope: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub(crate) struct RegistrationControlConfig {
+    pub enabled: bool,
+    pub kinds: Vec<RuntimeRegistrationKind>,
+    pub registration_name: String,
+    pub reason: String,
+}
+
 impl Default for ExampleConfig {
     fn default() -> Self {
         Self {
@@ -60,6 +70,7 @@ impl Default for ExampleConfig {
             requests: RequestsConfig::default(),
             execution: ExecutionConfig::default(),
             runtime: RuntimeConfig::default(),
+            registration_control: RegistrationControlConfig::default(),
         }
     }
 }
@@ -103,6 +114,17 @@ impl Default for RuntimeConfig {
         Self {
             emit_marks: true,
             emit_isolated_scope: true,
+        }
+    }
+}
+
+impl Default for RegistrationControlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            kinds: vec![RuntimeRegistrationKind::Subscriber],
+            registration_name: "documentation-controlled-subscriber".into(),
+            reason: "disabled by documentation plugin".into(),
         }
     }
 }
@@ -160,6 +182,30 @@ pub(crate) fn validate(config: &Json) -> Vec<ConfigDiagnostic> {
             "requests.header_value must not be empty",
         ));
     }
+    if parsed.registration_control.kinds.is_empty() {
+        diagnostics.push(diagnostic(
+            DiagnosticLevel::Error,
+            "invalid_registration_control",
+            Some("registration_control.kinds"),
+            "registration_control.kinds must not be empty",
+        ));
+    }
+    for (field, value) in [
+        (
+            "registration_control.registration_name",
+            &parsed.registration_control.registration_name,
+        ),
+        ("registration_control.reason", &parsed.registration_control.reason),
+    ] {
+        if value.is_empty() {
+            diagnostics.push(diagnostic(
+                DiagnosticLevel::Error,
+                "invalid_registration_control",
+                Some(field),
+                format!("{field} must not be empty"),
+            ));
+        }
+    }
     diagnostics
 }
 
@@ -167,7 +213,14 @@ fn validate_unknown_fields(config: &Json, diagnostics: &mut Vec<ConfigDiagnostic
     let Some(config) = config.as_object() else {
         return;
     };
-    const TOP_LEVEL: &[&str] = &["tag", "observe", "requests", "execution", "runtime"];
+    const TOP_LEVEL: &[&str] = &[
+        "tag",
+        "observe",
+        "requests",
+        "execution",
+        "runtime",
+        "registration_control",
+    ];
     const OBSERVE: &[&str] = &["enabled", "redact_keys"];
     const REQUESTS: &[&str] = &[
         "enabled",
@@ -181,6 +234,7 @@ fn validate_unknown_fields(config: &Json, diagnostics: &mut Vec<ConfigDiagnostic
     ];
     const EXECUTION: &[&str] = &["enabled", "priority", "emit_pending_marks"];
     const RUNTIME: &[&str] = &["emit_marks", "emit_isolated_scope"];
+    const REGISTRATION_CONTROL: &[&str] = &["enabled", "kinds", "registration_name", "reason"];
 
     report_unknown(config, "", TOP_LEVEL, diagnostics);
     for (field, allowed) in [
@@ -188,6 +242,7 @@ fn validate_unknown_fields(config: &Json, diagnostics: &mut Vec<ConfigDiagnostic
         ("requests", REQUESTS),
         ("execution", EXECUTION),
         ("runtime", RUNTIME),
+        ("registration_control", REGISTRATION_CONTROL),
     ] {
         if let Some(object) = config.get(field).and_then(Json::as_object) {
             report_unknown(object, field, allowed, diagnostics);

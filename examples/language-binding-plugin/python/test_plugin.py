@@ -14,7 +14,8 @@ import pytest_asyncio
 from main import DocumentationPlugin, component
 
 import nemo_relay
-from nemo_relay import llm, plugin, subscribers, tools
+from nemo_relay import llm, plugin, runtime_registrations, scope, subscribers, tools
+from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 
 
 @dataclass
@@ -59,6 +60,13 @@ def test_validation_accepts_supported_mode() -> None:
     assert DocumentationPlugin().validate({"requests": {"mode": "enforce"}}) == []
 
 
+def test_default_registration_control_is_disabled_and_valid() -> None:
+    configuration = component("enforce").components[0].config
+
+    assert configuration["registration_control"]["enabled"] is False
+    assert DocumentationPlugin().validate(configuration) == []
+
+
 def test_validation_rejects_unsupported_mode() -> None:
     diagnostics = DocumentationPlugin().validate({"requests": {"mode": "invalid"}})
 
@@ -87,6 +95,17 @@ def test_registration_rejects_a_duplicate_kind_and_missing_deregistration_is_fal
         ({"tag": ""}, "tag", "documentation-plugin.invalid_tag"),
         ({"requests": {"header_name": ""}}, "requests.header_name", "documentation-plugin.invalid_header"),
         ({"requests": {"header_value": ""}}, "requests.header_value", "documentation-plugin.invalid_header"),
+        ({"registration_control": {"kinds": []}}, "registration_control.kinds", "documentation-plugin.invalid_config"),
+        (
+            {"registration_control": {"registration_name": ""}},
+            "registration_control.registration_name",
+            "documentation-plugin.invalid_config",
+        ),
+        (
+            {"registration_control": {"reason": ""}},
+            "registration_control.reason",
+            "documentation-plugin.invalid_config",
+        ),
     ],
 )
 def test_validation_rejects_empty_required_strings(config: dict[str, Any], field: str, code: str) -> None:
@@ -133,6 +152,39 @@ def test_registers_each_safe_plugin_surface() -> None:
         "register_llm_execution_intercept",
         "register_llm_stream_execution_intercept",
     }
+
+    configuration = component("enforce").components[0].config
+    configuration["registration_control"]["enabled"] = True
+    context = RecordingContext()
+    DocumentationPlugin().register(configuration, context)  # type: ignore[arg-type]
+    assert "register_conditional_middleware_guardrail" in context.registrations
+
+
+async def test_registration_control_is_owned_by_activation(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = "documentation-controlled-subscriber"
+    observed: list[str] = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    subscribers.register(target, lambda event: observed.append(event.name))
+    configuration = component("enforce")
+    configuration.components[0].config["registration_control"]["enabled"] = True
+    plugin.register("documentation-plugin", DocumentationPlugin())
+    try:
+        before = runtime_registrations.list_runtime_registrations({RuntimeRegistrationKind.SUBSCRIBER})
+        assert any(item.effective_name == target for item in before)
+        await plugin.initialize(configuration)
+        baseline = len(observed)
+        scope.event("registration-control-active")
+        await subscribers.flush_async()
+        assert len(observed) == baseline
+        await plugin.clear_async()
+        scope.event("registration-control-cleared")
+        await subscribers.flush_async()
+        assert observed[-1] == "registration-control-cleared"
+    finally:
+        await plugin.clear_async()
+        plugin.deregister("documentation-plugin")
+        subscribers.deregister(target)
 
 
 async def test_activation_reports_no_diagnostics(active_plugin: ActivatedExample) -> None:

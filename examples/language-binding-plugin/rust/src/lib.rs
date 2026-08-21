@@ -3,6 +3,7 @@
 
 mod config;
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -62,6 +63,15 @@ impl Plugin for DocumentationPlugin {
         Box::pin(async move {
             let settings =
                 config::parse(&config).map_err(nemo_relay::plugin::PluginError::InvalidConfig)?;
+            if settings.registration_control.enabled {
+                let reason = settings.registration_control.reason.clone();
+                context.register_conditional_middleware_guardrail(
+                    "registration-control",
+                    settings.registration_control.kinds.iter().copied().collect::<BTreeSet<_>>(),
+                    &settings.registration_control.registration_name,
+                    Arc::new(move |_, _| Some(reason.clone())),
+                )?;
+            }
             if settings.observe.enabled {
                 context.register_subscriber(
                     "events",
@@ -320,7 +330,13 @@ pub fn config_with_enabled(mode: &str, enabled: bool) -> PluginConfig {
             "break_chain": false
         },
         "execution": { "enabled": true, "priority": 30, "emit_pending_marks": true },
-        "runtime": { "emit_marks": true, "emit_isolated_scope": true }
+        "runtime": { "emit_marks": true, "emit_isolated_scope": true },
+        "registration_control": {
+            "enabled": false,
+            "kinds": ["subscriber"],
+            "registration_name": "documentation-controlled-subscriber",
+            "reason": "disabled by documentation plugin"
+        }
     })
     .as_object()
     .expect("config object")

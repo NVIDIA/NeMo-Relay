@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 
 use futures::{StreamExt, stream};
 use nemo_relay::api::llm::{
@@ -108,6 +108,21 @@ fn validation_reports_each_empty_required_string_at_its_field() {
             "documentation-plugin.invalid_header",
             "requests.header_value",
         ),
+        (
+            json!({ "registration_control": { "kinds": [] } }),
+            "documentation-plugin.invalid_registration_control",
+            "registration_control.kinds",
+        ),
+        (
+            json!({ "registration_control": { "registration_name": "" } }),
+            "documentation-plugin.invalid_registration_control",
+            "registration_control.registration_name",
+        ),
+        (
+            json!({ "registration_control": { "reason": "" } }),
+            "documentation-plugin.invalid_registration_control",
+            "registration_control.reason",
+        ),
     ] {
         let diagnostics = DocumentationPlugin.validate(&configuration.as_object().unwrap().clone());
         assert!(diagnostics.iter().any(|diagnostic| {
@@ -149,11 +164,12 @@ fn implementation_registers_each_safe_plugin_surface() {
             "register_llm_request_intercept",
             "register_llm_execution_intercept",
             "register_llm_stream_execution_intercept",
+            "register_conditional_middleware_guardrail",
         ]
         .iter()
         .filter(|method| source.contains(**method))
         .count(),
-        15
+        16
     );
 }
 
@@ -182,6 +198,52 @@ async fn activation_reports_no_diagnostics() {
     let active = activate().await;
 
     assert!(active.report.diagnostics.is_empty());
+}
+
+#[tokio::test]
+async fn registration_control_is_owned_by_activation() {
+    const TARGET: &str = "documentation-controlled-subscriber";
+    let observed = Arc::new(AtomicUsize::new(0));
+    let captured = Arc::clone(&observed);
+    nemo_relay::api::subscriber::register_subscriber(
+        TARGET,
+        Arc::new(move |_| {
+            captured.fetch_add(1, Ordering::SeqCst);
+        }),
+    )
+    .expect("controlled subscriber should register");
+    let mut configuration = config("enforce");
+    configuration.components[0].config["registration_control"]["enabled"] = json!(true);
+
+    let active = activate_with(configuration).await;
+    flush_subscribers().expect("activation events should flush");
+    let baseline = observed.load(Ordering::SeqCst);
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("controlled-tool")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .build(),
+    )
+    .await
+    .expect("managed call should complete");
+    flush_subscribers().expect("active events should flush");
+    assert_eq!(observed.load(Ordering::SeqCst), baseline);
+
+    drop(active);
+    tool_call_execute(
+        ToolCallExecuteParams::builder()
+            .name("restored-tool")
+            .args(json!({}))
+            .func(Arc::new(|args| Box::pin(async move { Ok(ToolExecutionResult::new(args)) })))
+            .build(),
+    )
+    .await
+    .expect("managed call should complete after clear");
+    flush_subscribers().expect("restored events should flush");
+    assert!(observed.load(Ordering::SeqCst) > baseline);
+    nemo_relay::api::subscriber::deregister_subscriber(TARGET)
+        .expect("controlled subscriber should deregister");
 }
 
 #[tokio::test]

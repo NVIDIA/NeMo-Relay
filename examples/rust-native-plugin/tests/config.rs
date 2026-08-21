@@ -25,6 +25,12 @@ fn shared_configuration_is_valid() {
         },
         "execution": { "enabled": true, "priority": 30, "emit_pending_marks": true },
         "runtime": { "emit_marks": true, "emit_isolated_scope": true },
+        "registration_control": {
+            "enabled": false,
+            "kinds": ["subscriber"],
+            "registration_name": "documentation-controlled-subscriber",
+            "reason": "disabled by documentation plugin"
+        },
         "executor": { "worker_threads": 2 }
     })));
 
@@ -87,6 +93,21 @@ fn invalid_values_are_rejected_at_their_fields() {
             "examples.rust_native_policy.invalid_header",
             "requests.header_name",
         ),
+        (
+            json!({ "registration_control": { "kinds": [] } }),
+            "examples.rust_native_policy.invalid_registration_control",
+            "registration_control.kinds",
+        ),
+        (
+            json!({ "registration_control": { "registration_name": "" } }),
+            "examples.rust_native_policy.invalid_registration_control",
+            "registration_control.registration_name",
+        ),
+        (
+            json!({ "registration_control": { "reason": "" } }),
+            "examples.rust_native_policy.invalid_registration_control",
+            "registration_control.reason",
+        ),
     ] {
         let diagnostics = validate_example_config(&object(config));
         assert!(diagnostics.iter().any(|diagnostic| {
@@ -109,6 +130,7 @@ fn schema_declares_every_feature_group_and_executor() {
         "requests",
         "execution",
         "runtime",
+        "registration_control",
         "executor",
     ] {
         assert!(properties.contains_key(field), "schema is missing {field}");

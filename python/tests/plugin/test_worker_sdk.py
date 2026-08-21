@@ -400,6 +400,19 @@ class RecordingHostStub:
 
     async def ListRuntimeRegistrations(self, request: Any) -> Any:
         self.requests.append(request)
+        if self.failures.get("ListRuntimeRegistrations") == "error":
+            return pb.ListRuntimeRegistrationsResponse(error=_worker_error("list failed"))
+        if self.failures.get("ListRuntimeRegistrations") == "unknown_kind":
+            return pb.ListRuntimeRegistrationsResponse(registrations=[pb.RuntimeRegistrationIdentity(kind=999)])
+        if self.failures.get("ListRuntimeRegistrations") == "unknown_owner":
+            return pb.ListRuntimeRegistrationsResponse(
+                registrations=[
+                    pb.RuntimeRegistrationIdentity(
+                        kind=pb.SUBSCRIBER,
+                        owner=pb.RuntimeRegistrationOwner(kind=999),
+                    )
+                ]
+            )
         return pb.ListRuntimeRegistrationsResponse(
             registrations=[
                 pb.RuntimeRegistrationIdentity(
@@ -416,10 +429,14 @@ class RecordingHostStub:
 
     async def RegisterConditionalMiddlewareGuardrail(self, request: Any) -> Any:
         self.requests.append(request)
+        if self.failures.get("RegisterConditionalMiddlewareGuardrail") == "error":
+            return pb.RegisterConditionalMiddlewareGuardrailResponse(error=_worker_error("register failed"))
         return pb.RegisterConditionalMiddlewareGuardrailResponse(handle="gate-1")
 
     async def DeregisterConditionalMiddlewareGuardrail(self, request: Any) -> Any:
         self.requests.append(request)
+        if self.failures.get("DeregisterConditionalMiddlewareGuardrail") == "error":
+            return pb.DeregisterConditionalMiddlewareGuardrailResponse(error=_worker_error("deregister failed"))
         return pb.DeregisterConditionalMiddlewareGuardrailResponse(removed=True)
 
     async def CreateScopeStack(self, request: Any) -> Any:
@@ -2273,6 +2290,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         assert runtime.current_scope_stack_id() == stack_id
     assert runtime.current_scope_stack_id() is None
     assert tool_next.result["next_tool"]["value"] == 1
+
     assert tool_next.annotation == {"source": "host"}
     assert llm_next["next_llm"]["content"]["prompt"] == "hello"
     assert stream_next[0]["next_stream"]["content"]["prompt"] == "hello"
@@ -2354,6 +2372,44 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         await runtime.emit_mark("invalid-schema", data_schema={"name": "schema"})
     with pytest.raises(TypeError, match="measurements must contain mappings"):
         await runtime.emit_metric("invalid-metric", cast(Any, [42]))
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("error", "list failed"),
+        ("unknown_kind", "unknown runtime registration kind"),
+        ("unknown_owner", "unknown runtime registration owner kind"),
+    ],
+)
+async def test_runtime_registration_discovery_rejects_host_and_malformed_responses(
+    host_stub: RecordingHostStub, failure: str, message: str
+) -> None:
+    host_stub.failures["ListRuntimeRegistrations"] = failure
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
+
+    with pytest.raises(WorkerSdkError, match=message):
+        await runtime.list_runtime_registrations()
+
+
+async def test_runtime_gate_operations_propagate_host_errors(host_stub: RecordingHostStub) -> None:
+    runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
+    host_stub.failures["RegisterConditionalMiddlewareGuardrail"] = "error"
+    with pytest.raises(WorkerSdkError, match="register failed"):
+        await runtime.register_conditional_middleware_guardrail(
+            "gate",
+            {RuntimeRegistrationKind.SUBSCRIBER},
+            "target",
+            "disabled",
+        )
+
+    host_stub.failures["DeregisterConditionalMiddlewareGuardrail"] = "error"
+    with pytest.raises(WorkerSdkError, match="deregister failed"):
+        await runtime.deregister_conditional_middleware_guardrail(ConditionalMiddlewareGuardrailHandle("gate-1"))
+    with pytest.raises(TypeError, match="ConditionalMiddlewareGuardrailHandle"):
+        await runtime.deregister_conditional_middleware_guardrail(
+            "gate-1"  # type: ignore[arg-type] # ty: ignore[invalid-argument-type]
+        )
 
 
 async def test_invocation_scope_context_is_isolated_across_concurrent_requests(host_stub: RecordingHostStub):

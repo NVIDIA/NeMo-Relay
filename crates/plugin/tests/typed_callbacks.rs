@@ -2239,6 +2239,112 @@ unsafe extern "C" fn unavailable_plugin_context_register_gate(
     NemoRelayStatus::NotFound
 }
 
+unsafe extern "C" fn capture_plugin_context_runtime(
+    _ctx: *mut NemoRelayNativePluginContext,
+    out: *mut *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    if out.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    unsafe { *out = NonNull::<NemoRelayNativePluginRuntime>::dangling().as_ptr() };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_retain(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    UNAVAILABLE_RUNTIME_RETAINS.fetch_add(1, Ordering::SeqCst);
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_release(_runtime: *const NemoRelayNativePluginRuntime) {
+    UNAVAILABLE_RUNTIME_RELEASES.fetch_add(1, Ordering::SeqCst);
+}
+
+unsafe extern "C" fn capture_plugin_runtime_list_registrations(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    kinds_json: *const NemoRelayNativeString,
+    out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_json.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let kinds = read_host_string(&test_host(), kinds_json).unwrap();
+    RUNTIME_CALLS.lock().unwrap().push(format!("list:{kinds}"));
+    unsafe {
+        *out_json = json_host_string(
+            &test_host(),
+            json!([{
+                "kind": "subscriber",
+                "local_name": "target",
+                "effective_name": "plugin::0::target",
+                "owner": {
+                    "kind": "plugin",
+                    "plugin_kind": "example",
+                    "component_ordinal": 0
+                }
+            }]),
+        )
+    };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_register_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    reason: *const NemoRelayNativeString,
+    out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    if out_handle.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let host = test_host();
+    let values = [name, kinds_json, registration_name, reason]
+        .map(|value| read_host_string(&host, value).unwrap());
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "register:{}:{}:{}:{}",
+        values[0], values[1], values[2], values[3]
+    ));
+    unsafe { *out_handle = host_string(&host, "gate-handle") };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_runtime_deregister_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    handle: *const NemoRelayNativeString,
+    out_removed: *mut bool,
+) -> NemoRelayStatus {
+    if out_removed.is_null() {
+        return NemoRelayStatus::NullPointer;
+    }
+    let handle = read_host_string(&test_host(), handle).unwrap();
+    RUNTIME_CALLS
+        .lock()
+        .unwrap()
+        .push(format!("deregister:{handle}"));
+    unsafe { *out_removed = true };
+    NemoRelayStatus::Ok
+}
+
+unsafe extern "C" fn capture_plugin_context_register_gate(
+    _ctx: *mut NemoRelayNativePluginContext,
+    name: *const NemoRelayNativeString,
+    kinds_json: *const NemoRelayNativeString,
+    registration_name: *const NemoRelayNativeString,
+    reason: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    let host = test_host();
+    let values = [name, kinds_json, registration_name, reason]
+        .map(|value| read_host_string(&host, value).unwrap());
+    RUNTIME_CALLS.lock().unwrap().push(format!(
+        "initial:{}:{}:{}:{}",
+        values[0], values[1], values[2], values[3]
+    ));
+    NemoRelayStatus::Ok
+}
+
 fn test_host_v4() -> NemoRelayNativeHostApiV4 {
     let mut v1 = test_host();
     v1.abi_version = 4;
@@ -2871,6 +2977,72 @@ fn plugin_context_handles_an_unavailable_runtime_capability() {
         .unwrap_err();
     assert!(error.contains("NotFound"), "{error}");
     assert_eq!(UNAVAILABLE_CONTEXT_GATE_CALLS.load(Ordering::SeqCst), 1);
+    assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn plugin_runtime_registration_controls_cover_success_and_lifecycle() {
+    let _guard = begin_test();
+    let mut host = test_host_v4();
+    host.plugin_context_runtime = capture_plugin_context_runtime;
+    host.plugin_runtime_retain = capture_plugin_runtime_retain;
+    host.plugin_runtime_release = capture_plugin_runtime_release;
+    host.plugin_runtime_list_registrations = capture_plugin_runtime_list_registrations;
+    host.plugin_runtime_register_conditional_middleware_guardrail =
+        capture_plugin_runtime_register_gate;
+    host.plugin_runtime_deregister_conditional_middleware_guardrail =
+        capture_plugin_runtime_deregister_gate;
+    host.plugin_context_register_conditional_middleware_guardrail =
+        capture_plugin_context_register_gate;
+    let mut context = test_context(&host.v3.v1);
+    let runtime = context.runtime();
+    let kinds = BTreeSet::from([nemo_relay_plugin::RuntimeRegistrationKind::Subscriber]);
+
+    let registrations = runtime
+        .list_runtime_registrations(Some(&kinds))
+        .expect("runtime registrations should decode");
+    assert_eq!(registrations[0].effective_name, "plugin::0::target");
+    let handle = runtime
+        .register_conditional_middleware_guardrail(
+            "timer-gate",
+            &kinds,
+            "plugin::0::target",
+            "timer active",
+        )
+        .expect("dynamic gate should register");
+    assert!(
+        runtime
+            .deregister_conditional_middleware_guardrail(&handle)
+            .unwrap()
+    );
+    context
+        .register_conditional_middleware_guardrail(
+            "startup-gate",
+            &kinds,
+            "plugin::0::target",
+            "startup disabled",
+        )
+        .expect("initial gate should register");
+
+    let clone = runtime.clone();
+    drop(clone);
+    drop(runtime);
+    assert_eq!(UNAVAILABLE_RUNTIME_RETAINS.load(Ordering::SeqCst), 1);
+    assert_eq!(UNAVAILABLE_RUNTIME_RELEASES.load(Ordering::SeqCst), 2);
+    let calls = RUNTIME_CALLS.lock().unwrap();
+    assert!(calls.iter().any(|call| call.starts_with("list:")));
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("register:timer-gate:"))
+    );
+    assert!(calls.iter().any(|call| call == "deregister:gate-handle"));
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.starts_with("initial:startup-gate:"))
+    );
+    drop(calls);
     assert_eq!(STRING_LIVE_COUNT.load(Ordering::SeqCst), 0);
 }
 

@@ -342,6 +342,37 @@ describe('core plugins', () => {
   });
 });
 
+describe('plugin context conditional middleware guardrails', () => {
+  it('fails open and is removed during clear', async () => {
+    const suffix = `${process.pid}-${Date.now()}`;
+    const pluginKind = `node.context_gate.${suffix}`;
+    const target = `node-context-gate-target-${suffix}`;
+    const observed = [];
+    lib.registerSubscriber(target, (event) => observed.push(event.name));
+    plugin.register(pluginKind, {
+      register(_config, context) {
+        context.registerConditionalMiddlewareGuardrail('failing-gate', ['subscriber'], target, () => {
+          throw new Error('expected gate failure');
+        });
+      },
+    });
+    try {
+      await plugin.initialize({ version: 1, components: [plugin.ComponentSpec(pluginKind)] });
+      lib.event('node-context-gate-fail-open', null, null);
+      await lib.flushSubscribers();
+      assert.equal(observed.at(-1), 'node-context-gate-fail-open');
+      plugin.clear();
+      lib.event('node-context-gate-cleared', null, null);
+      await lib.flushSubscribers();
+      assert.equal(observed.at(-1), 'node-context-gate-cleared');
+    } finally {
+      plugin.clear();
+      plugin.deregister(pluginKind);
+      lib.deregisterSubscriber(target);
+    }
+  });
+});
+
 describe('adaptive helpers', () => {
   it('builds a redis backend with the default key prefix', () => {
     assert.deepEqual(adaptive.redisBackend('redis://127.0.0.1:6379'), {

@@ -43,6 +43,11 @@ test('validation accepts a supported mode', () => {
   assert.deepEqual(documentationPlugin.validate({ requests: { mode: 'enforce' } }), []);
 });
 
+test('default registration control is disabled and valid', () => {
+  assert.equal(DEFAULT_CONFIG.registration_control.enabled, false);
+  assert.deepEqual(documentationPlugin.validate(structuredClone(DEFAULT_CONFIG)), []);
+});
+
 test('validation rejects an unsupported mode', () => {
   const diagnostics = documentationPlugin.validate({ requests: { mode: 'invalid' } });
 
@@ -66,6 +71,13 @@ for (const [config, field, code] of [
   [{ tag: '' }, 'tag', 'documentation-plugin.invalid_tag'],
   [{ requests: { header_name: '' } }, 'requests.header_name', 'documentation-plugin.invalid_header'],
   [{ requests: { header_value: '' } }, 'requests.header_value', 'documentation-plugin.invalid_header'],
+  [{ registration_control: { kinds: [] } }, 'registration_control.kinds', 'documentation-plugin.invalid_config'],
+  [
+    { registration_control: { registration_name: '' } },
+    'registration_control.registration_name',
+    'documentation-plugin.invalid_config',
+  ],
+  [{ registration_control: { reason: '' } }, 'registration_control.reason', 'documentation-plugin.invalid_config'],
 ]) {
   test(`validation rejects an empty ${field}`, () => {
     const diagnostics = documentationPlugin.validate(config);
@@ -114,6 +126,35 @@ test('registers every safe plugin surface', () => {
     'registerToolSanitizeRequestGuardrail',
     'registerToolSanitizeResponseGuardrail',
   ]);
+
+  const enabled = structuredClone(DEFAULT_CONFIG);
+  enabled.registration_control.enabled = true;
+  const methods = new Set();
+  documentationPlugin.register(enabled, new Proxy({}, { get: (_target, method) => () => methods.add(method) }));
+  assert.ok(methods.has('registerConditionalMiddlewareGuardrail'));
+});
+
+test('registration control is owned by activation', async () => {
+  const target = 'documentation-controlled-subscriber';
+  const observed = [];
+  const controlled = config('enforce');
+  controlled.components[0].config.registration_control.enabled = true;
+  relay.registerSubscriber(target, (event) => observed.push(event.name));
+  try {
+    const before = relay.listRuntimeRegistrations(['subscriber']);
+    assert.ok(before.some((registration) => registration.effectiveName === target));
+    await withActivePlugin(async () => {
+      const baseline = observed.length;
+      relay.event('registration-control-active', null, null);
+      await relay.flushSubscribers();
+      assert.equal(observed.length, baseline);
+    }, controlled);
+    relay.event('registration-control-cleared', null, null);
+    await relay.flushSubscribers();
+    assert.equal(observed.at(-1), 'registration-control-cleared');
+  } finally {
+    relay.deregisterSubscriber(target);
+  }
 });
 
 test('activation reports no diagnostics', async () => {

@@ -3,6 +3,7 @@
 
 //! Python-facing generic plugin configuration and registration helpers.
 
+use std::collections::BTreeSet;
 #[cfg(test)]
 use std::collections::HashSet;
 use std::future::Future;
@@ -10,9 +11,11 @@ use std::pin::Pin;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use pyo3::prelude::*;
+use pyo3::types::PySet;
 use serde_json::{Map, Value as Json};
 
 use nemo_relay::api::registry::{
+    RuntimeRegistrationKind, deregister_conditional_middleware_guardrail,
     deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
@@ -20,14 +23,15 @@ use nemo_relay::api::registry::{
     deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
     deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
     deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_event_metadata_injector,
-    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
-    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
-    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
-    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
-    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept, register_tool_request_intercept,
-    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_conditional_middleware_guardrail,
+    register_event_metadata_injector, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_mark_sanitize_guardrail,
+    register_scope_sanitize_end_guardrail, register_scope_sanitize_start_guardrail,
+    register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
+    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+    register_tool_sanitize_response_guardrail,
 };
 use nemo_relay::api::subscriber::{deregister_subscriber, register_subscriber};
 use nemo_relay::error::Result as FlowResult;
@@ -239,8 +243,66 @@ impl PyPluginContext {
     }
 }
 
+fn runtime_registration_kind(kind: &str) -> PyResult<RuntimeRegistrationKind> {
+    serde_json::from_value(Json::String(kind.to_string())).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown runtime registration kind: {kind}"
+        ))
+    })
+}
+
 #[pymethods]
 impl PyPluginContext {
+    #[pyo3(signature = (
+        name: "str",
+        kinds: "set[str]",
+        registration_name: "str",
+        guardrail: "object"
+    ) -> "None", text_signature = "(name: str, kinds: set[str], registration_name: str, guardrail: object) -> None")]
+    fn register_conditional_middleware_guardrail(
+        &self,
+        name: &str,
+        kinds: BTreeSet<String>,
+        registration_name: &str,
+        guardrail: Py<PyAny>,
+    ) -> PyResult<()> {
+        let kinds = kinds
+            .iter()
+            .map(|kind| runtime_registration_kind(kind))
+            .collect::<PyResult<BTreeSet<_>>>()?;
+        let registration_name = registration_name.to_string();
+        self.register_callback(
+            name,
+            move |qualified_name| {
+                register_conditional_middleware_guardrail(
+                    qualified_name,
+                    kinds,
+                    &registration_name,
+                    Arc::new(move |kinds, effective_name| {
+                        Python::attach(|py| {
+                            let registration_kind = py
+                                .import("nemo_relay.runtime_registrations")?
+                                .getattr("RuntimeRegistrationKind")?;
+                            let python_kinds = PySet::empty(py)?;
+                            for kind in kinds {
+                                python_kinds.add(registration_kind.call1((kind.as_str(),))?)?;
+                            }
+                            guardrail
+                                .call1(py, (python_kinds, effective_name))?
+                                .extract::<Option<String>>(py)
+                        })
+                        .unwrap_or_else(|error| {
+                            Python::attach(|py| error.print(py));
+                            None
+                        })
+                    }),
+                )
+            },
+            deregister_conditional_middleware_guardrail,
+            "conditional middleware guardrail",
+        )
+    }
+
     #[pyo3(signature = (name: "str", priority: "int", callback: "object") -> "None", text_signature = "(name: str, priority: int, callback: object) -> None")]
     fn register_event_metadata_injector(
         &self,

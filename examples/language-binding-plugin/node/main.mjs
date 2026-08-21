@@ -32,6 +32,12 @@ export const DEFAULT_CONFIG = {
   },
   execution: { enabled: true, priority: 30, emit_pending_marks: true },
   runtime: { emit_marks: true, emit_isolated_scope: true },
+  registration_control: {
+    enabled: false,
+    kinds: ['subscriber'],
+    registration_name: 'documentation-controlled-subscriber',
+    reason: 'disabled by documentation plugin',
+  },
 };
 
 const GROUP_FIELDS = {
@@ -48,6 +54,7 @@ const GROUP_FIELDS = {
   ]),
   execution: new Set(['enabled', 'priority', 'emit_pending_marks']),
   runtime: new Set(['emit_marks', 'emit_isolated_scope']),
+  registration_control: new Set(['enabled', 'kinds', 'registration_name', 'reason']),
 };
 
 function diagnostic(level, code, field, message) {
@@ -143,9 +150,25 @@ function validateDocumentationConfig(config) {
     'execution.emit_pending_marks': settings.execution.emit_pending_marks,
     'runtime.emit_marks': settings.runtime.emit_marks,
     'runtime.emit_isolated_scope': settings.runtime.emit_isolated_scope,
+    'registration_control.enabled': settings.registration_control.enabled,
+    'registration_control.kinds': settings.registration_control.kinds,
+    'registration_control.registration_name': settings.registration_control.registration_name,
+    'registration_control.reason': settings.registration_control.reason,
   };
-  const stringFields = new Set(['tag', 'requests.mode', 'requests.header_name', 'requests.header_value']);
-  const arrayFields = new Set(['observe.redact_keys', 'requests.blocked_tools', 'requests.blocked_models']);
+  const stringFields = new Set([
+    'tag',
+    'requests.mode',
+    'requests.header_name',
+    'requests.header_value',
+    'registration_control.registration_name',
+    'registration_control.reason',
+  ]);
+  const arrayFields = new Set([
+    'observe.redact_keys',
+    'requests.blocked_tools',
+    'requests.blocked_models',
+    'registration_control.kinds',
+  ]);
   const integerFields = new Set(['requests.priority', 'execution.priority']);
   for (const [field, value] of Object.entries(fields)) {
     const valid = stringFields.has(field)
@@ -162,10 +185,31 @@ function validateDocumentationConfig(config) {
   if (typeof settings.tag === 'string' && settings.tag.length === 0) {
     diagnostics.push(diagnostic('error', 'invalid_tag', 'tag', 'tag must be a non-empty string'));
   }
+  const supportedKinds = new Set(Object.values(relay.RuntimeRegistrationKind));
+  if (
+    Array.isArray(settings.registration_control.kinds) &&
+    (settings.registration_control.kinds.length === 0 ||
+      !settings.registration_control.kinds.every((kind) => supportedKinds.has(kind)))
+  ) {
+    diagnostics.push(
+      diagnostic(
+        'error',
+        'invalid_config',
+        'registration_control.kinds',
+        'registration_control.kinds must be a non-empty array of supported registration kinds',
+      ),
+    );
+  }
   for (const field of ['requests.header_name', 'requests.header_value']) {
     const value = fields[field];
     if (typeof value === 'string' && value.length === 0) {
       diagnostics.push(diagnostic('error', 'invalid_header', field, `${field} must be a non-empty string`));
+    }
+  }
+  for (const field of ['registration_control.registration_name', 'registration_control.reason']) {
+    const value = fields[field];
+    if (typeof value === 'string' && value.length === 0) {
+      diagnostics.push(diagnostic('error', 'invalid_config', field, `${field} must be a non-empty string`));
     }
   }
   if (typeof settings.requests.mode === 'string' && !new Set(['observe', 'enforce']).has(settings.requests.mode)) {
@@ -183,7 +227,15 @@ export const documentationPlugin = {
   },
   register(config, context) {
     const settings = normalizedConfig(config);
-    const { observe, requests, execution, runtime } = settings;
+    const { observe, requests, execution, runtime, registration_control: registrationControl } = settings;
+    if (registrationControl.enabled) {
+      context.registerConditionalMiddlewareGuardrail(
+        'documentation-registration-control',
+        registrationControl.kinds,
+        registrationControl.registration_name,
+        () => registrationControl.reason,
+      );
+    }
     if (observe.enabled) {
       context.registerSubscriber('events', (event) => documentationPlugin.events.push(event.name));
       const sanitizeEvent = (_event, fields) => ({

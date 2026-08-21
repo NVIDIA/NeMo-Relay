@@ -34,6 +34,11 @@ configuration. A cleanup failure is more serious: the process can retain a runti
 diagnostic report and refuse later mutation because it can no longer prove that stale
 callbacks are gone.
 
+An activation-owned conditional middleware guardrail participates in the same
+transaction. Relay removes a partially registered gate if later component registration
+fails. A successful replacement removes the previous component's gate during teardown
+and installs the replacement gate with the new component.
+
 The report accessor is a snapshot, not a live inspection of every registry. The kind-listing
 accessor answers a different question: which implementations can future component
 documents reference? An inactive or disabled kind can appear in that list, and an active
@@ -155,3 +160,24 @@ Use the following order so active callbacks cannot outlive their implementation:
 Success means instance multiplicity is intentional, reports are interpreted separately
 from registry state, async teardown never blocks its event loop, and the application can
 prove both active registrations and future kind lookup have been removed.
+
+## Configure Registration Control
+
+The complete language-binding examples define the following optional group:
+
+| Field | Default | Validation |
+|---|---|---|
+| `enabled` | `false` | Must be a Boolean value. |
+| `kinds` | `["subscriber"]` | Must contain at least one supported global registration kind. |
+| `registration_name` | `"documentation-controlled-subscriber"` | Must be a nonempty effective target name. |
+| `reason` | `"disabled by documentation plugin"` | Must be a nonempty operator-facing explanation. |
+
+Keep the feature disabled unless the host deliberately supplies a target from
+runtime-registration discovery. Do not copy an effective name into long-lived
+configuration or reuse it after a process restart or plugin configuration reload. A host
+that generates plugin configuration dynamically can discover the target, insert its
+effective name, and initialize the component in the same runtime activation.
+
+The example uses a constant-result callback because the component owns the gate for its
+complete activation. Use the application-level API for a timer or health check that
+changes eligibility without replacing plugin configuration.

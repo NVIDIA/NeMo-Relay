@@ -66,6 +66,7 @@ from nemo_relay._native import (
 from nemo_relay._native import (
     validate_plugin_config as _validate_plugin_config,
 )
+from nemo_relay.runtime_registrations import ConditionalMiddlewareGuardrail, RuntimeRegistrationKind
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -116,6 +117,16 @@ class PluginContext(Protocol):
 
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None:
         """Register an infallible event subscriber for this component."""
+        ...
+
+    def register_conditional_middleware_guardrail(
+        self,
+        name: str,
+        kinds: set[RuntimeRegistrationKind],
+        registration_name: str,
+        guardrail: ConditionalMiddlewareGuardrail,
+    ) -> None:
+        """Register an activation-owned gate for a global runtime registration."""
         ...
 
     def register_event_metadata_injector(

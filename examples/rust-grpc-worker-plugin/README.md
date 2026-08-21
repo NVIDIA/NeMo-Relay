@@ -19,3 +19,10 @@ placeholder with the built executable name, and replace only `<artifact-sha256>`
 with the lowercase hexadecimal digest of the built executable. The manifest value
 keeps its `sha256:` prefix; omit the filename column printed by `shasum -a 256`,
 `sha256sum`, or `Get-FileHash`.
+
+The optional `registration_control` group installs one host-resident gate for the
+worker activation. It defaults to disabled, with `kinds: ["subscriber"]`, target
+`documentation-controlled-subscriber`, and reason
+`disabled by documentation plugin`. All three values must be nonempty. Refer to
+[Conditional Middleware Guardrails](../../docs/about-nemo-relay/concepts/conditional-middleware-guardrails.mdx)
+for effective-name discovery and automatic teardown behavior.

@@ -33,6 +33,14 @@ impl WorkerPlugin for DocumentationWorker {
 
     fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
         let config = ExampleConfig::parse(config).map_err(WorkerSdkError::InvalidInput)?;
+        if config.registration_control.enabled {
+            context.register_conditional_middleware_guardrail(
+                "documentation_registration_control",
+                config.registration_control.kinds.iter().copied().collect(),
+                &config.registration_control.registration_name,
+                &config.registration_control.reason,
+            );
+        }
         if config.observe.enabled {
             register_observation(context, &config);
         }

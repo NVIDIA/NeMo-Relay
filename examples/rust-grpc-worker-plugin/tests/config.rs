@@ -20,7 +20,13 @@ fn shared_configuration_is_valid() {
             "break_chain": false
         },
         "execution": { "enabled": true, "priority": 30, "emit_pending_marks": true },
-        "runtime": { "emit_marks": true, "emit_isolated_scope": true }
+        "runtime": { "emit_marks": true, "emit_isolated_scope": true },
+        "registration_control": {
+            "enabled": false,
+            "kinds": ["subscriber"],
+            "registration_name": "documentation-controlled-subscriber",
+            "reason": "disabled by documentation plugin"
+        }
     }));
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
@@ -83,13 +89,44 @@ fn empty_headers_are_reported_at_their_individual_fields() {
 }
 
 #[test]
+fn invalid_registration_control_is_reported_at_its_field() {
+    for (config, field) in [
+        (
+            json!({ "registration_control": { "kinds": [] } }),
+            "registration_control.kinds",
+        ),
+        (
+            json!({ "registration_control": { "registration_name": "" } }),
+            "registration_control.registration_name",
+        ),
+        (
+            json!({ "registration_control": { "reason": "" } }),
+            "registration_control.reason",
+        ),
+    ] {
+        let diagnostics = validate_example_config(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "examples.rust_grpc_worker.invalid_registration_control"
+                && diagnostic.field.as_deref() == Some(field)
+        }));
+    }
+}
+
+#[test]
 fn schema_contains_every_feature_group() {
     let schema: Json = serde_json::from_str(include_str!("../config.schema.json"))
         .expect("schema should be valid JSON");
     let fields = schema["properties"].as_object().expect("properties object");
     assert_eq!(schema["additionalProperties"], Json::Bool(true));
-    assert_eq!(fields.len(), 5);
-    for field in ["tag", "observe", "requests", "execution", "runtime"] {
+    assert_eq!(fields.len(), 6);
+    for field in [
+        "tag",
+        "observe",
+        "requests",
+        "execution",
+        "runtime",
+        "registration_control",
+    ] {
         assert!(fields.contains_key(field));
     }
 }

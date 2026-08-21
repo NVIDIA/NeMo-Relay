@@ -13,6 +13,7 @@ from typing import Any
 
 import nemo_relay
 from nemo_relay import llm, plugin, scope, subscribers, tools
+from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "tag": "documentation",
@@ -29,6 +30,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "execution": {"enabled": True, "priority": 30, "emit_pending_marks": True},
     "runtime": {"emit_marks": True, "emit_isolated_scope": True},
+    "registration_control": {
+        "enabled": False,
+        "kinds": [RuntimeRegistrationKind.SUBSCRIBER],
+        "registration_name": "documentation-controlled-subscriber",
+        "reason": "disabled by documentation plugin",
+    },
 }
 
 GROUP_FIELDS = {
@@ -45,6 +52,7 @@ GROUP_FIELDS = {
     },
     "execution": {"enabled", "priority", "emit_pending_marks"},
     "runtime": {"emit_marks", "emit_isolated_scope"},
+    "registration_control": {"enabled", "kinds", "registration_name", "reason"},
 }
 
 
@@ -139,6 +147,10 @@ def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]
         "execution.emit_pending_marks": bool,
         "runtime.emit_marks": bool,
         "runtime.emit_isolated_scope": bool,
+        "registration_control.enabled": bool,
+        "registration_control.kinds": list,
+        "registration_control.registration_name": str,
+        "registration_control.reason": str,
     }
     for field, expected in expected_types.items():
         group, separator, key = field.partition(".")
@@ -165,6 +177,18 @@ def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]
                     f"{field} must contain only strings",
                 )
             )
+    kinds = settings["registration_control"]["kinds"]
+    if isinstance(kinds, list):
+        supported_kinds = {kind.value for kind in RuntimeRegistrationKind}
+        if not kinds or not all(isinstance(item, str) and item in supported_kinds for item in kinds):
+            diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "invalid_config",
+                    "registration_control.kinds",
+                    "registration_control.kinds must be a non-empty array of supported registration kinds",
+                )
+            )
     if isinstance(settings["tag"], str) and not settings["tag"]:
         diagnostics.append(_diagnostic("error", "invalid_tag", "tag", "tag must be a non-empty string"))
     for field in ("requests.header_name", "requests.header_value"):
@@ -172,6 +196,11 @@ def validate_documentation_config(config: dict[str, Any]) -> list[dict[str, str]
         value = settings[group][key]
         if isinstance(value, str) and not value:
             diagnostics.append(_diagnostic("error", "invalid_header", field, f"{field} must be a non-empty string"))
+    for field in ("registration_control.registration_name", "registration_control.reason"):
+        group, key = field.split(".")
+        value = settings[group][key]
+        if isinstance(value, str) and not value:
+            diagnostics.append(_diagnostic("error", "invalid_config", field, f"{field} must be a non-empty string"))
     requests = settings["requests"]
     if isinstance(requests["mode"], str) and requests["mode"] not in {"observe", "enforce"}:
         diagnostics.append(
@@ -198,6 +227,14 @@ class DocumentationPlugin:
         observe = settings["observe"]
         requests = settings["requests"]
         execution = settings["execution"]
+        registration_control = settings["registration_control"]
+        if registration_control["enabled"]:
+            context.register_conditional_middleware_guardrail(
+                "documentation-registration-control",
+                {RuntimeRegistrationKind(kind) for kind in registration_control["kinds"]},
+                registration_control["registration_name"],
+                lambda _kinds, _registration_name: registration_control["reason"],
+            )
         if observe["enabled"]:
             context.register_subscriber("events", lambda event: self.events.append(event.name))
 

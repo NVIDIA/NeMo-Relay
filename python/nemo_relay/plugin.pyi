@@ -22,6 +22,7 @@ from nemo_relay import (
     ToolRequestIntercept,
     ToolSanitizeGuardrail,
 )
+from nemo_relay.runtime_registrations import ConditionalMiddlewareGuardrail, RuntimeRegistrationKind
 
 UnsupportedBehavior = Literal["ignore", "warn", "error"]
 DynamicPluginKind = Literal["rust_dynamic", "worker"]
@@ -51,6 +52,13 @@ class ConfigReport(TypedDict):
 
 class PluginContext(Protocol):
     def register_subscriber(self, name: str, callback: Callable[[Event], None]) -> None: ...
+    def register_conditional_middleware_guardrail(
+        self,
+        name: str,
+        kinds: set[RuntimeRegistrationKind],
+        registration_name: str,
+        guardrail: ConditionalMiddlewareGuardrail,
+    ) -> None: ...
     def register_event_metadata_injector(
         self, name: str, priority: int, callback: EventMetadataInjectorCallback
     ) -> None: ...
