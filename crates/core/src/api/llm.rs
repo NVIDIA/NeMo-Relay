@@ -1487,11 +1487,11 @@ impl Drop for ManagedLlmCompletion {
                 let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
                 global_context()
                     .read()
+                    .ok()
                     .map(|state| state.registry_snapshot())
                     .map(|state| state.llm_sanitize_response_entries(&scope_local_refs))
-                    .unwrap_or_default()
             }
-            None => Vec::new(),
+            None => None,
         };
         handle
             .optimization_recorder
@@ -1512,7 +1512,7 @@ impl Drop for ManagedLlmCompletion {
             event,
             Box::new(move |event| {
                 Box::pin(async move {
-                    let Some(data) = fallback_data else {
+                    let (Some(data), Some(entries)) = (fallback_data, entries) else {
                         return event;
                     };
                     let data = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
