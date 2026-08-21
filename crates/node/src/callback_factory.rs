@@ -10,7 +10,7 @@ use nemo_relay::api::runtime::subscriber_dispatcher::PublicationBuffer;
 
 use crate::types::ScopeStack;
 
-const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v11";
+const CALLBACK_FACTORIES_PROPERTY: &str = "__nemo_relay_callback_factories_v12";
 
 const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
   const { AsyncLocalStorage } = process.getBuiltinModule('node:async_hooks');
@@ -191,14 +191,18 @@ const CALLBACK_FACTORIES_SOURCE: &str = r#"(() => {
         }
         resolve();
         const iterator = value[Symbol.asyncIterator]();
+        let exhausted = false;
         try {
           while (!controller.signal.aborted) {
             const item = await iterator.next();
-            if (item.done) break;
+            if (item.done) {
+              exhausted = true;
+              break;
+            }
             await streamPush(jsonValue(item.value === undefined ? null : item.value));
           }
         } finally {
-          if (controller.signal.aborted && typeof iterator.return === 'function') {
+          if (!exhausted && typeof iterator.return === 'function') {
             await iterator.return();
           }
         }

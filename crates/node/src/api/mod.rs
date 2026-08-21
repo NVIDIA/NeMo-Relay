@@ -78,6 +78,8 @@ use nemo_relay_adaptive::plugin_component::register_adaptive_component;
 use nemo_relay_adaptive::{AdaptiveConfig, AdaptiveRuntime as CoreAdaptiveRuntime};
 use nemo_relay_pii_redaction::component::register_pii_redaction_component;
 
+pub(crate) const LLM_STREAM_BRIDGE_CAPACITY: usize = 32;
+
 use crate::callable;
 use crate::callback_factory;
 use crate::convert::{
@@ -578,7 +580,7 @@ async fn forward_stream_to_channel(
 }
 
 pub(crate) fn llm_stream_from_rust_stream(rust_stream: RustJsonStream) -> LlmStream {
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    let (tx, rx) = tokio::sync::mpsc::channel(LLM_STREAM_BRIDGE_CAPACITY);
     let (cancel, cancel_rx) = tokio::sync::watch::channel(false);
     let (closed, closed_rx) = tokio::sync::watch::channel(None);
     tokio::spawn(forward_stream_to_channel(

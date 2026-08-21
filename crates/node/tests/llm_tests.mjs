@@ -1645,7 +1645,7 @@ describe('LLM intercepts', () => {
     try {
       stream = await llmStreamCallExecute('backpressure_stream_llm', makeNative(), () => {});
       await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.ok(pulls <= 40, `expected bounded read-ahead, observed ${pulls} pulls`);
+      assert.ok(pulls <= 72, `expected bounded read-ahead, observed ${pulls} pulls`);
 
       const chunks = [];
       for (;;) {
@@ -1686,6 +1686,54 @@ describe('LLM intercepts', () => {
       assert.equal(providerEnded, true);
     } finally {
       deregisterLlmStreamExecutionIntercept('node_llm_stream_early_close');
+    }
+  });
+
+  it('stream execution intercept closes its iterator after a chunk conversion error', async () => {
+    let cleaned = false;
+    let stream;
+    registerLlmStreamExecutionIntercept('node_llm_stream_invalid_chunk_cleanup', 10, async () =>
+      (async function* () {
+        try {
+          yield 1n;
+        } finally {
+          cleaned = true;
+        }
+      })(),
+    );
+    try {
+      stream = await llmStreamCallExecute('invalid_chunk_cleanup_stream_llm', makeNative(), () => {});
+      await assert.rejects(() => stream.next(), /unsupported bigint value/i);
+      assert.equal(cleaned, true);
+      await assert.rejects(() => stream.close(), /unsupported bigint value/i);
+    } finally {
+      await stream?.close().catch(() => {});
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_invalid_chunk_cleanup');
+    }
+  });
+
+  it('stream execution intercept close waits for iterator cleanup', async () => {
+    let cleaned = false;
+    registerLlmStreamExecutionIntercept('node_llm_stream_await_cleanup', 10, async (_request, _next, signal) =>
+      (async function* () {
+        try {
+          yield { token: 'first' };
+          if (!signal.aborted) {
+            await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+          }
+        } finally {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          cleaned = true;
+        }
+      })(),
+    );
+    try {
+      const stream = await llmStreamCallExecute('await_cleanup_stream_llm', makeNative(), () => {});
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      await stream.close();
+      assert.equal(cleaned, true);
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_await_cleanup');
     }
   });
 

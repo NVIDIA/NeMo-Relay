@@ -136,6 +136,14 @@ struct StreamCompletion {
     ready: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<FlowResult<()>>>>,
     chunks: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<FlowResult<Json>>>>,
     terminal_error: std::sync::Mutex<Option<FlowError>>,
+    closed: tokio::sync::watch::Sender<Option<FlowResult<()>>>,
+}
+
+impl StreamCompletion {
+    fn finish(&self, result: FlowResult<()>) {
+        self.chunks.lock().unwrap().take();
+        self.closed.send_replace(Some(result));
+    }
 }
 
 #[derive(Clone)]
@@ -155,11 +163,17 @@ impl CallCompletion {
     fn stream(
         ready: tokio::sync::oneshot::Sender<FlowResult<()>>,
         chunks: tokio::sync::mpsc::Sender<FlowResult<Json>>,
-    ) -> (Self, Arc<StreamCompletion>) {
+    ) -> (
+        Self,
+        Arc<StreamCompletion>,
+        tokio::sync::watch::Receiver<Option<FlowResult<()>>>,
+    ) {
+        let (closed, closed_rx) = tokio::sync::watch::channel(None);
         let stream = Arc::new(StreamCompletion {
             ready: std::sync::Mutex::new(Some(ready)),
             chunks: std::sync::Mutex::new(Some(chunks)),
             terminal_error: std::sync::Mutex::new(None),
+            closed,
         });
         (
             Self {
@@ -168,6 +182,7 @@ impl CallCompletion {
                 )))),
             },
             stream,
+            closed_rx,
         )
     }
 
@@ -185,11 +200,11 @@ impl CallCompletion {
                 }
                 CallCompletionSender::Stream(sender) => {
                     if let Some(ready) = sender.ready.lock().unwrap().take() {
-                        let _ = ready.send(Err(error));
+                        let _ = ready.send(Err(error.clone()));
                     } else {
-                        *sender.terminal_error.lock().unwrap() = Some(error);
+                        *sender.terminal_error.lock().unwrap() = Some(error.clone());
                     }
-                    sender.chunks.lock().unwrap().take();
+                    sender.finish(Err(error));
                 }
             }
         }
@@ -258,6 +273,7 @@ impl Drop for CallCancellationGuard {
 struct JsCallbackStream {
     receiver: tokio_stream::wrappers::ReceiverStream<FlowResult<Json>>,
     completion: Arc<StreamCompletion>,
+    closed: tokio::sync::watch::Receiver<Option<FlowResult<()>>>,
     cancellation: CallCancellation,
 }
 
@@ -281,8 +297,18 @@ impl Stream for JsCallbackStream {
 
 impl LlmStreamInner for JsCallbackStream {
     fn close(self: Pin<&mut Self>) -> Pin<Box<dyn Future<Output = FlowResult<()>> + Send + '_>> {
-        self.cancellation.cancel();
-        Box::pin(async { Ok(()) })
+        let this = self.get_mut();
+        this.cancellation.cancel();
+        this.receiver.close();
+        let mut closed = this.closed.clone();
+        Box::pin(async move {
+            while closed.borrow().is_none() {
+                closed.changed().await.map_err(|_| {
+                    FlowError::Internal("JavaScript stream cleanup ended early".into())
+                })?;
+            }
+            closed.borrow().clone().expect("close state checked above")
+        })
     }
 }
 
@@ -469,9 +495,7 @@ fn build_completion_unknowns(
         ctx.env.execute_tokio_future(
             async move {
                 if let Some(chunks) = chunks {
-                    chunks.send(Ok(chunk)).await.map_err(|_| {
-                        napi::Error::from_reason("stream consumer closed".to_string())
-                    })?;
+                    let _ = chunks.send(Ok(chunk)).await;
                 }
                 Ok(())
             },
@@ -481,7 +505,7 @@ fn build_completion_unknowns(
 
     let end = env.create_function_from_closure("__nemo_relay_stream_end", move |ctx| {
         if let Some(stream) = &stream_completion {
-            stream.chunks.lock().unwrap().take();
+            stream.finish(Ok(()));
         }
         ctx.env.get_undefined()
     })?;
@@ -700,9 +724,12 @@ impl PromiseAwareFn {
         next: JsonStreamNextFn,
     ) -> FlowResult<nemo_relay::api::runtime::LlmJsonStream> {
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
-        let (chunk_sender, chunk_receiver) = tokio::sync::mpsc::channel(1);
-        let (completion, stream_completion) = CallCompletion::stream(ready_sender, chunk_sender);
+        let (chunk_sender, chunk_receiver) =
+            tokio::sync::mpsc::channel(crate::api::LLM_STREAM_BRIDGE_CAPACITY);
+        let (completion, stream_completion, closed) =
+            CallCompletion::stream(ready_sender, chunk_sender);
         let cancellation = CallCancellation::default();
+        let mut cancellation_guard = CallCancellationGuard::new(cancellation.clone());
         let continuation_context = MiddlewareContinuationContext::capture();
         let propagation_parent_uuid = capture_propagation_context()?.parent_uuid.to_string();
         let tsfn = self
@@ -733,10 +760,12 @@ impl PromiseAwareFn {
         ready_receiver
             .await
             .map_err(|e| FlowError::Internal(e.to_string()))??;
+        cancellation_guard.disarm();
         Ok(nemo_relay::api::runtime::LlmJsonStream::from_closeable(
             JsCallbackStream {
                 receiver: tokio_stream::wrappers::ReceiverStream::new(chunk_receiver),
                 completion: stream_completion,
+                closed,
                 cancellation,
             },
         ))
