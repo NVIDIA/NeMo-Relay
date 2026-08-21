@@ -119,9 +119,10 @@ routing value.
 
 When `enabled = true`, configure at least one trace endpoint or an enabled
 signal with explicit endpoints. NeMo Relay constructs every endpoint before
-registering subscribers. An invalid endpoint prevents activation, and a
-delivery failure from one exporter does not stop application work or delivery
-to the other exporters.
+registering subscribers. An invalid endpoint is skipped with an activation
+warning while valid endpoints register. Activation fails when no trace, log,
+or metric endpoint can be registered. A delivery failure from one exporter does
+not stop application work or delivery to the other exporters.
 
 ## Trace Endpoint Fields
 
@@ -262,6 +263,16 @@ set, `max_export_batch_size` must not exceed `max_queue_size`. When one size is
 inherited, the SDK caps the effective batch size at the effective queue size.
 The SDK falls back to its default for malformed environment values. Queue and
 batch sizes count spans, not bytes.
+
+If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
+and records an `observability.invalid_otel_endpoint` configuration warning with
+its `opentelemetry.endpoints[N]` field. Other valid endpoints continue to
+activate. Activation still fails when no trace, log, or metric endpoint can be
+registered.
+
+Relay also skips and logs any trace endpoint that fails during exporter
+construction. This includes malformed collector destinations that cannot be
+detected during configuration validation.
 
 Relay's thread-based batch processor exports serially, so it does not expose
 the SDK's concurrent-export setting. It also does not expose a separate batch
