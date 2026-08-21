@@ -32,6 +32,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -105,6 +106,23 @@ impl SpanExporter for BlockingSpanExporter {
             state = changed.wait(state).unwrap();
         }
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct FailingThenRecoveringSpanExporter {
+    attempts: Arc<AtomicUsize>,
+}
+
+impl SpanExporter for FailingThenRecoveringSpanExporter {
+    async fn export(&self, _batch: Vec<SpanData>) -> OTelSdkResult {
+        if self.attempts.fetch_add(1, Ordering::Relaxed) == 0 {
+            Err(OTelSdkError::InternalFailure(
+                "collector unavailable".to_string(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -709,10 +727,78 @@ fn omits_scope_metadata_when_final_value_is_unsupported_across_trace_projections
 
         let diagnostics = runtime_diagnostics.snapshot();
         let diagnostic = diagnostics
-            .get("otel.metadata_promotion_value_unsupported")
+            .get("otel.metadata_promotion_value_unsupported.nv.source")
             .expect("unsupported final metadata diagnostic");
         assert_eq!(diagnostic.count, 1);
         assert!(diagnostic.message.contains("nv.source"));
+    }
+}
+
+#[test]
+fn reports_each_unsupported_metadata_key_with_a_deterministic_diagnostic_code() {
+    let (provider, exporter) = make_provider();
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    let mut processor =
+        OtelEventProcessor::new_with_mark_projection_and_exclusions_and_mappings_and_runtime_diagnostics(
+            provider,
+            "unsupported-metadata-promotion-keys-test".into(),
+            OpenTelemetryType::Full,
+            MarkProjection::default(),
+            default_mark_exclude_names(),
+            Vec::new(),
+            vec!["tenant.".to_string()],
+            runtime_diagnostics.clone(),
+        );
+    let uuid = Uuid::now_v7();
+    let unsupported_metadata = json!({
+        "tenant.plan": {"name": "enterprise"},
+        "tenant.flags": null,
+        "tenant.tags": [["nested"]],
+        "tenant.mixed": [1, "string"],
+    });
+
+    processor.process(&make_start_event_with_metadata(
+        uuid,
+        None,
+        "unsupported-metadata-promotion-keys-scope",
+        unsupported_metadata.clone(),
+    ));
+    processor.process(&make_end_event_with_metadata(
+        uuid,
+        None,
+        "unsupported-metadata-promotion-keys-scope",
+        ScopeType::Agent,
+        unsupported_metadata,
+    ));
+    processor.force_flush().unwrap();
+
+    let spans = exporter.get_finished_spans().unwrap();
+    assert_eq!(spans.len(), 1);
+    let span_attributes = attr_map(&spans[0].attributes);
+    for key in ["tenant.flags", "tenant.mixed", "tenant.plan", "tenant.tags"] {
+        assert!(!span_attributes.contains_key(key));
+    }
+
+    let diagnostics = runtime_diagnostics.snapshot();
+    let expected_keys = ["tenant.flags", "tenant.mixed", "tenant.plan", "tenant.tags"];
+    assert_eq!(
+        diagnostics
+            .entries()
+            .iter()
+            .map(|diagnostic| diagnostic.code.as_str())
+            .collect::<Vec<_>>(),
+        expected_keys
+            .iter()
+            .map(|key| format!("otel.metadata_promotion_value_unsupported.{key}"))
+            .collect::<Vec<_>>()
+    );
+    for key in expected_keys {
+        let code = format!("otel.metadata_promotion_value_unsupported.{key}");
+        let diagnostic = diagnostics
+            .get(&code)
+            .expect("metadata-key-specific promotion diagnostic");
+        assert_eq!(diagnostic.count, 2);
+        assert!(diagnostic.message.contains(key));
     }
 }
 
@@ -4367,6 +4453,108 @@ fn plugin_trace_subscriber_runtime_diagnostics_use_trace_field() {
         diagnostic.field.as_deref(),
         Some("opentelemetry.traces[2].endpoint")
     );
+}
+
+#[test]
+fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
+    let runtime_diagnostics = SignalRuntimeDiagnostics::new(None);
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        FailingThenRecoveringSpanExporter::default(),
+        "https://collector.example/v1/traces".to_string(),
+        runtime_diagnostics.clone(),
+        BatchConfigBuilder::default()
+            .with_max_export_batch_size(1)
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let tracer = provider.tracer("trace-export-failure-diagnostics-test");
+
+    tracer.start("first-export-fails").end();
+    assert!(provider.force_flush().is_err());
+
+    let diagnostics = runtime_diagnostics.snapshot();
+    let diagnostic = diagnostics
+        .get("otel.traces_export_failed")
+        .expect("trace export failure diagnostic");
+    assert_eq!(diagnostic.count, 1);
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/traces")
+    );
+    assert!(diagnostic.message.contains("collector unavailable"));
+
+    let repeated_flush = provider.force_flush().unwrap_err();
+    assert!(
+        repeated_flush
+            .to_string()
+            .contains("otel.traces_export_failed (1)")
+    );
+
+    tracer.start("recovery-export").end();
+    provider.force_flush().unwrap();
+    provider.shutdown().unwrap();
+}
+
+#[test]
+fn unrecovered_trace_export_failure_is_retained_in_the_active_plugin_report() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _ = crate::plugin::clear_plugin_configuration();
+    let _clear_guard = ClearPluginConfigurationGuard;
+    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+        crate::plugin::PluginConfig::default(),
+    ))
+    .unwrap();
+
+    let runtime_diagnostics =
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.traces[2].endpoint".to_string()));
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        FailingThenRecoveringSpanExporter::default(),
+        "https://collector.example/v1/traces".to_string(),
+        runtime_diagnostics.clone(),
+        BatchConfigBuilder::default()
+            .with_max_export_batch_size(1)
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let tracer = provider.tracer("unrecovered-trace-export-failure-test");
+
+    tracer.start("export-fails").end();
+    assert!(provider.force_flush().is_err());
+
+    let shutdown = provider.shutdown().unwrap_err();
+    assert!(
+        shutdown
+            .to_string()
+            .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
+    );
+    assert!(
+        shutdown
+            .to_string()
+            .contains("otel.traces_export_failed (1)")
+    );
+
+    let report = crate::plugin::active_plugin_report().unwrap();
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.traces_export_failed")
+        .expect("trace export failure diagnostic");
+    assert_eq!(diagnostic.count, 1);
+    assert_eq!(
+        diagnostic.field.as_deref(),
+        Some("opentelemetry.traces[2].endpoint")
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/traces")
+    );
+    assert!(diagnostic.message.contains("collector unavailable"));
 }
 
 #[test]

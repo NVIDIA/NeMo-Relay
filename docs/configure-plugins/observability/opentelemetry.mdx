@@ -179,8 +179,13 @@ Marks.
 
 Promotion supports strings, booleans, signed 64-bit integers, floating-point
 numbers, empty arrays, and homogeneous arrays of those primitive types. Relay
-omits rejected values and records a bounded runtime diagnostic containing the
-key and reason, but it does not record the rejected value or stop trace export.
+omits rejected values and records one bounded runtime diagnostic per rejected
+key. The diagnostic code is
+`otel.metadata_promotion_value_unsupported.<metadata-key>`, its message contains
+the key and rejection reason, and its count is the number of occurrences for
+that key. Relay does not record the rejected value or stop trace export. Match
+the `otel.metadata_promotion_value_unsupported.` prefix to monitor all rejected
+metadata keys.
 
 Projection-owned attributes take precedence over promoted metadata with the
 same key. For `full` and `openinference`, configured attribute-mapping aliases

@@ -57,7 +57,7 @@ class _OtelCollectorHandler(http.server.BaseHTTPRequestHandler):
             }
         )
         server.request_event.set()
-        self.send_response(200)
+        self.send_response(server.response_status)
         self.end_headers()
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: ARG002
@@ -73,10 +73,14 @@ class _CollectorRequest(TypedDict):
 class _OtelCollector:
     server: "_OtelCollectorServer"
 
+    def __init__(self, response_status: int = 200) -> None:
+        self.response_status = response_status
+
     def __enter__(self) -> "_OtelCollector":
         self.server = _OtelCollectorServer(("127.0.0.1", 0), _OtelCollectorHandler)
         self.server.requests = []
         self.server.request_event = threading.Event()
+        self.server.response_status = self.response_status
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         return self
@@ -98,6 +102,7 @@ class _OtelCollector:
 class _OtelCollectorServer(http.server.ThreadingHTTPServer):
     requests: list[_CollectorRequest]
     request_event: threading.Event
+    response_status: int
 
 
 def _encode_varint(value: int) -> bytes:
@@ -819,6 +824,33 @@ class TestOpenTelemetryTypes:
                 assert request["body"]
                 assert b"nemo_relay.mark.metadata.source" in request["body"]
                 assert _otlp_string_attribute("nv.binding", "python") in request["body"]
+            finally:
+                subscriber.deregister(subscriber_name)
+                subscriber.shutdown()
+
+    def test_trace_export_failure_stays_unhealthy_until_a_later_export_succeeds(self):
+        with _OtelCollector(response_status=503) as collector:
+            subscriber = OpenTelemetrySubscriber(OpenTelemetryConfig("full", collector.endpoint))
+            subscriber_name = f"py_otel_trace_failure_{uuid4().hex}"
+            subscriber.register(subscriber_name)
+            try:
+                failed_scope = scope.push("trace-export-failure", ScopeType.Agent)
+                scope.pop(failed_scope)
+                with pytest.raises(RuntimeError):
+                    subscriber.force_flush()
+
+                diagnostic = subscriber.runtime_diagnostics().get("otel.traces_export_failed")
+                assert diagnostic is not None
+                assert diagnostic.count == 1
+                assert collector.endpoint in diagnostic.message
+
+                with pytest.raises(RuntimeError, match=r"otel\.traces_export_failed \(1\)"):
+                    subscriber.force_flush()
+
+                collector.server.response_status = 200
+                recovered_scope = scope.push("trace-export-recovery", ScopeType.Agent)
+                scope.pop(recovered_scope)
+                subscriber.force_flush()
             finally:
                 subscriber.deregister(subscriber_name)
                 subscriber.shutdown()

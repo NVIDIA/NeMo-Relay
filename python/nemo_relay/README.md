@@ -53,6 +53,9 @@ The Python package provides the following capabilities:
   resolve to `/v1/traces`, `/v1/logs`, or `/v1/metrics` for the selected signal.
   Each direct OTLP subscriber exposes `runtime_diagnostics()` for bounded
   exporter and event-processing failure summaries.
+  Trace export failures use `otel.traces_export_failed`; after a trace export
+  fails, `force_flush()` continues to return an error until a later trace batch
+  exports successfully.
   The `nemo_relay.observability` helpers configure plugin-owned endpoint fan-out.
 - **Plugin and typed helpers**: Public modules for plugins, codecs, typed
   wrappers, adaptive runtime behavior, and observability plugin configuration.
