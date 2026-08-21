@@ -538,18 +538,25 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
 
     let logs = resolve_signal_endpoints("logs", None, std::slice::from_ref(&trace)).unwrap();
     assert_eq!(
-        logs.endpoints[0].value.endpoint,
+        logs.endpoints[0].value.as_active().unwrap().endpoint,
         "https://collector.example/prefix/v1/logs?tenant=observability-dev"
     );
-    assert_eq!(logs.endpoints[0].value.headers, trace.headers);
     assert_eq!(
-        logs.endpoints[0].value.resource_attributes,
+        logs.endpoints[0].value.as_active().unwrap().headers,
+        trace.headers
+    );
+    assert_eq!(
+        logs.endpoints[0]
+            .value
+            .as_active()
+            .unwrap()
+            .resource_attributes,
         trace.resource_attributes
     );
 
     let metrics = resolve_signal_endpoints("metrics", None, &[trace]).unwrap();
     assert_eq!(
-        metrics.endpoints[0].value.endpoint,
+        metrics.endpoints[0].value.as_active().unwrap().endpoint,
         "https://collector.example/prefix/v1/metrics?tenant=observability-dev"
     );
 
@@ -560,6 +567,8 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
             .unwrap()
             .endpoints[0]
             .value
+            .as_active()
+            .unwrap()
             .endpoint,
         "https://collector.example/v1/logs"
     );
@@ -568,6 +577,8 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
             .unwrap()
             .endpoints[0]
             .value
+            .as_active()
+            .unwrap()
             .endpoint,
         "https://collector.example/v1/metrics"
     );
@@ -589,6 +600,8 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
             .unwrap()
             .endpoints[0]
             .value
+            .as_active()
+            .unwrap()
             .endpoint,
         custom[0].endpoint
     );
@@ -611,15 +624,15 @@ fn signal_endpoint_resolution_skips_ambiguous_trace_paths_and_preserves_indexes(
             .iter()
             .map(|endpoint| endpoint.index)
             .collect::<Vec<_>>(),
-        vec![0, 2]
+        vec![0, 1, 2]
     );
     assert_eq!(
         resolution
-            .skipped
+            .endpoints
             .iter()
-            .map(|endpoint| endpoint.index)
+            .map(|endpoint| endpoint.value.as_active().is_some())
             .collect::<Vec<_>>(),
-        vec![1]
+        vec![true, false, true]
     );
 }
 
@@ -652,17 +665,23 @@ fn signal_endpoint_resolution_covers_missing_trace_grpc_and_invalid_transports()
     grpc_trace.endpoint = "http://collector.example:4317".to_string();
     let derived = resolve_signal_endpoints("metrics", None, &[grpc_trace]).unwrap();
     assert_eq!(
-        derived.endpoints[0].value.endpoint,
+        derived.endpoints[0].value.as_active().unwrap().endpoint,
         "http://collector.example:4317"
     );
-    assert_eq!(derived.endpoints[0].value.transport, "grpc");
+    assert_eq!(
+        derived.endpoints[0].value.as_active().unwrap().transport,
+        "grpc"
+    );
 
     for endpoint in ["ftp://collector.example", "not a url"] {
         let mut trace = test_opentelemetry_endpoint();
         trace.endpoint = endpoint.to_string();
         let resolution = resolve_signal_endpoints("logs", None, &[trace]).unwrap();
-        assert!(resolution.endpoints.is_empty());
-        assert_eq!(resolution.skipped.len(), 1);
+        assert_eq!(resolution.endpoints.len(), 1);
+        assert!(matches!(
+            resolution.endpoints[0].value,
+            OpenTelemetryResource::Skipped(_)
+        ));
     }
 
     let mut endpoint = test_signal_endpoint();
@@ -1612,9 +1631,16 @@ fn skipped_trace_endpoint_preserves_configured_indexes() {
             .iter()
             .map(|subscriber| subscriber.index)
             .collect::<Vec<_>>(),
-        vec![0, 2]
+        vec![0, 1, 2]
     );
-    let _ = shutdown_indexed_opentelemetry_providers(&subscribers);
+    assert_eq!(
+        subscribers
+            .iter()
+            .map(|subscriber| subscriber.value.as_active().is_some())
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+    assert!(shutdown_indexed_opentelemetry_providers(&subscribers).is_empty());
 }
 
 #[test]
@@ -4145,13 +4171,13 @@ fn plugin_validation_reports_each_signal_specific_invalid_value() {
 
 fn counting_callbacks(
     counter: &Arc<AtomicUsize>,
-) -> Vec<IndexedOpenTelemetryResource<crate::api::runtime::EventSubscriberFn>> {
+) -> Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> {
     let counter = Arc::clone(counter);
     vec![IndexedOpenTelemetryResource {
         index: 0,
-        value: Arc::new(move |_| {
+        value: OpenTelemetryResource::Active(Arc::new(move |_| {
             counter.fetch_add(1, Ordering::Relaxed);
-        }),
+        })),
     }]
 }
 
@@ -4161,9 +4187,9 @@ fn counting_metric_callbacks(
     let counter = Arc::clone(counter);
     vec![IndexedOpenTelemetryResource {
         index: 0,
-        value: Arc::new(move |_, _| {
+        value: OpenTelemetryResource::Active(Arc::new(move |_, _| {
             counter.fetch_add(1, Ordering::Relaxed);
-        }),
+        })),
     }]
 }
 
@@ -4189,17 +4215,22 @@ fn reserved_metric_mark(version: &str, data: serde_json::Value) -> crate::api::e
 fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
     let delivered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let delivered_after_panic = std::sync::Arc::clone(&delivered);
-    let callbacks = vec![
+    let callbacks: Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> = vec![
         IndexedOpenTelemetryResource {
             index: 0,
-            value: std::sync::Arc::new(|_: &Event| -> () { panic!("simulated endpoint failure") })
-                as crate::api::runtime::EventSubscriberFn,
+            value: OpenTelemetryResource::Active(std::sync::Arc::new(|_: &Event| -> () {
+                panic!("simulated endpoint failure")
+            })),
+        },
+        IndexedOpenTelemetryResource {
+            index: 1,
+            value: OpenTelemetryResource::Skipped("invalid endpoint".to_string()),
         },
         IndexedOpenTelemetryResource {
             index: 2,
-            value: std::sync::Arc::new(move |_| {
+            value: OpenTelemetryResource::Active(std::sync::Arc::new(move |_| {
                 delivered_after_panic.store(true, std::sync::atomic::Ordering::SeqCst);
-            }),
+            })),
         },
     ];
     let event = crate::api::event::Event::Mark(crate::api::event::MarkEvent::new(
@@ -4224,19 +4255,20 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     let trace_callbacks = counting_callbacks(&traced);
     let log_callbacks = counting_callbacks(&logged);
     let metered_for_callback = Arc::clone(&metered);
-    let metric_callbacks = vec![IndexedOpenTelemetryResource {
-        index: 0,
-        value: Arc::new(
-            move |_: &Event, measurements: &[ValidatedMetricMeasurement]| {
-                assert_eq!(measurements.len(), 1);
-                assert_eq!(
-                    measurements[0].descriptor.name.as_str(),
-                    "example.tokens.saved"
-                );
-                metered_for_callback.fetch_add(1, Ordering::Relaxed);
-            },
-        ) as MetricEventCallback,
-    }];
+    let metric_callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> =
+        vec![IndexedOpenTelemetryResource {
+            index: 0,
+            value: OpenTelemetryResource::Active(Arc::new(
+                move |_: &Event, measurements: &[ValidatedMetricMeasurement]| {
+                    assert_eq!(measurements.len(), 1);
+                    assert_eq!(
+                        measurements[0].descriptor.name.as_str(),
+                        "example.tokens.saved"
+                    );
+                    metered_for_callback.fetch_add(1, Ordering::Relaxed);
+                },
+            )),
+        }];
     let rejected_metric_marks = AtomicU64::new(0);
 
     let ordinary_mark = crate::api::event::Event::Mark(MarkEvent::new(
