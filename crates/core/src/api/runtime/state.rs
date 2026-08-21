@@ -284,35 +284,77 @@ impl NemoRelayContextState {
         }
     }
 
-    /// Clone the registration-bearing portion of runtime state.
+    /// Clone the requested registration-bearing portions of runtime state.
     ///
     /// Eligibility callbacks must run without holding the process-global
     /// runtime-state lock. Callers use this snapshot to release that lock
-    /// before resolving conditional middleware guardrails. Runtime extensions
-    /// are intentionally excluded because they are not registration state.
-    pub(crate) fn registry_snapshot(&self) -> Self {
-        Self {
-            event_metadata_injectors: self.event_metadata_injectors.clone(),
-            mark_sanitize_guardrails: self.mark_sanitize_guardrails.clone(),
-            scope_sanitize_start_guardrails: self.scope_sanitize_start_guardrails.clone(),
-            scope_sanitize_end_guardrails: self.scope_sanitize_end_guardrails.clone(),
-            tool_sanitize_request_guardrails: self.tool_sanitize_request_guardrails.clone(),
-            tool_sanitize_response_guardrails: self.tool_sanitize_response_guardrails.clone(),
-            tool_conditional_execution_guardrails: self
-                .tool_conditional_execution_guardrails
-                .clone(),
-            tool_request_intercepts: self.tool_request_intercepts.clone(),
-            tool_execution_intercepts: self.tool_execution_intercepts.clone(),
-            llm_sanitize_request_guardrails: self.llm_sanitize_request_guardrails.clone(),
-            llm_sanitize_response_guardrails: self.llm_sanitize_response_guardrails.clone(),
-            llm_conditional_execution_guardrails: self.llm_conditional_execution_guardrails.clone(),
-            llm_request_intercepts: self.llm_request_intercepts.clone(),
-            llm_execution_intercepts: self.llm_execution_intercepts.clone(),
-            llm_stream_execution_intercepts: self.llm_stream_execution_intercepts.clone(),
-            event_subscribers: self.event_subscribers.clone(),
-            observability_full_payloads_enabled: self.observability_full_payloads_enabled,
-            extensions: HashMap::new(),
+    /// before resolving conditional middleware guardrails. Unrequested
+    /// registries and runtime extensions are intentionally excluded.
+    pub(crate) fn registry_snapshot(&self, kinds: &[RuntimeRegistrationKind]) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.observability_full_payloads_enabled = self.observability_full_payloads_enabled;
+        for kind in kinds {
+            match kind {
+                RuntimeRegistrationKind::Subscriber => {
+                    snapshot.event_subscribers = self.event_subscribers.clone();
+                }
+                RuntimeRegistrationKind::EventMetadataInjector => {
+                    snapshot.event_metadata_injectors = self.event_metadata_injectors.clone();
+                }
+                RuntimeRegistrationKind::MarkSanitizeGuardrail => {
+                    snapshot.mark_sanitize_guardrails = self.mark_sanitize_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ScopeSanitizeStartGuardrail => {
+                    snapshot.scope_sanitize_start_guardrails =
+                        self.scope_sanitize_start_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ScopeSanitizeEndGuardrail => {
+                    snapshot.scope_sanitize_end_guardrails =
+                        self.scope_sanitize_end_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolSanitizeRequestGuardrail => {
+                    snapshot.tool_sanitize_request_guardrails =
+                        self.tool_sanitize_request_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolSanitizeResponseGuardrail => {
+                    snapshot.tool_sanitize_response_guardrails =
+                        self.tool_sanitize_response_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolConditionalExecutionGuardrail => {
+                    snapshot.tool_conditional_execution_guardrails =
+                        self.tool_conditional_execution_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolRequestIntercept => {
+                    snapshot.tool_request_intercepts = self.tool_request_intercepts.clone();
+                }
+                RuntimeRegistrationKind::ToolExecutionIntercept => {
+                    snapshot.tool_execution_intercepts = self.tool_execution_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmSanitizeRequestGuardrail => {
+                    snapshot.llm_sanitize_request_guardrails =
+                        self.llm_sanitize_request_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmSanitizeResponseGuardrail => {
+                    snapshot.llm_sanitize_response_guardrails =
+                        self.llm_sanitize_response_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmConditionalExecutionGuardrail => {
+                    snapshot.llm_conditional_execution_guardrails =
+                        self.llm_conditional_execution_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmRequestIntercept => {
+                    snapshot.llm_request_intercepts = self.llm_request_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmExecutionIntercept => {
+                    snapshot.llm_execution_intercepts = self.llm_execution_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmStreamExecutionIntercept => {
+                    snapshot.llm_stream_execution_intercepts =
+                        self.llm_stream_execution_intercepts.clone();
+                }
+            }
         }
+        snapshot
     }
 
     /// Store an arbitrary runtime extension under `key`.

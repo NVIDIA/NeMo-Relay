@@ -84,7 +84,10 @@ pub(crate) fn runtime_registration_is_enabled(
     kind: RuntimeRegistrationKind,
     effective_name: &str,
 ) -> bool {
-    let matching = match conditional_middleware_guardrails().read() {
+    let Some(registry) = CONDITIONAL_MIDDLEWARE_GUARDRAILS.get() else {
+        return true;
+    };
+    let matching = match registry.read() {
         Ok(gates) => gates
             .iter()
             .filter(|(_, gate)| {

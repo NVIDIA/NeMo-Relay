@@ -38,7 +38,7 @@ use crate::api::event::{BaseEvent, MarkEvent};
 use crate::api::llm::emit_reserved_optimization_marks;
 use crate::api::llm::{EndLlmHandleParams, LlmHandle};
 use crate::api::optimization::finalize_optimization_summary;
-use crate::api::registry::Guardrail;
+use crate::api::registry::{Guardrail, RuntimeRegistrationKind};
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::global_context;
 use crate::api::runtime::subscriber_dispatcher;
@@ -140,7 +140,7 @@ impl LlmStreamWrapper {
             let context = global_context();
             context
                 .read()
-                .map(|state| state.registry_snapshot())
+                .map(|state| state.registry_snapshot(&[RuntimeRegistrationKind::Subscriber]))
                 .map(|state| state.collect_event_subscribers(&scope_subscribers))
                 .unwrap_or_default()
         };
@@ -417,7 +417,9 @@ fn snapshot_stream_end_sanitizers(
         global_context()
             .read()
             .ok()
-            .map(|state| state.registry_snapshot())
+            .map(|state| {
+                state.registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeResponseGuardrail])
+            })
             .map(|state| state.llm_sanitize_response_entries(&scope_local_refs))
     });
     match entries {

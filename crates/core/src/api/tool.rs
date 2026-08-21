@@ -4,6 +4,7 @@
 use serde_json::json;
 
 use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
+use crate::api::registry::RuntimeRegistrationKind;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -270,7 +271,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeRequestGuardrail]);
         (
             state.tool_sanitize_request_entries(&scope_local_refs),
             subscribers,
@@ -282,8 +283,7 @@ pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let handle = state.create_tool_handle(
             CreateToolHandleParams::builder()
                 .name(params.name)
@@ -366,7 +366,7 @@ async fn tool_call_with_subscriber_snapshot(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeRequestGuardrail]);
         let entries = state.tool_sanitize_request_entries(&scope_local_refs);
         (entries, subscribers)
     };
@@ -376,8 +376,7 @@ async fn tool_call_with_subscriber_snapshot(
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .map_err(|error| FlowError::Internal(error.to_string()))?;
         let handle_params = CreateToolHandleParams::builder()
             .name(params.name)
             .parent_uuid_opt(parent_uuid)
@@ -489,7 +488,7 @@ pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeResponseGuardrail]);
         (
             state.tool_sanitize_response_entries(&scope_local_refs),
             subscribers,
@@ -568,7 +567,7 @@ async fn tool_call_end_with_pending_marks(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeResponseGuardrail]);
         let entries = state.tool_sanitize_response_entries(&scope_local_refs);
         (entries, subscribers)
     };
@@ -795,7 +794,10 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
             let state = context
                 .read()
                 .map_err(|error| FlowError::Internal(error.to_string()))?
-                .registry_snapshot();
+                .registry_snapshot(&[
+                    RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+                    RuntimeRegistrationKind::Subscriber,
+                ]);
             let entries = state.tool_conditional_execution_entries(&scope_local_refs);
             let subscribers = state.collect_event_subscribers(&scope_subscribers);
             (
@@ -843,7 +845,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolRequestIntercept]);
         state.tool_request_intercept_entries(&scope_local_refs)
     };
     let intercepted_args = NemoRelayContextState::tool_request_intercepts_snapshot_chain(
@@ -888,7 +890,7 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
             let state = context
                 .read()
                 .map_err(|error| FlowError::Internal(error.to_string()))?
-                .registry_snapshot();
+                .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
             state.tool_build_execution_chain(&execution_name, func, &scope_local_refs)
         };
         execution(intercepted_args).await
@@ -957,7 +959,7 @@ pub async fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolRequestIntercept]);
         state.tool_request_intercept_entries(&scope_local_refs)
     };
     NemoRelayContextState::tool_request_intercepts_snapshot_chain(name, args, &entries).await
@@ -1002,7 +1004,10 @@ pub async fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[
+                RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+                RuntimeRegistrationKind::Subscriber,
+            ]);
         let entries = state.tool_conditional_execution_entries(&scope_local_refs);
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))

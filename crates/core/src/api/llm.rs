@@ -16,6 +16,7 @@ use crate::api::event::{
 use crate::api::optimization::{
     LlmOptimizationRecorder, finalize_optimization_summary, scope_llm_optimization_recorder,
 };
+use crate::api::registry::RuntimeRegistrationKind;
 #[cfg(test)]
 use crate::api::runtime::LlmCodecIdentity;
 use crate::api::runtime::NemoRelayContextState;
@@ -442,7 +443,7 @@ async fn emit_llm_start_with_subscribers(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeRequestGuardrail]);
         (
             state.llm_sanitize_request_entries(&scope_local_refs),
             state.observability_full_payloads_enabled,
@@ -516,7 +517,7 @@ fn queue_llm_start_with_subscribers(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeRequestGuardrail]);
         (
             state.llm_sanitize_request_entries(&scope_local_refs),
             state.observability_full_payloads_enabled,
@@ -894,7 +895,7 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeRequestGuardrail]);
         let entries = state.llm_sanitize_request_entries(&scope_local_refs);
         let full_payloads_enabled = state.observability_full_payloads_enabled;
         (entries, subscribers, full_payloads_enabled)
@@ -1102,7 +1103,7 @@ pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeResponseGuardrail]);
         (
             state.llm_sanitize_response_entries(&scope_local_refs),
             subscribers,
@@ -1215,7 +1216,7 @@ async fn llm_call_end_with_behavior(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeResponseGuardrail]);
         let entries = state.llm_sanitize_response_entries(&scope_local_refs);
         (entries, subscribers)
     };
@@ -1353,7 +1354,7 @@ async fn emit_llm_end_without_output(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeResponseGuardrail]);
         let entries = state.llm_sanitize_response_entries(&scope_local_refs);
         (entries, subscribers)
     };
@@ -1488,7 +1489,11 @@ impl Drop for ManagedLlmCompletion {
                 global_context()
                     .read()
                     .ok()
-                    .map(|state| state.registry_snapshot())
+                    .map(|state| {
+                        state.registry_snapshot(&[
+                            RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+                        ])
+                    })
                     .map(|state| state.llm_sanitize_response_entries(&scope_local_refs))
             }
             None => None,
@@ -1626,7 +1631,10 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
             let state = context
                 .read()
                 .map_err(|error| FlowError::Internal(error.to_string()))?
-                .registry_snapshot();
+                .registry_snapshot(&[
+                    RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+                    RuntimeRegistrationKind::Subscriber,
+                ]);
             let entries = state.llm_conditional_execution_entries(&scope_local_refs);
             let subscribers = state.collect_event_subscribers(&scope_subscribers);
             (
@@ -1733,7 +1741,7 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
                 let state = context
                     .read()
                     .map_err(|error| FlowError::Internal(error.to_string()))?
-                    .registry_snapshot();
+                    .registry_snapshot(&[RuntimeRegistrationKind::LlmExecutionIntercept]);
                 state.llm_build_execution_chain(&execution_name, func, &scope_local_refs)
             };
             execution(intercepted_request).await
@@ -1847,7 +1855,10 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
             let state = context
                 .read()
                 .map_err(|error| FlowError::Internal(error.to_string()))?
-                .registry_snapshot();
+                .registry_snapshot(&[
+                    RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+                    RuntimeRegistrationKind::Subscriber,
+                ]);
             let entries = state.llm_conditional_execution_entries(&scope_local_refs);
             let subscribers = state.collect_event_subscribers(&scope_subscribers);
             (
@@ -1954,7 +1965,7 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
                 let state = context
                     .read()
                     .map_err(|error| FlowError::Internal(error.to_string()))?
-                    .registry_snapshot();
+                    .registry_snapshot(&[RuntimeRegistrationKind::LlmStreamExecutionIntercept]);
                 state.llm_stream_build_execution_chain(&execution_name, func, &scope_local_refs)
             };
             let execution_context = MiddlewareContinuationContext::capture();
@@ -2033,7 +2044,7 @@ pub async fn llm_request_intercepts(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmRequestIntercept]);
         state.llm_request_intercept_entries(&scope_local_refs)
     };
     let mut outcome = NemoRelayContextState::llm_request_intercepts_snapshot_chain(
@@ -2085,7 +2096,10 @@ pub async fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[
+                RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+                RuntimeRegistrationKind::Subscriber,
+            ]);
         let entries = state.llm_conditional_execution_entries(&scope_local_refs);
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))

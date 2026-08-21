@@ -44,7 +44,7 @@ pub(crate) fn snapshot_event_subscribers(
     let state = context
         .read()
         .map_err(|error| FlowError::Internal(error.to_string()))?
-        .registry_snapshot();
+        .registry_snapshot(&[RuntimeRegistrationKind::Subscriber]);
     Ok(state.collect_event_subscribers(&scope_local_subscribers))
 }
 
@@ -88,8 +88,15 @@ pub(crate) fn snapshot_event_sanitizers(
     };
     let local_refs = locals.iter().collect::<Vec<_>>();
     let context = global_context();
+    let registration_kind = match event {
+        Event::Mark(_) => RuntimeRegistrationKind::MarkSanitizeGuardrail,
+        Event::Scope(scope) if scope.scope_category == ScopeCategory::Start => {
+            RuntimeRegistrationKind::ScopeSanitizeStartGuardrail
+        }
+        Event::Scope(_) => RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
+    };
     let state = match context.read() {
-        Ok(state) => state.registry_snapshot(),
+        Ok(state) => state.registry_snapshot(&[registration_kind]),
         Err(error) => {
             log::error!(
                 target: "nemo_relay.runtime",
@@ -143,7 +150,7 @@ pub(crate) fn snapshot_event_metadata_injectors(
     .snapshot_scope_local_registries(|registries| &registries.event_metadata_injectors);
     let context = global_context();
     let state = match context.read() {
-        Ok(state) => state.registry_snapshot(),
+        Ok(state) => state.registry_snapshot(&[RuntimeRegistrationKind::EventMetadataInjector]),
         Err(error) => {
             log::error!(
                 target: "nemo_relay.runtime",
@@ -334,7 +341,7 @@ async fn run_request_intercepts_with_codec_inner(
         let state = context
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?
-            .registry_snapshot();
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmRequestIntercept]);
         state.llm_request_intercept_entries(&scope_local_refs)
     };
 
