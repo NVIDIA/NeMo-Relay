@@ -30,6 +30,10 @@ Choose the entry point that matches the user's current outcome:
   already present, or language-specific manual integration.
 - **Already know where your application calls tools or models**: use
   [`nemo-relay-instrument-calls`](nemo-relay-instrument-calls/SKILL.md).
+- **Integrating Relay into an unsupported framework or harness**: use
+  [`nemo-relay-integrate-upstream`](nemo-relay-integrate-upstream/SKILL.md) to
+  assess ownership, choose attachment methods, implement the adapter, and
+  qualify its real coverage.
 - **Already emit Relay events and want useful output**: start with
   [`nemo-relay-plugin-observability`](nemo-relay-plugin-observability/SKILL.md).
 - **Something is not loading or emitting events**: use
@@ -58,6 +62,7 @@ Use this table when an application directly owns the execution boundary:
 | [`nemo-relay-instrument-calls`](nemo-relay-instrument-calls/SKILL.md) | Wrap application-owned tool or LLM/provider calls with scopes and managed execution. |
 | [`nemo-relay-instrument-context-isolation`](nemo-relay-instrument-context-isolation/SKILL.md) | Keep scope context isolated across concurrent requests, tasks, threads, or agent runs. |
 | [`nemo-relay-instrument-typed-wrappers`](nemo-relay-instrument-typed-wrappers/SKILL.md) | Add typed wrappers or provider codecs while preserving Relay middleware behavior. |
+| [`nemo-relay-integrate-upstream`](nemo-relay-integrate-upstream/SKILL.md) | Assess, implement, review, or qualify a Relay integration in an unsupported agent framework or harness. |
 
 ## Configure And Build Plugins
 
@@ -90,7 +95,10 @@ Use these sequences to choose the next workflow step:
 3. **Use an existing framework**: install the maintained integration -> get
    started with its built-in path -> add observability or another plugin based
    on the desired outcome.
-4. **Package reusable behavior**: prove the behavior in one application ->
+4. **Integrate an unsupported framework**: assess host ownership -> choose a
+   method per surface -> implement the smallest adapter -> qualify the exact
+   host and Relay revisions.
+5. **Package reusable behavior**: prove the behavior in one application ->
    build a plugin -> validate it in the target integration.
-5. **Recover a broken setup**: verify installation -> run the relevant doctor
+6. **Recover a broken setup**: verify installation -> run the relevant doctor
    checks -> debug the smallest failing runtime boundary.

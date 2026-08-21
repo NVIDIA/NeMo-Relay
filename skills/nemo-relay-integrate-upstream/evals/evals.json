@@ -1,0 +1,200 @@
+[
+  {
+    "id": "nemo-relay-integrate-upstream-001",
+    "question": "Can NeMo Relay integrate with this open-source Python agent framework? Please inspect its tool, model, streaming, subagent, and plugin boundaries and recommend the right shape, but do not change anything yet.",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent uses assessment mode, pins exact host and Relay revisions, traces each execution surface from source and tests, builds an ownership matrix, and recommends Relay methods per surface without modifying either repository.",
+    "expected_behavior": [
+      "The agent reads the skill and the assess-host reference before concluding",
+      "The agent records exact host and Relay revisions and treats different distributions independently",
+      "The agent distinguishes actual callbacks, paired events, awaited decision hooks, mutable hooks, and provider base URLs",
+      "The agent reports observable, evaluable, enforceable, mutable, managed, correlated, and complete behavior separately",
+      "The agent does not modify code, open issues, or create pull requests during assessment"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-002",
+    "question": "Our TypeScript harness gives extensions pre_tool and post_tool hooks, waits for pre_tool, applies rewritten arguments, and supports an Anthropic-compatible base URL. It never gives extensions the tool or provider callback. How should Relay attach?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent recommends a hybrid: standalone tool conditional execution for blocking, standalone request intercepts for argument mutation, explicit lifecycle for paired tool observation, and the gateway for managed model HTTP traffic. It does not claim execution-intercept or full managed parity in process.",
+    "expected_behavior": [
+      "The agent recommends a method independently for tool and model surfaces",
+      "The agent explains that paired hooks do not run complete managed middleware",
+      "The agent explains that the provider gateway does not cover tools or host lifecycle",
+      "The agent requires validation of rewritten arguments if host validation happens before the hook",
+      "The agent names correlation between extension and gateway runtimes as a separate concern"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-003",
+    "question": "This Rust framework hands our adapter the actual async tool and LLM callbacks. We are approved to implement Relay support. Preserve behavior and use the strongest supported boundary.",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent uses implementation mode and current Relay public APIs to place scopes and managed tool and LLM execution around the real callbacks, while preserving host validation, scheduling, retries, cancellation, streams, native result types, and Relay-disabled behavior.",
+    "expected_behavior": [
+      "The agent reads the implementation reference and current Relay integration docs",
+      "The agent prefers managed wrappers because the host yields the actual callbacks",
+      "The agent preserves host scheduling, retries, cancellation, and business behavior",
+      "The agent uses codec-correct JSON projections and keeps clients, callbacks, and streams outside Relay values",
+      "The agent adds deterministic success, error, cancellation, retry, streaming, and concurrency tests"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-004",
+    "question": "A closed desktop agent lets me change OPENAI_BASE_URL but exposes no tool, session, or subagent hooks. Can I say Relay provides full observability and guardrails for the application?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent limits the claim to compatible provider traffic routed through Relay. It explicitly says the base URL does not cover tools, local host lifecycle, subagents, or calls that bypass the configured provider and requires runtime evidence before claiming all model traffic.",
+    "expected_behavior": [
+      "The agent does not call gateway access a full application integration",
+      "The agent distinguishes model HTTP traffic from tools, sessions, and subagents",
+      "The agent identifies alternate providers or hard-coded endpoints as possible bypasses",
+      "The agent scopes all conclusions to evidence available from the closed application"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-005",
+    "question": "Our framework emits before_llm, after_llm, and llm_error events but ignores hook return values and swallows hook exceptions. Can Relay block unsafe model calls from this extension?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent says the extension can evaluate and observe but cannot enforce a block because the host neither honors a rejection nor yields the callback. It considers a compatible gateway or a small upstream abort contract instead of claiming standalone conditional execution is enforceable.",
+    "expected_behavior": [
+      "The agent separates evaluation from enforcement",
+      "The agent does not recommend throwing from a swallowed hook",
+      "The agent checks whether the provider gateway can own the HTTP request",
+      "The agent identifies an awaited host abort contract as the upstream route for in-process enforcement"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-006",
+    "question": "Review and qualify this existing Relay adapter. It claims full tool coverage, streaming parity, subagent correlation, request mutation, and no behavior change when policies are disabled.",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent uses qualification mode at exact revisions, compares Relay-disabled and enabled baselines, and directly tests each claim with deterministic tool, stream, subagent, mutation, cancellation, error, retry, and concurrency scenarios before issuing a scoped readiness statement.",
+    "expected_behavior": [
+      "The agent reads the qualification reference and records exact revisions",
+      "The agent compares host-visible payloads, results, streams, scheduling, and exceptions with Relay disabled and enabled",
+      "The agent proves blocking with a canary callback that must not run and mutation at the actual callback or provider",
+      "The agent tests scope isolation and parentage under concurrent tools and subagents",
+      "The agent lists untested paths and does not treat historical CI or a scripted model as stronger evidence than it is"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-007",
+    "question": "The agent calls an MCP client as one of its tools. If Relay wraps that call, will it automatically trace every nested tool the MCP server invokes?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent explains that wrapping the MCP bridge captures the client-visible bridge invocation and result. Nested server-side tool calls require their own Relay instrumentation and propagated context; otherwise they cannot be tied together as independently managed calls.",
+    "expected_behavior": [
+      "The agent distinguishes the MCP bridge call from nested server-side work",
+      "The agent does not claim automatic end-to-end tracing across a process boundary",
+      "The agent recommends explicit context export and import when both sides are instrumented",
+      "The agent preserves structured MCP error results as results rather than transport failures"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-008",
+    "question": "A Swift host has a plugin API but no Relay language package. Should we immediately build against Relay's C FFI?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent first assesses whether public hooks plus gateway routing or a supported sidecar/binding can satisfy the use case. It treats raw C FFI as an advanced source-first option requiring a compatibility, packaging, lifetime, threading, and shutdown spike rather than the default recommendation.",
+    "expected_behavior": [
+      "The agent does not choose FFI solely because the host is written in Swift",
+      "The agent inventories the plugin hooks and provider routing first",
+      "The agent states the larger ownership and compatibility burden of raw FFI",
+      "The agent requires distribution-specific loading and lifetime tests before recommending FFI"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-009",
+    "question": "The integration produces a tool start event and the tool still works. Is that enough to say tool instrumentation is complete?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent rejects the claim. It requires a balanced end or error event, stable IDs and parentage, result capture, cancellation and concurrency behavior, all dispatch paths, and direct proof of any middleware, blocking, or mutation claims.",
+    "expected_behavior": [
+      "The agent treats a start event as observation evidence only",
+      "The agent requires success, error, cancellation, and concurrent completion tests",
+      "The agent checks built-in, extension, MCP, and subagent dispatch paths before calling coverage complete",
+      "The agent does not infer managed middleware from manual lifecycle events"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-010",
+    "question": "I already use the maintained NeMo Relay LangGraph integration. Please create a second custom adapter around every LangGraph node.",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent identifies the maintained integration, stops before creating a duplicate adapter, and routes the user to the maintained setup and qualification path unless a concrete uncovered boundary is proven.",
+    "expected_behavior": [
+      "The agent checks for the maintained integration before designing new code",
+      "The agent avoids double instrumentation",
+      "The agent asks for or investigates a specific missing capability before proposing an additional adapter",
+      "The agent hands setup to nemo-relay-install or nemo-relay-get-started as appropriate"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-011",
+    "question": "My Python application directly owns two tool functions and one OpenAI call. There is no framework or harness to integrate. How do I add Relay?",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "The agent routes this narrower application instrumentation request to nemo-relay-instrument-calls rather than invoking the upstream framework integration workflow.",
+    "expected_behavior": [
+      "The agent recognizes that the application directly owns a small number of callbacks",
+      "The agent recommends nemo-relay-instrument-calls",
+      "The agent does not require a framework ownership assessment or upstream adapter"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-012",
+    "question": "Build a reusable configuration-driven Relay exporter that multiple applications can enable from plugin config.",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "The agent routes the request to nemo-relay-plugin-build because it concerns reusable Relay runtime behavior, not an upstream framework-owned integration boundary.",
+    "expected_behavior": [
+      "The agent recommends nemo-relay-plugin-build",
+      "The agent distinguishes a reusable Relay plugin from an upstream framework adapter",
+      "The agent does not start a host ownership assessment"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-013",
+    "question": "I have never installed NeMo Relay. Can you help me try it locally with Codex?",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "The agent routes this first-time setup request to nemo-relay-install and nemo-relay-get-started instead of the upstream integration skill.",
+    "expected_behavior": [
+      "The agent recognizes a first-time onboarding request",
+      "The agent recommends the install and get-started workflow",
+      "The agent does not perform an upstream framework integration assessment"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-014",
+    "question": "This coding-agent harness has an optional extension system with awaited pre/post tool hooks and configurable model base URLs, but only its core owns the actual tool and model callbacks. Should we immediately wire Relay directly into core for maximum coverage?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent does not choose core merely for maximum theoretical coverage or default to the optional extension. It maps requirements to the extension, gateway, and core surfaces, then chooses based on required coverage, intended product relationship, support and release ownership, lifecycle, and performance. It distinguishes the host extension from Relay runtime plugins and prevents duplicate instrumentation.",
+    "expected_behavior": [
+      "The agent chooses host integration depth separately from Relay methods used per call surface",
+      "The agent evaluates the optional extension and core integration without treating either as the default",
+      "The agent considers managed execution and callback ownership alongside product intent, support ownership, lifecycle, release coupling, and performance",
+      "The agent distinguishes a host extension from Relay middleware and exporter plugins",
+      "The agent checks activation, correlation, and duplicate instrumentation across the extension and gateway"
+    ]
+  },
+  {
+    "id": "nemo-relay-integrate-upstream-015",
+    "question": "Our host plugin gets chain start and end callbacks from worker threads. Concurrent siblings share one callback handler and can finish out of start order. Several profile objects share one process-wide Relay plugin configuration. How should the integration own scopes and shutdown?",
+    "expected_skill": "nemo-relay-integrate-upstream",
+    "expected_script": null,
+    "ground_truth": "The agent distinguishes a scope handle from its execution context, evaluates isolated branch stacks when dispatch can be controlled, and otherwise uses owned deferred completion without popping through a live or foreign scope. It treats callback synchronization, output snapshots, retryable pop failures, process-global activation, live-operation leases, and one final drain as separate responsibilities.",
+    "expected_behavior": [
+      "The agent asks whether the adapter controls branch creation before choosing forked stacks or deferred completion",
+      "The agent preserves the real completion time and snapshots caller-owned output when a close must be deferred",
+      "The agent never closes a scope owned by another handler and does not hold a synchronous lock across an await",
+      "The agent separates profile configuration owners from live callbacks, streams, and delegated operations",
+      "The agent stops admission, settles accepted work, closes owned scopes, drains publication once, and only then clears activation"
+    ]
+  }
+]
