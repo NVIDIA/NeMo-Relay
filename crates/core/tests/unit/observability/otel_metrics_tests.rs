@@ -52,9 +52,13 @@ fn measurement(
 }
 
 fn metric_event(version: &str, data: Json) -> Event {
+    metric_event_named("metric.record", version, data)
+}
+
+fn metric_event_named(name: &str, version: &str, data: Json) -> Event {
     Event::Mark(MarkEvent::new(
         BaseEvent::builder()
-            .name("metric.record")
+            .name(name)
             .data(data)
             .data_schema(
                 DataSchema::builder()
@@ -136,6 +140,59 @@ fn direct_metric_subscriber_exposes_runtime_diagnostics() {
             .message
             .contains("unsupported metric schema version")
     );
+}
+
+#[test]
+fn direct_metric_subscriber_retains_distinct_invalid_mark_causes() {
+    let subscriber =
+        OpenTelemetryMetricSubscriber::new(OpenTelemetryMetricConfig::new("http://127.0.0.1:4318"))
+            .unwrap();
+    let events = [
+        metric_event_named("wrong-schema", "999", json!({"measurements": []})),
+        metric_event_named(
+            "empty-measurements",
+            METRIC_DATA_SCHEMA_VERSION,
+            json!({"measurements": []}),
+        ),
+        metric_event_named(
+            "invalid-counter-type",
+            METRIC_DATA_SCHEMA_VERSION,
+            json!({"measurements": [{
+                "name": "example.requests",
+                "kind": "counter",
+                "value_type": "i64",
+                "value": -1
+            }]}),
+        ),
+        metric_event_named(
+            "invalid-instrument-name",
+            METRIC_DATA_SCHEMA_VERSION,
+            json!({"measurements": [{
+                "name": "9bad-name",
+                "kind": "counter",
+                "value_type": "u64",
+                "value": 1
+            }]}),
+        ),
+    ];
+
+    for event in &events {
+        (subscriber.subscriber())(event);
+    }
+
+    let diagnostics = subscriber.runtime_diagnostics();
+    let diagnostic = diagnostics
+        .get("otel.metric_mark_invalid")
+        .expect("invalid metric diagnostic");
+    assert_eq!(diagnostic.count, 4);
+    for mark_name in [
+        "wrong-schema",
+        "empty-measurements",
+        "invalid-counter-type",
+        "invalid-instrument-name",
+    ] {
+        assert!(diagnostic.message.contains(mark_name));
+    }
 }
 
 #[test]

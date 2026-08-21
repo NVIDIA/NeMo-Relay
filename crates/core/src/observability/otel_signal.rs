@@ -4,7 +4,7 @@
 //! Shared infrastructure for independently owned OTLP signal providers.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -29,7 +29,7 @@ const MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS: usize = 1_024;
 pub struct OpenTelemetryRuntimeDiagnostic {
     /// Stable identifier for the diagnostic condition.
     pub code: String,
-    /// Most recent message recorded for this condition.
+    /// Distinct messages recorded for this condition, retained within a bounded budget.
     pub message: String,
     /// Total number of occurrences recorded for this condition.
     pub count: u64,
@@ -57,7 +57,13 @@ impl OpenTelemetryRuntimeDiagnostics {
 
 #[derive(Debug, Default)]
 struct RuntimeDiagnosticState {
-    diagnostics: BTreeMap<String, OpenTelemetryRuntimeDiagnostic>,
+    diagnostics: BTreeMap<String, RuntimeDiagnosticEntry>,
+}
+
+#[derive(Debug)]
+struct RuntimeDiagnosticEntry {
+    diagnostic: OpenTelemetryRuntimeDiagnostic,
+    messages: BTreeSet<String>,
 }
 
 /// Shared runtime-diagnostic recorder for one independently owned OTLP subscriber.
@@ -78,21 +84,34 @@ impl SignalRuntimeDiagnostics {
     pub(super) fn record(&self, code: impl Into<String>, message: String, count: u64) -> u64 {
         let code = code.into();
         let count = count.max(1);
+        let message = truncate_runtime_diagnostic_message(message);
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let total = if let Some(diagnostic) = state.diagnostics.get_mut(&code) {
-            diagnostic.message = truncate_runtime_diagnostic_message(message.clone());
-            diagnostic.count = diagnostic.count.saturating_add(count);
-            diagnostic.count
+            diagnostic.diagnostic.count = diagnostic.diagnostic.count.saturating_add(count);
+            if diagnostic.messages.insert(message.clone()) {
+                let combined = combine_runtime_diagnostic_messages(&diagnostic.messages);
+                if combined.chars().count() <= MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS {
+                    diagnostic.diagnostic.message = combined;
+                } else {
+                    diagnostic.messages.remove(&message);
+                }
+            }
+            diagnostic.diagnostic.count
         } else if state.diagnostics.len() < MAX_RUNTIME_DIAGNOSTICS {
+            let mut messages = BTreeSet::new();
+            messages.insert(message.clone());
             state.diagnostics.insert(
                 code.clone(),
-                OpenTelemetryRuntimeDiagnostic {
-                    code: code.clone(),
-                    message: truncate_runtime_diagnostic_message(message.clone()),
-                    count,
+                RuntimeDiagnosticEntry {
+                    diagnostic: OpenTelemetryRuntimeDiagnostic {
+                        code: code.clone(),
+                        message: message.clone(),
+                        count,
+                    },
+                    messages,
                 },
             );
             count
@@ -111,7 +130,11 @@ impl SignalRuntimeDiagnostics {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         OpenTelemetryRuntimeDiagnostics {
-            diagnostics: state.diagnostics.values().cloned().collect(),
+            diagnostics: state
+                .diagnostics
+                .values()
+                .map(|entry| entry.diagnostic.clone())
+                .collect(),
         }
     }
 
@@ -130,10 +153,22 @@ fn truncate_runtime_diagnostic_message(message: String) -> String {
     }
     let mut truncated = message
         .chars()
-        .take(MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS)
+        .take(MAX_RUNTIME_DIAGNOSTIC_MESSAGE_CHARS - 1)
         .collect::<String>();
     truncated.push('…');
     truncated
+}
+
+fn combine_runtime_diagnostic_messages(messages: &BTreeSet<String>) -> String {
+    messages
+        .iter()
+        .fold(String::new(), |mut combined, message| {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(message);
+            combined
+        })
 }
 
 pub(super) enum MetricMarkClassification {
