@@ -288,13 +288,18 @@ from nemo_relay.runtime_registrations import (
 )
 
 target = next(
-    registration
-    for registration in list_runtime_registrations(
-        {RuntimeRegistrationKind.SUBSCRIBER}
-    )
-    if registration.local_name == "opentelemetry"
-    and registration.owner.plugin_kind == "observability"
+    (
+        registration
+        for registration in list_runtime_registrations(
+            {RuntimeRegistrationKind.SUBSCRIBER}
+        )
+        if registration.local_name == "opentelemetry"
+        and registration.owner.plugin_kind == "observability"
+    ),
+    None,
 )
+if target is None:
+    raise RuntimeError("OpenTelemetry subscriber was not found")
 
 paused = True
 register_conditional_middleware_guardrail(

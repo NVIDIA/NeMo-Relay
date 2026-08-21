@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use futures_util::StreamExt;
 use nemo_relay_worker::{
-    ConfigDiagnostic, EventSanitizeFields, Json, JsonStream, LlmOptimizationContribution,
-    LlmRequestInterceptOutcome, PendingMarkSpec, PluginContext, PluginRuntime, Result, ScopeType,
-    ToolExecutionInterceptOutcome, WorkerPlugin, WorkerSdkError,
+    ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, JsonStream,
+    LlmOptimizationContribution, LlmRequestInterceptOutcome, PendingMarkSpec, PluginContext,
+    PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, WorkerPlugin, WorkerSdkError,
 };
 use serde_json::json;
 
@@ -32,6 +32,16 @@ impl WorkerPlugin for DocumentationWorker {
     }
 
     fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
+        if let Some(diagnostic) = config::validate(config)
+            .into_iter()
+            .find(|diagnostic| diagnostic.level == DiagnosticLevel::Error)
+        {
+            let location = diagnostic.field.unwrap_or(diagnostic.code);
+            return Err(WorkerSdkError::InvalidInput(format!(
+                "{location}: {}",
+                diagnostic.message
+            )));
+        }
         let config = ExampleConfig::parse(config).map_err(WorkerSdkError::InvalidInput)?;
         if config.registration_control.enabled {
             context.register_conditional_middleware_guardrail(

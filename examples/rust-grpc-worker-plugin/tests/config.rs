@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use nemo_relay_rust_grpc_worker_plugin_example::{default_example_config, validate_example_config};
+use nemo_relay_rust_grpc_worker_plugin_example::{
+    DocumentationWorker, default_example_config, validate_example_config,
+};
+use nemo_relay_worker::{PluginContext, WorkerPlugin};
 use serde_json::{Value as Json, json};
 
 #[test]
@@ -69,6 +72,20 @@ fn wrong_types_are_rejected() {
 }
 
 #[test]
+fn registration_control_parse_errors_are_rejected() {
+    for config in [
+        json!({ "registration_control": { "enabled": "yes" } }),
+        json!({ "registration_control": { "kinds": ["unsupported"] } }),
+    ] {
+        let diagnostics = validate_example_config(&config);
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "examples.rust_grpc_worker.invalid_config"
+                && diagnostic.field.is_none()
+        }));
+    }
+}
+
+#[test]
 fn empty_headers_are_reported_at_their_individual_fields() {
     for (config, field) in [
         (
@@ -110,6 +127,23 @@ fn invalid_registration_control_is_reported_at_its_field() {
                 && diagnostic.field.as_deref() == Some(field)
         }));
     }
+}
+
+#[test]
+fn register_rejects_invalid_registration_control() {
+    let mut context = PluginContext::new();
+    let error = DocumentationWorker
+        .register(
+            &mut context,
+            &json!({ "registration_control": { "enabled": true, "reason": "" } }),
+        )
+        .expect_err("register should validate the raw configuration");
+
+    assert!(
+        error
+            .to_string()
+            .contains("registration_control.reason must not be empty")
+    );
 }
 
 #[test]

@@ -147,6 +147,11 @@ def test_project_builds_an_importable_wheel(tmp_path: Path) -> None:
 def test_default_configuration_is_valid(example: Any) -> None:
     assert example.ExamplePythonWorker().validate(example.DEFAULT_CONFIG) == []
     assert example.DEFAULT_CONFIG["registration_control"]["enabled"] is False
+    context, _runtime = configured_context()
+
+    example.ExamplePythonWorker().register(context, example.DEFAULT_CONFIG)
+
+    context.register_conditional_middleware_guardrail.assert_not_called()
 
 
 def test_non_object_configuration_is_rejected(example: Any) -> None:
@@ -175,7 +180,7 @@ def test_wrong_type_is_rejected(example: Any) -> None:
         ({"registration_control": {"reason": ""}}, "registration_control.reason"),
     ],
 )
-def test_invalid_registration_control_is_rejected(example: Any, config: dict[str, Any], field: str) -> None:
+def test_invalid_registration_control_is_rejected(example: Any, config: dict[str, Any], field: str):
     diagnostics = example.ExamplePythonWorker().validate(config)
 
     assert any(item.code == "examples.python_grpc_worker.invalid_type" and item.field == field for item in diagnostics)
@@ -234,7 +239,7 @@ def test_register_installs_all_protocol_surfaces(example: Any) -> None:
     assert all(getattr(context, method).call_count >= 1 for method in registration_methods)
 
 
-def test_enabled_registration_control_registers_expected_gate(example: Any) -> None:
+def test_enabled_registration_control_registers_expected_gate(example: Any):
     context, _runtime = configured_context()
     config = deepcopy(example.DEFAULT_CONFIG)
     config["registration_control"]["enabled"] = True

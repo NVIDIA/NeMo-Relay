@@ -421,7 +421,7 @@ class TestAdaptivePluginConfiguration:
             plugin.deregister("python.list_kinds_plugin")
 
 
-async def test_plugin_context_conditional_gate_fails_open_and_clears() -> None:
+async def test_plugin_context_conditional_gate_fails_open_and_clears():
     suffix = uuid4().hex
     kind = f"python.context_gate.{suffix}"
     target = f"python-context-gate-target-{suffix}"
@@ -463,7 +463,7 @@ async def test_plugin_context_conditional_gate_fails_open_and_clears() -> None:
         subscribers.deregister(target)
 
 
-async def test_failed_plugin_activation_rolls_back_conditional_gate() -> None:
+async def test_failed_plugin_activation_rolls_back_conditional_gate():
     suffix = uuid4().hex
     kind = f"python.context_gate_rollback.{suffix}"
     target = f"python-context-gate-rollback-target-{suffix}"

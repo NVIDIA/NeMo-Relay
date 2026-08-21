@@ -9,7 +9,7 @@ use nemo_relay::api::llm::{
     llm_stream_call_execute,
 };
 use nemo_relay::api::runtime::callbacks::LlmJsonStream;
-use nemo_relay::api::subscriber::flush_subscribers;
+use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, register_subscriber};
 use nemo_relay::api::tool::{ToolCallExecuteParams, ToolExecutionResult, tool_call_execute};
 use nemo_relay::plugin::{
     ConfigReport, DiagnosticLevel, Plugin, clear_plugin_configuration, deregister_plugin,
@@ -38,6 +38,14 @@ impl Drop for RegisteredPlugin {
 struct ActivePlugin {
     report: ConfigReport,
     _registration: RegisteredPlugin,
+}
+
+struct RegisteredSubscriber(&'static str);
+
+impl Drop for RegisteredSubscriber {
+    fn drop(&mut self) {
+        let _ = deregister_subscriber(self.0);
+    }
 }
 
 async fn register_only() -> RegisteredPlugin {
@@ -205,13 +213,14 @@ async fn registration_control_is_owned_by_activation() {
     const TARGET: &str = "documentation-controlled-subscriber";
     let observed = Arc::new(AtomicUsize::new(0));
     let captured = Arc::clone(&observed);
-    nemo_relay::api::subscriber::register_subscriber(
+    register_subscriber(
         TARGET,
         Arc::new(move |_| {
             captured.fetch_add(1, Ordering::SeqCst);
         }),
     )
     .expect("controlled subscriber should register");
+    let _subscriber = RegisteredSubscriber(TARGET);
     let mut configuration = config("enforce");
     configuration.components[0].config["registration_control"]["enabled"] = json!(true);
 
@@ -242,8 +251,6 @@ async fn registration_control_is_owned_by_activation() {
     .expect("managed call should complete after clear");
     flush_subscribers().expect("restored events should flush");
     assert!(observed.load(Ordering::SeqCst) > baseline);
-    nemo_relay::api::subscriber::deregister_subscriber(TARGET)
-        .expect("controlled subscriber should deregister");
 }
 
 #[tokio::test]

@@ -50,11 +50,16 @@ subscribers = await ctx.runtime.list_runtime_registrations(
     {RuntimeRegistrationKind.SUBSCRIBER}
 )
 opentelemetry = next(
-    registration
-    for registration in subscribers
-    if registration.local_name == "opentelemetry"
-    and registration.owner.plugin_kind == "observability"
+    (
+        registration
+        for registration in subscribers
+        if registration.local_name == "opentelemetry"
+        and registration.owner.plugin_kind == "observability"
+    ),
+    None,
 )
+if opentelemetry is None:
+    raise RuntimeError("OpenTelemetry subscriber was not found")
 
 gate = await ctx.runtime.register_conditional_middleware_guardrail(
     "pause-opentelemetry",

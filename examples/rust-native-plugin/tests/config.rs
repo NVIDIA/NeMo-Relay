@@ -76,6 +76,20 @@ fn wrong_types_are_rejected() {
 }
 
 #[test]
+fn registration_control_parse_errors_are_rejected() {
+    for config in [
+        json!({ "registration_control": { "enabled": "yes" } }),
+        json!({ "registration_control": { "kinds": ["unsupported"] } }),
+    ] {
+        let diagnostics = validate_example_config(&object(config));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "examples.rust_native_policy.invalid_config"
+                && diagnostic.field.is_none()
+        }));
+    }
+}
+
+#[test]
 fn invalid_values_are_rejected_at_their_fields() {
     for (config, code, field) in [
         (

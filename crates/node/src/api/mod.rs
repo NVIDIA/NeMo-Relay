@@ -67,7 +67,7 @@ use nemo_relay::plugin::{
     clear_plugin_configuration as clear_plugin_configuration_impl,
     deregister_plugin as deregister_plugin_impl, initialize_plugins as initialize_plugins_impl,
     list_plugin_kinds as list_plugin_kinds_impl, register_plugin as register_plugin_impl,
-    validate_plugin_config as validate_plugin_config_impl,
+    rollback_registrations, validate_plugin_config as validate_plugin_config_impl,
 };
 use nemo_relay::shared_runtime::initialize_shared_runtime_binding;
 use nemo_relay_adaptive::acg::{
@@ -2013,23 +2013,37 @@ impl Plugin for NodePlugin {
             let status = self.register.call_with_return_value(
                 payload,
                 ThreadsafeFunctionCallMode::NonBlocking,
-                move |_val: JsUnknown| {
-                    let _ = tx.send(Ok(()));
+                move |value: Json| {
+                    let result = callable::unwrap_middleware_result(
+                        callback_json(Some(value)),
+                        "JS plugin register callback failed",
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string());
+                    let _ = tx.send(result);
                     Ok(())
                 },
             );
-            if status != napi::Status::Ok {
-                return Err(PluginError::RegistrationFailed(format!(
+            let result = if status != napi::Status::Ok {
+                Err(PluginError::RegistrationFailed(format!(
                     "failed to queue JS plugin register callback: {status:?}"
-                )));
+                )))
+            } else {
+                rx.recv()
+                    .map_err(|_| {
+                        PluginError::RegistrationFailed(
+                            "JS plugin register completion channel closed".into(),
+                        )
+                    })?
+                    .map_err(PluginError::RegistrationFailed)
+            };
+            if let Err(error) = result {
+                let mut registrations = registrations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                rollback_registrations(&mut registrations);
+                return Err(error);
             }
-            rx.recv()
-                .map_err(|_| {
-                    PluginError::RegistrationFailed(
-                        "JS plugin register completion channel closed".into(),
-                    )
-                })?
-                .map_err(PluginError::RegistrationFailed)?;
 
             let drained = std::mem::take(&mut *registrations.lock().map_err(|e| {
                 PluginError::RegistrationFailed(format!("plugin registrations lock poisoned: {e}"))
@@ -5738,6 +5752,7 @@ pub fn register_plugin(
         }
         None => None,
     };
+    let register = callable::safe_middleware_callback(&env, &register)?;
     let mut register_tsfn = register
         .create_threadsafe_function::<NodePluginRegisterCall, JsUnknown, _, ErrorStrategy::Fatal>(
             0,

@@ -2384,7 +2384,7 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
 )
 async def test_runtime_registration_discovery_rejects_host_and_malformed_responses(
     host_stub: RecordingHostStub, failure: str, message: str
-) -> None:
+):
     host_stub.failures["ListRuntimeRegistrations"] = failure
     runtime = PluginRuntime(activation_id=ACTIVATION_ID, auth_token=AUTH_TOKEN, host_stub=host_stub)
 
