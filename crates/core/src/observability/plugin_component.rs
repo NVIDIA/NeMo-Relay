@@ -1419,6 +1419,12 @@ fn register_opentelemetry(
         }
         _ => Vec::new(),
     };
+    if trace_subscribers.is_empty() && log_subscribers.is_empty() && metric_subscribers.is_empty() {
+        return Err(PluginError::InvalidConfig(
+            "enabled OpenTelemetry section requires at least one valid trace, log, or metric endpoint"
+                .to_string(),
+        ));
+    }
     for (signal, count) in [
         ("traces", trace_subscribers.len()),
         ("logs", log_subscribers.len()),
@@ -1653,17 +1659,14 @@ fn build_opentelemetry_subscribers(
         match subscriber {
             Ok(subscriber) => subscribers.push(subscriber),
             Err(error) => {
-                if !shutdown_opentelemetry_providers(&subscribers).is_empty() {
-                    log::warn!(
-                        target: "nemo_relay.plugin",
-                        event = "plugin_resource_rollback_failed",
-                        plugin_kind = OBSERVABILITY_PLUGIN_KIND,
-                        resource_kind = "otlp_endpoint",
-                        reason = "shutdown_failed";
-                        "OpenTelemetry construction rollback could not shut down every endpoint"
-                    );
-                }
-                return Err(error);
+                log::warn!(
+                    target: "nemo_relay.plugin",
+                    event = "opentelemetry_endpoint_skipped",
+                    plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                    resource_kind = "otlp_endpoint",
+                    resource_index = index;
+                    "OpenTelemetry endpoint was skipped during activation; delivery continues to valid endpoints: {error}"
+                );
             }
         }
     }
@@ -3817,7 +3820,7 @@ fn push_otel_signal_diagnostic(
 
 fn validate_opentelemetry_batch_config(
     diagnostics: &mut Vec<ConfigDiagnostic>,
-    policy: &ConfigPolicy,
+    _policy: &ConfigPolicy,
     index: usize,
     endpoint: &OpenTelemetryEndpointConfig,
 ) {
@@ -3833,10 +3836,8 @@ fn validate_opentelemetry_batch_config(
         ),
     ] {
         if is_zero {
-            push_policy_diag(
+            push_skipped_opentelemetry_endpoint_diagnostic(
                 diagnostics,
-                policy.unsupported_value,
-                "observability.unsupported_value",
                 Some("opentelemetry".to_string()),
                 Some(format!("endpoints[{index}].{field}")),
                 format!("OpenTelemetry endpoints[{index}].{field} must be greater than 0"),
@@ -3847,10 +3848,8 @@ fn validate_opentelemetry_batch_config(
         (endpoint.max_export_batch_size, endpoint.max_queue_size),
         (Some(batch), Some(queue)) if batch > queue
     ) {
-        push_policy_diag(
+        push_skipped_opentelemetry_endpoint_diagnostic(
             diagnostics,
-            policy.unsupported_value,
-            "observability.unsupported_value",
             Some("opentelemetry".to_string()),
             Some(format!("endpoints[{index}].max_export_batch_size")),
             format!(
@@ -3858,6 +3857,21 @@ fn validate_opentelemetry_batch_config(
             ),
         );
     }
+}
+
+fn push_skipped_opentelemetry_endpoint_diagnostic(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    component: Option<String>,
+    field: Option<String>,
+    message: String,
+) {
+    diagnostics.push(ConfigDiagnostic {
+        level: DiagnosticLevel::Warning,
+        code: "observability.invalid_otel_endpoint".to_string(),
+        component,
+        field,
+        message,
+    });
 }
 
 struct OpenTelemetryDestinationCollision {

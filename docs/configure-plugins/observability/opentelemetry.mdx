@@ -258,6 +258,12 @@ inherited, the SDK caps the effective batch size at the effective queue size.
 The SDK falls back to its default for malformed environment values. Queue and
 batch sizes count spans, not bytes.
 
+If an endpoint's explicit batch settings are invalid, Relay skips that endpoint
+and records an `observability.invalid_otel_endpoint` configuration warning with
+its `opentelemetry.endpoints[N]` field. Other valid endpoints continue to
+activate. Activation still fails when no trace, log, or metric endpoint can be
+registered.
+
 Relay's thread-based batch processor exports serially, so it does not expose
 the SDK's concurrent-export setting. It also does not expose a separate batch
 processor export timeout; use the endpoint's `timeout_millis` to bound each

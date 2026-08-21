@@ -1220,19 +1220,50 @@ fn invalid_batch_config_identifies_the_endpoint_during_activation() {
     }));
 
     let report = validate_plugin_config(&config);
+    assert!(!report.has_errors());
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.field.as_deref() == Some("endpoints[1].max_queue_size")
+            && diagnostic.level == DiagnosticLevel::Warning
+            && diagnostic.code == "observability.invalid_otel_endpoint"
             && diagnostic
                 .message
                 .contains("OpenTelemetry endpoints[1].max_queue_size must be greater than 0")
     }));
 
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    let report = crate::plugin::active_plugin_report().unwrap();
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("endpoints[1].max_queue_size")
+            && diagnostic.level == DiagnosticLevel::Warning
+            && diagnostic.code == "observability.invalid_otel_endpoint"
+    }));
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn all_invalid_trace_batch_configs_still_block_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://jaeger-local:4318/v1/traces",
+                "max_queue_size": 0
+            }]
+        }
+    }));
+
+    assert!(!validate_plugin_config(&config).has_errors());
     let error = futures::executor::block_on(initialize_plugins_exact(config)).unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("OpenTelemetry endpoints[1].max_queue_size must be greater than 0")
+            .contains("requires at least one valid trace, log, or metric endpoint")
     );
+    assert!(crate::plugin::active_plugin_report().is_none());
 }
 
 #[test]
