@@ -1281,10 +1281,10 @@ export declare function deregisterLlmExecutionIntercept(name: string): boolean
 
 Register a streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>): void
+export declare function registerLlmStreamExecutionIntercept(name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
 ```
 
 ### `deregisterLlmStreamExecutionIntercept`
@@ -1599,10 +1599,10 @@ export declare function scopeDeregisterLlmExecutionIntercept(scopeUuid: string, 
 
 Register a scope-local streaming LLM execution intercept following the middleware chain pattern.
 
-The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to an array of downstream JSON chunks. Skip calling `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
+The `callable` receives the request and a `next` function. Call `next(request)` to invoke the next intercept or original streaming implementation; in Node the returned promise resolves to a lazy `AsyncIterable`. Return it directly or wrap it `next` to short-circuit the chain. `next` may be called repeatedly or concurrently while `callable` is pending; each call receives an isolated scope-stack branch, and unfinished or later calls reject after the returned interceptor stream settles. A downstream stream returned successfully by `next` keeps its normal lifetime.
 
 ```ts
-export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<Json[]>) => Json | Json[] | Promise<Json | Json[]>): void
+export declare function scopeRegisterLlmStreamExecutionIntercept(scopeUuid: string, name: string, priority: number, callable: (request: Json, next: (request: Json) => Promise<AsyncIterable<Json>>) => AsyncIterable<Json> | Promise<AsyncIterable<Json>>): void
 ```
 
 ### `scopeDeregisterLlmStreamExecutionIntercept`

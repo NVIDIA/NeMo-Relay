@@ -283,7 +283,7 @@ endpoint to avoid a log storm. During graceful shutdown, it logs
 For plugin-managed exporters, NeMo Relay also records `otel.spans_dropped` in the
 active plugin report's `runtime_diagnostics`. Its `count` is the exact number
 of dropped spans, `field` identifies the affected
-`opentelemetry.endpoints[N].endpoint`, and `message` includes the configured
+`opentelemetry.traces[N].endpoint`, and `message` includes the configured
 endpoint URL. If spans were dropped, clearing the plugin returns a delivery
 failure error and retains the diagnostic for inspection. This error does not
 disable later plugin configuration.
