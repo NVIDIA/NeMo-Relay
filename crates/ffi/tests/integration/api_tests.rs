@@ -649,6 +649,9 @@ unsafe extern "C" fn plugin_register_fail_with_last_error(
 
 #[path = "../unit/api/core_tests.rs"]
 mod core_tests;
+#[path = "../support/ffi_coverage.rs"]
+mod ffi_coverage_support;
+
 #[path = "api/coverage_sweeps_tests.rs"]
 mod coverage_sweeps_tests;
 #[path = "../unit/api/execution_tests.rs"]

@@ -708,6 +708,9 @@ fn detached_publications_share_one_background_executor_thread() {
 
 #[test]
 fn event_metadata_injection_applies_to_every_canonical_event_record() {
+    let _lock = crate::shared_runtime::runtime_owner_test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let invocations = Arc::new(AtomicUsize::new(0));
     let injector: EventMetadataInjectorFn = {
         let invocations = Arc::clone(&invocations);

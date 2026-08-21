@@ -190,6 +190,132 @@ func TestGoBindingErrorAndDefaultContracts(t *testing.T) {
 	assertOptimizationContributionValidation(t)
 }
 
+func TestRemainingPublicDefaultsAndPropagationCoverage(t *testing.T) {
+	endpoint := "http://127.0.0.1:4318"
+	logConfig, err := normalizeOpenTelemetryLogConfig(OpenTelemetryLogConfig{Endpoint: endpoint})
+	if err != nil {
+		t.Fatalf("normalize log defaults failed: %v", err)
+	}
+	if logConfig.MinimumSeverity != LogSeverityInfo || logConfig.MaxQueueSize != 2048 ||
+		logConfig.MaxExportBatchSize != 512 || logConfig.ScheduledDelay != time.Second ||
+		logConfig.Headers == nil || logConfig.ResourceAttributes == nil {
+		t.Fatalf("log defaults were not applied: %#v", logConfig)
+	}
+
+	metricConfig, err := normalizeOpenTelemetryMetricConfig(OpenTelemetryMetricConfig{Endpoint: endpoint})
+	if err != nil {
+		t.Fatalf("normalize metric defaults failed: %v", err)
+	}
+	if metricConfig.Temporality != OpenTelemetryMetricTemporalityCumulative ||
+		metricConfig.MaxInstruments != 256 || metricConfig.CardinalityLimit != 2000 ||
+		metricConfig.Headers == nil || metricConfig.ResourceAttributes == nil {
+		t.Fatalf("metric defaults were not applied: %#v", metricConfig)
+	}
+
+	for name, normalize := range map[string]func() error{
+		"negative log duration": func() error {
+			_, err := normalizeOpenTelemetryLogConfig(OpenTelemetryLogConfig{
+				Endpoint: endpoint,
+				Timeout:  -time.Millisecond,
+			})
+			return err
+		},
+		"negative metric duration": func() error {
+			_, err := normalizeOpenTelemetryMetricConfig(OpenTelemetryMetricConfig{
+				Endpoint:       endpoint,
+				ExportInterval: -time.Millisecond,
+			})
+			return err
+		},
+	} {
+		if err := normalize(); err == nil {
+			t.Fatalf("%s should fail", name)
+		}
+	}
+
+	oldMarshal := jsonMarshal
+	t.Cleanup(func() { jsonMarshal = oldMarshal })
+	jsonMarshal = func(any) ([]byte, error) {
+		return nil, errors.New("forced signal header marshal failure")
+	}
+	if _, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{endpoint: endpoint}); err == nil {
+		t.Fatal("expected signal header marshal failure")
+	}
+	callCount := 0
+	jsonMarshal = func(value any) ([]byte, error) {
+		callCount++
+		if callCount == 2 {
+			return nil, errors.New("forced signal resource marshal failure")
+		}
+		return oldMarshal(value)
+	}
+	if _, err := newOpenTelemetrySignalCStrings(openTelemetrySignalConfig{endpoint: endpoint}); err == nil {
+		t.Fatal("expected signal resource marshal failure")
+	}
+	jsonMarshal = oldMarshal
+
+	rootUUID := propagationRootUUID
+	context := PropagationContext{
+		Version:    1,
+		RootUUID:   &rootUUID,
+		ParentUUID: propagationParentUUID,
+	}
+	traceparent, err := context.ToTraceparent()
+	if err != nil {
+		t.Fatalf("ToTraceparent failed: %v", err)
+	}
+	if traceparent == "" {
+		t.Fatal("ToTraceparent returned an empty value")
+	}
+	if _, err := (PropagationContext{Version: 2, ParentUUID: propagationParentUUID}).ToTraceparent(); err == nil {
+		t.Fatal("expected invalid propagation context to fail")
+	}
+
+	if err := ScopeDeregisterEventMetadataInjector(propagationParentUUID, "missing-injector"); err == nil {
+		t.Fatal("expected missing scope metadata injector deregistration to fail")
+	}
+
+	expectedMetricTimestamp := time.Unix(1_700_000_000, 0)
+	observedMetricTimestamp := make(chan string, 1)
+	subscriberName := "go_metric_timestamp_coverage_" + time.Now().Format("150405.000000")
+	if err := RegisterSubscriber(subscriberName, func(event Event) {
+		if event.Name() == "go_metric_timestamp_coverage" {
+			observedMetricTimestamp <- event.Timestamp()
+		}
+	}); err != nil {
+		t.Fatalf("RegisterSubscriber failed: %v", err)
+	}
+	defer DeregisterSubscriber(subscriberName)
+
+	runTestWithScopeStack(t, func(t *testing.T) {
+		err := EmitMetric("go_metric_timestamp_coverage", []MetricMeasurement{{
+			Name:      "example.go.timestamp",
+			Kind:      MetricKindCounter,
+			ValueType: MetricValueTypeU64,
+			Value:     uint64(1),
+		}}, WithMetricTimestamp(expectedMetricTimestamp))
+		if err != nil {
+			t.Fatalf("EmitMetric with timestamp failed: %v", err)
+		}
+		if err := FlushSubscribers(); err != nil {
+			t.Fatalf("FlushSubscribers failed: %v", err)
+		}
+	})
+
+	select {
+	case timestamp := <-observedMetricTimestamp:
+		observed, err := time.Parse(time.RFC3339Nano, timestamp)
+		if err != nil {
+			t.Fatalf("failed to parse metric timestamp %q: %v", timestamp, err)
+		}
+		if !observed.Equal(expectedMetricTimestamp) {
+			t.Fatalf("metric timestamp = %s, expected %s", observed, expectedMetricTimestamp)
+		}
+	default:
+		t.Fatal("expected metric event with supplied timestamp")
+	}
+}
+
 func assertAdaptiveJSONUnmarshalFailures(t *testing.T) {
 	t.Helper()
 	runtime, err := NewAdaptiveRuntime(testAdaptiveRuntimeConfig("openai"))

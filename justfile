@@ -1506,7 +1506,10 @@ test-go:
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact go-coverage.xml)"
         junit_out="$(prepare_artifact go-junit.xml)"
-        go_test_cmd+=(-coverprofile=coverage.out)
+        # Include the root binding package when shorthand-package tests exercise
+        # its delegated implementation so those calls are represented once the
+        # per-package profiles are merged.
+        go_test_cmd+=(-coverprofile=coverage.out -coverpkg=./...)
         if [[ "$is_windows" == true ]]; then
             go_ldflags+=(-w)
         fi
@@ -1719,11 +1722,13 @@ package-node:
         echo "Non-release build: appending commit hash to version"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
     build_args=(build --)
     if [[ -n "$node_target" ]]; then
@@ -1800,12 +1805,14 @@ package-openclaw:
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     else
         package_version="{{ ref_name }}"
         echo "Using explicit version {{ ref_name }}"
         set_npm_package_version crates/node/package.json package-lock.json "$package_version" crates/node
         set_npm_package_version integrations/openclaw/package.json package-lock.json "$package_version" integrations/openclaw
         set_npm_package_dependency_version integrations/openclaw/package.json package-lock.json integrations/openclaw nemo-relay-node "$package_version"
+        set_npm_package_dependency_version examples/language-binding-plugin/node/package.json package-lock.json examples/language-binding-plugin/node nemo-relay-node "$package_version"
     fi
     npm install --workspace=nemo-relay-node --workspace=nemo-relay-openclaw --ignore-scripts
     if is_true "{{ ci }}"; then
