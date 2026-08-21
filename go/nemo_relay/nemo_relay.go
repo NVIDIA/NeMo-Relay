@@ -495,6 +495,9 @@ type RuntimeRegistrationIdentity struct {
 
 // RegisterConditionalMiddlewareGuardrail registers a global eligibility gate.
 func RegisterConditionalMiddlewareGuardrail(name string, kinds []RuntimeRegistrationKind, registrationName string, fn ConditionalMiddlewareGuardrailFunc) error {
+	if fn == nil {
+		return errConditionalMiddlewareGuardrailCallbackNil
+	}
 	kindsJSON, err := json.Marshal(kinds)
 	if err != nil {
 		return err

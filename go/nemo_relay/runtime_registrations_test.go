@@ -5,11 +5,24 @@ package nemo_relay
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 )
+
+func TestRegisterConditionalMiddlewareGuardrailRejectsNilCallback(t *testing.T) {
+	err := RegisterConditionalMiddlewareGuardrail(
+		"go-runtime-nil-gate",
+		[]RuntimeRegistrationKind{RuntimeRegistrationSubscriber},
+		"target-subscriber",
+		nil,
+	)
+	if !errors.Is(err, errConditionalMiddlewareGuardrailCallbackNil) {
+		t.Fatalf("RegisterConditionalMiddlewareGuardrail() error = %v, want %v", err, errConditionalMiddlewareGuardrailCallbackNil)
+	}
+}
 
 func TestConditionalMiddlewareGuardrailTogglesExistingRegistration(t *testing.T) {
 	suffix := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())

@@ -102,6 +102,7 @@ import (
 // ---------------------------------------------------------------------------
 
 var errEventMetadataInjectorCallbackNil = errors.New("event metadata injector callback is nil")
+var errConditionalMiddlewareGuardrailCallbackNil = errors.New("conditional middleware guardrail callback is nil")
 
 var (
 	closureRegistryMu sync.Mutex
