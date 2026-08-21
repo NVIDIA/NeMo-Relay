@@ -4387,6 +4387,65 @@ fn trace_export_failures_are_diagnosed_until_a_later_export_recovers() {
 }
 
 #[test]
+fn unrecovered_trace_export_failure_is_retained_in_the_active_plugin_report() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    let _ = crate::plugin::clear_plugin_configuration();
+    let _clear_guard = ClearPluginConfigurationGuard;
+    futures::executor::block_on(crate::plugin::initialize_plugins_exact(
+        crate::plugin::PluginConfig::default(),
+    ))
+    .unwrap();
+
+    let runtime_diagnostics =
+        SignalRuntimeDiagnostics::new(Some("opentelemetry.traces[2].endpoint".to_string()));
+    let processor = DiagnosticBatchSpanProcessor::new_with_batch_config(
+        FailingThenRecoveringSpanExporter::default(),
+        "https://collector.example/v1/traces".to_string(),
+        runtime_diagnostics.clone(),
+        BatchConfigBuilder::default()
+            .with_max_export_batch_size(1)
+            .build(),
+    );
+    let provider = SdkTracerProvider::builder()
+        .with_span_processor(processor)
+        .build();
+    let tracer = provider.tracer("unrecovered-trace-export-failure-test");
+
+    tracer.start("export-fails").end();
+    assert!(provider.force_flush().is_err());
+
+    let shutdown = provider.shutdown().unwrap_err();
+    assert!(
+        shutdown
+            .to_string()
+            .contains(OTEL_RUNTIME_DELIVERY_FAILURE_MARKER)
+    );
+    assert!(
+        shutdown
+            .to_string()
+            .contains("otel.traces_export_failed (1)")
+    );
+
+    let report = crate::plugin::active_plugin_report().unwrap();
+    let diagnostic = report
+        .runtime_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "otel.traces_export_failed")
+        .expect("trace export failure diagnostic");
+    assert_eq!(diagnostic.count, 1);
+    assert_eq!(
+        diagnostic.field.as_deref(),
+        Some("opentelemetry.traces[2].endpoint")
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("https://collector.example/v1/traces")
+    );
+    assert!(diagnostic.message.contains("collector unavailable"));
+}
+
+#[test]
 fn grpc_metadata_and_runtime_builder_paths_succeed() {
     let metadata = build_grpc_metadata(&HashMap::from([(
         "authorization".to_string(),
