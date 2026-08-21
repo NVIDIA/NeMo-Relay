@@ -1400,6 +1400,32 @@ fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
         }
     }))));
     assert!(activation.is_err());
+
+    futures::executor::block_on(initialize_plugins_exact(plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "full",
+                    "endpoint": "http://localhost:4318/v1/traces",
+                    "header_env": {"x-api-key": variable}
+                },
+                {
+                    "type": "gen_ai",
+                    "endpoint": "http://localhost:4319/v1/traces"
+                }
+            ]
+        }
+    }))))
+    .unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+    clear_plugin_configuration().unwrap();
 }
 
 #[test]
