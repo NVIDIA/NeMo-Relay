@@ -26,7 +26,9 @@ extern "C" fn nemo_relay_register_plugin(
 The current host negotiates ABI v4, then a separately frozen v3 table, then the frozen
 legacy v2 table. ABI v4 extends the complete v3 prefix with completion-scoped
 [codecs](/about-nemo-relay/concepts/codecs) and
-pull-based downstream LLM streams. This table version is independent of authored
+pull-based downstream LLM streams, plus an activation-owned runtime capability for
+registration discovery and dynamic conditional middleware guardrail control. These table
+versions are independent of authored
 `compat.native_api = "1"`.
 
 The following table enumerates the operations introduced at each table level. The exact
@@ -37,7 +39,7 @@ function signatures and field order are defined by the public
 |---|---|
 | Frozen v1/v2 prefix | Version and struct-size negotiation; host version; string allocation, access, and release; thread-local error reporting; callback-scoped LLM request decode and encode plus response decode; subscriber, five tool, six LLM, and three event-sanitizer registrations; current scope, scope push and pop, mark emission, isolated stack creation and release, thread-stack set, capture, and restore, captured-binding release, active-stack inspection, and scoped binding. |
 | Frozen v3 extension | Completion resolve, reject, cancellation inspection, and release; one-shot completion-coupled continuation invocation; continuation release; generic async middleware registration; bounded output-stream push, finish, reject, cancellation inspection, and release; downstream stream invocation; stream-middleware registration; and repeated or concurrent unary continuation invocation with independent result callbacks. |
-| Current v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; and output-stream backpressure inspection. |
+| Current v4 extension | Completion-scoped LLM request decode and encode plus response decode; pull-based downstream LLM stream open, pull, cancel, and release; completion retain for typed codec facades; output-stream backpressure inspection; extended mark emission; runtime diagnostics; activation-owned runtime capability creation, retain, and release; global runtime-registration discovery; owned conditional middleware guardrail registration and deregistration; and activation-time host-resident gate declaration. |
 
 The prefix and descriptor layout are explicit. A plugin fills the descriptor with its
 stable kind, component multiplicity, opaque state, callbacks, and destructor. The host
@@ -90,6 +92,12 @@ structs otherwise contain scalars, opaque handles, callback pointers, and plugin
 and unwinding must never cross the boundary. Release host strings with the matching host
 operation and retain plugin state until the host releases the registration and every
 callback-owned reference derived from it.
+
+A successful `plugin_context_runtime` call returns one owned runtime-capability
+reference. Each successful `plugin_runtime_retain` call creates another owned reference,
+and the plugin must pass every owned reference to `plugin_runtime_release` exactly once.
+Activation teardown makes runtime operations unavailable, but it does not release
+references retained by plugin code; those references must still be released.
 
 ```rust
 #[repr(i32)]

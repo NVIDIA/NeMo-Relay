@@ -11,8 +11,19 @@ Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo
 
 Global and scope-local middleware registration helpers. Middleware registry helpers for global and scope-local guardrails, intercepts, and subscribers.
 
+## Structs
+
+- [RuntimeRegistrationIdentity](/reference/api/rust-library-reference/nemo-relay/api/registry/struct-runtimeregistrationidentity): Structured identity for a global gateable runtime registration.
+- [RuntimeRegistrationOwner](/reference/api/rust-library-reference/nemo-relay/api/registry/struct-runtimeregistrationowner): Discovery metadata describing the owner of a runtime registration.
+
+## Enums
+
+- [RuntimeRegistrationKind](/reference/api/rust-library-reference/nemo-relay/api/registry/enum-runtimeregistrationkind): A global runtime registration surface that can be selected by a conditional middleware guardrail.
+- [RuntimeRegistrationOwnerKind](/reference/api/rust-library-reference/nemo-relay/api/registry/enum-runtimeregistrationownerkind): The owner category reported for a global runtime registration.
+
 ## Functions
 
+- [deregister_conditional_middleware_guardrail](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-deregister-conditional-middleware-guardrail): Deregister a global conditional middleware guardrail.
 - [deregister_event_metadata_injector](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-deregister-event-metadata-injector): Deregister a global Event metadata injector.
 - [deregister_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-deregister-llm-conditional-execution-guardrail): Deregister a global LLM conditional-execution guardrail.
 - [deregister_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-deregister-llm-execution-intercept): Deregister a global LLM execution intercept.
@@ -28,6 +39,8 @@ Global and scope-local middleware registration helpers. Middleware registry help
 - [deregister_tool_request_intercept](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-deregister-tool-request-intercept): Deregister a global tool request intercept.
 - [deregister_tool_sanitize_request_guardrail](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-deregister-tool-sanitize-request-guardrail): Deregister a global tool sanitize-request guardrail.
 - [deregister_tool_sanitize_response_guardrail](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-deregister-tool-sanitize-response-guardrail): Deregister a global tool sanitize-response guardrail.
+- [list_runtime_registrations](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-list-runtime-registrations): List a deterministic snapshot of global gateable runtime registrations.
+- [register_conditional_middleware_guardrail](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-register-conditional-middleware-guardrail): Register a global conditional middleware guardrail.
 - [register_event_metadata_injector](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-register-event-metadata-injector): Register a global Event metadata injector.
 - [register_llm_conditional_execution_guardrail](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-register-llm-conditional-execution-guardrail): Register a global LLM conditional-execution guardrail. The guardrail can block LLM execution before intercepts or the provider callback run.
 - [register_llm_execution_intercept](/reference/api/rust-library-reference/nemo-relay/api/registry/fn-register-llm-execution-intercept): Register a global LLM execution intercept. Execution intercepts can wrap or replace the non-streaming provider callback.

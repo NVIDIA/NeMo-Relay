@@ -27,6 +27,26 @@ Structured identity of the codec active for one worker invocation.
 
 One bounded runtime diagnostic reported by the Relay host.
 
+### `RuntimeRegistrationKind(str, Enum)`
+
+Global runtime registration surfaces that a worker can gate.
+
+### `RuntimeRegistrationOwnerKind(str, Enum)`
+
+Owner categories reported by host registration discovery.
+
+### `RuntimeRegistrationOwner`
+
+Owner metadata for a discovered runtime registration.
+
+### `RuntimeRegistrationIdentity`
+
+Structured identity for a global gateable runtime registration.
+
+### `ConditionalMiddlewareGuardrailHandle`
+
+Opaque activation-owned key for removing a worker-created gate.
+
 ### `RuntimeDiagnostics`
 
 Bounded snapshot of active host runtime diagnostics.
@@ -413,6 +433,14 @@ def register_subscriber(name: str, callback: SubscriberCallback) -> None
 
 Register a callback that receives Relay events.
 
+##### `register_conditional_middleware_guardrail`
+
+```python
+def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, reason: str) -> None
+```
+
+Declare a host-resident gate installed with this activation.
+
 ##### `register_event_metadata_injector`
 
 ```python
@@ -546,6 +574,30 @@ def PluginRuntime(*, activation_id: str, auth_token: str, host_stub: Any) -> Non
 ```
 
 Create an instance.
+
+##### `list_runtime_registrations`
+
+```python
+async def list_runtime_registrations(kinds: Iterable[RuntimeRegistrationKind] | None = None) -> list[RuntimeRegistrationIdentity]
+```
+
+List global gateable registrations known to the Relay host.
+
+##### `register_conditional_middleware_guardrail`
+
+```python
+async def register_conditional_middleware_guardrail(name: str, kinds: set[RuntimeRegistrationKind], registration_name: str, reason: str) -> ConditionalMiddlewareGuardrailHandle
+```
+
+Register a host-resident gate owned by this worker activation.
+
+##### `deregister_conditional_middleware_guardrail`
+
+```python
+async def deregister_conditional_middleware_guardrail(handle: ConditionalMiddlewareGuardrailHandle) -> bool
+```
+
+Remove a host-resident gate owned by this worker activation.
 
 ##### `emit_mark`
 

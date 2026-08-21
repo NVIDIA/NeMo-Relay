@@ -22,6 +22,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [AnnotatedLlmRequest](/reference/api/rust-library-reference/nemo-relay-plugin/struct-annotatedllmrequest): Structured view of an LLM request, produced by a Codec from opaque [`LlmRequest`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-llmrequest) content.
 - [AnnotatedLlmResponse](/reference/api/rust-library-reference/nemo-relay-plugin/struct-annotatedllmresponse): Structured view of an LLM response, produced by a response codec from raw JSON API output.
 - [CategoryProfile](/reference/api/rust-library-reference/nemo-relay-plugin/struct-categoryprofile): Category-specific profile data.
+- [ConditionalMiddlewareGuardrailHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-conditionalmiddlewareguardrailhandle): Opaque activation-owned handle for a native plugin's dynamic gate.
 - [ConfigDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-configdiagnostic): Structured validation diagnostic for plugin validation.
 - [DataSchema](/reference/api/rust-library-reference/nemo-relay-plugin/struct-dataschema): Identifier for the schema that describes an event's opaque `data` payload.
 - [EventCategory](/reference/api/rust-library-reference/nemo-relay-plugin/struct-eventcategory): Semantic category carried by ATOF `category`.
@@ -51,7 +52,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [NemoRelayNativeAsyncStream](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativeasyncstream): Opaque incremental output channel supplied to native async stream intercepts.
 - [NemoRelayNativeHostApiV1](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv1): Versioned host API table passed to native plugin entry symbols.
 - [NemoRelayNativeHostApiV3](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv3): ABI-v3 host extension appended to [`NemoRelayNativeHostApiV1`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv1).
-- [NemoRelayNativeHostApiV4](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv4): ABI-v4 host extension for typed asynchronous middleware, mark options, and diagnostics.
+- [NemoRelayNativeHostApiV4](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativehostapiv4): ABI-v4 host extension for typed asynchronous middleware, mark options, diagnostics, and activation-owned dynamic gate control.
 - [NemoRelayNativeLlmAsyncStream](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmasyncstream): Opaque pull-based downstream LLM stream owned by the host.
 - [NemoRelayNativeLlmRequestCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmrequestcodec): Opaque callback-scoped request codec capability owned by the host.
 - [NemoRelayNativeLlmResponseCodec](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmresponsecodec): Opaque callback-scoped response codec capability owned by the host.
@@ -59,6 +60,7 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [NemoRelayNativeLlmSanitizeResponseContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmsanitizeresponsecontext): Per-call response sanitizer context passed over the native ABI.
 - [NemoRelayNativeLlmStreamV1](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativellmstreamv1): Native LLM JSON stream handle table.
 - [NemoRelayNativePluginContext](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativeplugincontext): Opaque plugin registration context borrowed from the host during registration.
+- [NemoRelayNativePluginRuntime](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativepluginruntime): Opaque activation-owned runtime capability used by native plugins.
 - [NemoRelayNativePluginV1](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativepluginv1): Versioned plugin descriptor returned by native plugin entry symbols.
 - [NemoRelayNativeScopeHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativescopehandle): Opaque host-owned scope handle.
 - [NemoRelayNativeScopeStack](/reference/api/rust-library-reference/nemo-relay-plugin/struct-nemorelaynativescopestack): Opaque host-owned scope stack handle.
@@ -69,6 +71,8 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [PluginRuntime](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pluginruntime): Cloneable high-level runtime handle for host APIs available to native plugins.
 - [RuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay-plugin/struct-runtimediagnostic): One bounded runtime diagnostic reported by the Relay host.
 - [RuntimeDiagnostics](/reference/api/rust-library-reference/nemo-relay-plugin/struct-runtimediagnostics): Bounded snapshot of active host runtime diagnostics.
+- [RuntimeRegistrationIdentity](/reference/api/rust-library-reference/nemo-relay-plugin/struct-runtimeregistrationidentity): Structured identity for a global gateable runtime registration.
+- [RuntimeRegistrationOwner](/reference/api/rust-library-reference/nemo-relay-plugin/struct-runtimeregistrationowner): Discovery metadata describing the owner of a runtime registration.
 - [ScopeAttributes](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopeattributes): Bitflags that modify scope behavior and observability.
 - [ScopeGuard](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopeguard): RAII guard for a host scope opened by [`PluginRuntime::scope`](/reference/api/rust-library-reference/nemo-relay-plugin/struct-pluginruntime).
 - [ScopeHandle](/reference/api/rust-library-reference/nemo-relay-plugin/struct-scopehandle): Host-owned scope handle returned by native scope APIs.
@@ -97,6 +101,8 @@ This crate intentionally does not depend on the `nemo-relay` runtime crate. Nati
 - [NemoRelayNativeLlmCodecKind](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativellmcodeckind): Discriminator for the codec supplied to an LLM sanitizer over the native ABI.
 - [NemoRelayNativeScopeType](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaynativescopetype): Scope category used by native plugins when opening scopes.
 - [NemoRelayStatus](/reference/api/rust-library-reference/nemo-relay-plugin/enum-nemorelaystatus): Status codes returned by stable native ABI functions.
+- [RuntimeRegistrationKind](/reference/api/rust-library-reference/nemo-relay-plugin/enum-runtimeregistrationkind): A global runtime registration surface that can be selected by a conditional middleware guardrail.
+- [RuntimeRegistrationOwnerKind](/reference/api/rust-library-reference/nemo-relay-plugin/enum-runtimeregistrationownerkind): The owner category reported for a global runtime registration.
 - [ScopeCategory](/reference/api/rust-library-reference/nemo-relay-plugin/enum-scopecategory): Agent Trajectory Observability Format (ATOF) lifecycle phase for a scope event.
 - [ScopeType](/reference/api/rust-library-reference/nemo-relay-plugin/enum-scopetype): Semantic category attached to a scope lifecycle span.
 

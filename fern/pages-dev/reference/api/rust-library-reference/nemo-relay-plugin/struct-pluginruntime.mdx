@@ -2,7 +2,7 @@
 title: "Struct Plugin Runtime"
 sidebar-title: "PluginRuntime"
 description: "Cloneable high-level runtime handle for host APIs available to native plugins."
-position: 49
+position: 51
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -26,6 +26,24 @@ Cloneable high-level runtime handle for host APIs available to native plugins.
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(host: &amp;<a href=\"struct-nemorelaynativehostapiv1\">NemoRelayNativeHostApiV1</a>) -&gt; Self"}} /></pre>
 
 Creates a runtime handle from the host ABI table.
+
+#### `list_runtime_registrations`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn list_runtime_registrations(\n    &amp;self,\n    kinds: <a href=\"https://doc.rust-lang.org/1.96.1/core/option/enum.Option.html\">Option</a>&lt;&amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;&gt;,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/vec/struct.Vec.html\">Vec</a>&lt;<a href=\"struct-runtimeregistrationidentity\">RuntimeRegistrationIdentity</a>&gt;&gt;"}} /></pre>
+
+Lists global gateable runtime registrations.
+
+#### `register_conditional_middleware_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn register_conditional_middleware_guardrail(\n    &amp;self,\n    name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    kinds: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/collections/btree/set/struct.BTreeSet.html\">BTreeSet</a>&lt;<a href=\"enum-runtimeregistrationkind\">RuntimeRegistrationKind</a>&gt;,\n    registration_name: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n    reason: &amp;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.str.html\">str</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"struct-conditionalmiddlewareguardrailhandle\">ConditionalMiddlewareGuardrailHandle</a>&gt;"}} /></pre>
+
+Registers an activation-owned host-resident eligibility gate.
+
+#### `deregister_conditional_middleware_guardrail`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn deregister_conditional_middleware_guardrail(\n    &amp;self,\n    handle: &amp;<a href=\"struct-conditionalmiddlewareguardrailhandle\">ConditionalMiddlewareGuardrailHandle</a>,\n) -&gt; <a href=\"type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.bool.html\">bool</a>&gt;"}} /></pre>
+
+Deregisters an activation-owned eligibility gate.
 
 #### `host_api`
 
@@ -115,8 +133,24 @@ Binds `stack` to the current OS thread until the returned guard is dropped.
 
 #### `clone`
 
-<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; Self"}} /></pre>
 
 #### `clone_from`
 
 <pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Drop for PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html\">Drop</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+#### `drop`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/ops/drop/trait.Drop.html#tymethod.drop\">drop</a>(&amp;mut self)"}} /></pre>
+
+### `impl Send for PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>
+
+### `impl Sync for PluginRuntime`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Sync.html\">Sync</a> for <a href=\"struct-pluginruntime\">PluginRuntime</a>"}} /></pre>

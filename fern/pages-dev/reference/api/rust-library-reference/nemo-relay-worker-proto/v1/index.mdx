@@ -25,8 +25,11 @@ Generated protobuf and gRPC service definitions.
 ## Structs
 
 - [CancelInvocationRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-cancelinvocationrequest)
+- [ConditionalMiddlewareGuardrailRegistration](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-conditionalmiddlewareguardrailregistration)
 - [CreateScopeStackRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-createscopestackrequest)
 - [CreateScopeStackResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-createscopestackresponse)
+- [DeregisterConditionalMiddlewareGuardrailRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-deregisterconditionalmiddlewareguardrailrequest)
+- [DeregisterConditionalMiddlewareGuardrailResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-deregisterconditionalmiddlewareguardrailresponse)
 - [DropScopeStackRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-dropscopestackrequest)
 - [EmitMarkRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-emitmarkrequest)
 - [EmptyResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-emptyresult)
@@ -43,6 +46,8 @@ Generated protobuf and gRPC service definitions.
 - [JsonEnvelope](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-jsonenvelope)
 - [JsonResult](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-jsonresult)
 - [JsonValue](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-jsonvalue): A lossless JSON value. The bytes MUST contain exactly one JSON value.
+- [ListRuntimeRegistrationsRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-listruntimeregistrationsrequest)
+- [ListRuntimeRegistrationsResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-listruntimeregistrationsresponse)
 - [LlmCodecDecodeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmcodecdecoderequest)
 - [LlmCodecDecodeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmcodecdecoderesponse)
 - [LlmCodecEncodeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-llmcodecencoderequest)
@@ -56,10 +61,14 @@ Generated protobuf and gRPC service definitions.
 - [PopScopeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-popscoperequest)
 - [PushScopeRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-pushscoperequest)
 - [PushScopeResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-pushscoperesponse)
+- [RegisterConditionalMiddlewareGuardrailRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerconditionalmiddlewareguardrailrequest)
+- [RegisterConditionalMiddlewareGuardrailResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerconditionalmiddlewareguardrailresponse)
 - [RegisterRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerrequest)
 - [RegisterResponse](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registerresponse)
 - [Registration](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-registration)
 - [RuntimeDiagnostic](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-runtimediagnostic)
+- [RuntimeRegistrationIdentity](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-runtimeregistrationidentity)
+- [RuntimeRegistrationOwner](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-runtimeregistrationowner)
 - [ScopeContext](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-scopecontext)
 - [ShutdownRequest](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-shutdownrequest)
 - [StreamChunk](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/struct-streamchunk)
@@ -78,4 +87,5 @@ Generated protobuf and gRPC service definitions.
 
 - [LlmCodecKind](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-llmcodeckind)
 - [RegistrationSurface](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-registrationsurface)
+- [RuntimeRegistrationOwnerKind](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-runtimeregistrationownerkind)
 - [ScopeType](/reference/api/rust-library-reference/nemo-relay-worker-proto/v1/enum-scopetype)

@@ -2,7 +2,7 @@
 title: "Module callbacks"
 sidebar-title: "callbacks"
 description: "Callback type aliases used by the runtime middleware pipeline."
-position: 49
+position: 50
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
@@ -30,6 +30,7 @@ The public middleware registration APIs accept callback closures with the signat
 
 ## Type Aliases
 
+- [ConditionalMiddlewareGuardrailFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-conditionalmiddlewareguardrailfn): Decide whether matching global runtime registrations remain eligible.
 - [EventMetadataInjectorFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventmetadatainjectorfn): Add flat metadata attributes to a fully constructed event.
 - [EventSanitizeFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsanitizefn): Sanitize mutable observability fields on a fully constructed event.
 - [EventSubscriberFn](/reference/api/rust-library-reference/nemo-relay/api/runtime/callbacks/type-eventsubscriberfn): Consume runtime lifecycle events after they are emitted.
