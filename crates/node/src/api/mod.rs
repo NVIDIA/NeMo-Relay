@@ -1640,6 +1640,23 @@ struct NodeConditionalMiddlewareGuardrail {
     registration_thread: std::thread::ThreadId,
 }
 
+const CONDITIONAL_GATE_CALLBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn recv_conditional_gate_result(
+    rx: std::sync::mpsc::Receiver<napi::Result<Option<String>>>,
+    timeout: std::time::Duration,
+) -> napi::Result<Option<String>> {
+    rx.recv_timeout(timeout).map_err(|error| match error {
+        std::sync::mpsc::RecvTimeoutError::Timeout => napi::Error::from_reason(format!(
+            "conditional gate callback timed out after {} seconds",
+            timeout.as_secs()
+        )),
+        std::sync::mpsc::RecvTimeoutError::Disconnected => {
+            napi::Error::from_reason("conditional gate callback channel disconnected")
+        }
+    })?
+}
+
 impl NodeConditionalMiddlewareGuardrail {
     fn call(&self, kinds: Vec<String>, registration_name: String) -> napi::Result<Option<String>> {
         if std::thread::current().id() == self.registration_thread {
@@ -1662,9 +1679,21 @@ impl NodeConditionalMiddlewareGuardrail {
                 "conditional gate callback scheduling failed: {status:?}"
             )));
         }
-        rx.recv().map_err(|error| {
-            napi::Error::from_reason(format!("conditional gate callback failed: {error}"))
-        })?
+        recv_conditional_gate_result(rx, CONDITIONAL_GATE_CALLBACK_TIMEOUT)
+    }
+}
+
+#[cfg(test)]
+mod conditional_gate_tests {
+    use super::*;
+
+    #[test]
+    fn conditional_gate_result_wait_is_bounded() {
+        let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+        let error = recv_conditional_gate_result(rx, std::time::Duration::from_millis(1))
+            .expect_err("an unresponsive callback must time out");
+
+        assert!(error.reason.contains("conditional gate callback timed out"));
     }
 }
 
