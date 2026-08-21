@@ -1865,10 +1865,15 @@ fn build_opentelemetry_log_subscribers(
         match result {
             Ok(subscriber) => subscribers.push(subscriber),
             Err(error) => {
-                for subscriber in &subscribers {
-                    let _ = subscriber.shutdown_provider();
-                }
-                return Err(error);
+                log::warn!(
+                    target: "nemo_relay.plugin",
+                    event = "opentelemetry_endpoint_skipped",
+                    plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                    resource_kind = "otlp_endpoint",
+                    signal = "logs",
+                    resource_index = index;
+                    "OpenTelemetry log endpoint was skipped during activation; delivery continues to valid endpoints: {error}"
+                );
             }
         }
     }
@@ -1905,10 +1910,15 @@ fn build_opentelemetry_metric_subscribers(
         match result {
             Ok(subscriber) => subscribers.push(subscriber),
             Err(error) => {
-                for subscriber in &subscribers {
-                    let _ = subscriber.shutdown_provider();
-                }
-                return Err(error);
+                log::warn!(
+                    target: "nemo_relay.plugin",
+                    event = "opentelemetry_endpoint_skipped",
+                    plugin_kind = OBSERVABILITY_PLUGIN_KIND,
+                    resource_kind = "otlp_endpoint",
+                    signal = "metrics",
+                    resource_index = index;
+                    "OpenTelemetry metric endpoint was skipped during activation; delivery continues to valid endpoints: {error}"
+                );
             }
         }
     }

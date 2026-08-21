@@ -1429,6 +1429,120 @@ fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
 }
 
 #[test]
+fn invalid_log_endpoint_keeps_valid_signal_subscriber() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let variable = "NEMO_RELAY_TEST_MISSING_OTEL_LOG_HEADER_ENV";
+    unsafe { std::env::remove_var(variable) };
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "logs": {
+                "enabled": true,
+                "endpoints": [
+                    {
+                        "endpoint": "http://localhost:4318/v1/logs",
+                        "header_env": {"authorization": variable}
+                    },
+                    {"endpoint": "http://localhost:4319/v1/logs"}
+                ]
+            }
+        }
+    }));
+
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn invalid_metric_endpoint_keeps_valid_signal_subscriber() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let variable = "NEMO_RELAY_TEST_MISSING_OTEL_METRIC_HEADER_ENV";
+    unsafe { std::env::remove_var(variable) };
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "metrics": {
+                "enabled": true,
+                "endpoints": [
+                    {
+                        "endpoint": "http://localhost:4318/v1/metrics",
+                        "header_env": {"authorization": variable}
+                    },
+                    {"endpoint": "http://localhost:4319/v1/metrics"}
+                ]
+            }
+        }
+    }));
+
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn all_invalid_log_and_metric_endpoints_still_block_activation() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let log_variable = "NEMO_RELAY_TEST_MISSING_OTEL_LOG_HEADER_ENV";
+    let metric_variable = "NEMO_RELAY_TEST_MISSING_OTEL_METRIC_HEADER_ENV";
+    unsafe {
+        std::env::remove_var(log_variable);
+        std::env::remove_var(metric_variable);
+    }
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "logs": {
+                "enabled": true,
+                "endpoints": [{
+                    "endpoint": "http://localhost:4318/v1/logs",
+                    "header_env": {"authorization": log_variable}
+                }]
+            },
+            "metrics": {
+                "enabled": true,
+                "endpoints": [{
+                    "endpoint": "http://localhost:4318/v1/metrics",
+                    "header_env": {"authorization": metric_variable}
+                }]
+            }
+        }
+    }));
+
+    let error = futures::executor::block_on(initialize_plugins_exact(config)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires at least one valid trace, log, or metric endpoint")
+    );
+    assert!(crate::plugin::active_plugin_report().is_none());
+}
+
+#[test]
 fn outer_disabled_component_does_not_resolve_opentelemetry_header_env() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     let variable = "NEMO_RELAY_TEST_DISABLED_OTEL_HEADER_ENV";
