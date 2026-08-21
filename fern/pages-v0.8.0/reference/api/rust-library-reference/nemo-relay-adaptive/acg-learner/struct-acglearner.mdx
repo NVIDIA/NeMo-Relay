@@ -1,0 +1,51 @@
+---
+title: "Struct AcgLearner"
+sidebar-title: "AcgLearner"
+slug: "/reference/api/rust-library-reference/nemo-relay-adaptive/acg_learner/struct-acglearner"
+description: "Learner that derives prompt stability state for ACG."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct AcgLearner { /* private fields */ }
+```
+
+Learner that derives prompt stability state for ACG.
+
+This learner groups annotated LLM requests by derived ACG profile key, builds prompt IR observations, persists a bounded observation window, and updates the hot cache with the latest stability results.
+
+## Implementations
+
+### `impl AcgLearner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-acglearner\">AcgLearner</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(\n    agent_id: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    observation_window: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>,\n    thresholds: <a href=\"../acg/stability/struct-stabilitythresholds\">StabilityThresholds</a>,\n) -&gt; Self"}} /></pre>
+
+Create a new ACG learner.
+
+##### Parameters
+
+- `agent_id`: Agent identifier whose observations should be updated.
+- `observation_window`: Maximum number of observations to retain per profile.
+- `thresholds`: Stability thresholds used during analysis.
+
+##### Returns
+
+A configured [`AcgLearner`](/reference/api/rust-library-reference/nemo-relay-adaptive/acg_learner/struct-acglearner).
+
+## Trait Implementations
+
+### `impl Learner for AcgLearner`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"../learner/traits/trait-learner\">Learner</a> for <a href=\"struct-acglearner\">AcgLearner</a>"}} /></pre>
+
+#### `process_run`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"../learner/traits/trait-learner\">process_run</a>&lt;'a&gt;(\n    &amp;'a self,\n    run: &amp;'a <a href=\"../types/records/struct-runrecord\">RunRecord</a>,\n    backend: &amp;'a dyn <a href=\"../storage/traits/trait-storagebackenddyn\">StorageBackendDyn</a>,\n    hot_cache: &amp;'a <a href=\"https://doc.rust-lang.org/1.96.1/alloc/sync/struct.Arc.html\">Arc</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/sync/poison/rwlock/struct.RwLock.html\">RwLock</a>&lt;<a href=\"../types/cache/struct-hotcache\">HotCache</a>&gt;&gt;,\n) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/pin/struct.Pin.html\">Pin</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/boxed/struct.Box.html\">Box</a>&lt;dyn <a href=\"https://doc.rust-lang.org/1.96.1/core/future/future/trait.Future.html\">Future</a>&lt;Output = <a href=\"../error/type-result\">Result</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.unit.html\">()</a>&gt;&gt; + <a href=\"https://doc.rust-lang.org/1.96.1/core/marker/trait.Send.html\">Send</a> + 'a&gt;&gt;"}} /></pre>

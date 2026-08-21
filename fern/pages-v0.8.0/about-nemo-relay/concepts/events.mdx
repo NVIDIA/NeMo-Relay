@@ -1,0 +1,347 @@
+---
+title: "Events"
+description: "Understand ATOF lifecycle events, fields, relationships, and delivery."
+position: 4
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+This page explains the lifecycle events emitted by scopes, tools, LLM calls, middleware,
+and subscribers.
+
+## What Events Represent
+
+Events are the runtime record of what happened. NeMo Relay uses Agent
+Trajectory Observability Format (ATOF) `0.1` as the canonical event format for
+scopes, managed execution helpers, manual lifecycle APIs, subscribers, and
+exporters. Refer to the
+[ATOF Core Specification](/reference/atof-event-format) for the normative wire
+format.
+
+## Event Kinds
+
+ATOF has two event kinds.
+
+### scope
+
+Emitted when lifecycle work starts or ends. `scope_category` is `start` or
+`end`, and `category` identifies the kind of work, such as `agent`, `function`,
+`tool`, `llm`, `retriever`, `embedder`, `reranker`, `guardrail`, `evaluator`,
+`custom`, or `unknown`.
+
+### mark
+
+Emitted for named runtime checkpoints that are not full start/end lifecycle
+pairs.
+
+| Behavior | `scope` | `mark` |
+| --- | --- | --- |
+| Duration | Represents work with a start and end time | Represents one point in time |
+| Pairing | Start and end share a UUID | No paired event |
+| Parentage | Child of the scope active when work starts | Child of the scope active when recorded |
+| Typical uses | Agent, tool, LLM, or function execution | Session start, compaction, skill-load attempt, or other checkpoint |
+
+The coding-agent CLI emits one `session.start` mark when a session lifecycle
+begins. Its metadata includes the logical harness `session_id`, the Relay-owned
+`session_instance_id`, and any configured session metadata such as `user_id`.
+The mark does not copy the native startup-hook payload or force a turn scope to
+open.
+
+For example, a tool scope and a checkpoint recorded by the same agent can carry
+the same `parent_uuid`. The tool start and end share the tool's `uuid`; the mark
+has its own UUID and no matching end event. Consumers can rely on these
+structural fields without inspecting application-defined `data`.
+
+## Fields Common to Every Event
+
+Every event carries a shared envelope:
+
+- `kind`
+- `atof_version`
+- `uuid`
+- `parent_uuid`
+- `timestamp`
+- `name`
+- `data`
+- `data_schema`
+- `metadata`
+
+Scope events add `scope_category`, `category`, `attributes`, and optional
+`category_profile`. Mark events can optionally carry `category` and
+`category_profile`. Generic mark helpers also accept an optional `data_schema`
+and log `severity`. Relay stores typed severity in sanitizer-visible metadata
+under `nemo_relay.log.severity`; that Relay convention does not add a field to
+the ATOF `0.1` envelope.
+
+Runtime helpers assign timestamps automatically by default. Manual lifecycle
+helpers for scopes, marks, tool calls, and LLM calls also accept an explicit
+timestamp for integrations that are replaying events or mirroring an upstream
+framework clock. Use explicit timestamps only when the caller owns a reliable
+event time; otherwise prefer the runtime-generated timestamp.
+
+Native Rust, Python, Node.js, and FFI event-producing APIs construct canonical
+events synchronously, enqueue subscriber delivery, and return without waiting
+for subscriber callbacks, exporter work, file writes, or tracing processors.
+Use the binding flush API when a test or shutdown path must wait for queued
+subscriber work.
+
+## Semantic Meaning
+
+These sections describe how consumers should interpret event fields and
+relationships.
+
+### Start and End Pairing
+
+Start and end scope events for the same lifecycle pair by UUID. That pairing
+lets subscribers compute durations, reconstruct call boundaries, and preserve
+nesting in downstream systems.
+
+### Input and Output Payloads
+
+ATOF uses one `data` field. For scope events, `data` is the semantic input on
+`scope_category == "start"` and the semantic output on
+`scope_category == "end"`.
+
+By default, LLM start annotations use freshness state owned by the nearest
+agent scope:
+
+- **Fresh history:** An agent starts fresh when its scope opens and becomes
+  fresh again after a `compaction` mark. The first subsequent LLM start retains
+  the complete available request history and consumes the fresh state.
+- **Stale history:** After that first start, later LLM starts retain all system
+  instructions, the latest user message, and every following assistant or tool
+  message. If the history has no user message, the annotation retains system
+  instructions and the final non-system message.
+- **Scope ownership:** Nested agents track freshness independently. The implicit
+  root is the freshness owner for work outside an explicit agent. Non-agent
+  scopes inherit their nearest agent's state instead of starting a new budget.
+- **Codec projection:** When a request codec supplies an annotation, Relay
+  applies the same history projection to the event's provider-shaped input. If
+  that event-only encode fails, Relay retains the complete event input and
+  annotation. The request used for provider execution remains unchanged.
+- **Concurrency:** Concurrent starts have no guaranteed emission order, but
+  exactly one consumes a fresh state. Events are independent observations, not
+  a replayable history stream.
+
+Set the observability plugin's `enable_full_payloads` option to `true` to retain
+complete sanitized request input and annotations on every LLM start event.
+Credential removal and sanitizers still apply.
+
+### Category Profiles
+
+Category-specific fields live under `category_profile`. NeMo Relay uses
+`model_name` for LLM events, `tool_call_id` for tool events, and `subtype` for
+custom-category events. LLM codec annotations, when present, are serialized
+under `category_profile.annotated_request` on LLM start events and
+`category_profile.annotated_response` on LLM end events. A successful tool end
+event places its optional opaque result annotation under
+`category_profile.tool_result_annotation`. Unknown profile fields are preserved
+so newer producers can interoperate with older consumers.
+
+### Annotated Request and Response Data
+
+LLM codecs can enrich LLM events with annotated request and response data. These
+annotations are part of the canonical event JSON under `category_profile` when
+they are present, so ATOF JSONL export and in-process subscriber JSON expose the
+same payload shape. Request annotations use the owning agent's freshness state.
+
+Managed and manual tool execution uses `ToolExecutionResult` to keep the
+application-owned `result` separate from an optional opaque `annotation`.
+Relay records the result as the tool end output and projects a non-null
+annotation into `category_profile.tool_result_annotation`. A tool
+sanitize-response guardrail sanitizes only the result. A scope-end event
+sanitizer can then replace or remove the annotation before subscribers and
+exporters receive the event.
+
+### Event Handoff
+
+Subscribers and exporters receive the completed event after sanitization.
+Consumers should prefer typed event fields, binding helpers, and annotated
+request or response data before reading raw payloads again.
+
+Before that handoff, event sanitizers can replace `data`, `category_profile`,
+and `metadata`. The runtime keeps identity, lifecycle, category, timestamp,
+and parent fields immutable. Refer to
+[Event Sanitizers](/reference/event-sanitizers) for registration levels and
+ordering.
+
+Events preserve runtime facts. They do not decide which scope owns a call, how
+replay or cost policy is applied, how redaction policy is configured, how
+streams are blocked, or how an exporter maps fields into its output format. Those
+decisions stay in the session, codec, plugin, guardrail, or exporter layer that
+owns them.
+
+### Automatic Skill-Load Marks
+
+NeMo Relay automatically records an on-demand skill-load attempt when an
+instrumented tool explicitly names a skill or requests a complete `SKILL.md`
+read. The following payload excerpt shows the stable skill-load fields.
+Standard [fields common to every event](#fields-common-to-every-event), such as
+`atof_version`, `uuid`, `parent_uuid`, and `timestamp`, are omitted.
+
+Detection only affects observability. An unsupported or unrecognized read still
+runs normally, but Relay emits no skill-load mark. Skill-load, first-use, and
+reuse analytics can therefore undercount actual loads.
+
+<Warning>
+Automatic skill-load extraction is best effort. Relay emits `skill.load` only
+through one of the following detection paths:
+
+- An integration supplies a precomputed detection with a nonempty skill name
+  and supported source before removing the original tool arguments.
+- Relay sees a recognized first-class skill tool with a nonempty `skill`,
+  `skill_name`, or `name` argument.
+- Relay sees the original arguments for a supported reader request that meets
+  all of the reader criteria below.
+
+For a reader request, all of the following conditions must be true:
+
+- The tool name matches a supported reader, either directly or through one
+  supported shell wrapper.
+- A recognized argument field or parsed command contains a path or URI. Its
+  final path component equals `SKILL.md` under an ASCII case-insensitive
+  comparison.
+- The path's immediate parent directory has a nonempty name, which Relay uses
+  as the skill name.
+- The request reads the entire file. Relay ignores requests that use partial or
+  range controls, unsupported transformations, metadata-only operations,
+  pipelines, redirections, command substitutions, or compound commands.
+  Relay also ignores output-transforming and unreviewed reader options.
+
+Relay checks the request before tool execution. The mark records an attempted
+load even if execution later fails. If Relay doesn't emit a mark, that doesn't
+prove that the skill wasn't loaded.
+</Warning>
+
+```json
+{
+  "kind": "mark",
+  "name": "skill.load",
+  "data": {"skill_name": "review"},
+  "metadata": {
+    "skill_load_source": "structured_read",
+    "tool_name": "read_file"
+  }
+}
+```
+
+Relay uses these `skill_load_source` values:
+
+| Source | Detected Request |
+| --- | --- |
+| `skill_tool` | A first-class skill tool, such as `Skill` or `skill_view` |
+| `structured_read` | A structured request for a whole-file read |
+| `shell_read` | A complete `cat`, `bat`, `batcat`, or PowerShell `Get-Content` command, either direct or within one supported wrapper |
+
+For structured reads, Relay recognizes only the following reviewed tool-name
+suffixes and argument fields:
+
+- Tool suffixes: `read`, `read_file`, `read_text_file`,
+  `read_multiple_files`, `file_read`, `read_resource`, `get_file_contents`,
+  and `read_file_content`.
+- Argument fields: `path`, `file_path`, `filepath`, `filename`, `file`,
+  `paths`, `uri`, and `absolute_path`.
+
+A shell wrapper is a shell command that launches a supported reader as its
+command string. For example, Relay can inspect
+`bash -lc 'cat ./skills/review/SKILL.md'` or
+`pwsh -Command 'Get-Content ./skills/review/SKILL.md -Raw'`. Relay unwraps at
+most one supported layer before applying the reader rules.
+
+For shell reads, Relay recognizes the following direct shell tool names after
+normalizing case and nonalphanumeric separators:
+
+- Tool names: `sh`, `bash`, `zsh`, `fish`, `shell`, `shell_command`, `exec`,
+  `exec_command`, `execute`, `terminal`, `run_command`, `run_shell_command`,
+  `shell_exec`, `powershell`, and `pwsh`.
+- Argument fields: `command` and `cmd`.
+
+Relay also recognizes a single wrapper layer inside a direct shell tool. Each
+wrapper must use one of the following forms:
+
+- POSIX shells: `sh -c`, `bash -c`, `bash -lc`, `zsh -c`, or `zsh -lc`.
+- Fish: `fish -c` or `fish --command=...`.
+- PowerShell: `powershell -Command` or `pwsh -Command`.
+
+The `sh`, `bash`, `zsh`, and `fish` wrappers support `cat`, `bat`, and `batcat`.
+PowerShell wrappers support `Get-Content`. Relay treats unknown tool names,
+argument fields, wrapper forms, Windows `type`, and PowerShell aliases as
+unsupported until an integration explicitly adds them to the registry.
+
+The shell reader option registry is deliberately narrow:
+
+- `cat` supports no options or the exact content-preserving `-u` option. Other
+  options, including bundled short options, are unsupported.
+- `bat` and `batcat` require one exact plain-output option: `-p` or `--plain`.
+  Relay rejects every additional option.
+- `Get-Content` supports positional paths and the exact `-Path`,
+  `-LiteralPath`, `-Raw`, `-Encoding`, `-ReadCount`, `-AsByteStream`, and
+  `-Force` options. PowerShell abbreviations and other options are unsupported.
+
+For a reader request, the final path component must equal `SKILL.md` under an
+ASCII case-insensitive comparison. Relay uses the immediate parent directory as
+the skill name. Relay doesn't emit a mark when a structured request has a
+`offset` other than the integer `0`, a `limit`, or a range control. It also
+doesn't emit a mark for shell commands that use pipelines, redirections,
+compound commands, or range-limited readers, or help, version, listing, or
+diagnostic operations. It also doesn't emit a mark for output-transforming or
+unreviewed reader options. An explicit structured `offset` of `0` still
+represents a complete read. Relay omits the full path and shell command from
+the mark.
+
+The mark has these lifecycle semantics:
+
+- Relay emits it immediately after the tool-start event and before execution,
+  with the tool span as its parent.
+- The mark records an eager load attempt and remains in the event stream if the
+  tool later fails.
+- Relay doesn't emit the mark for a blocked call that never starts.
+- Relay emits at most one mark for each skill in a tool call. A later tool call
+  that attempts the same load emits another mark.
+
+The three related facts are intentionally distinct:
+
+- `skill.load` records an attempt detected before execution.
+- The tool end event records whether execution succeeded.
+- `skill.load.inferred` records a prompt expansion that Relay could not confirm
+  as a file read.
+
+Consumers should not treat any one of them as proof of the others.
+
+Claude Code `Skill`, Codex complete-reader shell calls, Hermes `skill_view`, and
+tool calls made through the Rust, Python, Node.js, Go/FFI, LangChain, LangGraph,
+and Deep Agents paths use this observed contract. The existing Deep Agents
+`DeepAgents Skills Configured` mark remains a separate configuration summary;
+it does not mean that a skill body was loaded.
+
+Claude Code exposes slash-command expansion without saying whether the command
+came from a skill or a legacy command. For a nonempty slash-command expansion,
+Relay emits `skill.load.inferred` with `data.skill_name`,
+`metadata.skill_load_source = "prompt_expansion"`, and
+`metadata.inferred = true`. Relay also includes `metadata.command_source` when
+Claude Code provides it. Keep inferred and observed counts separate.
+
+Exporters handle the mark as follows:
+
+- ATOF preserves the mark event.
+- ATIF omits marks because it models trajectory steps rather than independent
+  point-in-time events.
+- The `full` and `openinference` OpenTelemetry projections use their fixed
+  native handling for non-metric marks. The `gen_ai` projection omits marks.
+- The independent OTLP log pipeline exports sanitized non-metric marks. The
+  independent metric pipeline exclusively consumes valid marks with the
+  Relay-owned `nemo.relay.metric_measurements` schema. Invalid reserved metric
+  marks reach no OTLP signal and produce an operational diagnostic. This
+  routing does not define an ATOF-wide metric semantic.
+
+## How Events Are Produced
+
+Scope APIs emit `scope` start and end events and can also emit named `mark`
+events. Managed tool and LLM helpers emit `scope` events with `category` set to
+`tool` or `llm`. Conditional-execution rejections and explicit mark points let
+the runtime record important state transitions even when there is no full nested
+callback to wrap. Subscriber delivery is downstream from event construction and
+does not block the emitting call on native bindings.
+
+ATOF export writes the raw ATOF event stream. ATIF and OpenTelemetry traces,
+logs, and metrics are downstream projections over the same events.

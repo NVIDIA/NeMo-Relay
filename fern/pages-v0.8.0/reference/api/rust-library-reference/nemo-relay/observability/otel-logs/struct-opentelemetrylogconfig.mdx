@@ -1,0 +1,123 @@
+---
+title: "Struct Open Telemetry LogConfig"
+sidebar-title: "OpenTelemetryLogConfig"
+slug: "/reference/api/rust-library-reference/nemo-relay/observability/otel_logs/struct-opentelemetrylogconfig"
+description: "Configuration for an OTLP log subscriber."
+position: 1
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+Generated from `cargo doc --no-deps -p nemo-relay -p nemo-relay-adaptive -p nemo-relay-pii-redaction -p nemo-relay-ffi -p nemo-relay-types -p nemo-relay-plugin -p nemo-relay-worker-proto -p nemo-relay-worker`.
+
+```rust
+pub struct OpenTelemetryLogConfig { /* private fields */ }
+```
+
+Configuration for an OTLP log subscriber.
+
+## Implementations
+
+### `impl OpenTelemetryLogConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"struct-opentelemetrylogconfig\">OpenTelemetryLogConfig</a>"}} /></pre>
+
+#### `new`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn new(endpoint: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Create a log exporter for a required OTLP endpoint.
+
+#### `with_transport`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_transport(self, transport: <a href=\"../otel/enum-otlptransport\">OtlpTransport</a>) -&gt; Self"}} /></pre>
+
+Select the OTLP transport.
+
+#### `with_header`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_header(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Add an exporter header or gRPC metadata entry.
+
+#### `with_resource_attribute`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_resource_attribute(\n    self,\n    key: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n    value: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;,\n) -&gt; Self"}} /></pre>
+
+Add an OpenTelemetry resource attribute.
+
+#### `with_service_name`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_name(self, service_name: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Set the `service.name` resource attribute.
+
+#### `with_service_namespace`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_namespace(self, namespace: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Set the optional `service.namespace` resource attribute.
+
+#### `with_service_version`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_service_version(self, version: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Set the optional `service.version` resource attribute.
+
+#### `with_instrumentation_scope`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_instrumentation_scope(self, scope: impl <a href=\"https://doc.rust-lang.org/1.96.1/core/convert/trait.Into.html\">Into</a>&lt;<a href=\"https://doc.rust-lang.org/1.96.1/alloc/string/struct.String.html\">String</a>&gt;) -&gt; Self"}} /></pre>
+
+Set the instrumentation scope name.
+
+#### `with_timeout`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_timeout(self, timeout: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>) -&gt; Self"}} /></pre>
+
+Set the OTLP request timeout.
+
+#### `with_minimum_severity`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_minimum_severity(self, severity: <a href=\"../../api/event/enum-logseverity\">LogSeverity</a>) -&gt; Self"}} /></pre>
+
+Set the minimum mark severity exported as a log.
+
+#### `with_max_queue_size`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_max_queue_size(self, max_queue_size: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
+
+Set the maximum queued log records.
+
+#### `with_max_export_batch_size`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_max_export_batch_size(self, max_export_batch_size: <a href=\"https://doc.rust-lang.org/1.96.1/std/primitive.usize.html\">usize</a>) -&gt; Self"}} /></pre>
+
+Set the maximum records in one export batch.
+
+#### `with_scheduled_delay`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "pub fn with_scheduled_delay(self, delay: <a href=\"https://doc.rust-lang.org/1.96.1/core/time/struct.Duration.html\">Duration</a>) -&gt; Self"}} /></pre>
+
+Set the maximum delay before exporting a partial batch.
+
+## Trait Implementations
+
+### `impl Clone for OpenTelemetryLogConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html\">Clone</a> for <a href=\"struct-opentelemetrylogconfig\">OpenTelemetryLogConfig</a>"}} /></pre>
+
+#### `clone`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#tymethod.clone\">clone</a>(&amp;self) -&gt; <a href=\"struct-opentelemetrylogconfig\">OpenTelemetryLogConfig</a>"}} /></pre>
+
+#### `clone_from`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/clone/trait.Clone.html#method.clone_from\">clone_from</a>(&amp;mut self, source: &amp;Self)"}} /></pre>
+
+### `impl Debug for OpenTelemetryLogConfig`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "impl <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html\">Debug</a> for <a href=\"struct-opentelemetrylogconfig\">OpenTelemetryLogConfig</a>"}} /></pre>
+
+#### `fmt`
+
+<pre className="rust-signature"><code dangerouslySetInnerHTML={{"__html": "fn <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/trait.Debug.html#tymethod.fmt\">fmt</a>(&amp;self, f: &amp;mut <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/struct.Formatter.html\">Formatter</a>&lt;'_&gt;) -&gt; <a href=\"https://doc.rust-lang.org/1.96.1/core/fmt/type.Result.html\">Result</a>"}} /></pre>
