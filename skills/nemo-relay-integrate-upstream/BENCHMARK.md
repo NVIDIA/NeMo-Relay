@@ -1,4 +1,4 @@
-# Skill Benchmark: nemo-relay-get-started
+# Skill Benchmark: nemo-relay-integrate-upstream
 
 > ✅ **Overall verdict: PASS — Recommended for publication**
 
@@ -8,12 +8,12 @@ Recommended for publication based on the completed evaluation evidence in this r
 
 ## Evaluation Metadata
 
-- Skill: `nemo-relay-get-started`
+- Skill: `nemo-relay-integrate-upstream`
 - Evaluation date: 2026-08-21
 - Evaluator version: `1.3.2`
 - Agents: Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`), Codex (`openai/openai/gpt-5.5`)
-- Tasks: 15 evaluation tasks (14 positive, 1 negative)
-- Dataset digest: `sha256:d8b84368c53829b1ab95079b2968f8e667766a8d13577bc10331d59a90e243ae` (skill-evaluator-dataset-snapshot/1)
+- Tasks: 15 evaluation tasks (12 positive, 3 negative)
+- Dataset digest: `sha256:df36705ad53ceb27180c4643b12567090ba4f775d56ae9c7bac145c7a0d499f3` (skill-evaluator-dataset-snapshot/1)
 - Attempts per task: 1
 - Environment: `local`
 - Tier 3 evidence: required for publication
@@ -45,12 +45,12 @@ The three-tier evaluation checks whether the skill:
 
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 49% → 88% (+39 points) | 51% → 83% (+32 points) |
-| Security | 100% → 100% (±0 points) | 73% → 90% (+17 points) |
-| Correctness | 23% → 92% (+69 points) | 68% → 89% (+21 points) |
-| Discoverability | 51% → 95% (+44 points) | 44% → 90% (+45 points) |
-| Effectiveness | 27% → 68% (+40 points) | 42% → 70% (+27 points) |
-| Efficiency | 44% → 84% (+40 points) | 27% → 76% (+49 points) |
+| Overall | 58% → 92% (+34 points) | 64% → 92% (+28 points) |
+| Security | 93% → 100% (+7 points) | 87% → 100% (+13 points) |
+| Correctness | 60% → 92% (+32 points) | 76% → 96% (+20 points) |
+| Discoverability | 46% → 99% (+53 points) | 50% → 94% (+43 points) |
+| Effectiveness | 45% → 71% (+26 points) | 55% → 76% (+22 points) |
+| Efficiency | 45% → 97% (+52 points) | 53% → 96% (+43 points) |
 
 **How to read this table:** baseline is the same task attempted without the target skill. Uplift is `skill score - baseline score`, shown in percentage points.
 
@@ -69,9 +69,9 @@ Example: `47% → 92% (+45 points)` means the skill-assisted run scored 92%, 45 
 <details>
 <summary>Show detailed findings and successful checks</summary>
 
-- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Instructions' (`skills/nemo-relay-get-started/SKILL.md`)
-- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Examples' (`skills/nemo-relay-get-started/SKILL.md`)
-- **LOW** SCHEMA/author_format: Author must be of the form 'Name <email@host>' (`skills/nemo-relay-get-started/SKILL.md`)
+- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Instructions' (`skills/nemo-relay-integrate-upstream/SKILL.md`)
+- **MEDIUM** SCHEMA/body_recommended_section: Missing recommended section: '## Examples' (`skills/nemo-relay-integrate-upstream/SKILL.md`)
+- **LOW** SCHEMA/author_format: Author must be of the form 'Name <email@host>' (`skills/nemo-relay-integrate-upstream/SKILL.md`)
 
 </details>
 
