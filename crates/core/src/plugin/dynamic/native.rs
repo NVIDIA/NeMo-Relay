@@ -541,19 +541,33 @@ struct NativeOwnedGate {
 impl NativeHostPluginRuntime {
     fn cleanup(&self) -> crate::plugin::Result<()> {
         self.active.store(false, Ordering::Release);
-        let names = self
-            .gates
-            .lock()
-            .map_err(|error| PluginError::Internal(format!("native gate lock poisoned: {error}")))?
+        let mut gates = match self.gates.lock() {
+            Ok(gates) => gates,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.native",
+                    event = "native_gate_ownership_lock_poisoned";
+                    "Native gate ownership lock was poisoned during cleanup; recovering owned gates"
+                );
+                error.into_inner()
+            }
+        };
+        let names = gates
             .drain()
             .map(|(_, gate)| gate.qualified_name)
             .collect::<Vec<_>>();
+        drop(gates);
+        let mut errors = Vec::new();
         for name in names {
-            deregister_conditional_middleware_guardrail(&name).map_err(|error| {
-                PluginError::RegistrationFailed(format!(
-                    "conditional middleware guardrail deregistration failed: {error}"
-                ))
-            })?;
+            if let Err(error) = deregister_conditional_middleware_guardrail(&name) {
+                errors.push(format!("'{name}': {error}"));
+            }
+        }
+        if !errors.is_empty() {
+            return Err(PluginError::RegistrationFailed(format!(
+                "conditional middleware guardrail deregistration failed: {}",
+                errors.join("; ")
+            )));
         }
         Ok(())
     }
@@ -4035,6 +4049,10 @@ unsafe extern "C" fn native_plugin_runtime_register_conditional_middleware_guard
             return NemoRelayStatus::Internal;
         }
     };
+    if !runtime.active.load(Ordering::Acquire) {
+        set_native_last_error("plugin runtime capability is no longer active");
+        return NemoRelayStatus::NotFound;
+    }
     if gates.values().any(|gate| gate.local_name == local_name) {
         set_native_last_error(format!(
             "conditional middleware guardrail '{local_name}' already exists for this activation"

@@ -2172,6 +2172,7 @@ struct WorkerHostRuntimeState {
     scope_handles: Mutex<HashMap<String, StoredScopeHandle>>,
     continuations: Mutex<HashMap<String, Continuation>>,
     codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
+    gates_active: AtomicBool,
     conditional_middleware_guardrails: Mutex<HashMap<String, WorkerOwnedGate>>,
 }
 
@@ -2261,23 +2262,38 @@ impl WorkerHostRuntimeState {
             scope_handles: Mutex::new(HashMap::new()),
             continuations: Mutex::new(HashMap::new()),
             codecs: Mutex::new(HashMap::new()),
+            gates_active: AtomicBool::new(true),
             conditional_middleware_guardrails: Mutex::new(HashMap::new()),
         }
     }
 
     fn cleanup_conditional_middleware_guardrails(&self) {
-        let names = self
-            .conditional_middleware_guardrails
-            .lock()
-            .map(|mut gates| {
-                gates
-                    .drain()
-                    .map(|(_, gate)| gate.qualified_name)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        self.gates_active.store(false, Ordering::Release);
+        let mut gates = match self.conditional_middleware_guardrails.lock() {
+            Ok(gates) => gates,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.worker",
+                    event = "worker_gate_ownership_lock_poisoned";
+                    "Worker gate ownership lock was poisoned during cleanup; recovering owned gates"
+                );
+                error.into_inner()
+            }
+        };
+        let names = gates
+            .drain()
+            .map(|(_, gate)| gate.qualified_name)
+            .collect::<Vec<_>>();
+        drop(gates);
         for name in names {
-            let _ = deregister_conditional_middleware_guardrail(&name);
+            if let Err(error) = deregister_conditional_middleware_guardrail(&name) {
+                log::error!(
+                    target: "nemo_relay.worker",
+                    event = "worker_gate_cleanup_failed",
+                    gate = name.as_str();
+                    "Worker-owned conditional middleware guardrail cleanup failed: {error}"
+                );
+            }
         }
     }
 
@@ -2294,6 +2310,11 @@ impl WorkerHostRuntimeState {
             .map_err(|error| {
                 FlowError::Internal(format!("gate ownership lock poisoned: {error}"))
             })?;
+        if !self.gates_active.load(Ordering::Acquire) {
+            return Err(FlowError::NotFound(
+                "worker activation is shutting down".into(),
+            ));
+        }
         if owned_gates.values().any(|gate| gate.local_name == name) {
             return Err(FlowError::AlreadyExists(format!(
                 "conditional middleware guardrail '{name}' already exists for this activation"
