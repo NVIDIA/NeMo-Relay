@@ -2231,6 +2231,10 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
             ),
         )
     ]
+    list_request = _last_request(host_stub, pb.ListRuntimeRegistrationsRequest)
+    assert list_request.activation_id == ACTIVATION_ID
+    assert list_request.auth_token == AUTH_TOKEN
+    assert list(list_request.kinds) == [pb.SUBSCRIBER]
     gate = await runtime.register_conditional_middleware_guardrail(
         "pause-otel",
         {RuntimeRegistrationKind.SUBSCRIBER},
@@ -2238,7 +2242,18 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
         "temporarily disabled",
     )
     assert isinstance(gate, ConditionalMiddlewareGuardrailHandle)
+    register_request = _last_request(host_stub, pb.RegisterConditionalMiddlewareGuardrailRequest)
+    assert register_request.activation_id == ACTIVATION_ID
+    assert register_request.auth_token == AUTH_TOKEN
+    assert register_request.name == "pause-otel"
+    assert list(register_request.kinds) == [pb.SUBSCRIBER]
+    assert register_request.registration_name == registrations[0].effective_name
+    assert register_request.reason == "temporarily disabled"
     assert await runtime.deregister_conditional_middleware_guardrail(gate)
+    deregister_request = _last_request(host_stub, pb.DeregisterConditionalMiddlewareGuardrailRequest)
+    assert deregister_request.activation_id == ACTIVATION_ID
+    assert deregister_request.auth_token == AUTH_TOKEN
+    assert deregister_request.handle == "gate-1"
 
     stack_id = await runtime.create_scope_stack()
     assert stack_id == "stack-1"

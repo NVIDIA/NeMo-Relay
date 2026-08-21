@@ -823,6 +823,52 @@ async fn worker_service_invokes_every_registration_surface() {
     assert_eq!(stream_auth.code(), tonic::Code::PermissionDenied);
 
     let calls = host.calls();
+    let runtime_registration_requests = host.runtime_registration_requests();
+    assert_eq!(runtime_registration_requests.list.len(), 1);
+    assert_eq!(
+        runtime_registration_requests.list[0].activation_id,
+        ACTIVATION_ID
+    );
+    assert_eq!(runtime_registration_requests.list[0].auth_token, AUTH_TOKEN);
+    assert_eq!(
+        runtime_registration_requests.list[0].kinds,
+        vec![RegistrationSurface::Subscriber as i32]
+    );
+    assert_eq!(runtime_registration_requests.register.len(), 1);
+    assert_eq!(
+        runtime_registration_requests.register[0].activation_id,
+        ACTIVATION_ID
+    );
+    assert_eq!(
+        runtime_registration_requests.register[0].auth_token,
+        AUTH_TOKEN
+    );
+    assert_eq!(runtime_registration_requests.register[0].name, "timer-gate");
+    assert_eq!(
+        runtime_registration_requests.register[0].kinds,
+        vec![RegistrationSurface::Subscriber as i32]
+    );
+    assert_eq!(
+        runtime_registration_requests.register[0].registration_name,
+        "target-subscriber"
+    );
+    assert_eq!(
+        runtime_registration_requests.register[0].reason,
+        "timer active"
+    );
+    assert_eq!(runtime_registration_requests.deregister.len(), 1);
+    assert_eq!(
+        runtime_registration_requests.deregister[0].activation_id,
+        ACTIVATION_ID
+    );
+    assert_eq!(
+        runtime_registration_requests.deregister[0].auth_token,
+        AUTH_TOKEN
+    );
+    assert_eq!(
+        runtime_registration_requests.deregister[0].handle,
+        "gate-handle"
+    );
     assert!(calls.contains(&"runtime_diagnostics".into()));
     assert!(calls.contains(&"mark:tool-exec:stack-1:parent-1".into()));
     assert!(calls.contains(&"create_scope_stack".into()));
@@ -1909,7 +1955,11 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_tool_execution_intercept("tool-exec", 1, move |_, value, next: ToolNext| {
             let runtime = tool_runtime.clone();
             async move {
-                let registrations = runtime.list_runtime_registrations(None).await?;
+                let registrations = runtime
+                    .list_runtime_registrations(Some(BTreeSet::from([
+                        RuntimeRegistrationKind::Subscriber,
+                    ])))
+                    .await?;
                 if !registrations.is_empty() {
                     return Err(WorkerSdkError::Callback(
                         "mock runtime registration discovery was not empty".into(),
@@ -2206,10 +2256,18 @@ struct MockHostFailures {
 }
 
 #[derive(Clone, Default)]
+struct RuntimeRegistrationRequests {
+    list: Vec<ListRuntimeRegistrationsRequest>,
+    register: Vec<RegisterConditionalMiddlewareGuardrailRequest>,
+    deregister: Vec<DeregisterConditionalMiddlewareGuardrailRequest>,
+}
+
+#[derive(Clone, Default)]
 struct MockHost {
     calls: Arc<Mutex<Vec<String>>>,
     marks: Arc<Mutex<Vec<EmitMarkRequest>>>,
     failures: Arc<Mutex<MockHostFailures>>,
+    runtime_registration_requests: Arc<Mutex<RuntimeRegistrationRequests>>,
 }
 
 impl MockHost {
@@ -2232,6 +2290,13 @@ impl MockHost {
     fn set_failures(&self, failures: MockHostFailures) {
         *self.failures.lock().expect("failures lock") = failures;
     }
+
+    fn runtime_registration_requests(&self) -> RuntimeRegistrationRequests {
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .clone()
+    }
 }
 
 #[tonic::async_trait]
@@ -2242,6 +2307,11 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<ListRuntimeRegistrationsResponse>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .list
+            .push(request);
         Ok(Response::new(ListRuntimeRegistrationsResponse {
             registrations: Vec::new(),
             error: None,
@@ -2254,6 +2324,11 @@ impl RelayHostRuntime for MockHost {
     ) -> std::result::Result<Response<RegisterConditionalMiddlewareGuardrailResponse>, Status> {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .register
+            .push(request);
         Ok(Response::new(
             RegisterConditionalMiddlewareGuardrailResponse {
                 handle: "gate-handle".into(),
@@ -2269,6 +2344,11 @@ impl RelayHostRuntime for MockHost {
     {
         let request = request.into_inner();
         authorize_host(&request.activation_id, &request.auth_token)?;
+        self.runtime_registration_requests
+            .lock()
+            .expect("runtime registration requests lock")
+            .deregister
+            .push(request);
         Ok(Response::new(
             DeregisterConditionalMiddlewareGuardrailResponse {
                 removed: true,
