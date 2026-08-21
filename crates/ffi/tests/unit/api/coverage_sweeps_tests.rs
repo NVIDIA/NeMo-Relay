@@ -2682,6 +2682,27 @@ fn test_ffi_adaptive_runtime_and_cache_helper_paths() {
         let mut out_json = ptr::null_mut();
 
         assert_status!(
+            nemo_relay_adaptive_runtime_register(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_adaptive_runtime_deregister(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_adaptive_runtime_shutdown(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_adaptive_runtime_wait_for_idle(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            nemo_relay_adaptive_runtime_report_json(ptr::null_mut(), &mut out_json),
+            NemoRelayStatus::NullPointer
+        );
+
+        assert_status!(
             nemo_relay_adaptive_validate_config(ptr::null(), &mut out_json),
             NemoRelayStatus::InvalidJson
         );
@@ -2756,6 +2777,10 @@ fn test_ffi_adaptive_runtime_and_cache_helper_paths() {
             nemo_relay_adaptive_runtime_bind_scope(runtime, scope),
             NemoRelayStatus::Ok
         );
+        assert_status!(
+            nemo_relay_adaptive_runtime_bind_scope(ptr::null_mut(), scope),
+            NemoRelayStatus::NullPointer
+        );
 
         let cache_facts_options = cstring(
             &json!({
@@ -2782,6 +2807,14 @@ fn test_ffi_adaptive_runtime_and_cache_helper_paths() {
                 &mut out_json,
             ),
             NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_adaptive_runtime_build_cache_request_facts(
+                ptr::null_mut(),
+                cache_facts_options.as_ptr(),
+                &mut out_json,
+            ),
+            NemoRelayStatus::NullPointer
         );
         let facts = returned_json(out_json);
         assert_eq!(facts["provider"], "openai");
@@ -3435,5 +3468,494 @@ fn test_ffi_observability_component_and_constructor_error_paths() {
             ),
             NemoRelayStatus::InvalidArg
         );
+    }
+}
+
+#[test]
+fn test_ffi_scope_event_and_metric_validation_sweeps() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let stack = fresh_scope_stack();
+        let invalid_utf8 = [0xffu8, 0];
+        let invalid = invalid_utf8.as_ptr() as *const c_char;
+        let malformed_json = cstring("{");
+        let metric_name = cstring("ffi_metric_validation_sweep");
+        let event_name = cstring("ffi_event_validation_sweep");
+        let scope_name = cstring("ffi_scope_validation_sweep");
+        let instrument_name = cstring("example.validation.value");
+        let unit = cstring("{item}");
+        let description = cstring("validation sweep");
+        let attributes = cstring(r#"{"source":"ffi"}"#);
+        let metadata = cstring(r#"{"test":true}"#);
+        let invalid_timestamp = i64::MAX;
+
+        assert_status!(
+            api::nemo_relay_get_handle(ptr::null_mut()),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            api::nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null_mut(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+
+        let mut scope = ptr::null_mut();
+        for (data, metadata, input) in [
+            (malformed_json.as_ptr(), ptr::null(), ptr::null()),
+            (ptr::null(), malformed_json.as_ptr(), ptr::null()),
+            (ptr::null(), ptr::null(), malformed_json.as_ptr()),
+        ] {
+            assert_status!(
+                api::nemo_relay_push_scope(
+                    scope_name.as_ptr(),
+                    NemoRelayScopeType::Custom,
+                    ptr::null(),
+                    0,
+                    data,
+                    metadata,
+                    input,
+                    ptr::null(),
+                    &mut scope,
+                ),
+                NemoRelayStatus::InvalidJson
+            );
+        }
+        assert_status!(
+            api::nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::from_ref(&invalid_timestamp),
+                &mut scope,
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+        assert_status!(
+            api::nemo_relay_push_scope(
+                scope_name.as_ptr(),
+                NemoRelayScopeType::Custom,
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut scope,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        assert_status!(
+            api::nemo_relay_pop_scope(ptr::null(), ptr::null(), ptr::null(), ptr::null()),
+            NemoRelayStatus::NullPointer
+        );
+        for (output, metadata, timestamp, expected) in [
+            (
+                malformed_json.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                NemoRelayStatus::InvalidJson,
+            ),
+            (
+                ptr::null(),
+                malformed_json.as_ptr(),
+                ptr::null(),
+                NemoRelayStatus::InvalidJson,
+            ),
+            (
+                ptr::null(),
+                ptr::null(),
+                ptr::from_ref(&invalid_timestamp),
+                NemoRelayStatus::InvalidArg,
+            ),
+        ] {
+            assert_status!(
+                api::nemo_relay_pop_scope(scope, output, metadata, timestamp),
+                expected
+            );
+        }
+
+        let invalid_schema = cstring(r#"{"name":1,"version":false}"#);
+        assert_status!(
+            api::nemo_relay_event_v2(
+                invalid,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidUtf8
+        );
+        for (data, schema, event_metadata) in [
+            (malformed_json.as_ptr(), ptr::null(), ptr::null()),
+            (ptr::null(), malformed_json.as_ptr(), ptr::null()),
+            (ptr::null(), invalid_schema.as_ptr(), ptr::null()),
+            (ptr::null(), ptr::null(), malformed_json.as_ptr()),
+        ] {
+            assert_status!(
+                api::nemo_relay_event_v2(
+                    event_name.as_ptr(),
+                    scope,
+                    data,
+                    schema,
+                    event_metadata,
+                    ptr::null(),
+                    ptr::null(),
+                ),
+                NemoRelayStatus::InvalidJson
+            );
+        }
+        assert_status!(
+            api::nemo_relay_event_v2(
+                event_name.as_ptr(),
+                scope,
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::from_ref(&invalid_timestamp),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        let measurements = cstring(
+            r#"[{"name":"example.validation.value","kind":"counter","value_type":"u64","value":1}]"#,
+        );
+        let invalid_measurements_shape = cstring(r#"{"name":"not-an-array"}"#);
+        for (name, values, metric_metadata, timestamp, expected) in [
+            (
+                invalid,
+                measurements.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                NemoRelayStatus::InvalidUtf8,
+            ),
+            (
+                metric_name.as_ptr(),
+                malformed_json.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                NemoRelayStatus::InvalidJson,
+            ),
+            (
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                NemoRelayStatus::NullPointer,
+            ),
+            (
+                metric_name.as_ptr(),
+                invalid_measurements_shape.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                NemoRelayStatus::InvalidJson,
+            ),
+            (
+                metric_name.as_ptr(),
+                measurements.as_ptr(),
+                malformed_json.as_ptr(),
+                ptr::null(),
+                NemoRelayStatus::InvalidJson,
+            ),
+            (
+                metric_name.as_ptr(),
+                measurements.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&invalid_timestamp),
+                NemoRelayStatus::InvalidArg,
+            ),
+        ] {
+            assert_status!(
+                api::nemo_relay_metric_json(name, ptr::null(), values, metric_metadata, timestamp),
+                expected
+            );
+        }
+        assert_status!(
+            api::nemo_relay_metric_json(
+                metric_name.as_ptr(),
+                scope,
+                measurements.as_ptr(),
+                metadata.as_ptr(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let base_measurement = types::NemoRelayMetricMeasurement {
+            name: instrument_name.as_ptr(),
+            kind: types::NEMO_RELAY_METRIC_KIND_COUNTER,
+            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_I64,
+            u64_value: 0,
+            i64_value: -7,
+            f64_value: 0.0,
+            unit: unit.as_ptr(),
+            description: description.as_ptr(),
+            attributes_json: attributes.as_ptr(),
+            boundaries: ptr::null(),
+            boundaries_len: 0,
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                invalid,
+                ptr::null(),
+                ptr::from_ref(&base_measurement),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidUtf8
+        );
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::NullPointer
+        );
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidArg
+        );
+
+        for measurement in [
+            types::NemoRelayMetricMeasurement {
+                name: invalid,
+                ..base_measurement
+            },
+            types::NemoRelayMetricMeasurement {
+                unit: invalid,
+                ..base_measurement
+            },
+            types::NemoRelayMetricMeasurement {
+                description: invalid,
+                ..base_measurement
+            },
+        ] {
+            assert_status!(
+                api::nemo_relay_metric(
+                    metric_name.as_ptr(),
+                    ptr::null(),
+                    ptr::from_ref(&measurement),
+                    1,
+                    ptr::null(),
+                    ptr::null(),
+                ),
+                NemoRelayStatus::InvalidUtf8
+            );
+        }
+        let invalid_attributes = types::NemoRelayMetricMeasurement {
+            attributes_json: malformed_json.as_ptr(),
+            ..base_measurement
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                ptr::null(),
+                ptr::from_ref(&invalid_attributes),
+                1,
+                ptr::null(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::InvalidJson
+        );
+
+        let boundaries = [0.0, 1.0, 10.0];
+        let histogram_measurement = types::NemoRelayMetricMeasurement {
+            kind: types::NEMO_RELAY_METRIC_KIND_HISTOGRAM,
+            value_type: types::NEMO_RELAY_METRIC_VALUE_TYPE_F64,
+            f64_value: 2.5,
+            boundaries: boundaries.as_ptr(),
+            boundaries_len: boundaries.len(),
+            ..base_measurement
+        };
+        assert_status!(
+            api::nemo_relay_metric(
+                metric_name.as_ptr(),
+                scope,
+                ptr::from_ref(&histogram_measurement),
+                1,
+                metadata.as_ptr(),
+                ptr::null(),
+            ),
+            NemoRelayStatus::Ok
+        );
+        for (metric_metadata, timestamp, expected) in [
+            (
+                malformed_json.as_ptr(),
+                ptr::null(),
+                NemoRelayStatus::InvalidJson,
+            ),
+            (
+                ptr::null(),
+                ptr::from_ref(&invalid_timestamp),
+                NemoRelayStatus::InvalidArg,
+            ),
+        ] {
+            assert_status!(
+                api::nemo_relay_metric(
+                    metric_name.as_ptr(),
+                    ptr::null(),
+                    ptr::from_ref(&base_measurement),
+                    1,
+                    metric_metadata,
+                    timestamp,
+                ),
+                expected
+            );
+        }
+
+        assert_status!(
+            api::nemo_relay_pop_scope(scope, ptr::null(), ptr::null(), ptr::null()),
+            NemoRelayStatus::Ok
+        );
+        nemo_relay_scope_handle_free(scope);
+        nemo_relay_scope_stack_free(stack);
+    }
+}
+
+#[test]
+fn test_ffi_otel_signal_subscribers_apply_all_typed_options() {
+    let _lock = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    reset_globals();
+
+    unsafe {
+        let transport = cstring("http_binary");
+        let log_endpoint = cstring("http://127.0.0.1:4318/v1/logs");
+        let metric_endpoint = cstring("http://127.0.0.1:4318/v1/metrics");
+        let headers = cstring(r#"{"authorization":"test-token"}"#);
+        let resources = cstring(r#"{"service.instance.id":"ffi-test"}"#);
+        let service_name = cstring("ffi-coverage");
+        let service_namespace = cstring("nemo-relay");
+        let service_version = cstring("test");
+        let instrumentation_scope = cstring("ffi.coverage");
+        let minimum_severity = cstring("warn");
+        let temporality = cstring("delta");
+
+        let mut log_subscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_log_subscriber_create(
+                transport.as_ptr(),
+                log_endpoint.as_ptr(),
+                headers.as_ptr(),
+                resources.as_ptr(),
+                service_name.as_ptr(),
+                service_namespace.as_ptr(),
+                service_version.as_ptr(),
+                instrumentation_scope.as_ptr(),
+                250,
+                minimum_severity.as_ptr(),
+                64,
+                16,
+                10,
+                &mut log_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!log_subscriber.is_null());
+
+        let log_name = cstring(&unique_name("ffi_typed_log_subscriber"));
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(log_subscriber, log_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_register(log_subscriber, log_name.as_ptr()),
+            NemoRelayStatus::Internal
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_deregister(log_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_force_flush(log_subscriber),
+            NemoRelayStatus::Internal
+        );
+        assert_status!(
+            nemo_relay_otel_log_subscriber_shutdown(log_subscriber),
+            NemoRelayStatus::Internal
+        );
+        types::nemo_relay_otel_log_subscriber_free(log_subscriber);
+
+        let mut metric_subscriber = ptr::null_mut();
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_create(
+                transport.as_ptr(),
+                metric_endpoint.as_ptr(),
+                headers.as_ptr(),
+                resources.as_ptr(),
+                service_name.as_ptr(),
+                service_namespace.as_ptr(),
+                service_version.as_ptr(),
+                instrumentation_scope.as_ptr(),
+                250,
+                20,
+                temporality.as_ptr(),
+                256,
+                128,
+                &mut metric_subscriber,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(!metric_subscriber.is_null());
+
+        let metric_name = cstring(&unique_name("ffi_typed_metric_subscriber"));
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(metric_subscriber, metric_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_register(metric_subscriber, metric_name.as_ptr()),
+            NemoRelayStatus::Internal
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_deregister(metric_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
+            NemoRelayStatus::Ok
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_force_flush(metric_subscriber),
+            NemoRelayStatus::Internal
+        );
+        assert_status!(
+            nemo_relay_otel_metric_subscriber_shutdown(metric_subscriber),
+            NemoRelayStatus::Internal
+        );
+        types::nemo_relay_otel_metric_subscriber_free(metric_subscriber);
     }
 }

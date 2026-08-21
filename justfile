@@ -1506,7 +1506,10 @@ test-go:
     if is_true "{{ ci }}"; then
         coverage_out="$(prepare_artifact go-coverage.xml)"
         junit_out="$(prepare_artifact go-junit.xml)"
-        go_test_cmd+=(-coverprofile=coverage.out)
+        # Include the root binding package when shorthand-package tests exercise
+        # its delegated implementation so those calls are represented once the
+        # per-package profiles are merged.
+        go_test_cmd+=(-coverprofile=coverage.out -coverpkg=./...)
         if [[ "$is_windows" == true ]]; then
             go_ldflags+=(-w)
         fi
