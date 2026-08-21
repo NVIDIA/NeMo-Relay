@@ -5,8 +5,13 @@
 
 from uuid import uuid4
 
+import nemo_relay._native as native
 from nemo_relay import intercepts, runtime_registrations, tools
 from nemo_relay.runtime_registrations import RuntimeRegistrationKind
+
+
+def test_native_list_runtime_registrations_defaults_to_all_kinds():
+    assert isinstance(native.list_runtime_registrations(), list)
 
 
 def test_conditional_middleware_guardrail_toggles_existing_registration():

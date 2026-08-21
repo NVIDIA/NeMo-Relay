@@ -121,6 +121,7 @@ fn deregister_conditional_middleware_guardrail(name: &str) -> PyResult<bool> {
 }
 
 #[pyfunction]
+#[pyo3(signature = (kinds = None))]
 fn list_runtime_registrations(
     py: Python<'_>,
     kinds: Option<HashSet<String>>,
