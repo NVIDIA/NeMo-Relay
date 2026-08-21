@@ -33,7 +33,7 @@ The release pipeline publishes these package surfaces from a tag push:
 | crates.io | `nemo-relay-types`, `nemo-relay-plugin`, `nemo-relay-worker-proto`, `nemo-relay-worker`, `nemo-relay`, `nemo-relay-adaptive`, `nemo-relay-pii-redaction`, `nemo-relay-ffi`, `nemo-relay-cli` |
 | PyPI | `nemo-relay` wheels and source distribution, `nemo-relay-plugin` and `nemo-relay-cli-bin` wheels |
 | npm | `nemo-relay-node` and its seven platform packages, and `nemo-relay-openclaw` |
-| GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, Node npm tarballs, and checksums |
+| GitHub Releases | CLI binaries, `nemo-relay` and `nemo-relay-cli-bin` wheels, Node npm tarballs, Rampart native plugin archives, and checksums |
 | Fern | The documentation site |
 
 Go remains source-first. There is no separate Go package-manager publication
@@ -69,6 +69,9 @@ NeMo Relay versions are anchored on the workspace SemVer in the repository root
   stays `dynamic = ["version"]` in the repository, and the packaging recipe
   writes a concrete version into `pyproject.toml` and `crates/python/Cargo.toml`
   in the ephemeral packaging workspace.
+- The standalone `plugins/pii-rampart/Cargo.toml` package version and its local
+  path dependency versions in `plugins/pii-rampart/Cargo.lock` track the same
+  project version.
 
 For non-tag CI builds, packaging recipes append a commit-derived suffix:
 
@@ -179,6 +182,8 @@ The helper updates:
    [`package-lock.json`](package-lock.json) to the same release version.
 5. The Python `nemo-relay-cli-bin` metadata, including the exact
    `nemo-relay[cli]` dependency version.
+6. The standalone Rampart plugin manifest and its local path dependency lock
+   entries.
 Review docs and snippets that mention explicit versions, including:
 
 - [`README.md`](README.md)
@@ -212,6 +217,19 @@ just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 packa
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-rust
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python
 just --set output_dir "$PWD/target/release-artifacts" --set ref_name 0.1.0 package-python-sdist
+```
+
+The Rampart native plugin package takes an already-built platform library and
+uses `cargo-about` to generate attributions from its standalone lockfile. For
+example, on Apple Silicon:
+
+```bash
+cargo build --locked --release --manifest-path plugins/pii-rampart/Cargo.toml
+just --set output_dir "$PWD/target/release-artifacts" \
+  --set ref_name 0.8.0 \
+  package-pii-rampart-plugin \
+  "$PWD/plugins/pii-rampart/target/release/libnemo_relay_pii_rampart_plugin.dylib" \
+  aarch64-apple-darwin
 ```
 
 Be aware that the local packaging recipes intentionally rewrite version fields
@@ -264,8 +282,13 @@ The release pipeline then:
    - The Rust CLI matrix builds GNU Linux binaries in manylinux containers and
      musl Linux binaries natively, validates each in its matching container, and
      packages each prebuilt binary as a `nemo-relay-cli-bin` wheel.
+   - The same Rust package matrix builds the opt-in Rampart native plugin for
+     six supported targets, materializes a SHA-256-bound plugin manifest, and
+     loads the registration symbol in the matching host or Linux runtime
+     container. The Relay CLI remains available on Windows ARM64, but Tract does
+     not currently support compiling the Rampart plugin for that target.
    - The distribution release-asset job uploads the CLI binaries, `nemo-relay`
-     API wheels, CLI wheels, and split Node npm packages.
+     API wheels, CLI wheels, split Node npm packages, and Rampart plugin archives.
      `SHA256SUMS` covers every attached distribution artifact, and raw CLI
      binaries also receive individual `.sha256` files for installer
      compatibility.

@@ -787,7 +787,7 @@ fn render_json_pointer_path(path_segments: &[String]) -> String {
     rendered
 }
 
-fn escape_json_pointer_segment(segment: &str) -> String {
+pub(crate) fn escape_json_pointer_segment(segment: &str) -> String {
     segment.replace('~', "~0").replace('/', "~1")
 }
 

@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "nemo-relay-pii-rampart-plugin"
+version = "0.8.0"
+edition = "2024"
+publish = false
+description = "Opt-in native Rampart PII redaction plugin for NeMo Relay"
+license = "Apache-2.0"
+
+[workspace]
+
+[lib]
+name = "nemo_relay_pii_rampart_plugin"
+crate-type = ["cdylib"]
+
+[dependencies]
+futures = "0.3"
+nemo-relay = { path = "../../crates/core" }
+nemo-relay-pii-redaction = { path = "../../crates/pii-redaction", features = ["rampart"] }
+nemo-relay-plugin = { path = "../../crates/plugin" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+
+[dev-dependencies]
+jsonschema = "0.46.8"
+sha2 = "0.11"
+tempfile = "3"

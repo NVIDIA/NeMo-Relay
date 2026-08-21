@@ -1,0 +1,268 @@
+{
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rampart PII Redaction",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["model_path"],
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "required": ["preset"]
+        },
+        {
+          "required": ["target_paths"],
+          "properties": {
+            "target_paths": {
+              "minItems": 1
+            }
+          }
+        },
+        {
+          "required": ["target_path_patterns"],
+          "properties": {
+            "target_path_patterns": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "not": {
+        "allOf": [
+          {
+            "required": ["preset"]
+          },
+          {
+            "anyOf": [
+              {
+                "required": ["target_paths"],
+                "properties": {
+                  "target_paths": {
+                    "minItems": 1
+                  }
+                }
+              },
+              {
+                "required": ["target_path_patterns"],
+                "properties": {
+                  "target_path_patterns": {
+                    "minItems": 1
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": ["custom_mark_payload_policy"],
+        "properties": {
+          "custom_mark_payload_policy": {
+            "const": "redact_all_leaves"
+          }
+        }
+      },
+      "then": {
+        "required": ["preset"],
+        "properties": {
+          "preset": {
+            "const": "trajectory_context"
+          }
+        }
+      }
+    },
+    {
+      "not": {
+        "required": ["input", "output", "mark", "tool_input", "tool_output"],
+        "properties": {
+          "input": {
+            "const": false
+          },
+          "output": {
+            "const": false
+          },
+          "mark": {
+            "const": false
+          },
+          "tool_input": {
+            "const": false
+          },
+          "tool_output": {
+            "const": false
+          }
+        }
+      }
+    }
+  ],
+  "x-nemo-relay-order": [
+    "model_path",
+    "preset",
+    "target_paths",
+    "target_path_patterns",
+    "input",
+    "output",
+    "mark",
+    "tool_input",
+    "tool_output",
+    "priority",
+    "codec",
+    "min_score",
+    "excluded_labels",
+    "replacement",
+    "custom_mark_payload_policy",
+    "max_windows_per_payload",
+    "inference_batch_size",
+    "policy"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "default": 1
+    },
+    "model_path": {
+      "title": "Model path",
+      "description": "Absolute path to the pinned Rampart model snapshot.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "input": {
+      "title": "Sanitize LLM requests",
+      "type": "boolean",
+      "default": true
+    },
+    "output": {
+      "title": "Sanitize LLM responses",
+      "type": "boolean",
+      "default": true
+    },
+    "mark": {
+      "title": "Sanitize mark events",
+      "type": "boolean",
+      "default": true
+    },
+    "tool_input": {
+      "title": "Sanitize tool requests",
+      "type": "boolean",
+      "default": true
+    },
+    "tool_output": {
+      "title": "Sanitize tool responses",
+      "type": "boolean",
+      "default": true
+    },
+    "priority": {
+      "title": "Middleware priority",
+      "type": "integer",
+      "default": 100
+    },
+    "codec": {
+      "title": "Fallback provider codec",
+      "type": "string",
+      "enum": [
+        "openai_chat",
+        "openai_responses",
+        "anthropic_messages",
+        "gemini_generate_content"
+      ]
+    },
+    "preset": {
+      "title": "Content-selection preset",
+      "type": "string",
+      "enum": ["trajectory_context"]
+    },
+    "target_paths": {
+      "title": "Exact JSON pointers",
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "maxLength": 1024
+      },
+      "default": []
+    },
+    "target_path_patterns": {
+      "title": "JSON pointer patterns",
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "string",
+        "maxLength": 1024
+      },
+      "default": []
+    },
+    "min_score": {
+      "title": "Minimum detection score",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.4
+    },
+    "excluded_labels": {
+      "title": "Excluded labels",
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "default": []
+    },
+    "replacement": {
+      "title": "Replacement text",
+      "type": "string",
+      "maxLength": 1024,
+      "default": "[REDACTED]"
+    },
+    "custom_mark_payload_policy": {
+      "title": "Custom mark payload policy",
+      "type": "string",
+      "enum": ["preserve", "redact_all_leaves"],
+      "default": "preserve"
+    },
+    "max_windows_per_payload": {
+      "title": "Maximum model windows per payload",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16,
+      "default": 4
+    },
+    "inference_batch_size": {
+      "title": "Inference batch size",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 16
+    },
+    "policy": {
+      "title": "Unsupported configuration policy",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unknown_component": {
+          "$ref": "#/$defs/unsupportedBehavior"
+        },
+        "unknown_field": {
+          "$ref": "#/$defs/unsupportedBehavior"
+        },
+        "unsupported_value": {
+          "$ref": "#/$defs/unsupportedBehavior"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "unsupportedBehavior": {
+      "type": "string",
+      "enum": ["ignore", "warn", "error"]
+    }
+  }
+}
