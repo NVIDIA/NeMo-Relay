@@ -9,7 +9,7 @@
 //! All functions are annotated with `#[napi]` and their doc comments appear
 //! in the generated `index.d.ts` TypeScript definitions.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -1599,6 +1599,73 @@ impl PersistentJsFunction {
         // SAFETY: `returned` is the live result of invoking `func` in this environment.
         unsafe { Option::<Json>::from_napi_value(self.env, returned.raw()) }.map(callback_json)
     }
+
+    fn call_conditional_gate(
+        &self,
+        kinds: Vec<String>,
+        registration_name: String,
+    ) -> napi::Result<Json> {
+        let mut value = ptr::null_mut();
+        let status =
+            unsafe { napi::sys::napi_get_reference_value(self.env, self.reference, &mut value) };
+        if status != napi::sys::Status::napi_ok {
+            return Err(napi::Error::from_reason("failed to borrow gate function"));
+        }
+        let func = unsafe { JsFunction::from_raw_unchecked(self.env, value) };
+        let kinds = unsafe {
+            JsUnknown::from_raw_unchecked(self.env, Vec::<String>::to_napi_value(self.env, kinds)?)
+        };
+        let registration_name = unsafe {
+            JsUnknown::from_raw_unchecked(
+                self.env,
+                String::to_napi_value(self.env, registration_name)?,
+            )
+        };
+        let returned = func.call(None, &[kinds, registration_name])?;
+        unsafe { Json::from_napi_value(self.env, returned.raw()) }
+    }
+}
+
+fn decode_conditional_gate_result(value: Json) -> napi::Result<Option<String>> {
+    let value = callable::unwrap_middleware_result(value, "conditional middleware guardrail")
+        .map_err(to_napi_err)?;
+    serde_json::from_value(value).map_err(|_| {
+        napi::Error::from_reason("conditional middleware guardrail must return a string or null")
+    })
+}
+
+struct NodeConditionalMiddlewareGuardrail {
+    direct: PersistentJsFunction,
+    thread_safe: ThreadsafeFunction<(Vec<String>, String), ErrorStrategy::Fatal>,
+    registration_thread: std::thread::ThreadId,
+}
+
+impl NodeConditionalMiddlewareGuardrail {
+    fn call(&self, kinds: Vec<String>, registration_name: String) -> napi::Result<Option<String>> {
+        if std::thread::current().id() == self.registration_thread {
+            return decode_conditional_gate_result(
+                self.direct
+                    .call_conditional_gate(kinds, registration_name)?,
+            );
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let status = self.thread_safe.call_with_return_value(
+            (kinds, registration_name),
+            ThreadsafeFunctionCallMode::Blocking,
+            move |value: Json| {
+                let _ = tx.send(decode_conditional_gate_result(value));
+                Ok(())
+            },
+        );
+        if status != napi::Status::Ok {
+            return Err(napi::Error::from_reason(format!(
+                "conditional gate callback scheduling failed: {status:?}"
+            )));
+        }
+        rx.recv().map_err(|error| {
+            napi::Error::from_reason(format!("conditional gate callback failed: {error}"))
+        })?
+    }
 }
 
 fn node_event_sanitize_fn(env: &Env, func: &JsFunction) -> napi::Result<EventSanitizeFn> {
@@ -3170,6 +3237,246 @@ pub fn register_event_metadata_injector(
 #[napi]
 pub fn deregister_event_metadata_injector(name: String) -> Result<bool> {
     core_registry_api::deregister_event_metadata_injector(&name).map_err(to_napi_err)
+}
+
+/// A global runtime registration surface that a conditional middleware guardrail can select.
+#[napi(string_enum = "snake_case")]
+pub enum RuntimeRegistrationKind {
+    Subscriber,
+    EventMetadataInjector,
+    MarkSanitizeGuardrail,
+    ScopeSanitizeStartGuardrail,
+    ScopeSanitizeEndGuardrail,
+    ToolSanitizeRequestGuardrail,
+    ToolSanitizeResponseGuardrail,
+    ToolConditionalExecutionGuardrail,
+    ToolRequestIntercept,
+    ToolExecutionIntercept,
+    LlmSanitizeRequestGuardrail,
+    LlmSanitizeResponseGuardrail,
+    LlmConditionalExecutionGuardrail,
+    LlmRequestIntercept,
+    LlmExecutionIntercept,
+    LlmStreamExecutionIntercept,
+}
+
+impl From<RuntimeRegistrationKind> for core_registry_api::RuntimeRegistrationKind {
+    fn from(kind: RuntimeRegistrationKind) -> Self {
+        match kind {
+            RuntimeRegistrationKind::Subscriber => Self::Subscriber,
+            RuntimeRegistrationKind::EventMetadataInjector => Self::EventMetadataInjector,
+            RuntimeRegistrationKind::MarkSanitizeGuardrail => Self::MarkSanitizeGuardrail,
+            RuntimeRegistrationKind::ScopeSanitizeStartGuardrail => {
+                Self::ScopeSanitizeStartGuardrail
+            }
+            RuntimeRegistrationKind::ScopeSanitizeEndGuardrail => Self::ScopeSanitizeEndGuardrail,
+            RuntimeRegistrationKind::ToolSanitizeRequestGuardrail => {
+                Self::ToolSanitizeRequestGuardrail
+            }
+            RuntimeRegistrationKind::ToolSanitizeResponseGuardrail => {
+                Self::ToolSanitizeResponseGuardrail
+            }
+            RuntimeRegistrationKind::ToolConditionalExecutionGuardrail => {
+                Self::ToolConditionalExecutionGuardrail
+            }
+            RuntimeRegistrationKind::ToolRequestIntercept => Self::ToolRequestIntercept,
+            RuntimeRegistrationKind::ToolExecutionIntercept => Self::ToolExecutionIntercept,
+            RuntimeRegistrationKind::LlmSanitizeRequestGuardrail => {
+                Self::LlmSanitizeRequestGuardrail
+            }
+            RuntimeRegistrationKind::LlmSanitizeResponseGuardrail => {
+                Self::LlmSanitizeResponseGuardrail
+            }
+            RuntimeRegistrationKind::LlmConditionalExecutionGuardrail => {
+                Self::LlmConditionalExecutionGuardrail
+            }
+            RuntimeRegistrationKind::LlmRequestIntercept => Self::LlmRequestIntercept,
+            RuntimeRegistrationKind::LlmExecutionIntercept => Self::LlmExecutionIntercept,
+            RuntimeRegistrationKind::LlmStreamExecutionIntercept => {
+                Self::LlmStreamExecutionIntercept
+            }
+        }
+    }
+}
+
+impl From<core_registry_api::RuntimeRegistrationKind> for RuntimeRegistrationKind {
+    fn from(kind: core_registry_api::RuntimeRegistrationKind) -> Self {
+        match kind {
+            core_registry_api::RuntimeRegistrationKind::Subscriber => Self::Subscriber,
+            core_registry_api::RuntimeRegistrationKind::EventMetadataInjector => {
+                Self::EventMetadataInjector
+            }
+            core_registry_api::RuntimeRegistrationKind::MarkSanitizeGuardrail => {
+                Self::MarkSanitizeGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::ScopeSanitizeStartGuardrail => {
+                Self::ScopeSanitizeStartGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::ScopeSanitizeEndGuardrail => {
+                Self::ScopeSanitizeEndGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::ToolSanitizeRequestGuardrail => {
+                Self::ToolSanitizeRequestGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::ToolSanitizeResponseGuardrail => {
+                Self::ToolSanitizeResponseGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::ToolConditionalExecutionGuardrail => {
+                Self::ToolConditionalExecutionGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::ToolRequestIntercept => {
+                Self::ToolRequestIntercept
+            }
+            core_registry_api::RuntimeRegistrationKind::ToolExecutionIntercept => {
+                Self::ToolExecutionIntercept
+            }
+            core_registry_api::RuntimeRegistrationKind::LlmSanitizeRequestGuardrail => {
+                Self::LlmSanitizeRequestGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::LlmSanitizeResponseGuardrail => {
+                Self::LlmSanitizeResponseGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::LlmConditionalExecutionGuardrail => {
+                Self::LlmConditionalExecutionGuardrail
+            }
+            core_registry_api::RuntimeRegistrationKind::LlmRequestIntercept => {
+                Self::LlmRequestIntercept
+            }
+            core_registry_api::RuntimeRegistrationKind::LlmExecutionIntercept => {
+                Self::LlmExecutionIntercept
+            }
+            core_registry_api::RuntimeRegistrationKind::LlmStreamExecutionIntercept => {
+                Self::LlmStreamExecutionIntercept
+            }
+        }
+    }
+}
+
+/// The owner category reported for a global runtime registration.
+#[napi(string_enum = "snake_case")]
+pub enum RuntimeRegistrationOwnerKind {
+    Core,
+    GlobalApi,
+    Plugin,
+}
+
+/// Discovery metadata describing the owner of a runtime registration.
+#[napi(object)]
+pub struct RuntimeRegistrationOwner {
+    pub kind: RuntimeRegistrationOwnerKind,
+    pub plugin_kind: Option<String>,
+    pub component_ordinal: Option<u32>,
+}
+
+/// Structured identity for one global gateable runtime registration.
+#[napi(object)]
+pub struct RuntimeRegistrationIdentity {
+    pub kind: RuntimeRegistrationKind,
+    pub local_name: String,
+    pub effective_name: String,
+    pub owner: RuntimeRegistrationOwner,
+}
+
+impl From<core_registry_api::RuntimeRegistrationIdentity> for RuntimeRegistrationIdentity {
+    fn from(identity: core_registry_api::RuntimeRegistrationIdentity) -> Self {
+        let owner_kind = match identity.owner.kind {
+            core_registry_api::RuntimeRegistrationOwnerKind::Core => {
+                RuntimeRegistrationOwnerKind::Core
+            }
+            core_registry_api::RuntimeRegistrationOwnerKind::GlobalApi => {
+                RuntimeRegistrationOwnerKind::GlobalApi
+            }
+            core_registry_api::RuntimeRegistrationOwnerKind::Plugin => {
+                RuntimeRegistrationOwnerKind::Plugin
+            }
+        };
+        Self {
+            kind: identity.kind.into(),
+            local_name: identity.local_name,
+            effective_name: identity.effective_name,
+            owner: RuntimeRegistrationOwner {
+                kind: owner_kind,
+                plugin_kind: identity.owner.plugin_kind,
+                component_ordinal: identity.owner.component_ordinal,
+            },
+        }
+    }
+}
+
+/// Register a global eligibility gate for runtime registrations matching kind and name.
+#[napi]
+pub fn register_conditional_middleware_guardrail(
+    env: Env,
+    name: String,
+    kinds: Vec<RuntimeRegistrationKind>,
+    registration_name: String,
+    #[napi(
+        ts_arg_type = "(kinds: RuntimeRegistrationKind[], registrationName: string) => string | null"
+    )]
+    guardrail: JsFunction,
+) -> Result<()> {
+    let selected = kinds.into_iter().map(Into::into).collect::<BTreeSet<_>>();
+    let guardrail = callable::safe_conditional_gate_callback(&env, &guardrail)?;
+    let direct = PersistentJsFunction::new(&env, &guardrail)?;
+    let registration_thread = std::thread::current().id();
+    let mut thread_safe = guardrail.create_threadsafe_function(
+        0,
+        |ctx: napi::threadsafe_function::ThreadSafeCallContext<(Vec<String>, String)>| {
+            let kinds = unsafe {
+                JsUnknown::from_raw_unchecked(
+                    ctx.env.raw(),
+                    Vec::<String>::to_napi_value(ctx.env.raw(), ctx.value.0)?,
+                )
+            };
+            let registration_name = ctx.env.create_string_from_std(ctx.value.1)?;
+            Ok(vec![
+                kinds,
+                js_unknown_from_raw(&ctx.env, &registration_name),
+            ])
+        },
+    )?;
+    thread_safe.unref(&env)?;
+    let callback = Arc::new(NodeConditionalMiddlewareGuardrail {
+        direct,
+        thread_safe,
+        registration_thread,
+    });
+    core_registry_api::register_conditional_middleware_guardrail(
+        &name,
+        selected,
+        &registration_name,
+        Arc::new(move |kinds, effective_name| {
+            callback
+                .call(
+                    kinds.iter().map(|kind| kind.as_str().to_string()).collect(),
+                    effective_name.to_string(),
+                )
+                .unwrap_or_else(|error| {
+                    record_callback_error(format!(
+                        "Node conditional middleware guardrail failed open: {error}"
+                    ));
+                    None
+                })
+        }),
+    )
+    .map_err(to_napi_err)
+}
+
+/// Deregister a global runtime-registration eligibility gate by name.
+#[napi]
+pub fn deregister_conditional_middleware_guardrail(name: String) -> Result<bool> {
+    core_registry_api::deregister_conditional_middleware_guardrail(&name).map_err(to_napi_err)
+}
+
+/// List global gateable runtime registrations.
+#[napi]
+pub fn list_runtime_registrations(
+    kinds: Option<Vec<RuntimeRegistrationKind>>,
+) -> Result<Vec<RuntimeRegistrationIdentity>> {
+    let selected = kinds.map(|kinds| kinds.into_iter().map(Into::into).collect::<BTreeSet<_>>());
+    let registrations =
+        core_registry_api::list_runtime_registrations(selected.as_ref()).map_err(to_napi_err)?;
+    Ok(registrations.into_iter().map(Into::into).collect())
 }
 
 macro_rules! napi_event_guardrail_api {

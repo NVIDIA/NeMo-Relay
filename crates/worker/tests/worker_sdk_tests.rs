@@ -3,7 +3,7 @@
 
 //! End-to-end coverage for the Rust gRPC worker SDK service.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
@@ -22,9 +22,9 @@ use nemo_relay_types::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec}
 use nemo_relay_worker::{
     ANNOTATED_LLM_REQUEST_SCHEMA, DataSchema, EmitMarkOptions, Json, JsonStream, LlmNext,
     LlmRequest, LlmStreamNext, LogSeverity, MetricKind, MetricMeasurement, MetricValueType,
-    PluginContext, PluginRuntime, Result, ScopeType, ToolExecutionInterceptOutcome, ToolNext,
-    WorkerPlugin, WorkerSdkError, WorkerServerConfig, serve_plugin, serve_plugin_arc,
-    serve_plugin_arc_with_config,
+    PluginContext, PluginRuntime, Result, RuntimeRegistrationKind, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, WorkerServerConfig,
+    serve_plugin, serve_plugin_arc, serve_plugin_arc_with_config,
 };
 use nemo_relay_worker_proto::v1::plugin_worker_client::PluginWorkerClient;
 use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
@@ -32,11 +32,15 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
-    GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest, HostAck, InvokeRequest,
-    InvokeResponse, JsonEnvelope, JsonResult, LlmInvocation, LlmNextRequest, LlmStreamNextRequest,
-    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegistrationSurface,
-    RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext, ShutdownRequest, StreamChunk,
+    DeregisterConditionalMiddlewareGuardrailRequest,
+    DeregisterConditionalMiddlewareGuardrailResponse, DropScopeStackRequest, EmitMarkRequest,
+    GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, HandshakeRequest, HealthRequest,
+    HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
+    ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse, LlmInvocation,
+    LlmNextRequest, LlmStreamNextRequest, PopScopeRequest, PushScopeRequest, PushScopeResponse,
+    RegisterConditionalMiddlewareGuardrailRequest, RegisterConditionalMiddlewareGuardrailResponse,
+    RegisterRequest, RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic,
+    ScopeContext, ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
     ToolNextRequest, ValidateRequest, WorkerError,
@@ -1890,6 +1894,28 @@ impl WorkerPlugin for SurfacePlugin {
         ctx.register_tool_execution_intercept("tool-exec", 1, move |_, value, next: ToolNext| {
             let runtime = tool_runtime.clone();
             async move {
+                let registrations = runtime.list_runtime_registrations(None).await?;
+                if !registrations.is_empty() {
+                    return Err(WorkerSdkError::Callback(
+                        "mock runtime registration discovery was not empty".into(),
+                    ));
+                }
+                let gate = runtime
+                    .register_conditional_middleware_guardrail(
+                        "timer-gate",
+                        BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+                        "target-subscriber",
+                        "timer active",
+                    )
+                    .await?;
+                if !runtime
+                    .deregister_conditional_middleware_guardrail(&gate)
+                    .await?
+                {
+                    return Err(WorkerSdkError::Callback(
+                        "mock runtime did not remove the owned gate".into(),
+                    ));
+                }
                 let diagnostics = runtime.runtime_diagnostics().await?;
                 if diagnostics
                     .get("otel.metric_mark_invalid")
@@ -2195,6 +2221,47 @@ impl MockHost {
 
 #[tonic::async_trait]
 impl RelayHostRuntime for MockHost {
+    async fn list_runtime_registrations(
+        &self,
+        request: Request<ListRuntimeRegistrationsRequest>,
+    ) -> std::result::Result<Response<ListRuntimeRegistrationsResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        Ok(Response::new(ListRuntimeRegistrationsResponse {
+            registrations: Vec::new(),
+            error: None,
+        }))
+    }
+
+    async fn register_conditional_middleware_guardrail(
+        &self,
+        request: Request<RegisterConditionalMiddlewareGuardrailRequest>,
+    ) -> std::result::Result<Response<RegisterConditionalMiddlewareGuardrailResponse>, Status> {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        Ok(Response::new(
+            RegisterConditionalMiddlewareGuardrailResponse {
+                handle: "gate-handle".into(),
+                error: None,
+            },
+        ))
+    }
+
+    async fn deregister_conditional_middleware_guardrail(
+        &self,
+        request: Request<DeregisterConditionalMiddlewareGuardrailRequest>,
+    ) -> std::result::Result<Response<DeregisterConditionalMiddlewareGuardrailResponse>, Status>
+    {
+        let request = request.into_inner();
+        authorize_host(&request.activation_id, &request.auth_token)?;
+        Ok(Response::new(
+            DeregisterConditionalMiddlewareGuardrailResponse {
+                removed: true,
+                error: None,
+            },
+        ))
+    }
+
     async fn get_runtime_diagnostics(
         &self,
         request: Request<GetRuntimeDiagnosticsRequest>,

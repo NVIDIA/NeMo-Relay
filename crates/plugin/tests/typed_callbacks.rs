@@ -39,12 +39,12 @@ use nemo_relay_plugin::{
     NemoRelayNativeLlmResponseCodec, NemoRelayNativeLlmSanitizeRequestCb,
     NemoRelayNativeLlmSanitizeRequestContext, NemoRelayNativeLlmSanitizeResponseCb,
     NemoRelayNativeLlmSanitizeResponseContext, NemoRelayNativeLlmStreamExecutionCb,
-    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
-    NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack, NemoRelayNativeScopeStackBinding,
-    NemoRelayNativeScopeType, NemoRelayNativeString, NemoRelayNativeToolConditionalCb,
-    NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb, NemoRelayNativeWithScopeStackCb,
-    NemoRelayStatus, PendingMarkSpec, PluginContext, PluginRuntime, ScopeType,
-    ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
+    NemoRelayNativeLlmStreamV1, NemoRelayNativePluginContext, NemoRelayNativePluginRuntime,
+    NemoRelayNativePluginV1, NemoRelayNativeScopeHandle, NemoRelayNativeScopeStack,
+    NemoRelayNativeScopeStackBinding, NemoRelayNativeScopeType, NemoRelayNativeString,
+    NemoRelayNativeToolConditionalCb, NemoRelayNativeToolExecutionCb, NemoRelayNativeToolJsonCb,
+    NemoRelayNativeWithScopeStackCb, NemoRelayStatus, PendingMarkSpec, PluginContext,
+    PluginRuntime, ScopeType, ToolExecutionInterceptOutcome, ToolExecutionResult, ToolNext,
 };
 use serde_json::{Map, json};
 
@@ -459,12 +459,19 @@ fn assert_native_abi_platform_layout() {
             0, 320, 328, 336, 344, 352, 360, 368, 376, 384, 392, 400, 408, 416, 424, 432
         ]
     );
-    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 528);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(8, 584);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 512);
     assert_eq!(
         offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
         520
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
+        576
     );
     assert_type_layout::<NemoRelayNativePluginV1>(8, 56);
     assert_eq!(plugin_offsets(), [0, 8, 16, 24, 32, 40, 48]);
@@ -489,12 +496,19 @@ fn assert_native_abi_platform_layout() {
             0, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204, 208, 212
         ]
     );
-    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 260);
+    assert_type_layout::<NemoRelayNativeHostApiV4>(4, 288);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, v3), 0);
     assert_eq!(offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2), 252);
     assert_eq!(
         offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
         256
+    );
+    assert_eq!(
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
+        284
     );
     assert_type_layout::<NemoRelayNativePluginV1>(4, 28);
     assert_eq!(plugin_offsets(), [0, 4, 8, 12, 16, 20, 24]);
@@ -512,23 +526,45 @@ fn native_abi_v4_extension_is_append_only() {
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 8);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 528);
-        assert_eq!(host_api_v4_offsets(), [0, 512, 520]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 584);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 512, 520, 528, 536, 544, 552, 560, 568, 576]
+        );
     }
 
     #[cfg(target_pointer_width = "32")]
     {
         assert_eq!(align_of::<NemoRelayNativeHostApiV4>(), 4);
-        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 260);
-        assert_eq!(host_api_v4_offsets(), [0, 252, 256]);
+        assert_eq!(size_of::<NemoRelayNativeHostApiV4>(), 288);
+        assert_eq!(
+            host_api_v4_offsets(),
+            [0, 252, 256, 260, 264, 268, 272, 276, 280, 284]
+        );
     }
 }
 
-fn host_api_v4_offsets() -> [usize; 3] {
+fn host_api_v4_offsets() -> [usize; 10] {
     [
         offset_of!(NemoRelayNativeHostApiV4, v3),
         offset_of!(NemoRelayNativeHostApiV4, emit_mark_v2),
         offset_of!(NemoRelayNativeHostApiV4, get_runtime_diagnostics),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_context_runtime),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_retain),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_release),
+        offset_of!(NemoRelayNativeHostApiV4, plugin_runtime_list_registrations),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_runtime_register_conditional_middleware_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_runtime_deregister_conditional_middleware_guardrail
+        ),
+        offset_of!(
+            NemoRelayNativeHostApiV4,
+            plugin_context_register_conditional_middleware_guardrail
+        ),
     ]
 }
 
@@ -2122,6 +2158,64 @@ unsafe extern "C" fn capture_async_release_pull_stream(
     }
 }
 
+unsafe extern "C" fn unavailable_plugin_context_runtime(
+    _ctx: *mut NemoRelayNativePluginContext,
+    out: *mut *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    if !out.is_null() {
+        unsafe { *out = ptr::null() };
+    }
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_retain(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_release(
+    _runtime: *const NemoRelayNativePluginRuntime,
+) {
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_list_registrations(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _kinds_json: *const NemoRelayNativeString,
+    _out_json: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_register_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _name: *const NemoRelayNativeString,
+    _kinds_json: *const NemoRelayNativeString,
+    _registration_name: *const NemoRelayNativeString,
+    _reason: *const NemoRelayNativeString,
+    _out_handle: *mut *mut NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_runtime_deregister_gate(
+    _runtime: *const NemoRelayNativePluginRuntime,
+    _handle: *const NemoRelayNativeString,
+    _out_removed: *mut bool,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
+unsafe extern "C" fn unavailable_plugin_context_register_gate(
+    _ctx: *mut NemoRelayNativePluginContext,
+    _name: *const NemoRelayNativeString,
+    _kinds_json: *const NemoRelayNativeString,
+    _registration_name: *const NemoRelayNativeString,
+    _reason: *const NemoRelayNativeString,
+) -> NemoRelayStatus {
+    NemoRelayStatus::NotFound
+}
+
 fn test_host_v4() -> NemoRelayNativeHostApiV4 {
     let mut v1 = test_host();
     v1.abi_version = 4;
@@ -2156,6 +2250,16 @@ fn test_host_v4() -> NemoRelayNativeHostApiV4 {
         async_stream_is_backpressured: capture_async_stream_backpressured,
         emit_mark_v2: capture_emit_mark_v2,
         get_runtime_diagnostics: capture_runtime_diagnostics,
+        plugin_context_runtime: unavailable_plugin_context_runtime,
+        plugin_runtime_retain: unavailable_plugin_runtime_retain,
+        plugin_runtime_release: unavailable_plugin_runtime_release,
+        plugin_runtime_list_registrations: unavailable_plugin_runtime_list_registrations,
+        plugin_runtime_register_conditional_middleware_guardrail:
+            unavailable_plugin_runtime_register_gate,
+        plugin_runtime_deregister_conditional_middleware_guardrail:
+            unavailable_plugin_runtime_deregister_gate,
+        plugin_context_register_conditional_middleware_guardrail:
+            unavailable_plugin_context_register_gate,
     }
 }
 

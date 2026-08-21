@@ -108,6 +108,69 @@ Plugins can install middleware during initialization. This is the reusable,
 configuration-driven path for shipping middleware bundles without hand-registering
 everything in application code.
 
+## Control Global Registration Eligibility
+
+A conditional middleware guardrail can dynamically disable an existing global
+subscriber, metadata injector, guardrail, or intercept. The target remains
+registered and owned by its original component. Relay omits the target from new
+runtime snapshots while a matching gate returns a reason string, then includes
+the target again after the gate returns `None` or is deregistered.
+
+Use `list_runtime_registrations` to discover a target's structured identity.
+Match the `RuntimeRegistrationKind` and `effective_name` fields rather than
+guessing a plugin-qualified name. Effective names remain stable for the current
+runtime activation, but callers must not persist them across process restarts
+or plugin configuration reloads.
+
+The following Python example disables the OpenTelemetry subscriber until a
+background policy removes the gate:
+
+```python
+from nemo_relay.runtime_registrations import (
+    RuntimeRegistrationKind,
+    deregister_conditional_middleware_guardrail,
+    list_runtime_registrations,
+    register_conditional_middleware_guardrail,
+)
+
+subscribers = list_runtime_registrations({RuntimeRegistrationKind.SUBSCRIBER})
+opentelemetry = next(
+    registration
+    for registration in subscribers
+    if registration.local_name == "opentelemetry"
+    and registration.owner.plugin_kind == "observability"
+)
+
+register_conditional_middleware_guardrail(
+    "pause-opentelemetry",
+    {RuntimeRegistrationKind.SUBSCRIBER},
+    opentelemetry.effective_name,
+    lambda _kinds, _name: "export paused",
+)
+
+# A timer, health check, or other background policy can enable future
+# subscriber snapshots without recreating the OpenTelemetry exporter.
+deregister_conditional_middleware_guardrail("pause-opentelemetry")
+```
+
+Conditional middleware guardrails have these runtime properties:
+
+- They apply only to global registrations. A global gate does not disable a
+  same-named scope-local registration.
+- Relay evaluates matching gates in gate-name order. Every matching gate must
+  return `None` for the target to remain eligible.
+- Gate callback failures and panics fail open. Relay continues with the target
+  and records a runtime diagnostic.
+- Gate changes affect future middleware and event-publication snapshots.
+  Queued events and in-flight execution chains keep their existing decisions.
+- Gate registration, gate deregistration, target deregistration, and plugin
+  teardown are never gated.
+
+Direct SDK integrations can register a synchronous callable that reads shared
+state. Rust-native and gRPC worker plugins use host-resident gates. Their async
+tasks can register and deregister gates through `PluginRuntime` without a
+callback across the dynamic-plugin boundary.
+
 ## Middleware Families
 
 NeMo Relay provides four middleware purposes:

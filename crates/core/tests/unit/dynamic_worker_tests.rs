@@ -478,6 +478,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("empty registration names should fail");
@@ -493,6 +494,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("unsupported registration surfaces should fail");
@@ -512,6 +514,7 @@ fn registration_plan_and_scope_type_helpers_validate_edges() {
                 break_chain: false,
             }],
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         },
     )
     .expect_err("unspecified registration surfaces should fail");
@@ -1825,14 +1828,20 @@ async fn installed_callbacks_apply_surface_specific_fallbacks() {
         let state = context.read().unwrap();
         (
             state.collect_event_subscribers(&[]),
-            NemoRelayContextState::event_sanitize_entries(&state.mark_sanitize_guardrails, &[]),
+            NemoRelayContextState::event_sanitize_entries(
+                &state.mark_sanitize_guardrails,
+                &[],
+                crate::api::registry::RuntimeRegistrationKind::MarkSanitizeGuardrail,
+            ),
             NemoRelayContextState::event_sanitize_entries(
                 &state.scope_sanitize_start_guardrails,
                 &[],
+                crate::api::registry::RuntimeRegistrationKind::ScopeSanitizeStartGuardrail,
             ),
             NemoRelayContextState::event_sanitize_entries(
                 &state.scope_sanitize_end_guardrails,
                 &[],
+                crate::api::registry::RuntimeRegistrationKind::ScopeSanitizeEndGuardrail,
             ),
             state.tool_sanitize_request_entries(&[]),
             state.tool_sanitize_response_entries(&[]),
@@ -3007,6 +3016,7 @@ impl PluginWorker for FakePluginWorker {
         Ok(tonic::Response::new(RegisterResponse {
             registrations: Vec::new(),
             error: None,
+            conditional_middleware_guardrails: Vec::new(),
         }))
     }
 

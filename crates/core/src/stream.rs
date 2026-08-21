@@ -140,6 +140,7 @@ impl LlmStreamWrapper {
             let context = global_context();
             context
                 .read()
+                .map(|state| state.registry_snapshot())
                 .map(|state| state.collect_event_subscribers(&scope_subscribers))
                 .unwrap_or_default()
         };
@@ -407,13 +408,17 @@ impl LlmStreamWrapper {
 fn snapshot_stream_end_sanitizers(
     scope_stack: &ScopeStackHandle,
 ) -> (Vec<Guardrail<LlmSanitizeResponseFn>>, bool) {
-    let entries = scope_stack.read().ok().and_then(|scope_guard| {
-        let scope_locals = scope_guard
-            .collect_scope_local_registries(|registry| &registry.llm_sanitize_response_guardrails);
+    let scope_locals = scope_stack.read().ok().map(|scope_guard| {
+        scope_guard
+            .snapshot_scope_local_registries(|registry| &registry.llm_sanitize_response_guardrails)
+    });
+    let entries = scope_locals.and_then(|scope_locals| {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         global_context()
             .read()
             .ok()
-            .map(|state| state.llm_sanitize_response_entries(&scope_locals))
+            .map(|state| state.registry_snapshot())
+            .map(|state| state.llm_sanitize_response_entries(&scope_local_refs))
     });
     match entries {
         Some(entries) => (entries, false),

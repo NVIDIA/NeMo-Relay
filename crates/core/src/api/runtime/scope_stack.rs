@@ -369,6 +369,21 @@ impl ScopeStack {
             .collect()
     }
 
+    /// Clone one registry field from every active scope that owns it.
+    ///
+    /// Eligibility callbacks must not run while the scope-stack lock is held.
+    /// Resolution paths use these owned snapshots before consulting global
+    /// conditional middleware guardrails.
+    pub(crate) fn snapshot_scope_local_registries<T: RegistryEntry + Clone>(
+        &self,
+        field: impl Fn(&ScopeLocalRegistries) -> &SortedRegistry<T>,
+    ) -> Vec<SortedRegistry<T>> {
+        self.collect_scope_local_registries(field)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
     /// Collect all scope-local subscribers visible from the active stack.
     ///
     /// # Returns

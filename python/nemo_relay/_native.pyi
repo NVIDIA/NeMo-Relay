@@ -33,6 +33,34 @@ _Json: TypeAlias = _JsonValue
 _MessageContent: TypeAlias = str | Sequence[Mapping[str, _JsonValue]]
 _TToolResult = TypeVar("_TToolResult")
 
+class _RuntimeRegistrationOwner(TypedDict):
+    kind: str
+    plugin_kind: str | None
+    component_ordinal: int | None
+
+class _RuntimeRegistrationIdentity(TypedDict):
+    kind: str
+    local_name: str
+    effective_name: str
+    owner: _RuntimeRegistrationOwner
+
+def register_conditional_middleware_guardrail(
+    name: str,
+    kinds: set[str],
+    registration_name: str,
+    guardrail: Callable[[set[str], str], str | None],
+) -> None:
+    """Register a global runtime-registration eligibility gate."""
+    ...
+
+def deregister_conditional_middleware_guardrail(name: str) -> bool:
+    """Remove a global runtime-registration eligibility gate."""
+    ...
+
+def list_runtime_registrations(kinds: set[str] | None = None) -> list[_RuntimeRegistrationIdentity]:
+    """List global gateable runtime registrations."""
+    ...
+
 def _shutdown_default_logging() -> None: ...
 
 class _EventSanitizeFields(TypedDict):
