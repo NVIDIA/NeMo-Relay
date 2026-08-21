@@ -3195,3 +3195,104 @@ fn assert_atif_trajectory(trajectory: &Json) {
     assert_eq!(trajectory["schema_version"], json!("ATIF-v1.7"));
     assert!(trajectory["steps"].as_array().unwrap().len() >= 4);
 }
+
+#[derive(Default)]
+struct RuntimeRegistrationGateCapture {
+    kinds_json: Vec<u8>,
+    registration_name: Vec<u8>,
+}
+
+unsafe extern "C" fn runtime_registration_gate_cb(
+    user_data: *mut libc::c_void,
+    kinds_json: *const c_char,
+    registration_name: *const c_char,
+) -> *mut c_char {
+    let capture = unsafe { &mut *user_data.cast::<RuntimeRegistrationGateCapture>() };
+    capture.kinds_json = unsafe { CStr::from_ptr(kinds_json) }.to_bytes().to_vec();
+    capture.registration_name = unsafe { CStr::from_ptr(registration_name) }
+        .to_bytes()
+        .to_vec();
+    c"timer active".to_owned().into_raw()
+}
+
+#[test]
+fn conditional_middleware_guardrail_ffi_toggles_existing_registration() {
+    let _lock = TEST_MUTEX.lock().unwrap();
+    let target_name = cstring("ffi-runtime-target");
+    let gate_name = cstring("ffi-runtime-gate");
+    let kinds = cstring(r#"["tool_request_intercept"]"#);
+    let tool_name = cstring("tool");
+    let args = cstring("{}");
+    let mut gate_capture = RuntimeRegistrationGateCapture::default();
+
+    unsafe {
+        assert_status!(
+            nemo_relay_register_tool_request_intercept(
+                target_name.as_ptr(),
+                0,
+                false,
+                tool_request_cb,
+                ptr::null_mut(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mut registrations = ptr::null_mut();
+        assert_status!(
+            nemo_relay_list_runtime_registrations(kinds.as_ptr(), &mut registrations),
+            NemoRelayStatus::Ok
+        );
+        let registrations = returned_json(registrations);
+        assert!(
+            registrations
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|registration| { registration["local_name"] == json!("ffi-runtime-target") })
+        );
+
+        assert_status!(
+            nemo_relay_register_conditional_middleware_guardrail(
+                gate_name.as_ptr(),
+                kinds.as_ptr(),
+                target_name.as_ptr(),
+                Some(runtime_registration_gate_cb),
+                (&mut gate_capture as *mut RuntimeRegistrationGateCapture).cast(),
+                None,
+            ),
+            NemoRelayStatus::Ok
+        );
+
+        let mut disabled = ptr::null_mut();
+        assert_status!(
+            nemo_relay_tool_request_intercepts(tool_name.as_ptr(), args.as_ptr(), &mut disabled),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(disabled), json!({}));
+        assert_eq!(gate_capture.kinds_json, br#"["tool_request_intercept"]"#);
+        assert_eq!(gate_capture.registration_name, b"ffi-runtime-target");
+
+        let mut removed = false;
+        assert_status!(
+            nemo_relay_deregister_conditional_middleware_guardrail(
+                gate_name.as_ptr(),
+                &mut removed,
+            ),
+            NemoRelayStatus::Ok
+        );
+        assert!(removed);
+
+        let mut enabled = ptr::null_mut();
+        assert_status!(
+            nemo_relay_tool_request_intercepts(tool_name.as_ptr(), args.as_ptr(), &mut enabled),
+            NemoRelayStatus::Ok
+        );
+        assert_eq!(returned_json(enabled), json!({"intercepted": true}));
+
+        assert_status!(
+            nemo_relay_deregister_tool_request_intercept(target_name.as_ptr()),
+            NemoRelayStatus::Ok
+        );
+    }
+}

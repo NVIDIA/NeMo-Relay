@@ -304,7 +304,7 @@ impl OpenTelemetryLogSubscriber {
         self.inner
             .provider
             .force_flush()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
     }
 
     /// Shut down the OTLP logger provider.
@@ -316,7 +316,7 @@ impl OpenTelemetryLogSubscriber {
             .inner
             .provider
             .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()));
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()));
         barrier.and(provider)
     }
 
@@ -324,7 +324,7 @@ impl OpenTelemetryLogSubscriber {
         self.inner
             .provider
             .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
     }
 
     pub(crate) fn delivery_failure_summary(&self) -> Option<String> {

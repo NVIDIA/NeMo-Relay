@@ -22,10 +22,55 @@ scope context while the `RelayHostRuntime` service performs the real work.
 | Inspect inherited context | The runtime proxy carries the task scope snapshot. | `current_scope_stack_id` and `current_parent_scope_id` expose the current binding. |
 | Emit typed telemetry | Use `emit_mark_with_options` or `emit_metric`. | Use the matching async runtime methods. |
 | Read runtime diagnostics | Await `runtime_diagnostics`. | Await `runtime_diagnostics`. |
+| Discover global runtime registrations | Await `list_runtime_registrations`. | Await `list_runtime_registrations`. |
+| Disable or enable a global registration | Await `register_conditional_middleware_guardrail`, retain the returned handle, and await `deregister_conditional_middleware_guardrail`. | Await the matching methods and retain the returned opaque handle. |
 
 Every host request carries the activation ID, token, and relevant scope context. A worker
 must not expose, log, or persist the activation token or codec capability IDs. Those
 values identify a live local capability and expire with the activation or invocation.
+
+## Control a Registration from a Background Task
+
+Worker gates are host-resident. Relay does not call the worker while it resolves
+a middleware chain or publishes an event. A worker timer or health monitor can
+therefore register a constant-reason gate, retain its activation-owned handle,
+and deregister it later.
+
+The following Python worker flow discovers the observability plugin's
+OpenTelemetry subscriber and disables it for one timer interval:
+
+```python
+import asyncio
+
+from nemo_relay_plugin import RuntimeRegistrationKind
+
+subscribers = await ctx.runtime.list_runtime_registrations(
+    {RuntimeRegistrationKind.SUBSCRIBER}
+)
+opentelemetry = next(
+    registration
+    for registration in subscribers
+    if registration.local_name == "opentelemetry"
+    and registration.owner.plugin_kind == "observability"
+)
+
+gate = await ctx.runtime.register_conditional_middleware_guardrail(
+    "pause-opentelemetry",
+    {RuntimeRegistrationKind.SUBSCRIBER},
+    opentelemetry.effective_name,
+    "worker timer active",
+)
+try:
+    await asyncio.sleep(30)
+finally:
+    await ctx.runtime.deregister_conditional_middleware_guardrail(gate)
+```
+
+The worker can remove only gates owned by its activation. Relay removes any
+remaining owned gates during ordinary activation teardown. A worker can also
+call `PluginContext.register_conditional_middleware_guardrail` during
+registration to declare an initial host-resident gate; use `PluginRuntime` for
+timer-controlled changes after activation.
 
 Use typed [mark](/about-nemo-relay/concepts/events) options when an exported mark needs
 a data schema or log severity. Use

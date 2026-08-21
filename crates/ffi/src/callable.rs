@@ -74,6 +74,49 @@ pub type NemoRelayToolConditionalCb = unsafe extern "C" fn(
     args_json: *const c_char,
 ) -> *mut c_char;
 
+/// Callback for a conditional middleware guardrail. `kinds_json` is a JSON
+/// array of configured runtime-registration kind strings. `kinds_json` and
+/// `registration_name` are borrowed for the callback invocation only. Returns
+/// NULL to enable the target or a reason string allocated compatibly with
+/// `nemo_relay_string_free` to disable it. Ownership of a non-null return value
+/// transfers to Relay.
+pub type NemoRelayConditionalMiddlewareGuardrailCb = Option<
+    unsafe extern "C" fn(
+        user_data: *mut libc::c_void,
+        kinds_json: *const c_char,
+        registration_name: *const c_char,
+    ) -> *mut c_char,
+>;
+
+type FfiConditionalMiddlewareGuardrailFn = unsafe extern "C" fn(
+    user_data: *mut libc::c_void,
+    kinds_json: *const c_char,
+    registration_name: *const c_char,
+) -> *mut c_char;
+
+/// Wrap a C conditional middleware guardrail callback for the core runtime.
+pub fn wrap_conditional_middleware_guardrail_fn(
+    cb: FfiConditionalMiddlewareGuardrailFn,
+    user_data: *mut libc::c_void,
+    free_fn: NemoRelayFreeFn,
+) -> nemo_relay::api::runtime::ConditionalMiddlewareGuardrailFn {
+    let ud = make_user_data(user_data, free_fn);
+    Arc::new(move |kinds, registration_name| {
+        clear_last_error();
+        let kinds = kinds.iter().map(|kind| kind.as_str()).collect::<Vec<_>>();
+        let c_kinds = json_to_c_string(&serde_json::to_value(kinds).unwrap_or_default());
+        let c_name = CString::new(registration_name).unwrap_or_default();
+        let result_ptr = unsafe { cb(ud.ptr, c_kinds, c_name.as_ptr()) };
+        unsafe { nemo_relay_string_free_internal(c_kinds) };
+        if result_ptr.is_null() {
+            return None;
+        }
+        let result = ptr_to_opt_string(result_ptr);
+        unsafe { nemo_relay_string_free_internal(result_ptr) };
+        result
+    })
+}
+
 /// Callback for tool execution (default callable). Receives arguments as JSON
 /// and returns a serialized `ToolExecutionResult` with required `result` and
 /// optional `annotation` fields. The returned string must be allocated with

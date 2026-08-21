@@ -10,7 +10,7 @@
 //! - rollback bookkeeping for registrations created during plugin setup
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::future::Future;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -23,6 +23,7 @@ use serde_json::{Map, Value as Json};
 use thiserror::Error;
 
 use crate::api::registry::{
+    RuntimeRegistrationKind, deregister_conditional_middleware_guardrail,
     deregister_event_metadata_injector, deregister_llm_conditional_execution_guardrail,
     deregister_llm_execution_intercept, deregister_llm_request_intercept,
     deregister_llm_sanitize_request_guardrail, deregister_llm_sanitize_response_guardrail,
@@ -30,19 +31,21 @@ use crate::api::registry::{
     deregister_scope_sanitize_end_guardrail, deregister_scope_sanitize_start_guardrail,
     deregister_tool_conditional_execution_guardrail, deregister_tool_execution_intercept,
     deregister_tool_request_intercept, deregister_tool_sanitize_request_guardrail,
-    deregister_tool_sanitize_response_guardrail, register_event_metadata_injector,
-    register_llm_conditional_execution_guardrail, register_llm_execution_intercept,
-    register_llm_request_intercept, register_llm_sanitize_request_guardrail,
-    register_llm_sanitize_response_guardrail, register_llm_stream_execution_intercept,
-    register_mark_sanitize_guardrail, register_scope_sanitize_end_guardrail,
-    register_scope_sanitize_start_guardrail, register_tool_conditional_execution_guardrail,
-    register_tool_execution_intercept, register_tool_request_intercept,
-    register_tool_sanitize_request_guardrail, register_tool_sanitize_response_guardrail,
+    deregister_tool_sanitize_response_guardrail, register_conditional_middleware_guardrail,
+    register_event_metadata_injector, register_llm_conditional_execution_guardrail,
+    register_llm_execution_intercept, register_llm_request_intercept,
+    register_llm_sanitize_request_guardrail, register_llm_sanitize_response_guardrail,
+    register_llm_stream_execution_intercept, register_mark_sanitize_guardrail,
+    register_scope_sanitize_end_guardrail, register_scope_sanitize_start_guardrail,
+    register_tool_conditional_execution_guardrail, register_tool_execution_intercept,
+    register_tool_request_intercept, register_tool_sanitize_request_guardrail,
+    register_tool_sanitize_response_guardrail,
 };
 use crate::api::runtime::{
-    EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn,
-    LlmRequestInterceptFn, LlmSanitizeRequestFn, LlmSanitizeResponseFn, LlmStreamExecutionFn,
-    ToolConditionalFn, ToolExecutionFn, ToolInterceptFn, ToolSanitizeFn,
+    ConditionalMiddlewareGuardrailFn, EventMetadataInjectorFn, EventSanitizeFn, EventSubscriberFn,
+    LlmConditionalFn, LlmExecutionFn, LlmRequestInterceptFn, LlmSanitizeRequestFn,
+    LlmSanitizeResponseFn, LlmStreamExecutionFn, ToolConditionalFn, ToolExecutionFn,
+    ToolInterceptFn, ToolSanitizeFn,
 };
 use crate::api::subscriber::{deregister_subscriber, register_subscriber};
 pub use nemo_relay_types::plugin::{ConfigDiagnostic, DiagnosticLevel};
@@ -449,6 +452,43 @@ impl PluginRegistrationContext {
                     .map_err(|err| {
                         PluginError::RegistrationFailed(format!(
                             "subscriber deregistration failed: {err}"
+                        ))
+                    })
+            }),
+        ));
+        Ok(())
+    }
+
+    /// Registers a global conditional middleware guardrail and records its
+    /// rollback closure.
+    pub fn register_conditional_middleware_guardrail(
+        &mut self,
+        name: &str,
+        kinds: BTreeSet<RuntimeRegistrationKind>,
+        registration_name: &str,
+        guardrail: ConditionalMiddlewareGuardrailFn,
+    ) -> Result<()> {
+        let qualified_name = self.qualify_name(name);
+        register_conditional_middleware_guardrail(
+            &qualified_name,
+            kinds,
+            registration_name,
+            guardrail,
+        )
+        .map_err(|err| {
+            PluginError::RegistrationFailed(format!("conditional middleware guardrail: {err}"))
+        })?;
+
+        let name_owned = qualified_name;
+        self.registrations.push(PluginRegistration::new(
+            "plugin",
+            name_owned.clone(),
+            Box::new(move || {
+                deregister_conditional_middleware_guardrail(&name_owned)
+                    .map(|_| ())
+                    .map_err(|err| {
+                        PluginError::RegistrationFailed(format!(
+                            "conditional middleware guardrail deregistration failed: {err}"
                         ))
                     })
             }),

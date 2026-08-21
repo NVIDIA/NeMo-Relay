@@ -102,6 +102,7 @@ import (
 // ---------------------------------------------------------------------------
 
 var errEventMetadataInjectorCallbackNil = errors.New("event metadata injector callback is nil")
+var errConditionalMiddlewareGuardrailCallbackNil = errors.New("conditional middleware guardrail callback is nil")
 
 var (
 	closureRegistryMu sync.Mutex
@@ -170,6 +171,10 @@ type ToolSanitizeFunc func(name string, args json.RawMessage) json.RawMessage
 // proceed. It returns nil to allow execution, or a non-nil pointer to an error
 // message string to reject the call.
 type ToolConditionalFunc func(name string, args json.RawMessage) *string
+
+// ConditionalMiddlewareGuardrailFunc decides whether one matching global
+// runtime registration remains eligible. A nil reason enables the target.
+type ConditionalMiddlewareGuardrailFunc func(kinds []RuntimeRegistrationKind, registrationName string) *string
 
 // ToolExecutionFunc is a callback that executes a tool call, receiving the
 // arguments as JSON and returning the canonical result or an error.
@@ -649,6 +654,21 @@ func goToolConditionalTrampoline(userData unsafe.Pointer, name *C.char, argsJSON
 		return nil
 	}
 	return C.CString(*result)
+}
+
+//export goConditionalMiddlewareGuardrailTrampoline
+func goConditionalMiddlewareGuardrailTrampoline(userData unsafe.Pointer, kindsJSON *C.char, registrationName *C.char) *C.char {
+	fn := lookupClosure(userData).(ConditionalMiddlewareGuardrailFunc)
+	var kinds []RuntimeRegistrationKind
+	if err := json.Unmarshal([]byte(C.GoString(kindsJSON)), &kinds); err != nil {
+		setLastErrorMessage(err.Error())
+		return nil
+	}
+	reason := fn(kinds, C.GoString(registrationName))
+	if reason == nil {
+		return nil
+	}
+	return C.CString(*reason)
 }
 
 //export goToolExecTrampoline

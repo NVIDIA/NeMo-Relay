@@ -16,6 +16,7 @@ use crate::api::event::{
 use crate::api::optimization::{
     LlmOptimizationRecorder, finalize_optimization_summary, scope_llm_optimization_recorder,
 };
+use crate::api::registry::RuntimeRegistrationKind;
 #[cfg(test)]
 use crate::api::runtime::LlmCodecIdentity;
 use crate::api::runtime::NemoRelayContextState;
@@ -431,16 +432,20 @@ async fn emit_llm_start_with_subscribers(
     ensure_runtime_owner()?;
     let (entries, full_payloads_enabled) = {
         let scope_stack = handle.captured_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_sanitize_request_guardrails
-        });
+        let scope_locals = scope_stack
+            .read()
+            .expect("scope stack lock poisoned")
+            .snapshot_scope_local_registries(|registries| {
+                &registries.llm_sanitize_request_guardrails
+            });
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeRequestGuardrail]);
         (
-            state.llm_sanitize_request_entries(&scope_locals),
+            state.llm_sanitize_request_entries(&scope_local_refs),
             state.observability_full_payloads_enabled,
         )
     };
@@ -502,20 +507,17 @@ fn queue_llm_start_with_subscribers(
     let scope_stack = handle.captured_scope_stack().clone();
     let scope_locals = {
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        scope_guard
-            .collect_scope_local_registries(|registries| {
-                &registries.llm_sanitize_request_guardrails
-            })
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>()
+        scope_guard.snapshot_scope_local_registries(|registries| {
+            &registries.llm_sanitize_request_guardrails
+        })
     };
     let (entries, full_payloads_enabled) = {
         let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeRequestGuardrail]);
         (
             state.llm_sanitize_request_entries(&scope_local_refs),
             state.observability_full_payloads_enabled,
@@ -875,24 +877,28 @@ pub fn llm_call(params: LlmCallParams<'_>) -> Result<LlmHandle> {
         .build();
     let handle = create_llm_handle(handle_params)?;
     let scope_stack = handle.captured_scope_stack().clone();
-    let (entries, subscribers, agent_is_fresh, full_payloads_enabled) = {
+    let (scope_locals, scope_subscribers, agent_is_fresh) = {
         let mut scope_guard = scope_stack
             .write()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
+        let scope_locals = scope_guard.snapshot_scope_local_registries(|registries| {
             &registries.llm_sanitize_request_guardrails
         });
-        let subscribers =
-            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
+        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        let agent_is_fresh = scope_guard.take_agent_freshness(handle.parent_uuid);
+        (scope_locals, scope_subscribers, agent_is_fresh)
+    };
+    let (entries, subscribers, full_payloads_enabled) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.llm_sanitize_request_entries(&scope_locals);
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeRequestGuardrail]);
+        let entries = state.llm_sanitize_request_entries(&scope_local_refs);
         let full_payloads_enabled = state.observability_full_payloads_enabled;
-        drop(state);
-        let agent_is_fresh = scope_guard.take_agent_freshness(handle.parent_uuid);
-        (entries, subscribers, agent_is_fresh, full_payloads_enabled)
+        (entries, subscribers, full_payloads_enabled)
     };
     // Middleware and event publication only observe a credential-free copy.
     // Keep `params.request` untouched: it remains the caller/provider request.
@@ -1079,21 +1085,27 @@ async fn build_llm_end_payload(
 pub fn llm_call_end(params: LlmCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = params.handle.captured_scope_stack().clone();
-    let (entries, subscribers) = {
+    let (scope_locals, scope_subscribers) = {
         let scope_guard = scope_stack
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_sanitize_response_guardrails
-        });
-        let subscribers =
-            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
+        (
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.llm_sanitize_response_guardrails
+            }),
+            scope_guard.collect_scope_local_subscribers(),
+        )
+    };
+    let (entries, subscribers) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeResponseGuardrail]);
         (
-            state.llm_sanitize_response_entries(&scope_locals),
+            state.llm_sanitize_response_entries(&scope_local_refs),
             subscribers,
         )
     };
@@ -1184,13 +1196,18 @@ async fn llm_call_end_with_behavior(
     } = params;
     let timestamp = timestamp.unwrap_or_else(Utc::now);
     ensure_runtime_owner()?;
-    let (entries, subscribers) = {
+    let (scope_locals, scope_subscribers) = {
         let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_sanitize_response_guardrails
-        });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        (
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.llm_sanitize_response_guardrails
+            }),
+            scope_guard.collect_scope_local_subscribers(),
+        )
+    };
+    let (entries, subscribers) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let subscribers = match lifecycle_subscribers {
             Some(subscribers) => subscribers.to_vec(),
             None => snapshot_event_subscribers(scope_subscribers)?,
@@ -1198,8 +1215,9 @@ async fn llm_call_end_with_behavior(
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.llm_sanitize_response_entries(&scope_locals);
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeResponseGuardrail]);
+        let entries = state.llm_sanitize_response_entries(&scope_local_refs);
         (entries, subscribers)
     };
     handle.optimization_recorder.close_for_finalization(None);
@@ -1316,13 +1334,18 @@ async fn emit_llm_end_without_output(
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let timestamp = Utc::now();
-    let (entries, subscribers) = {
+    let (scope_locals, scope_subscribers) = {
         let scope_stack = handle.captured_scope_stack();
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_sanitize_response_guardrails
-        });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        (
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.llm_sanitize_response_guardrails
+            }),
+            scope_guard.collect_scope_local_subscribers(),
+        )
+    };
+    let (entries, subscribers) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let subscribers = match lifecycle_subscribers {
             Some(subscribers) => subscribers.to_vec(),
             None => snapshot_event_subscribers(scope_subscribers)?,
@@ -1330,8 +1353,9 @@ async fn emit_llm_end_without_output(
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.llm_sanitize_response_entries(&scope_locals);
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmSanitizeResponseGuardrail]);
+        let entries = state.llm_sanitize_response_entries(&scope_local_refs);
         (entries, subscribers)
     };
     handle.optimization_recorder.close_for_finalization(None);
@@ -1454,17 +1478,25 @@ impl Drop for ManagedLlmCompletion {
             Some("LLM execution cancelled".into()),
         );
         let scope_stack = handle.captured_scope_stack().clone();
-        let entries = match scope_stack.read() {
-            Ok(scope_guard) => {
-                let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                    &registries.llm_sanitize_response_guardrails
-                });
+        let scope_locals = scope_stack.read().ok().map(|scope_guard| {
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.llm_sanitize_response_guardrails
+            })
+        });
+        let entries = match scope_locals {
+            Some(scope_locals) => {
+                let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
                 global_context()
                     .read()
-                    .map(|state| state.llm_sanitize_response_entries(&scope_locals))
-                    .unwrap_or_default()
+                    .ok()
+                    .map(|state| {
+                        state.registry_snapshot(&[
+                            RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+                        ])
+                    })
+                    .map(|state| state.llm_sanitize_response_entries(&scope_local_refs))
             }
-            Err(_) => Vec::new(),
+            None => None,
         };
         handle
             .optimization_recorder
@@ -1485,7 +1517,7 @@ impl Drop for ManagedLlmCompletion {
             event,
             Box::new(move |event| {
                 Box::pin(async move {
-                    let Some(data) = fallback_data else {
+                    let (Some(data), Some(entries)) = (fallback_data, entries) else {
                         return event;
                     };
                     let data = NemoRelayContextState::llm_sanitize_response_snapshot_chain(
@@ -1585,16 +1617,25 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
     {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
             let scope_stack = current_scope_stack();
-            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-            let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                &registries.llm_conditional_execution_guardrails
-            });
-            let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+            let (scope_locals, scope_subscribers) = {
+                let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+                (
+                    scope_guard.snapshot_scope_local_registries(|registries| {
+                        &registries.llm_conditional_execution_guardrails
+                    }),
+                    scope_guard.collect_scope_local_subscribers(),
+                )
+            };
+            let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
             let context = global_context();
             let state = context
                 .read()
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
-            let entries = state.llm_conditional_execution_entries(&scope_locals);
+                .map_err(|error| FlowError::Internal(error.to_string()))?
+                .registry_snapshot(&[
+                    RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+                    RuntimeRegistrationKind::Subscriber,
+                ]);
+            let entries = state.llm_conditional_execution_entries(&scope_local_refs);
             let subscribers = state.collect_event_subscribers(&scope_subscribers);
             (
                 entries,
@@ -1689,15 +1730,19 @@ pub async fn llm_call_execute(params: LlmCallExecuteParams) -> Result<Json> {
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
             let execution = {
                 let scope_stack = current_scope_stack();
-                let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-                let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                    &registries.llm_execution_intercepts
-                });
+                let scope_locals = scope_stack
+                    .read()
+                    .expect("scope stack lock poisoned")
+                    .snapshot_scope_local_registries(|registries| {
+                        &registries.llm_execution_intercepts
+                    });
+                let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
                 let context = global_context();
                 let state = context
                     .read()
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                state.llm_build_execution_chain(&execution_name, func, &scope_locals)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?
+                    .registry_snapshot(&[RuntimeRegistrationKind::LlmExecutionIntercept]);
+                state.llm_build_execution_chain(&execution_name, func, &scope_local_refs)
             };
             execution(intercepted_request).await
         }),
@@ -1796,16 +1841,25 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
     {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
             let scope_stack = current_scope_stack();
-            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-            let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                &registries.llm_conditional_execution_guardrails
-            });
-            let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+            let (scope_locals, scope_subscribers) = {
+                let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+                (
+                    scope_guard.snapshot_scope_local_registries(|registries| {
+                        &registries.llm_conditional_execution_guardrails
+                    }),
+                    scope_guard.collect_scope_local_subscribers(),
+                )
+            };
+            let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
             let context = global_context();
             let state = context
                 .read()
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
-            let entries = state.llm_conditional_execution_entries(&scope_locals);
+                .map_err(|error| FlowError::Internal(error.to_string()))?
+                .registry_snapshot(&[
+                    RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+                    RuntimeRegistrationKind::Subscriber,
+                ]);
+            let entries = state.llm_conditional_execution_entries(&scope_local_refs);
             let subscribers = state.collect_event_subscribers(&scope_subscribers);
             (
                 entries,
@@ -1900,15 +1954,19 @@ pub async fn llm_stream_call_execute(params: LlmStreamCallExecuteParams) -> Resu
         scope_llm_optimization_recorder(handle.optimization_recorder.clone(), async move {
             let execution = {
                 let scope_stack = current_scope_stack();
-                let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-                let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                    &registries.llm_stream_execution_intercepts
-                });
+                let scope_locals = scope_stack
+                    .read()
+                    .expect("scope stack lock poisoned")
+                    .snapshot_scope_local_registries(|registries| {
+                        &registries.llm_stream_execution_intercepts
+                    });
+                let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
                 let context = global_context();
                 let state = context
                     .read()
-                    .map_err(|error| FlowError::Internal(error.to_string()))?;
-                state.llm_stream_build_execution_chain(&execution_name, func, &scope_locals)
+                    .map_err(|error| FlowError::Internal(error.to_string()))?
+                    .registry_snapshot(&[RuntimeRegistrationKind::LlmStreamExecutionIntercept]);
+                state.llm_stream_build_execution_chain(&execution_name, func, &scope_local_refs)
             };
             let execution_context = MiddlewareContinuationContext::capture();
             execution(intercepted_request)
@@ -1977,14 +2035,17 @@ pub async fn llm_request_intercepts(
     ensure_runtime_owner()?;
     let entries = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard
-            .collect_scope_local_registries(|registries| &registries.llm_request_intercepts);
+        let scope_locals = scope_stack
+            .read()
+            .expect("scope stack lock poisoned")
+            .snapshot_scope_local_registries(|registries| &registries.llm_request_intercepts);
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.llm_request_intercept_entries(&scope_locals)
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::LlmRequestIntercept]);
+        state.llm_request_intercept_entries(&scope_local_refs)
     };
     let mut outcome = NemoRelayContextState::llm_request_intercepts_snapshot_chain(
         name, request, None, &entries, false,
@@ -2021,16 +2082,25 @@ pub async fn llm_conditional_execution(request: &LlmRequest) -> Result<()> {
     ensure_runtime_owner()?;
     let (entries, subscribers, parent_uuid) = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.llm_conditional_execution_guardrails
-        });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        let (scope_locals, scope_subscribers) = {
+            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            (
+                scope_guard.snapshot_scope_local_registries(|registries| {
+                    &registries.llm_conditional_execution_guardrails
+                }),
+                scope_guard.collect_scope_local_subscribers(),
+            )
+        };
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.llm_conditional_execution_entries(&scope_locals);
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[
+                RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+                RuntimeRegistrationKind::Subscriber,
+            ]);
+        let entries = state.llm_conditional_execution_entries(&scope_local_refs);
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))
     };

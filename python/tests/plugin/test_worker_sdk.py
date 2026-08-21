@@ -24,6 +24,7 @@ if os.environ.get("NEMO_RELAY_SKIP_PYTHON_PLUGIN_TESTS") == "1":
 grpc = pytest.importorskip("grpc")
 
 from nemo_relay_plugin import (  # noqa: E402
+    ConditionalMiddlewareGuardrailHandle,
     ConfigDiagnostic,
     DataSchema,
     DiagnosticLevel,
@@ -38,6 +39,9 @@ from nemo_relay_plugin import (  # noqa: E402
     PluginRuntime,
     RuntimeDiagnostic,
     RuntimeDiagnostics,
+    RuntimeRegistrationIdentity,
+    RuntimeRegistrationKind,
+    RuntimeRegistrationOwnerKind,
     ScopeType,
     ToolExecutionInterceptOutcome,
     ToolExecutionResult,
@@ -394,6 +398,30 @@ class RecordingHostStub:
             ]
         )
 
+    async def ListRuntimeRegistrations(self, request: Any) -> Any:
+        self.requests.append(request)
+        return pb.ListRuntimeRegistrationsResponse(
+            registrations=[
+                pb.RuntimeRegistrationIdentity(
+                    kind=pb.SUBSCRIBER,
+                    local_name="opentelemetry",
+                    effective_name="__nemo_relay_plugin__observability__opentelemetry",
+                    owner=pb.RuntimeRegistrationOwner(
+                        kind=pb.RUNTIME_REGISTRATION_OWNER_KIND_PLUGIN,
+                        plugin_kind="observability",
+                    ),
+                )
+            ]
+        )
+
+    async def RegisterConditionalMiddlewareGuardrail(self, request: Any) -> Any:
+        self.requests.append(request)
+        return pb.RegisterConditionalMiddlewareGuardrailResponse(handle="gate-1")
+
+    async def DeregisterConditionalMiddlewareGuardrail(self, request: Any) -> Any:
+        self.requests.append(request)
+        return pb.DeregisterConditionalMiddlewareGuardrailResponse(removed=True)
+
     async def CreateScopeStack(self, request: Any) -> Any:
         self.requests.append(request)
         if self.failures.get("CreateScopeStack") == "error":
@@ -592,6 +620,12 @@ class AllSurfacesPlugin(WorkerPlugin):
                 yield _tag(chunk, "llm_stream_execution")
 
         ctx.register_subscriber("subscriber", subscriber)
+        ctx.register_conditional_middleware_guardrail(
+            "initial_gate",
+            {RuntimeRegistrationKind.SUBSCRIBER},
+            "missing-target",
+            "initial gate",
+        )
         ctx.register_event_metadata_injector("event_metadata", event_metadata, priority=1)
         ctx.register_mark_sanitize_guardrail("event_sanitize", mark_sanitize, priority=1)
         ctx.register_scope_sanitize_start_guardrail("event_sanitize", scope_start_sanitize, priority=2)
@@ -617,6 +651,16 @@ def host_stub_fixture() -> RecordingHostStub:
 @pytest.fixture(name="service")
 def service_fixture(host_stub: RecordingHostStub) -> _WorkerService:
     return _service(AllSurfacesPlugin(), host_stub)
+
+
+async def test_register_returns_initial_conditional_middleware_guardrail(service: _WorkerService):
+    response = await _register(service)
+    assert len(response.conditional_middleware_guardrails) == 1
+    gate = response.conditional_middleware_guardrails[0]
+    assert gate.name == "initial_gate"
+    assert list(gate.kinds) == [pb.SUBSCRIBER]
+    assert gate.registration_name == "missing-target"
+    assert gate.reason == "initial gate"
 
 
 def test_generated_proto_matches_worker_contract():
@@ -2174,6 +2218,42 @@ async def test_runtime_host_calls_and_scope_context(host_stub: RecordingHostStub
     )
     assert diagnostics.get("zeta") == RuntimeDiagnostic(code="zeta", message="latest", count=3)
     assert diagnostics.get("missing") is None
+
+    registrations = await runtime.list_runtime_registrations({RuntimeRegistrationKind.SUBSCRIBER})
+    assert registrations == [
+        RuntimeRegistrationIdentity(
+            kind=RuntimeRegistrationKind.SUBSCRIBER,
+            local_name="opentelemetry",
+            effective_name="__nemo_relay_plugin__observability__opentelemetry",
+            owner=plugin_api.RuntimeRegistrationOwner(
+                kind=RuntimeRegistrationOwnerKind.PLUGIN,
+                plugin_kind="observability",
+            ),
+        )
+    ]
+    list_request = _last_request(host_stub, pb.ListRuntimeRegistrationsRequest)
+    assert list_request.activation_id == ACTIVATION_ID
+    assert list_request.auth_token == AUTH_TOKEN
+    assert list(list_request.kinds) == [pb.SUBSCRIBER]
+    gate = await runtime.register_conditional_middleware_guardrail(
+        "pause-otel",
+        {RuntimeRegistrationKind.SUBSCRIBER},
+        registrations[0].effective_name,
+        "temporarily disabled",
+    )
+    assert isinstance(gate, ConditionalMiddlewareGuardrailHandle)
+    register_request = _last_request(host_stub, pb.RegisterConditionalMiddlewareGuardrailRequest)
+    assert register_request.activation_id == ACTIVATION_ID
+    assert register_request.auth_token == AUTH_TOKEN
+    assert register_request.name == "pause-otel"
+    assert list(register_request.kinds) == [pb.SUBSCRIBER]
+    assert register_request.registration_name == registrations[0].effective_name
+    assert register_request.reason == "temporarily disabled"
+    assert await runtime.deregister_conditional_middleware_guardrail(gate)
+    deregister_request = _last_request(host_stub, pb.DeregisterConditionalMiddlewareGuardrailRequest)
+    assert deregister_request.activation_id == ACTIVATION_ID
+    assert deregister_request.auth_token == AUTH_TOKEN
+    assert deregister_request.handle == "gate-1"
 
     stack_id = await runtime.create_scope_stack()
     assert stack_id == "stack-1"

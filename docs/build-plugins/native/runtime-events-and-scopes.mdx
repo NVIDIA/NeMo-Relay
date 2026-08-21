@@ -110,6 +110,21 @@ The diagnostic snapshot is bounded and ordered by code. It is a host-level view,
 does not identify the plugin that recorded a diagnostic. These operations require the
 native host ABI v4 extensions.
 
+## Control Global Runtime Registrations
+
+Native host ABI v4 adds activation-owned registration discovery and conditional
+middleware guardrail control. `PluginRuntime::list_runtime_registrations`
+returns structured global identities. A background plugin task can call
+`register_conditional_middleware_guardrail`, retain the returned opaque handle,
+and call `deregister_conditional_middleware_guardrail` when the target should
+be eligible for future snapshots again.
+
+The host evaluates a constant reason callback locally. It does not enter the
+native library while resolving the target. The plugin can remove only gates
+owned by its activation, and Relay removes remaining gates during activation
+teardown. Use `PluginContext::register_conditional_middleware_guardrail` for a
+gate that must exist as part of the initial registration transaction.
+
 ## Configure the SDK Executor
 
 `NativePlugin::executor_config` supplies the plugin-wide default. The SDK default and the

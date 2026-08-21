@@ -3,7 +3,7 @@
 
 //! gRPC worker dynamic plugin loader and host-side proxy adapter.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -20,15 +20,22 @@ use nemo_relay_worker_proto::v1::relay_host_runtime_server::{
 };
 use nemo_relay_worker_proto::v1::{
     CancelInvocationRequest, CreateScopeStackRequest, CreateScopeStackResponse,
-    DropScopeStackRequest, EmitMarkRequest, GetRuntimeDiagnosticsRequest,
-    GetRuntimeDiagnosticsResponse, GuardrailResult, HandshakeRequest, HandshakeResponse,
-    HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope, JsonResult,
+    DeregisterConditionalMiddlewareGuardrailRequest,
+    DeregisterConditionalMiddlewareGuardrailResponse, DropScopeStackRequest, EmitMarkRequest,
+    GetRuntimeDiagnosticsRequest, GetRuntimeDiagnosticsResponse, GuardrailResult, HandshakeRequest,
+    HandshakeResponse, HealthRequest, HostAck, InvokeRequest, InvokeResponse, JsonEnvelope,
+    JsonResult, ListRuntimeRegistrationsRequest, ListRuntimeRegistrationsResponse,
     LlmCodecDecodeRequest, LlmCodecDecodeResponse, LlmCodecEncodeRequest,
     LlmCodecIdentity as ProtoLlmCodecIdentity, LlmCodecKind, LlmInvocation, LlmNextRequest,
     LlmSanitizeRequestContext as ProtoLlmSanitizeRequestContext,
     LlmSanitizeResponseContext as ProtoLlmSanitizeResponseContext, LlmStreamNextRequest,
-    PopScopeRequest, PushScopeRequest, PushScopeResponse, RegisterRequest, RegisterResponse,
-    Registration, RegistrationSurface, RuntimeDiagnostic as ProtoRuntimeDiagnostic, ScopeContext,
+    PopScopeRequest, PushScopeRequest, PushScopeResponse,
+    RegisterConditionalMiddlewareGuardrailRequest, RegisterConditionalMiddlewareGuardrailResponse,
+    RegisterRequest, RegisterResponse, Registration, RegistrationSurface,
+    RuntimeDiagnostic as ProtoRuntimeDiagnostic,
+    RuntimeRegistrationIdentity as ProtoRuntimeRegistrationIdentity,
+    RuntimeRegistrationOwner as ProtoRuntimeRegistrationOwner,
+    RuntimeRegistrationOwnerKind as ProtoRuntimeRegistrationOwnerKind, ScopeContext,
     ShutdownRequest, StreamChunk,
     ToolExecutionInterceptOutcome as ProtoToolExecutionInterceptOutcome,
     ToolExecutionResult as ProtoToolExecutionResult, ToolExecutionResultResponse, ToolInvocation,
@@ -65,6 +72,11 @@ use tower::service_fn;
 
 use crate::api::event::{DataSchema, Event, EventSanitizeFields, LogSeverity};
 use crate::api::llm::{LLM_REQUEST_INTERCEPT_OUTCOME_SCHEMA, LlmRequest};
+use crate::api::registry::{
+    RuntimeRegistrationKind, RuntimeRegistrationOwnerKind,
+    deregister_conditional_middleware_guardrail, list_runtime_registrations,
+    register_conditional_middleware_guardrail,
+};
 use crate::api::runtime::subscriber_dispatcher::{
     PublicationBuffer, capture_nested_publication_buffer, with_nested_publication_buffer,
 };
@@ -289,6 +301,8 @@ impl WorkerPluginInstance {
             plugin_id = self.plugin_kind.as_str();
             "Worker plugin is stopping"
         );
+
+        self.host_state.cleanup_conditional_middleware_guardrails();
 
         let mut client = self.client.clone();
         let request = ShutdownRequest {
@@ -596,8 +610,8 @@ fn load_one_worker_plugin(
         None => Vec::new(),
     };
 
-    let registrations = if diagnostics_have_errors(&validation_diagnostics) {
-        Vec::new()
+    let (registrations, initial_gates) = if diagnostics_have_errors(&validation_diagnostics) {
+        (Vec::new(), Vec::new())
     } else {
         let register = block_on_runtime(
             runtime_handle.runtime(),
@@ -616,8 +630,42 @@ fn load_one_worker_plugin(
             return Err(worker_error_to_plugin(error, "worker registration failed"));
         }
         validate_registration_plan(&spec.plugin_id, &register)?;
-        register.registrations
+        (
+            register.registrations,
+            register.conditional_middleware_guardrails,
+        )
     };
+    for gate in initial_gates {
+        let kinds = gate
+            .kinds
+            .into_iter()
+            .map(|kind| {
+                RegistrationSurface::try_from(kind)
+                    .map_err(|_| {
+                        PluginError::RegistrationFailed(format!(
+                            "worker plugin '{}' returned an unknown conditional middleware guardrail kind",
+                            spec.plugin_id
+                        ))
+                    })
+                    .and_then(|surface| {
+                        runtime_registration_kind_from_surface(surface).map_err(|status| {
+                            PluginError::RegistrationFailed(status.message().to_string())
+                        })
+                    })
+            })
+            .collect::<crate::plugin::Result<BTreeSet<_>>>()?;
+        if let Err(error) = host_state.register_owned_conditional_middleware_guardrail(
+            gate.name,
+            kinds,
+            gate.registration_name,
+            gate.reason,
+        ) {
+            host_state.cleanup_conditional_middleware_guardrails();
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker initial conditional middleware guardrail failed: {error}"
+            )));
+        }
+    }
     if registrations.iter().any(|registration| {
         RegistrationSurface::try_from(registration.surface)
             .is_ok_and(|surface| surface == RegistrationSurface::LlmRequestIntercept)
@@ -2124,6 +2172,13 @@ struct WorkerHostRuntimeState {
     scope_handles: Mutex<HashMap<String, StoredScopeHandle>>,
     continuations: Mutex<HashMap<String, Continuation>>,
     codecs: Mutex<HashMap<String, WorkerCodecCapability>>,
+    gates_active: AtomicBool,
+    conditional_middleware_guardrails: Mutex<HashMap<String, WorkerOwnedGate>>,
+}
+
+struct WorkerOwnedGate {
+    local_name: String,
+    qualified_name: String,
 }
 
 struct WorkerCodecCapability {
@@ -2207,7 +2262,83 @@ impl WorkerHostRuntimeState {
             scope_handles: Mutex::new(HashMap::new()),
             continuations: Mutex::new(HashMap::new()),
             codecs: Mutex::new(HashMap::new()),
+            gates_active: AtomicBool::new(true),
+            conditional_middleware_guardrails: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn cleanup_conditional_middleware_guardrails(&self) {
+        self.gates_active.store(false, Ordering::Release);
+        let mut gates = match self.conditional_middleware_guardrails.lock() {
+            Ok(gates) => gates,
+            Err(error) => {
+                log::error!(
+                    target: "nemo_relay.worker",
+                    event = "worker_gate_ownership_lock_poisoned";
+                    "Worker gate ownership lock was poisoned during cleanup; recovering owned gates"
+                );
+                error.into_inner()
+            }
+        };
+        let names = gates
+            .drain()
+            .map(|(_, gate)| gate.qualified_name)
+            .collect::<Vec<_>>();
+        drop(gates);
+        for name in names {
+            if let Err(error) = deregister_conditional_middleware_guardrail(&name) {
+                log::error!(
+                    target: "nemo_relay.worker",
+                    event = "worker_gate_cleanup_failed",
+                    gate = name.as_str();
+                    "Worker-owned conditional middleware guardrail cleanup failed: {error}"
+                );
+            }
+        }
+    }
+
+    fn register_owned_conditional_middleware_guardrail(
+        &self,
+        name: String,
+        kinds: BTreeSet<RuntimeRegistrationKind>,
+        registration_name: String,
+        reason: String,
+    ) -> FlowResult<String> {
+        let mut owned_gates = self
+            .conditional_middleware_guardrails
+            .lock()
+            .map_err(|error| {
+                FlowError::Internal(format!("gate ownership lock poisoned: {error}"))
+            })?;
+        if !self.gates_active.load(Ordering::Acquire) {
+            return Err(FlowError::NotFound(
+                "worker activation is shutting down".into(),
+            ));
+        }
+        if owned_gates.values().any(|gate| gate.local_name == name) {
+            return Err(FlowError::AlreadyExists(format!(
+                "conditional middleware guardrail '{name}' already exists for this activation"
+            )));
+        }
+        let handle = format!("gate-{}", Uuid::now_v7());
+        let qualified_name = format!(
+            "__nemo_relay_worker_gate__{}__{}__{}",
+            self.activation_id, name, handle
+        );
+        register_conditional_middleware_guardrail(
+            &qualified_name,
+            kinds,
+            &registration_name,
+            Arc::new(move |_, _| Some(reason.clone())),
+        )?;
+        owned_gates.insert(
+            handle.clone(),
+            WorkerOwnedGate {
+                local_name: name,
+                qualified_name,
+            },
+        );
+        Ok(handle)
     }
 
     fn insert_request_codec(&self, invocation_id: &str, codec: Arc<dyn LlmCodec>) -> String {
@@ -2517,8 +2648,221 @@ struct WorkerHostRuntimeService {
     state: Arc<WorkerHostRuntimeState>,
 }
 
+fn runtime_registration_kind_from_surface(
+    surface: RegistrationSurface,
+) -> Result<RuntimeRegistrationKind, Status> {
+    match surface {
+        RegistrationSurface::Subscriber => Ok(RuntimeRegistrationKind::Subscriber),
+        RegistrationSurface::EventMetadataInjector => {
+            Ok(RuntimeRegistrationKind::EventMetadataInjector)
+        }
+        RegistrationSurface::MarkSanitizeGuardrail => {
+            Ok(RuntimeRegistrationKind::MarkSanitizeGuardrail)
+        }
+        RegistrationSurface::ScopeSanitizeStartGuardrail => {
+            Ok(RuntimeRegistrationKind::ScopeSanitizeStartGuardrail)
+        }
+        RegistrationSurface::ScopeSanitizeEndGuardrail => {
+            Ok(RuntimeRegistrationKind::ScopeSanitizeEndGuardrail)
+        }
+        RegistrationSurface::ToolSanitizeRequestGuardrail => {
+            Ok(RuntimeRegistrationKind::ToolSanitizeRequestGuardrail)
+        }
+        RegistrationSurface::ToolSanitizeResponseGuardrail => {
+            Ok(RuntimeRegistrationKind::ToolSanitizeResponseGuardrail)
+        }
+        RegistrationSurface::ToolConditionalExecutionGuardrail => {
+            Ok(RuntimeRegistrationKind::ToolConditionalExecutionGuardrail)
+        }
+        RegistrationSurface::ToolRequestIntercept => {
+            Ok(RuntimeRegistrationKind::ToolRequestIntercept)
+        }
+        RegistrationSurface::ToolExecutionIntercept => {
+            Ok(RuntimeRegistrationKind::ToolExecutionIntercept)
+        }
+        RegistrationSurface::LlmSanitizeRequestGuardrail => {
+            Ok(RuntimeRegistrationKind::LlmSanitizeRequestGuardrail)
+        }
+        RegistrationSurface::LlmSanitizeResponseGuardrail => {
+            Ok(RuntimeRegistrationKind::LlmSanitizeResponseGuardrail)
+        }
+        RegistrationSurface::LlmConditionalExecutionGuardrail => {
+            Ok(RuntimeRegistrationKind::LlmConditionalExecutionGuardrail)
+        }
+        RegistrationSurface::LlmRequestIntercept => {
+            Ok(RuntimeRegistrationKind::LlmRequestIntercept)
+        }
+        RegistrationSurface::LlmExecutionIntercept => {
+            Ok(RuntimeRegistrationKind::LlmExecutionIntercept)
+        }
+        RegistrationSurface::LlmStreamExecutionIntercept => {
+            Ok(RuntimeRegistrationKind::LlmStreamExecutionIntercept)
+        }
+        RegistrationSurface::Unspecified => Err(Status::invalid_argument(
+            "runtime registration kind must be specified",
+        )),
+    }
+}
+
+fn registration_surface_from_kind(kind: RuntimeRegistrationKind) -> RegistrationSurface {
+    match kind {
+        RuntimeRegistrationKind::Subscriber => RegistrationSurface::Subscriber,
+        RuntimeRegistrationKind::EventMetadataInjector => {
+            RegistrationSurface::EventMetadataInjector
+        }
+        RuntimeRegistrationKind::MarkSanitizeGuardrail => {
+            RegistrationSurface::MarkSanitizeGuardrail
+        }
+        RuntimeRegistrationKind::ScopeSanitizeStartGuardrail => {
+            RegistrationSurface::ScopeSanitizeStartGuardrail
+        }
+        RuntimeRegistrationKind::ScopeSanitizeEndGuardrail => {
+            RegistrationSurface::ScopeSanitizeEndGuardrail
+        }
+        RuntimeRegistrationKind::ToolSanitizeRequestGuardrail => {
+            RegistrationSurface::ToolSanitizeRequestGuardrail
+        }
+        RuntimeRegistrationKind::ToolSanitizeResponseGuardrail => {
+            RegistrationSurface::ToolSanitizeResponseGuardrail
+        }
+        RuntimeRegistrationKind::ToolConditionalExecutionGuardrail => {
+            RegistrationSurface::ToolConditionalExecutionGuardrail
+        }
+        RuntimeRegistrationKind::ToolRequestIntercept => RegistrationSurface::ToolRequestIntercept,
+        RuntimeRegistrationKind::ToolExecutionIntercept => {
+            RegistrationSurface::ToolExecutionIntercept
+        }
+        RuntimeRegistrationKind::LlmSanitizeRequestGuardrail => {
+            RegistrationSurface::LlmSanitizeRequestGuardrail
+        }
+        RuntimeRegistrationKind::LlmSanitizeResponseGuardrail => {
+            RegistrationSurface::LlmSanitizeResponseGuardrail
+        }
+        RuntimeRegistrationKind::LlmConditionalExecutionGuardrail => {
+            RegistrationSurface::LlmConditionalExecutionGuardrail
+        }
+        RuntimeRegistrationKind::LlmRequestIntercept => RegistrationSurface::LlmRequestIntercept,
+        RuntimeRegistrationKind::LlmExecutionIntercept => {
+            RegistrationSurface::LlmExecutionIntercept
+        }
+        RuntimeRegistrationKind::LlmStreamExecutionIntercept => {
+            RegistrationSurface::LlmStreamExecutionIntercept
+        }
+    }
+}
+
 #[tonic::async_trait]
 impl RelayHostRuntime for WorkerHostRuntimeService {
+    async fn list_runtime_registrations(
+        &self,
+        request: Request<ListRuntimeRegistrationsRequest>,
+    ) -> Result<Response<ListRuntimeRegistrationsResponse>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let kinds = request
+            .kinds
+            .into_iter()
+            .map(|kind| {
+                RegistrationSurface::try_from(kind)
+                    .map_err(|_| Status::invalid_argument("unknown runtime registration kind"))
+                    .and_then(runtime_registration_kind_from_surface)
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let selected = (!kinds.is_empty()).then_some(&kinds);
+        let registrations = list_runtime_registrations(selected).map_err(status_from_flow)?;
+        Ok(Response::new(ListRuntimeRegistrationsResponse {
+            registrations: registrations
+                .into_iter()
+                .map(|registration| ProtoRuntimeRegistrationIdentity {
+                    kind: registration_surface_from_kind(registration.kind) as i32,
+                    local_name: registration.local_name,
+                    effective_name: registration.effective_name,
+                    owner: Some(ProtoRuntimeRegistrationOwner {
+                        kind: match registration.owner.kind {
+                            RuntimeRegistrationOwnerKind::Core => {
+                                ProtoRuntimeRegistrationOwnerKind::Core as i32
+                            }
+                            RuntimeRegistrationOwnerKind::GlobalApi => {
+                                ProtoRuntimeRegistrationOwnerKind::GlobalApi as i32
+                            }
+                            RuntimeRegistrationOwnerKind::Plugin => {
+                                ProtoRuntimeRegistrationOwnerKind::Plugin as i32
+                            }
+                        },
+                        plugin_kind: registration.owner.plugin_kind,
+                        component_ordinal: registration.owner.component_ordinal,
+                    }),
+                })
+                .collect(),
+            error: None,
+        }))
+    }
+
+    async fn register_conditional_middleware_guardrail(
+        &self,
+        request: Request<RegisterConditionalMiddlewareGuardrailRequest>,
+    ) -> Result<Response<RegisterConditionalMiddlewareGuardrailResponse>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let kinds = request
+            .kinds
+            .into_iter()
+            .map(|kind| {
+                RegistrationSurface::try_from(kind)
+                    .map_err(|_| Status::invalid_argument("unknown runtime registration kind"))
+                    .and_then(runtime_registration_kind_from_surface)
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let handle = self
+            .state
+            .register_owned_conditional_middleware_guardrail(
+                request.name,
+                kinds,
+                request.registration_name,
+                request.reason,
+            )
+            .map_err(status_from_flow)?;
+        Ok(Response::new(
+            RegisterConditionalMiddlewareGuardrailResponse {
+                handle,
+                error: None,
+            },
+        ))
+    }
+
+    async fn deregister_conditional_middleware_guardrail(
+        &self,
+        request: Request<DeregisterConditionalMiddlewareGuardrailRequest>,
+    ) -> Result<Response<DeregisterConditionalMiddlewareGuardrailResponse>, Status> {
+        let request = request.into_inner();
+        self.state
+            .authorize(&request.activation_id, &request.auth_token)?;
+        let mut owned_gates = self
+            .state
+            .conditional_middleware_guardrails
+            .lock()
+            .map_err(|error| Status::internal(format!("gate ownership lock poisoned: {error}")))?;
+        let removed = match owned_gates.get(&request.handle) {
+            Some(gate) => {
+                let removed = deregister_conditional_middleware_guardrail(&gate.qualified_name)
+                    .map_err(status_from_flow)?;
+                if removed {
+                    owned_gates.remove(&request.handle);
+                }
+                removed
+            }
+            None => false,
+        };
+        Ok(Response::new(
+            DeregisterConditionalMiddlewareGuardrailResponse {
+                removed,
+                error: None,
+            },
+        ))
+    }
+
     async fn emit_mark(
         &self,
         request: Request<EmitMarkRequest>,
@@ -3334,6 +3678,23 @@ fn validate_registration_plan(
         if surface == RegistrationSurface::Unspecified {
             return Err(PluginError::RegistrationFailed(format!(
                 "worker plugin '{plugin_id}' returned unspecified registration surface"
+            )));
+        }
+    }
+    let mut gate_names = std::collections::HashSet::new();
+    for gate in &response.conditional_middleware_guardrails {
+        if gate.name.trim().is_empty()
+            || gate.registration_name.trim().is_empty()
+            || gate.kinds.is_empty()
+        {
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{plugin_id}' returned an invalid conditional middleware guardrail"
+            )));
+        }
+        if !gate_names.insert(gate.name.as_str()) {
+            return Err(PluginError::RegistrationFailed(format!(
+                "worker plugin '{plugin_id}' returned duplicate conditional middleware guardrail '{}'",
+                gate.name
             )));
         }
     }

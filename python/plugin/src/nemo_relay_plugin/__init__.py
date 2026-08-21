@@ -47,6 +47,11 @@ Public data types:
     ConfigDiagnostic: Structured configuration warning or error.
     RuntimeDiagnostic: One aggregated host runtime diagnostic entry.
     RuntimeDiagnostics: Immutable host runtime diagnostics snapshot.
+    RuntimeRegistrationKind: Kind of globally registered runtime behavior.
+    RuntimeRegistrationOwnerKind: Kind of owner that installed a registration.
+    RuntimeRegistrationOwner: Structured identity of a registration owner.
+    RuntimeRegistrationIdentity: Structured identity of a runtime registration.
+    ConditionalMiddlewareGuardrailHandle: Opaque handle for a registered guardrail.
     ScopeType: Semantic category for a Relay execution scope.
     WorkerSdkError: SDK, host-call, or worker protocol error.
 
@@ -79,6 +84,7 @@ Public functions:
 
 from ._api import (
     AnnotatedLlmRequest,
+    ConditionalMiddlewareGuardrailHandle,
     ConfigDiagnostic,
     DataSchema,
     DiagnosticLevel,
@@ -116,6 +122,10 @@ from ._api import (
     PluginRuntime,
     RuntimeDiagnostic,
     RuntimeDiagnostics,
+    RuntimeRegistrationIdentity,
+    RuntimeRegistrationKind,
+    RuntimeRegistrationOwner,
+    RuntimeRegistrationOwnerKind,
     ScopeType,
     SubscriberCallback,
     ToolConditionalCallback,
@@ -134,6 +144,7 @@ from ._api import (
 
 __all__ = [
     "AnnotatedLlmRequest",
+    "ConditionalMiddlewareGuardrailHandle",
     "ConfigDiagnostic",
     "DataSchema",
     "DiagnosticLevel",
@@ -170,6 +181,10 @@ __all__ = [
     "PluginRuntime",
     "RuntimeDiagnostic",
     "RuntimeDiagnostics",
+    "RuntimeRegistrationIdentity",
+    "RuntimeRegistrationKind",
+    "RuntimeRegistrationOwner",
+    "RuntimeRegistrationOwnerKind",
     "PendingMarkSpec",
     "ScopeType",
     "SubscriberCallback",

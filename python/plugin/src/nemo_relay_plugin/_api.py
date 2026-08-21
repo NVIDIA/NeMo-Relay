@@ -121,6 +121,61 @@ class RuntimeDiagnostic:
     count: int
 
 
+class RuntimeRegistrationKind(str, Enum):
+    """Global runtime registration surfaces that a worker can gate."""
+
+    SUBSCRIBER = "subscriber"
+    EVENT_METADATA_INJECTOR = "event_metadata_injector"
+    MARK_SANITIZE_GUARDRAIL = "mark_sanitize_guardrail"
+    SCOPE_SANITIZE_START_GUARDRAIL = "scope_sanitize_start_guardrail"
+    SCOPE_SANITIZE_END_GUARDRAIL = "scope_sanitize_end_guardrail"
+    TOOL_SANITIZE_REQUEST_GUARDRAIL = "tool_sanitize_request_guardrail"
+    TOOL_SANITIZE_RESPONSE_GUARDRAIL = "tool_sanitize_response_guardrail"
+    TOOL_CONDITIONAL_EXECUTION_GUARDRAIL = "tool_conditional_execution_guardrail"
+    TOOL_REQUEST_INTERCEPT = "tool_request_intercept"
+    TOOL_EXECUTION_INTERCEPT = "tool_execution_intercept"
+    LLM_SANITIZE_REQUEST_GUARDRAIL = "llm_sanitize_request_guardrail"
+    LLM_SANITIZE_RESPONSE_GUARDRAIL = "llm_sanitize_response_guardrail"
+    LLM_CONDITIONAL_EXECUTION_GUARDRAIL = "llm_conditional_execution_guardrail"
+    LLM_REQUEST_INTERCEPT = "llm_request_intercept"
+    LLM_EXECUTION_INTERCEPT = "llm_execution_intercept"
+    LLM_STREAM_EXECUTION_INTERCEPT = "llm_stream_execution_intercept"
+
+
+class RuntimeRegistrationOwnerKind(str, Enum):
+    """Owner categories reported by host registration discovery."""
+
+    CORE = "core"
+    GLOBAL_API = "global_api"
+    PLUGIN = "plugin"
+
+
+@dataclass(frozen=True)
+class RuntimeRegistrationOwner:
+    """Owner metadata for a discovered runtime registration."""
+
+    kind: RuntimeRegistrationOwnerKind
+    plugin_kind: str | None = None
+    component_ordinal: int | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeRegistrationIdentity:
+    """Structured identity for a global gateable runtime registration."""
+
+    kind: RuntimeRegistrationKind
+    local_name: str
+    effective_name: str
+    owner: RuntimeRegistrationOwner
+
+
+@dataclass(frozen=True)
+class ConditionalMiddlewareGuardrailHandle:
+    """Opaque activation-owned key for removing a worker-created gate."""
+
+    _value: str = field(repr=False)
+
+
 @dataclass(frozen=True)
 class RuntimeDiagnostics:
     """Bounded snapshot of active host runtime diagnostics."""
@@ -969,6 +1024,7 @@ LlmStreamExecutionCallback: TypeAlias = Callable[
 @dataclass(slots=True)
 class _Handlers:
     registrations: list[Any]
+    conditional_middleware_guardrails: list[Any]
     subscribers: dict[str, SubscriberCallback]
     event_metadata_injectors: dict[str, EventMetadataInjectorCallback]
     mark_sanitizers: dict[str, EventSanitizeCallback]
@@ -990,6 +1046,7 @@ class _Handlers:
     def empty(cls) -> _Handlers:
         return cls(
             registrations=[],
+            conditional_middleware_guardrails=[],
             subscribers={},
             event_metadata_injectors={},
             mark_sanitizers={},
@@ -1073,6 +1130,23 @@ class PluginContext:
         """
         self._push_registration(name, pb.SUBSCRIBER, 0, False)
         self._handlers.subscribers[name] = callback
+
+    def register_conditional_middleware_guardrail(
+        self,
+        name: str,
+        kinds: set[RuntimeRegistrationKind],
+        registration_name: str,
+        reason: str,
+    ) -> None:
+        """Declare a host-resident gate installed with this activation."""
+        self._handlers.conditional_middleware_guardrails.append(
+            pb.ConditionalMiddlewareGuardrailRegistration(
+                name=name,
+                kinds=[_runtime_registration_surface(kind) for kind in kinds],
+                registration_name=registration_name,
+                reason=reason,
+            )
+        )
 
     def register_event_metadata_injector(
         self,
@@ -1444,6 +1518,77 @@ class PluginRuntime:
         self._activation_id = activation_id
         self._auth_token = auth_token
         self._host_stub = host_stub
+
+    async def list_runtime_registrations(
+        self, kinds: Iterable[RuntimeRegistrationKind] | None = None
+    ) -> list[RuntimeRegistrationIdentity]:
+        """List global gateable registrations known to the Relay host."""
+        selected = [] if kinds is None else [_runtime_registration_surface(kind) for kind in kinds]
+        response = await self._host_stub.ListRuntimeRegistrations(
+            pb.ListRuntimeRegistrationsRequest(
+                activation_id=self._activation_id,
+                auth_token=self._auth_token,
+                kinds=selected,
+            )
+        )
+        if response.HasField("error"):
+            raise _worker_error_to_sdk(response.error)
+        return [
+            RuntimeRegistrationIdentity(
+                kind=_runtime_registration_kind(registration.kind),
+                local_name=registration.local_name,
+                effective_name=registration.effective_name,
+                owner=RuntimeRegistrationOwner(
+                    kind=_runtime_registration_owner_kind(registration.owner.kind),
+                    plugin_kind=(
+                        registration.owner.plugin_kind if registration.owner.HasField("plugin_kind") else None
+                    ),
+                    component_ordinal=(
+                        registration.owner.component_ordinal
+                        if registration.owner.HasField("component_ordinal")
+                        else None
+                    ),
+                ),
+            )
+            for registration in response.registrations
+        ]
+
+    async def register_conditional_middleware_guardrail(
+        self,
+        name: str,
+        kinds: set[RuntimeRegistrationKind],
+        registration_name: str,
+        reason: str,
+    ) -> ConditionalMiddlewareGuardrailHandle:
+        """Register a host-resident gate owned by this worker activation."""
+        response = await self._host_stub.RegisterConditionalMiddlewareGuardrail(
+            pb.RegisterConditionalMiddlewareGuardrailRequest(
+                activation_id=self._activation_id,
+                auth_token=self._auth_token,
+                name=name,
+                kinds=[_runtime_registration_surface(kind) for kind in kinds],
+                registration_name=registration_name,
+                reason=reason,
+            )
+        )
+        if response.HasField("error"):
+            raise _worker_error_to_sdk(response.error)
+        return ConditionalMiddlewareGuardrailHandle(response.handle)
+
+    async def deregister_conditional_middleware_guardrail(self, handle: ConditionalMiddlewareGuardrailHandle) -> bool:
+        """Remove a host-resident gate owned by this worker activation."""
+        if not isinstance(handle, ConditionalMiddlewareGuardrailHandle):
+            raise TypeError("handle must be a ConditionalMiddlewareGuardrailHandle")
+        response = await self._host_stub.DeregisterConditionalMiddlewareGuardrail(
+            pb.DeregisterConditionalMiddlewareGuardrailRequest(
+                activation_id=self._activation_id,
+                auth_token=self._auth_token,
+                handle=handle._value,
+            )
+        )
+        if response.HasField("error"):
+            raise _worker_error_to_sdk(response.error)
+        return response.removed
 
     async def _decode_llm_codec_request(
         self, capability_id: str, invocation_id: str, request: LlmRequest
@@ -2104,18 +2249,27 @@ class _WorkerService(pb_grpc.PluginWorkerServicer):
             if self._registered_config is not _UNREGISTERED:
                 if config != self._registered_config:
                     raise WorkerSdkError("worker is already registered with a different component config")
-                return pb.RegisterResponse(registrations=self._handlers.registrations)
+                return pb.RegisterResponse(
+                    registrations=self._handlers.registrations,
+                    conditional_middleware_guardrails=self._handlers.conditional_middleware_guardrails,
+                )
             async with self._registration_lock:
                 if self._registered_config is not _UNREGISTERED:
                     if config != self._registered_config:
                         raise WorkerSdkError("worker is already registered with a different component config")
-                    return pb.RegisterResponse(registrations=self._handlers.registrations)
+                    return pb.RegisterResponse(
+                        registrations=self._handlers.registrations,
+                        conditional_middleware_guardrails=self._handlers.conditional_middleware_guardrails,
+                    )
                 registered_config = copy.deepcopy(config)
                 ctx = PluginContext(runtime=self._runtime)
                 await _maybe_await(self._plugin.register(ctx, config))
                 self._handlers = ctx._handlers
                 self._registered_config = registered_config
-                return pb.RegisterResponse(registrations=ctx._handlers.registrations)
+                return pb.RegisterResponse(
+                    registrations=ctx._handlers.registrations,
+                    conditional_middleware_guardrails=ctx._handlers.conditional_middleware_guardrails,
+                )
         except Exception as exc:  # noqa: BLE001 - callback failure is protocol data.
             return pb.RegisterResponse(error=_sdk_error_to_worker(exc))
 
@@ -2672,6 +2826,48 @@ async def _as_async_iter(value: Iterable[Json] | AsyncIterator[Json]) -> AsyncIt
         raise WorkerSdkError("stream callback must return an iterable or async iterator of JSON chunks")
     for item in value:
         yield item
+
+
+def _runtime_registration_surface(kind: RuntimeRegistrationKind | str) -> int:
+    value = RuntimeRegistrationKind(kind)
+    mapping = {
+        RuntimeRegistrationKind.SUBSCRIBER: pb.SUBSCRIBER,
+        RuntimeRegistrationKind.EVENT_METADATA_INJECTOR: pb.EVENT_METADATA_INJECTOR,
+        RuntimeRegistrationKind.MARK_SANITIZE_GUARDRAIL: pb.MARK_SANITIZE_GUARDRAIL,
+        RuntimeRegistrationKind.SCOPE_SANITIZE_START_GUARDRAIL: pb.SCOPE_SANITIZE_START_GUARDRAIL,
+        RuntimeRegistrationKind.SCOPE_SANITIZE_END_GUARDRAIL: pb.SCOPE_SANITIZE_END_GUARDRAIL,
+        RuntimeRegistrationKind.TOOL_SANITIZE_REQUEST_GUARDRAIL: pb.TOOL_SANITIZE_REQUEST_GUARDRAIL,
+        RuntimeRegistrationKind.TOOL_SANITIZE_RESPONSE_GUARDRAIL: pb.TOOL_SANITIZE_RESPONSE_GUARDRAIL,
+        RuntimeRegistrationKind.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL: pb.TOOL_CONDITIONAL_EXECUTION_GUARDRAIL,
+        RuntimeRegistrationKind.TOOL_REQUEST_INTERCEPT: pb.TOOL_REQUEST_INTERCEPT,
+        RuntimeRegistrationKind.TOOL_EXECUTION_INTERCEPT: pb.TOOL_EXECUTION_INTERCEPT,
+        RuntimeRegistrationKind.LLM_SANITIZE_REQUEST_GUARDRAIL: pb.LLM_SANITIZE_REQUEST_GUARDRAIL,
+        RuntimeRegistrationKind.LLM_SANITIZE_RESPONSE_GUARDRAIL: pb.LLM_SANITIZE_RESPONSE_GUARDRAIL,
+        RuntimeRegistrationKind.LLM_CONDITIONAL_EXECUTION_GUARDRAIL: pb.LLM_CONDITIONAL_EXECUTION_GUARDRAIL,
+        RuntimeRegistrationKind.LLM_REQUEST_INTERCEPT: pb.LLM_REQUEST_INTERCEPT,
+        RuntimeRegistrationKind.LLM_EXECUTION_INTERCEPT: pb.LLM_EXECUTION_INTERCEPT,
+        RuntimeRegistrationKind.LLM_STREAM_EXECUTION_INTERCEPT: pb.LLM_STREAM_EXECUTION_INTERCEPT,
+    }
+    return mapping[value]
+
+
+def _runtime_registration_kind(surface: int) -> RuntimeRegistrationKind:
+    for kind in RuntimeRegistrationKind:
+        if _runtime_registration_surface(kind) == surface:
+            return kind
+    raise WorkerSdkError(f"unknown runtime registration kind: {surface}")
+
+
+def _runtime_registration_owner_kind(value: int) -> RuntimeRegistrationOwnerKind:
+    mapping = {
+        pb.RUNTIME_REGISTRATION_OWNER_KIND_CORE: RuntimeRegistrationOwnerKind.CORE,
+        pb.RUNTIME_REGISTRATION_OWNER_KIND_GLOBAL_API: RuntimeRegistrationOwnerKind.GLOBAL_API,
+        pb.RUNTIME_REGISTRATION_OWNER_KIND_PLUGIN: RuntimeRegistrationOwnerKind.PLUGIN,
+    }
+    try:
+        return mapping[value]
+    except KeyError as exc:
+        raise WorkerSdkError(f"unknown runtime registration owner kind: {value}") from exc
 
 
 def _proto_scope_type(scope_type: ScopeType | str) -> int:

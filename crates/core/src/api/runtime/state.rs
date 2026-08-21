@@ -26,7 +26,10 @@ use crate::api::event::{
 };
 use crate::api::llm::{CreateLlmHandleParams, EndLlmHandleParams};
 use crate::api::llm::{LlmHandle, LlmRequest};
-use crate::api::registry::{EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept};
+use crate::api::registry::{
+    EventMetadataInjector, ExecutionIntercept, Guardrail, Intercept, RuntimeRegistrationKind,
+    runtime_registration_is_enabled,
+};
 use crate::api::runtime::ScopeStackHandle;
 use crate::api::runtime::callbacks::{
     EventSanitizeFn, EventSubscriberFn, LlmConditionalFn, LlmExecutionFn, LlmExecutionNextFn,
@@ -281,6 +284,79 @@ impl NemoRelayContextState {
         }
     }
 
+    /// Clone the requested registration-bearing portions of runtime state.
+    ///
+    /// Eligibility callbacks must run without holding the process-global
+    /// runtime-state lock. Callers use this snapshot to release that lock
+    /// before resolving conditional middleware guardrails. Unrequested
+    /// registries and runtime extensions are intentionally excluded.
+    pub(crate) fn registry_snapshot(&self, kinds: &[RuntimeRegistrationKind]) -> Self {
+        let mut snapshot = Self::new();
+        snapshot.observability_full_payloads_enabled = self.observability_full_payloads_enabled;
+        for kind in kinds {
+            match kind {
+                RuntimeRegistrationKind::Subscriber => {
+                    snapshot.event_subscribers = self.event_subscribers.clone();
+                }
+                RuntimeRegistrationKind::EventMetadataInjector => {
+                    snapshot.event_metadata_injectors = self.event_metadata_injectors.clone();
+                }
+                RuntimeRegistrationKind::MarkSanitizeGuardrail => {
+                    snapshot.mark_sanitize_guardrails = self.mark_sanitize_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ScopeSanitizeStartGuardrail => {
+                    snapshot.scope_sanitize_start_guardrails =
+                        self.scope_sanitize_start_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ScopeSanitizeEndGuardrail => {
+                    snapshot.scope_sanitize_end_guardrails =
+                        self.scope_sanitize_end_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolSanitizeRequestGuardrail => {
+                    snapshot.tool_sanitize_request_guardrails =
+                        self.tool_sanitize_request_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolSanitizeResponseGuardrail => {
+                    snapshot.tool_sanitize_response_guardrails =
+                        self.tool_sanitize_response_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolConditionalExecutionGuardrail => {
+                    snapshot.tool_conditional_execution_guardrails =
+                        self.tool_conditional_execution_guardrails.clone();
+                }
+                RuntimeRegistrationKind::ToolRequestIntercept => {
+                    snapshot.tool_request_intercepts = self.tool_request_intercepts.clone();
+                }
+                RuntimeRegistrationKind::ToolExecutionIntercept => {
+                    snapshot.tool_execution_intercepts = self.tool_execution_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmSanitizeRequestGuardrail => {
+                    snapshot.llm_sanitize_request_guardrails =
+                        self.llm_sanitize_request_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmSanitizeResponseGuardrail => {
+                    snapshot.llm_sanitize_response_guardrails =
+                        self.llm_sanitize_response_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmConditionalExecutionGuardrail => {
+                    snapshot.llm_conditional_execution_guardrails =
+                        self.llm_conditional_execution_guardrails.clone();
+                }
+                RuntimeRegistrationKind::LlmRequestIntercept => {
+                    snapshot.llm_request_intercepts = self.llm_request_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmExecutionIntercept => {
+                    snapshot.llm_execution_intercepts = self.llm_execution_intercepts.clone();
+                }
+                RuntimeRegistrationKind::LlmStreamExecutionIntercept => {
+                    snapshot.llm_stream_execution_intercepts =
+                        self.llm_stream_execution_intercepts.clone();
+                }
+            }
+        }
+        snapshot
+    }
+
     /// Store an arbitrary runtime extension under `key`.
     ///
     /// Extensions let bindings or integrations attach shared state to the
@@ -348,7 +424,14 @@ impl NemoRelayContextState {
     ) -> Vec<EventSubscriberFn> {
         let mut subscribers =
             Vec::with_capacity(self.event_subscribers.len() + scope_local_subscribers.len());
-        subscribers.extend(self.event_subscribers.values().cloned());
+        subscribers.extend(
+            self.event_subscribers
+                .iter()
+                .filter(|(name, _)| {
+                    runtime_registration_is_enabled(RuntimeRegistrationKind::Subscriber, name)
+                })
+                .map(|(_, callback)| callback.clone()),
+        );
         subscribers.extend(scope_local_subscribers.iter().cloned());
         subscribers
     }
@@ -796,8 +879,9 @@ impl NemoRelayContextState {
     pub(crate) fn event_sanitize_entries(
         global: &SortedRegistry<Guardrail<EventSanitizeFn>>,
         scope_locals: &[&SortedRegistry<Guardrail<EventSanitizeFn>>],
+        kind: RuntimeRegistrationKind,
     ) -> Vec<Guardrail<EventSanitizeFn>> {
-        merge_guardrail_entries(global, scope_locals)
+        merge_guardrail_entries(global, scope_locals, kind)
             .into_iter()
             .cloned()
             .collect()
@@ -947,10 +1031,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Vec<Guardrail<ToolSanitizeFn>> {
-        merge_guardrail_entries(&self.tool_sanitize_request_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.tool_sanitize_request_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::ToolSanitizeRequestGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of tool request sanitizers in priority order.
@@ -1011,10 +1099,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolSanitizeFn>>],
     ) -> Vec<Guardrail<ToolSanitizeFn>> {
-        merge_guardrail_entries(&self.tool_sanitize_response_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.tool_sanitize_response_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::ToolSanitizeResponseGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of tool response sanitizers in priority order.
@@ -1076,10 +1168,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<ToolConditionalFn>>],
     ) -> Vec<Guardrail<ToolConditionalFn>> {
-        merge_guardrail_entries(&self.tool_conditional_execution_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.tool_conditional_execution_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Evaluate a snapshot of tool conditional-execution guardrails in priority order.
@@ -1180,10 +1276,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Intercept<ToolInterceptFn>>],
     ) -> Vec<Intercept<ToolInterceptFn>> {
-        merge_intercept_entries(&self.tool_request_intercepts, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_intercept_entries(
+            &self.tool_request_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::ToolRequestIntercept,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of tool request intercepts in priority order.
@@ -1247,8 +1347,11 @@ impl NemoRelayContextState {
         default_fn: ToolExecutionNextFn,
         scope_locals: &[&SortedRegistry<ExecutionIntercept<ToolExecutionFn>>],
     ) -> ToolExecutionOutcomeNextFn {
-        let matching =
-            merge_execution_intercept_callables(&self.tool_execution_intercepts, scope_locals);
+        let matching = merge_execution_intercept_callables(
+            &self.tool_execution_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::ToolExecutionIntercept,
+        );
         let mut next: ToolExecutionOutcomeNextFn = Arc::new(move |args| {
             let default_fn = default_fn.clone();
             Box::pin(async move {
@@ -1325,10 +1428,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeRequestFn>>],
     ) -> Vec<Guardrail<LlmSanitizeRequestFn>> {
-        merge_guardrail_entries(&self.llm_sanitize_request_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.llm_sanitize_request_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::LlmSanitizeRequestGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of LLM request sanitizers in priority order.
@@ -1393,10 +1500,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmSanitizeResponseFn>>],
     ) -> Vec<Guardrail<LlmSanitizeResponseFn>> {
-        merge_guardrail_entries(&self.llm_sanitize_response_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.llm_sanitize_response_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::LlmSanitizeResponseGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of LLM response sanitizers in priority order.
@@ -1461,10 +1572,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Guardrail<LlmConditionalFn>>],
     ) -> Vec<Guardrail<LlmConditionalFn>> {
-        merge_guardrail_entries(&self.llm_conditional_execution_guardrails, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_guardrail_entries(
+            &self.llm_conditional_execution_guardrails,
+            scope_locals,
+            RuntimeRegistrationKind::LlmConditionalExecutionGuardrail,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Evaluate a snapshot of LLM conditional-execution guardrails in priority order.
@@ -1560,10 +1675,14 @@ impl NemoRelayContextState {
         &self,
         scope_locals: &[&SortedRegistry<Intercept<LlmRequestInterceptFn>>],
     ) -> Vec<Intercept<LlmRequestInterceptFn>> {
-        merge_intercept_entries(&self.llm_request_intercepts, scope_locals)
-            .into_iter()
-            .cloned()
-            .collect()
+        merge_intercept_entries(
+            &self.llm_request_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::LlmRequestIntercept,
+        )
+        .into_iter()
+        .cloned()
+        .collect()
     }
 
     /// Run a snapshot of LLM request intercepts in priority order.
@@ -1687,8 +1806,11 @@ impl NemoRelayContextState {
         default_fn: LlmExecutionNextFn,
         scope_locals: &[&SortedRegistry<ExecutionIntercept<LlmExecutionFn>>],
     ) -> LlmExecutionNextFn {
-        let matching =
-            merge_execution_intercept_callables(&self.llm_execution_intercepts, scope_locals);
+        let matching = merge_execution_intercept_callables(
+            &self.llm_execution_intercepts,
+            scope_locals,
+            RuntimeRegistrationKind::LlmExecutionIntercept,
+        );
         let mut next = default_fn;
         let name = name.to_string();
         for (callable, _) in matching.into_iter().rev() {
@@ -1738,6 +1860,7 @@ impl NemoRelayContextState {
         let matching = merge_execution_intercept_callables(
             &self.llm_stream_execution_intercepts,
             scope_locals,
+            RuntimeRegistrationKind::LlmStreamExecutionIntercept,
         );
         let mut next = default_fn;
         let name = name.to_string();
