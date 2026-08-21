@@ -1174,12 +1174,65 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         "endpoints[0].scheduled_delay_millis",
     ] {
         assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.field.as_deref() == Some(field)),
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.field.as_deref() == Some(field) && diagnostic.message.contains(field)
+            }),
             "missing diagnostic for {field}: {diagnostics:?}"
         );
     }
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("endpoints[0].max_export_batch_size")
+            && diagnostic
+                .message
+                .contains("endpoints[0].max_export_batch_size")
+            && diagnostic
+                .message
+                .contains("less than or equal to max_queue_size")
+    }));
+}
+
+#[test]
+fn invalid_batch_config_identifies_the_endpoint_during_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "full",
+                    "endpoint": "http://jaeger-local:4318/v1/traces",
+                    "max_queue_size": 256
+                },
+                {
+                    "type": "full",
+                    "endpoint": "http://tempo-prod:4319/v1/traces",
+                    "max_queue_size": 0
+                },
+                {
+                    "type": "full",
+                    "endpoint": "http://compliance:4320/v1/traces",
+                    "max_queue_size": 128
+                }
+            ]
+        }
+    }));
+
+    let report = validate_plugin_config(&config);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("endpoints[1].max_queue_size")
+            && diagnostic
+                .message
+                .contains("OpenTelemetry endpoints[1].max_queue_size must be greater than 0")
+    }));
+
+    let error = futures::executor::block_on(initialize_plugins_exact(config)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("OpenTelemetry endpoints[1].max_queue_size must be greater than 0")
+    );
 }
 
 #[test]

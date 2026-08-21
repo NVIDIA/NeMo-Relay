@@ -3839,7 +3839,7 @@ fn validate_opentelemetry_batch_config(
                 "observability.unsupported_value",
                 Some("opentelemetry".to_string()),
                 Some(format!("endpoints[{index}].{field}")),
-                format!("OpenTelemetry endpoint {field} must be greater than 0"),
+                format!("OpenTelemetry endpoints[{index}].{field} must be greater than 0"),
             );
         }
     }
@@ -3853,8 +3853,9 @@ fn validate_opentelemetry_batch_config(
             "observability.unsupported_value",
             Some("opentelemetry".to_string()),
             Some(format!("endpoints[{index}].max_export_batch_size")),
-            "OpenTelemetry endpoint max_export_batch_size must be less than or equal to max_queue_size"
-                .to_string(),
+            format!(
+                "OpenTelemetry endpoints[{index}].max_export_batch_size must be less than or equal to max_queue_size"
+            ),
         );
     }
 }
