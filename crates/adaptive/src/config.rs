@@ -7,7 +7,7 @@ use nemo_relay::plugin::ConfigPolicy;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
-use crate::response_cache::config::{BackendConfig, KEY_STRATEGY_EXACT_REQUEST, ToolCacheConfig};
+use crate::response_cache::config::{BackendConfig, ResponseCacheKeyStrategy, ToolCacheConfig};
 
 /// Canonical config document for the adaptive plugin component.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,8 +212,8 @@ pub struct ResponseCacheConfig {
     /// requests explicitly pinned deterministic (`temperature` = 0) — absent
     /// or unreadable temperatures count as nondeterministic.
     pub cache_nondeterministic: bool,
-    /// Key strategy. Only [`KEY_STRATEGY_EXACT_REQUEST`] is supported.
-    pub key_strategy: String,
+    /// Typed key-derivation strategy.
+    pub key_strategy: ResponseCacheKeyStrategy,
     /// Request headers (case-insensitive) folded into the key; never auth headers.
     pub header_allowlist: Vec<String>,
     /// Storage backend selection.
@@ -231,7 +231,7 @@ impl Default for ResponseCacheConfig {
             priority: 50,
             bypass_rate: 0.0,
             cache_nondeterministic: false,
-            key_strategy: KEY_STRATEGY_EXACT_REQUEST.to_string(),
+            key_strategy: ResponseCacheKeyStrategy::ExactRequest,
             header_allowlist: Vec::new(),
             backend: BackendConfig::default(),
             tools: None,
@@ -402,7 +402,7 @@ nemo_relay::editor_config! {
         priority => { label: "priority", kind: Integer },
         bypass_rate => { label: "bypass_rate", kind: Float },
         cache_nondeterministic => { label: "cache_nondeterministic", kind: Boolean },
-        key_strategy => { label: "key_strategy", kind: String },
+        key_strategy => { label: "key_strategy", kind: Enum, values: ["exact_request", "logical"] },
         header_allowlist => { label: "header_allowlist", kind: Json },
         backend => {
             label: "backend",

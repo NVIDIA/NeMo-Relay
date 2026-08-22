@@ -993,6 +993,13 @@ fn tool_key_with_error_policy(
     }
 }
 
+fn logical_config() -> ResponseCacheConfig {
+    ResponseCacheConfig {
+        key_strategy: ResponseCacheKeyStrategy::Logical,
+        ..cache_all_config()
+    }
+}
+
 #[test]
 fn same_tool_and_args_yield_the_same_key() {
     let args = json!({"q": "weather", "units": "metric"});
@@ -1295,5 +1302,155 @@ fn decode_round_trip_guards_fall_back_to_raw_tool_and_message_shapes() {
     assert_eq!(
         resolved_body("openai", &legacy_message_request),
         (legacy_message_request.content.clone(), None)
+    );
+}
+
+// --- `logical` key strategy (structural tool-schema hash) ---------
+
+const LOGICAL_KEY_MODEL: &str = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+
+fn tool(name: &str, description: &str, param: &str, param_type: &str) -> Json {
+    json!({
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {param: {"type": param_type, "description": "a param"}}
+            }
+        }
+    })
+}
+
+#[test]
+fn logical_ignores_tool_description_and_order() {
+    let a = request(json!({
+        "model": LOGICAL_KEY_MODEL,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [tool("get_weather", "Get the weather.", "city", "string"),
+                  tool("get_time", "Get the time.", "tz", "string")]
+    }));
+    let b = request(json!({
+        "model": LOGICAL_KEY_MODEL,
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [tool("get_time", "Return the current time.", "tz", "string"),
+                  tool("get_weather", "Look up weather, reworded.", "city", "string")]
+    }));
+    assert_eq!(
+        key_of("openai", &a, &logical_config()),
+        key_of("openai", &b, &logical_config()),
+        "logical keying must ignore tool description text and tool order"
+    );
+    assert_ne!(
+        key_of("openai", &a, &cache_all_config()),
+        key_of("openai", &b, &cache_all_config()),
+        "exact_request must not collapse reworded/reordered tools"
+    );
+}
+
+#[test]
+fn structural_tool_schema_sorts_on_canonical_bytes() {
+    // RFC 8785 formats 1.0 and 1 identically, so two JCS-identical tool
+    // sets must sort (and therefore hash) identically; a serde_json
+    // Display sort key would order them differently around 1.5.
+    let a = json!([{"x": 1.0}, {"x": 1.5}]);
+    let b = json!([{"x": 1.5}, {"x": 1}]);
+    assert_eq!(
+        fingerprint(&structural_tool_schema(&a)),
+        fingerprint(&structural_tool_schema(&b)),
+        "JCS-identical tool sets must produce one key regardless of number formatting"
+    );
+}
+
+#[test]
+fn logical_differs_on_changed_tool_interface() {
+    let cfg = logical_config();
+    let base = request(json!({
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
+        "tools": [tool("get_weather", "d", "city", "string")]
+    }));
+    let renamed = request(json!({
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
+        "tools": [tool("get_weather", "d", "location", "string")]
+    }));
+    let retyped = request(json!({
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
+        "tools": [tool("get_weather", "d", "city", "number")]
+    }));
+    assert_ne!(
+        key_of("openai", &base, &cfg),
+        key_of("openai", &renamed, &cfg),
+        "a renamed parameter must change the key"
+    );
+    assert_ne!(
+        key_of("openai", &base, &cfg),
+        key_of("openai", &retyped, &cfg),
+        "a changed parameter type must change the key"
+    );
+}
+
+#[test]
+fn logical_differs_on_distinct_builtin_tools() {
+    let cfg = logical_config();
+    let with_builtin = |tool: Json| {
+        request(json!({
+            "model": LOGICAL_KEY_MODEL,
+            "input": "search the docs",
+            "store": false,
+            "tools": [tool]
+        }))
+    };
+    assert_ne!(
+        key_of(
+            "openai",
+            &with_builtin(json!({"type": "web_search_preview"})),
+            &cfg
+        ),
+        key_of(
+            "openai",
+            &with_builtin(json!({"type": "code_interpreter", "container": {"type": "auto"}})),
+            &cfg,
+        ),
+        "tools without a function schema must keep their definitions in the key"
+    );
+}
+
+#[test]
+fn logical_differs_on_changed_parameter_enum() {
+    let cfg = logical_config();
+    let with_units = |units: Json| {
+        request(json!({
+            "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "function", "function": {
+                "name": "get_weather",
+                "parameters": {"type": "object", "properties": {
+                    "unit": {"type": "string", "enum": units}
+                }}
+            }}]
+        }))
+    };
+    assert_ne!(
+        key_of(
+            "openai",
+            &with_units(json!(["celsius", "fahrenheit"])),
+            &cfg
+        ),
+        key_of("openai", &with_units(json!(["kelvin"])), &cfg),
+        "a changed parameter enum must change the key"
+    );
+}
+
+#[test]
+fn logical_and_exact_do_not_collide() {
+    // Tool-less, so both strategies key the identical body and only the
+    // strategy field in the key document separates them.
+    let req = request(json!({
+        "model": LOGICAL_KEY_MODEL, "messages": [{"role": "user", "content": "hi"}]
+    }));
+    assert_ne!(
+        key_of("openai", &req, &logical_config()),
+        key_of("openai", &req, &cache_all_config()),
+        "logical and exact_request must not share keys (strategy is folded in)"
     );
 }
