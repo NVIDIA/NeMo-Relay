@@ -369,7 +369,7 @@ impl OpenTelemetryMetricSubscriber {
         self.inner
             .provider
             .force_flush()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()))
     }
 
     /// Shut down the meter provider, including its final collection.
@@ -381,7 +381,7 @@ impl OpenTelemetryMetricSubscriber {
             .inner
             .provider
             .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()));
+            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()));
         barrier.and(provider)
     }
 
@@ -389,7 +389,7 @@ impl OpenTelemetryMetricSubscriber {
         self.inner
             .provider
             .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::MetricProvider(error.to_string()))
     }
 
     pub(crate) fn delivery_failure_summary(&self) -> Option<String> {

@@ -299,7 +299,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-## aiohttp (3.14.1)
+## aiohttp (3.14.3)
 
 ### Licenses
 License: `Apache-2.0 AND MIT`
@@ -1442,7 +1442,7 @@ Apache License
    END OF TERMS AND CONDITIONS
 ```
 
-## cryptography (48.0.0)
+## cryptography (50.0.0)
 
 ### Licenses
 License: `Apache-2.0 OR BSD-3-Clause`
@@ -3520,7 +3520,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-## idna (3.11)
+## idna (3.19)
 
 ### Licenses
 License: `BSD-3-Clause`
@@ -3529,7 +3529,7 @@ License: `BSD-3-Clause`
 ```
 BSD 3-Clause License
 
-Copyright (c) 2013-2025, Kim Davies and contributors.
+Copyright (c) 2013-2026, Kim Davies and contributors.
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -3749,7 +3749,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## langchain (1.3.14)
+## langchain (1.3.16)
 
 ### Licenses
 License: `MIT`
@@ -3809,14 +3809,34 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langchain-core (1.5.3)
+## langchain-core (1.6.0)
 
 ### Licenses
 License: `MIT`
 
   - `LICENSE`:
 ```
-(No license file found in locked artifact for langchain-core; see package metadata or PyPI.)
+MIT License
+
+Copyright (c) LangChain, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ## langchain-google-genai (4.3.2)
@@ -3909,7 +3929,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## langgraph (1.2.9)
+## langgraph (1.2.11)
 
 ### Licenses
 License: `MIT`
@@ -5342,7 +5362,7 @@ Apache License
    limitations under the License.
 ```
 
-## protobuf (7.35.1)
+## protobuf (7.36.0)
 
 ### Licenses
 License: `BSD-3-Clause`
@@ -5437,7 +5457,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## pyasn1 (0.6.3)
+## pyasn1 (0.6.4)
 
 ### Licenses
 License: `BSD-2-Clause`

@@ -4,6 +4,7 @@
 use serde_json::json;
 
 use crate::api::event::{BaseEvent, Event, MarkEvent, PendingMarkSpec};
+use crate::api::registry::RuntimeRegistrationKind;
 use crate::api::runtime::NemoRelayContextState;
 use crate::api::runtime::current_scope_stack;
 use crate::api::runtime::global_context;
@@ -252,21 +253,27 @@ pub struct ToolCallEndParams<'a> {
 pub fn tool_call(params: ToolCallParams<'_>) -> Result<ToolHandle> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
-    let (entries, subscribers) = {
+    let (scope_locals, scope_subscribers) = {
         let scope_guard = scope_stack
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_sanitize_request_guardrails
-        });
-        let subscribers =
-            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
+        (
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_request_guardrails
+            }),
+            scope_guard.collect_scope_local_subscribers(),
+        )
+    };
+    let (entries, subscribers) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeRequestGuardrail]);
         (
-            state.tool_sanitize_request_entries(&scope_locals),
+            state.tool_sanitize_request_entries(&scope_local_refs),
             subscribers,
         )
     };
@@ -343,18 +350,24 @@ async fn tool_call_with_subscriber_snapshot(
     ensure_runtime_owner()?;
     let parent_uuid = resolve_parent_uuid(params.parent);
     let scope_stack = current_scope_stack();
-    let (entries, subscribers) = {
+    let (scope_locals, scope_subscribers) = {
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_sanitize_request_guardrails
-        });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        (
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_request_guardrails
+            }),
+            scope_guard.collect_scope_local_subscribers(),
+        )
+    };
+    let (entries, subscribers) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.tool_sanitize_request_entries(&scope_locals);
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeRequestGuardrail]);
+        let entries = state.tool_sanitize_request_entries(&scope_local_refs);
         (entries, subscribers)
     };
     let skill_loads = resolve_skill_loads(params.name, &params.args, params.metadata.as_ref());
@@ -457,21 +470,27 @@ async fn tool_call_with_subscriber_snapshot(
 pub fn tool_call_end(params: ToolCallEndParams<'_>) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
-    let (entries, subscribers) = {
+    let (scope_locals, scope_subscribers) = {
         let scope_guard = scope_stack
             .read()
             .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_sanitize_response_guardrails
-        });
-        let subscribers =
-            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?;
+        (
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_response_guardrails
+            }),
+            scope_guard.collect_scope_local_subscribers(),
+        )
+    };
+    let (entries, subscribers) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
+        let subscribers = snapshot_event_subscribers(scope_subscribers)?;
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeResponseGuardrail]);
         (
-            state.tool_sanitize_response_entries(&scope_locals),
+            state.tool_sanitize_response_entries(&scope_local_refs),
             subscribers,
         )
     };
@@ -528,21 +547,28 @@ async fn tool_call_end_with_pending_marks(
 ) -> Result<()> {
     ensure_runtime_owner()?;
     let scope_stack = current_scope_stack();
-    let (entries, subscribers) = {
+    let (scope_locals, scope_subscribers) = {
         let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_sanitize_response_guardrails
-        });
+        (
+            scope_guard.snapshot_scope_local_registries(|registries| {
+                &registries.tool_sanitize_response_guardrails
+            }),
+            scope_guard.collect_scope_local_subscribers(),
+        )
+    };
+    let (entries, subscribers) = {
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let subscribers = if lifecycle_subscribers.is_some() {
             Vec::new()
         } else {
-            snapshot_event_subscribers(scope_guard.collect_scope_local_subscribers())?
+            snapshot_event_subscribers(scope_subscribers)?
         };
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.tool_sanitize_response_entries(&scope_locals);
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolSanitizeResponseGuardrail]);
+        let entries = state.tool_sanitize_response_entries(&scope_local_refs);
         (entries, subscribers)
     };
     let subscribers = lifecycle_subscribers.unwrap_or(&subscribers);
@@ -754,16 +780,25 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
     {
         let (entries, subscribers, parent_uuid, guardrail_metadata) = {
             let scope_stack = current_scope_stack();
-            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-            let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-                &registries.tool_conditional_execution_guardrails
-            });
-            let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+            let (scope_locals, scope_subscribers) = {
+                let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+                (
+                    scope_guard.snapshot_scope_local_registries(|registries| {
+                        &registries.tool_conditional_execution_guardrails
+                    }),
+                    scope_guard.collect_scope_local_subscribers(),
+                )
+            };
+            let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
             let context = global_context();
             let state = context
                 .read()
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
-            let entries = state.tool_conditional_execution_entries(&scope_locals);
+                .map_err(|error| FlowError::Internal(error.to_string()))?
+                .registry_snapshot(&[
+                    RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+                    RuntimeRegistrationKind::Subscriber,
+                ]);
+            let entries = state.tool_conditional_execution_entries(&scope_local_refs);
             let subscribers = state.collect_event_subscribers(&scope_subscribers);
             (
                 entries,
@@ -801,14 +836,17 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
 
     let intercept_entries = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard
-            .collect_scope_local_registries(|registries| &registries.tool_request_intercepts);
+        let scope_locals = scope_stack
+            .read()
+            .expect("scope stack lock poisoned")
+            .snapshot_scope_local_registries(|registries| &registries.tool_request_intercepts);
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.tool_request_intercept_entries(&scope_locals)
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolRequestIntercept]);
+        state.tool_request_intercept_entries(&scope_local_refs)
     };
     let intercepted_args = NemoRelayContextState::tool_request_intercepts_snapshot_chain(
         &name,
@@ -841,14 +879,19 @@ pub async fn tool_call_execute(params: ToolCallExecuteParams) -> Result<ToolExec
     let execution = with_active_event_uuid(handle.uuid, async move {
         let execution = {
             let scope_stack = current_scope_stack();
-            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-            let scope_locals = scope_guard
-                .collect_scope_local_registries(|registries| &registries.tool_execution_intercepts);
+            let scope_locals = scope_stack
+                .read()
+                .expect("scope stack lock poisoned")
+                .snapshot_scope_local_registries(|registries| {
+                    &registries.tool_execution_intercepts
+                });
+            let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
             let context = global_context();
             let state = context
                 .read()
-                .map_err(|error| FlowError::Internal(error.to_string()))?;
-            state.tool_build_execution_chain(&execution_name, func, &scope_locals)
+                .map_err(|error| FlowError::Internal(error.to_string()))?
+                .registry_snapshot(&[RuntimeRegistrationKind::ToolExecutionIntercept]);
+            state.tool_build_execution_chain(&execution_name, func, &scope_local_refs)
         };
         execution(intercepted_args).await
     })
@@ -907,14 +950,17 @@ pub async fn tool_request_intercepts(name: &str, args: Json) -> Result<Json> {
     ensure_runtime_owner()?;
     let entries = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard
-            .collect_scope_local_registries(|registries| &registries.tool_request_intercepts);
+        let scope_locals = scope_stack
+            .read()
+            .expect("scope stack lock poisoned")
+            .snapshot_scope_local_registries(|registries| &registries.tool_request_intercepts);
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        state.tool_request_intercept_entries(&scope_locals)
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[RuntimeRegistrationKind::ToolRequestIntercept]);
+        state.tool_request_intercept_entries(&scope_local_refs)
     };
     NemoRelayContextState::tool_request_intercepts_snapshot_chain(name, args, &entries).await
 }
@@ -944,16 +990,25 @@ pub async fn tool_conditional_execution(name: &str, args: &Json) -> Result<()> {
     ensure_runtime_owner()?;
     let (entries, subscribers, parent_uuid) = {
         let scope_stack = current_scope_stack();
-        let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
-        let scope_locals = scope_guard.collect_scope_local_registries(|registries| {
-            &registries.tool_conditional_execution_guardrails
-        });
-        let scope_subscribers = scope_guard.collect_scope_local_subscribers();
+        let (scope_locals, scope_subscribers) = {
+            let scope_guard = scope_stack.read().expect("scope stack lock poisoned");
+            (
+                scope_guard.snapshot_scope_local_registries(|registries| {
+                    &registries.tool_conditional_execution_guardrails
+                }),
+                scope_guard.collect_scope_local_subscribers(),
+            )
+        };
+        let scope_local_refs = scope_locals.iter().collect::<Vec<_>>();
         let context = global_context();
         let state = context
             .read()
-            .map_err(|error| FlowError::Internal(error.to_string()))?;
-        let entries = state.tool_conditional_execution_entries(&scope_locals);
+            .map_err(|error| FlowError::Internal(error.to_string()))?
+            .registry_snapshot(&[
+                RuntimeRegistrationKind::ToolConditionalExecutionGuardrail,
+                RuntimeRegistrationKind::Subscriber,
+            ]);
+        let entries = state.tool_conditional_execution_entries(&scope_local_refs);
         let subscribers = state.collect_event_subscribers(&scope_subscribers);
         (entries, subscribers, resolve_parent_uuid(None))
     };

@@ -27,6 +27,7 @@ from typing import Literal, Optional, TypeAlias, TypedDict
 
 from nemo_relay import adaptive as adaptive
 from nemo_relay import codecs as codecs
+from nemo_relay import event_metadata as event_metadata
 from nemo_relay import guardrails as guardrails
 from nemo_relay import intercepts as intercepts
 from nemo_relay import llm as llm
@@ -232,6 +233,14 @@ Exceptional flow:
     Exceptions fail closed, clear the mutable observability fields, and stop
     the remaining sanitizer chain.
 """
+EventMetadataScalar: TypeAlias = str | int | float | bool
+EventMetadataValue: TypeAlias = EventMetadataScalar | list[str] | list[int] | list[float] | list[bool]
+EventMetadata: TypeAlias = dict[str, EventMetadataValue]
+EventMetadataInjectorCallback: TypeAlias = Callable[
+    [Event],
+    EventMetadata | Awaitable[EventMetadata],
+]
+"""Additive middleware callback that returns flat event metadata additions."""
 ToolConditionalExecutionGuardrail: TypeAlias = Callable[[str, Json], Optional[str] | Awaitable[Optional[str]]]
 """Guardrail callback that can block tool execution.
 

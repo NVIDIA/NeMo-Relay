@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use nemo_relay_worker::{
     ConfigDiagnostic, DiagnosticLevel, EventSanitizeFields, Json, LlmRequest,
     METRIC_DATA_SCHEMA_NAME, MetricKind, MetricMeasurement, MetricValueType, PendingMarkSpec,
 };
 use nemo_relay_worker::{
-    JsonStream, LlmNext, LlmStreamNext, PluginContext, ScopeType, ToolExecutionInterceptOutcome,
-    ToolNext, WorkerPlugin, WorkerSdkError, serve_plugin,
+    JsonStream, LlmNext, LlmStreamNext, PluginContext, RuntimeRegistrationKind, ScopeType,
+    ToolExecutionInterceptOutcome, ToolNext, WorkerPlugin, WorkerSdkError, serve_plugin,
 };
 use serde_json::json;
 
@@ -142,6 +142,12 @@ impl WorkerPlugin for FixtureWorkerPlugin {
             |_, fields| async move { Ok(mark_event_fields(fields, "worker_plugin_scope_end")) },
         );
         register_fixture_subscriber(ctx, runtime.clone());
+        ctx.register_conditional_middleware_guardrail(
+            "fixture_initial_gate",
+            BTreeSet::from([RuntimeRegistrationKind::Subscriber]),
+            "missing-worker-target",
+            "fixture initial gate",
+        );
         register_fixture_tool_hooks(
             ctx,
             runtime,

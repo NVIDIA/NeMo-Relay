@@ -1514,13 +1514,11 @@ describe('LLM intercepts', () => {
   it('stream execution intercept composes with next', async () => {
     registerLlmStreamExecutionIntercept('node_llm_stream_exec_repl', 10, async (native, next) => {
       native.content.intercepted = true;
-      const chunks = await next(native);
-      return [
-        ...chunks,
-        {
-          wrapped: native.content.intercepted,
-        },
-      ];
+      const downstream = await next(native);
+      return (async function* () {
+        yield* downstream;
+        yield { wrapped: native.content.intercepted };
+      })();
     });
 
     const native = makeNative();
@@ -1551,14 +1549,7 @@ describe('LLM intercepts', () => {
       seen.push(chunk);
     }
 
-    assert.deepEqual(seen, [
-      {
-        chunk: true,
-      },
-      {
-        wrapped: true,
-      },
-    ]);
+    assert.deepEqual(seen, [{ chunk: true }, { wrapped: true }]);
     deregisterLlmStreamExecutionIntercept('node_llm_stream_exec_repl');
   });
 
@@ -1571,7 +1562,9 @@ describe('LLM intercepts', () => {
     let providerCalls = 0;
     registerLlmStreamExecutionIntercept('node_llm_stream_late_next', 10, async (native, next) => {
       lateNext = lateGate.then(() => next(native));
-      return [{ source: 'intercept' }];
+      return (async function* () {
+        yield { source: 'intercept' };
+      })();
     });
     try {
       const stream = await llmStreamCallExecute('late_next_stream_llm', makeNative(), () => {
@@ -1595,26 +1588,164 @@ describe('LLM intercepts', () => {
     let retainedNext;
     registerLlmStreamExecutionIntercept('node_llm_stream_retained_next_scope', 10, async (native, next) => {
       retainedNext = () => next(native);
-      // Keep the Rust-to-Node forwarding channel backpressured so the
-      // interceptor output stream, and therefore its continuation lease,
-      // remains active after this callback Promise resolves.
-      return Array.from({ length: 64 }, (_, index) => ({ source: 'intercept', index }));
+      return (async function* () {
+        for (let index = 0; index < 64; index += 1) {
+          yield { source: 'intercept', index };
+        }
+      })();
     });
     try {
       const stream = await lib.withScopeStack(invocationStack, () =>
         llmStreamCallExecute('retained_next_scope_stream_llm', makeNative(), (wrapper) => {
-          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, {
-            scope: lib.getHandle().uuid,
-          });
+          lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { scope: lib.getHandle().uuid });
           lib.endStream(wrapper.__nemo_relay_stream_id);
         }),
       );
-
-      assert.deepEqual(await retainedNext(), [{ scope: invocationScope }]);
+      const downstream = await retainedNext();
+      const iterator = downstream[Symbol.asyncIterator]();
+      assert.deepEqual(await iterator.next(), { done: false, value: { scope: invocationScope } });
       assert.deepEqual(await stream.next(), { source: 'intercept', index: 0 });
       await stream.close();
     } finally {
       deregisterLlmStreamExecutionIntercept('node_llm_stream_retained_next_scope');
+    }
+  });
+
+  it('stream execution intercept preserves first-chunk delivery before completion', async () => {
+    let releaseCompletion;
+    const completion = new Promise((resolve) => {
+      releaseCompletion = resolve;
+    });
+    registerLlmStreamExecutionIntercept('node_llm_stream_incremental', 10, async (request, next) => next(request));
+    try {
+      const stream = await llmStreamCallExecute('incremental_stream_llm', makeNative(), (wrapper) => {
+        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'first' });
+        completion.then(() => lib.endStream(wrapper.__nemo_relay_stream_id));
+      });
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      releaseCompletion();
+      assert.equal(await stream.next(), null);
+    } finally {
+      releaseCompletion?.();
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_incremental');
+    }
+  });
+
+  it('stream execution intercept applies backpressure to its async iterable', async () => {
+    let pulls = 0;
+    let stream;
+    registerLlmStreamExecutionIntercept('node_llm_stream_backpressure', 10, async () =>
+      (async function* () {
+        for (let index = 0; index < 256; index += 1) {
+          pulls += 1;
+          yield { index };
+        }
+      })(),
+    );
+    try {
+      stream = await llmStreamCallExecute('backpressure_stream_llm', makeNative(), () => {});
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(pulls <= 72, `expected bounded read-ahead, observed ${pulls} pulls`);
+
+      const chunks = [];
+      for (;;) {
+        const chunk = await stream.next();
+        if (chunk === null) break;
+        chunks.push(chunk);
+      }
+      assert.equal(chunks.length, 256);
+      assert.equal(pulls, 256);
+    } finally {
+      await stream?.close();
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_backpressure');
+    }
+  });
+
+  it('stream execution intercept closes a transformed downstream stream early', async () => {
+    let providerEnded = false;
+    registerLlmStreamExecutionIntercept('node_llm_stream_early_close', 10, async (request, next) => {
+      const downstream = await next(request);
+      return (async function* () {
+        yield* downstream;
+      })();
+    });
+    try {
+      const stream = await llmStreamCallExecute('early_close_stream_llm', makeNative(), (wrapper) => {
+        lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'first' });
+        const poll = setInterval(() => {
+          if (!lib.pushStreamChunk(wrapper.__nemo_relay_stream_id, { token: 'later' })) {
+            clearInterval(poll);
+            providerEnded = true;
+            lib.endStream(wrapper.__nemo_relay_stream_id);
+          }
+        }, 1);
+      });
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      await stream.close();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(providerEnded, true);
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_early_close');
+    }
+  });
+
+  it('stream execution intercept closes its iterator after a chunk conversion error', async () => {
+    let cleaned = false;
+    let stream;
+    registerLlmStreamExecutionIntercept('node_llm_stream_invalid_chunk_cleanup', 10, async () =>
+      (async function* () {
+        try {
+          yield 1n;
+        } finally {
+          cleaned = true;
+        }
+      })(),
+    );
+    try {
+      stream = await llmStreamCallExecute('invalid_chunk_cleanup_stream_llm', makeNative(), () => {});
+      await assert.rejects(() => stream.next(), /unsupported bigint value/i);
+      assert.equal(cleaned, true);
+      await assert.rejects(() => stream.close(), /unsupported bigint value/i);
+    } finally {
+      await stream?.close().catch(() => {});
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_invalid_chunk_cleanup');
+    }
+  });
+
+  it('stream execution intercept close waits for iterator cleanup', async () => {
+    let cleaned = false;
+    registerLlmStreamExecutionIntercept('node_llm_stream_await_cleanup', 10, async (_request, _next, signal) =>
+      (async function* () {
+        try {
+          yield { token: 'first' };
+          if (!signal.aborted) {
+            await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+          }
+        } finally {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          cleaned = true;
+        }
+      })(),
+    );
+    try {
+      const stream = await llmStreamCallExecute('await_cleanup_stream_llm', makeNative(), () => {});
+      assert.deepEqual(await stream.next(), { token: 'first' });
+      await stream.close();
+      assert.equal(cleaned, true);
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_await_cleanup');
+    }
+  });
+
+  it('stream execution intercept rejects non-iterable results', async () => {
+    registerLlmStreamExecutionIntercept('node_llm_stream_non_iterable', 10, async () => ({ invalid: true }));
+    try {
+      await assert.rejects(
+        () => llmStreamCallExecute('non_iterable_stream_llm', makeNative(), () => {}),
+        /must return an AsyncIterable/i,
+      );
+    } finally {
+      deregisterLlmStreamExecutionIntercept('node_llm_stream_non_iterable');
     }
   });
 
@@ -1691,7 +1822,10 @@ describe('LLM intercepts', () => {
           }),
         ),
       ]);
-      return [...first, ...second];
+      return (async function* () {
+        yield* first;
+        yield* second;
+      })();
     });
     try {
       const stream = await llmStreamCallExecute('scoped_next_stream_llm', makeNative(), (wrapper) => {
@@ -1743,10 +1877,13 @@ describe('LLM intercepts', () => {
       releaseBlocker = resolve;
     });
 
-    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_target', 100, async (request, next) => [
-      ...(await next(request)),
-      { snapshotted: true },
-    ]);
+    registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_target', 100, async (request, next) => {
+      const downstream = await next(request);
+      return (async function* () {
+        yield* downstream;
+        yield { snapshotted: true };
+      })();
+    });
     registerLlmStreamExecutionIntercept('node_llm_stream_snapshot_blocker', -100, async (request, next) => {
       blockerEntered();
       await release;
@@ -1826,43 +1963,6 @@ describe('LLM intercepts', () => {
       stdio: 'inherit',
       timeout: 5_000,
     });
-  });
-
-  it('stream execution intercept can return a single scalar chunk', async () => {
-    registerLlmStreamExecutionIntercept('node_llm_stream_scalar', 10, async () => ({
-      scalar: true,
-    }));
-
-    const seen = [];
-    const stream = await llmStreamCallExecute(
-      'stream_scalar_llm',
-      makeNative(),
-      () => {
-        throw new Error('downstream stream should not be called');
-      },
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
-    );
-
-    for (;;) {
-      const chunk = await stream.next();
-      if (chunk === null) {
-        break;
-      }
-      seen.push(chunk);
-    }
-
-    assert.deepEqual(seen, [
-      {
-        scalar: true,
-      },
-    ]);
-    deregisterLlmStreamExecutionIntercept('node_llm_stream_scalar');
   });
 
   it('stream execution intercept rejects invalid next request payloads', async () => {
@@ -2011,14 +2111,12 @@ describe('LLM intercepts', () => {
       assert.match(declaration, /Promise</, `${registration} must expose its Promise callback form`);
     }
     assert.equal(
-      declarations.split('next: (request: Json) => Promise<Json[]>').length - 1,
+      declarations.split('next: (request: Json) => Promise<AsyncIterable<Json>>').length - 1,
       2,
-      'global and scope-local stream intercept declarations must expose the buffered next contract',
+      'global and scope-local stream intercept declarations must expose the lazy next contract',
     );
     assert.equal(
-      declarations.split(
-        'next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>',
-      ).length - 1,
+      declarations.split('next: (args: Json) => ToolExecutionResult | Promise<ToolExecutionResult>').length - 1,
       2,
       'global and scope-local tool intercept declarations must expose canonical tool results',
     );
@@ -2038,9 +2136,8 @@ describe('LLM intercepts', () => {
     assert.match(declarations, /registerLlmRequestIntercept\([\s\S]*?Promise<LlmRequestInterceptOutcome>/);
     assert.match(
       declarations,
-      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: Json\) => Promise<Json\[\]>/,
+      /registerLlmStreamExecutionIntercept\([\s\S]*?next: \(request: Json\) => Promise<AsyncIterable<Json>>/,
     );
-    assert.doesNotMatch(declarations, /registerLlmStreamExecutionIntercept\([\s\S]*?AsyncIterable/);
   });
 
   it('standalone conditional execution helper throws on rejection', async () => {

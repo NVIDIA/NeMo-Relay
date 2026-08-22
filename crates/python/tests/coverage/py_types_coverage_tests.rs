@@ -7,8 +7,9 @@ use super::*;
 use std::ffi::CString;
 
 use nemo_relay::api::event::{
-    BaseEvent, CategoryProfile, Event, EventCategory, MarkEvent, ScopeCategory, ScopeEvent,
-    llm_attributes_to_strings, scope_attributes_to_strings, tool_attributes_to_strings,
+    BaseEvent, CategoryProfile, Event, EventCategory, LogSeverity, MarkEvent, MetricKind,
+    MetricValueType, ScopeCategory, ScopeEvent, llm_attributes_to_strings,
+    scope_attributes_to_strings, tool_attributes_to_strings,
 };
 use nemo_relay::api::llm::{LlmAttributes, LlmHandle};
 use nemo_relay::api::llm::{LlmCallParams, llm_call, llm_call_end};
@@ -260,6 +261,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
                 None,
             )));
             assert_eq!(event.kind(), "mark");
+            assert_eq!(event.atof_version(), "0.1");
             assert_eq!(event.parent_uuid(), Some(parent_uuid.to_string()));
             assert_eq!(
                 py_to_json(event.data(py).unwrap().bind(py)).unwrap(),
@@ -284,6 +286,7 @@ fn test_bitflags_handles_and_event_wrappers_expose_expected_fields() {
                 Some(CategoryProfile::builder().tool_call_id("tool-1").build()),
             )));
             assert_eq!(tool_event.kind(), "scope");
+            assert_eq!(tool_event.atof_version(), "0.1");
             assert_eq!(tool_event.scope_category(), "start");
             assert_eq!(tool_event.category(), "tool");
             assert_eq!(
@@ -1085,6 +1088,221 @@ fn test_python_side_core_type_constructors_cover_exposed_entrypoints() {
             .call1((bad_headers, py.None()))
             .unwrap_err();
         assert!(err.to_string().contains("not an instance of 'dict'"));
+    });
+}
+
+#[test]
+fn test_metric_measurement_and_pending_mark_getters_cover_python_surface() {
+    let _python = crate::test_support::init_python_test();
+    Python::attach(|py| {
+        let module = PyModule::new(py, "_types_metric_mark_getters").unwrap();
+        register(&module).unwrap();
+
+        let metric_kwargs = PyDict::new(py);
+        metric_kwargs.set_item("unit", "tokens").unwrap();
+        metric_kwargs
+            .set_item("description", "generated tokens")
+            .unwrap();
+        metric_kwargs
+            .set_item(
+                "attributes",
+                json_to_py(py, &json!({"model": "demo"})).unwrap(),
+            )
+            .unwrap();
+        metric_kwargs
+            .set_item("boundaries", vec![1.0_f64, 10.0])
+            .unwrap();
+        let metric = module
+            .getattr("MetricMeasurement")
+            .unwrap()
+            .call(
+                (
+                    "relay.tokens",
+                    module
+                        .getattr("MetricKind")
+                        .unwrap()
+                        .getattr("Histogram")
+                        .unwrap(),
+                    module
+                        .getattr("MetricValueType")
+                        .unwrap()
+                        .getattr("U64")
+                        .unwrap(),
+                    7_u64,
+                ),
+                Some(&metric_kwargs),
+            )
+            .unwrap();
+        assert_eq!(
+            metric.getattr("name").unwrap().extract::<String>().unwrap(),
+            "relay.tokens"
+        );
+        assert_eq!(
+            metric.getattr("value").unwrap().extract::<u64>().unwrap(),
+            7
+        );
+        assert_eq!(
+            metric.getattr("unit").unwrap().extract::<String>().unwrap(),
+            "tokens"
+        );
+        assert_eq!(
+            metric
+                .getattr("description")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "generated tokens"
+        );
+        assert_eq!(
+            py_to_json(metric.getattr("attributes").unwrap().as_any()).unwrap(),
+            json!({"model": "demo"})
+        );
+        assert_eq!(
+            metric
+                .getattr("boundaries")
+                .unwrap()
+                .extract::<Vec<f64>>()
+                .unwrap(),
+            vec![1.0, 10.0]
+        );
+        assert!(metric.getattr("kind").is_ok());
+        assert!(metric.getattr("value_type").is_ok());
+        assert!(
+            metric
+                .repr()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("relay.tokens")
+        );
+
+        let mark_kwargs = PyDict::new(py);
+        mark_kwargs
+            .set_item(
+                "data",
+                json_to_py(py, &json!({"phase": "execute"})).unwrap(),
+            )
+            .unwrap();
+        mark_kwargs
+            .set_item(
+                "metadata",
+                json_to_py(py, &json!({"trace": "abc"})).unwrap(),
+            )
+            .unwrap();
+        mark_kwargs
+            .set_item(
+                "data_schema",
+                json_to_py(py, &json!({"name": "relay.mark", "version": "1"})).unwrap(),
+            )
+            .unwrap();
+        mark_kwargs
+            .set_item(
+                "severity",
+                module
+                    .getattr("LogSeverity")
+                    .unwrap()
+                    .getattr("Info")
+                    .unwrap(),
+            )
+            .unwrap();
+        let mark = module
+            .getattr("PendingMarkSpec")
+            .unwrap()
+            .call(("relay.execute",), Some(&mark_kwargs))
+            .unwrap();
+        assert_eq!(
+            mark.getattr("name").unwrap().extract::<String>().unwrap(),
+            "relay.execute"
+        );
+        assert!(mark.getattr("category").unwrap().is_none());
+        assert!(mark.getattr("category_profile").unwrap().is_none());
+        assert_eq!(
+            py_to_json(mark.getattr("data").unwrap().as_any()).unwrap(),
+            json!({"phase": "execute"})
+        );
+        assert_eq!(
+            py_to_json(mark.getattr("metadata").unwrap().as_any()).unwrap(),
+            json!({"trace": "abc"})
+        );
+        assert_eq!(
+            py_to_json(mark.getattr("data_schema").unwrap().as_any()).unwrap(),
+            json!({"name": "relay.mark", "version": "1"})
+        );
+        assert!(mark.getattr("severity").is_ok());
+    });
+}
+
+#[test]
+fn test_metric_enum_conversions_and_tool_execution_outcome_getters() {
+    let _python = crate::test_support::init_python_test();
+    for (python, native) in [
+        (PyLogSeverity::Trace, LogSeverity::Trace),
+        (PyLogSeverity::Debug, LogSeverity::Debug),
+        (PyLogSeverity::Error, LogSeverity::Error),
+    ] {
+        assert!(PyLogSeverity::from(native) == python);
+        assert!(LogSeverity::from(python) == native);
+    }
+    for (python, native) in [
+        (PyMetricKind::UpDownCounter, MetricKind::UpDownCounter),
+        (PyMetricKind::Gauge, MetricKind::Gauge),
+        (PyMetricKind::Histogram, MetricKind::Histogram),
+    ] {
+        assert!(PyMetricKind::from(native) == python);
+        assert!(MetricKind::from(python) == native);
+    }
+    for (python, native) in [
+        (PyMetricValueType::I64, MetricValueType::I64),
+        (PyMetricValueType::F64, MetricValueType::F64),
+    ] {
+        assert!(PyMetricValueType::from(native) == python);
+        assert!(MetricValueType::from(python) == native);
+    }
+
+    Python::attach(|py| {
+        let module = PyModule::new(py, "_types_tool_execution_outcome").unwrap();
+        register(&module).unwrap();
+        let mark = module
+            .getattr("PendingMarkSpec")
+            .unwrap()
+            .call1(("relay.execute",))
+            .unwrap();
+        let outcome_kwargs = PyDict::new(py);
+        outcome_kwargs
+            .set_item(
+                "annotation",
+                json_to_py(py, &json!({"source": "coverage"})).unwrap(),
+            )
+            .unwrap();
+        let pending_marks = PyList::new(py, [mark]).unwrap();
+        let outcome = module
+            .getattr("ToolExecutionInterceptOutcome")
+            .unwrap()
+            .call(
+                (json_to_py(py, &json!({"ok": true})).unwrap(), pending_marks),
+                Some(&outcome_kwargs),
+            )
+            .unwrap();
+        assert_eq!(
+            py_to_json(outcome.getattr("result").unwrap().as_any()).unwrap(),
+            json!({"ok": true})
+        );
+        assert_eq!(
+            py_to_json(outcome.getattr("annotation").unwrap().as_any()).unwrap(),
+            json!({"source": "coverage"})
+        );
+        let returned_marks = outcome.getattr("pending_marks").unwrap();
+        assert_eq!(returned_marks.len().unwrap(), 1);
+        assert_eq!(
+            returned_marks
+                .get_item(0)
+                .unwrap()
+                .getattr("name")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "relay.execute"
+        );
     });
 }
 

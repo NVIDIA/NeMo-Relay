@@ -212,6 +212,30 @@ class LangChainCodec(LlmCodec):
                     provider_tool_calls.append((annotated_messages[0], raw_tool_calls))
         return provider_tool_calls
 
+    def _provider_tool_calls_for_message(
+        self,
+        message: dict[str, Any],
+        original_provider_tool_calls: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+        matched_original_messages: set[int],
+    ) -> list[dict[str, Any]] | None:
+        """Preserve provider tool-call encoding when an assistant message still matches."""
+        for index, (original_message, original_tool_calls) in enumerate(original_provider_tool_calls):
+            if index not in matched_original_messages and message == original_message:
+                matched_original_messages.add(index)
+                return original_tool_calls
+
+        message_without_tool_calls = {key: value for key, value in message.items() if key != "tool_calls"}
+        for index, (original_message, original_tool_calls) in enumerate(original_provider_tool_calls):
+            original_without_tool_calls = {key: value for key, value in original_message.items() if key != "tool_calls"}
+            if index in matched_original_messages or message_without_tool_calls != original_without_tool_calls:
+                continue
+            matched_original_messages.add(index)
+            if message.get("tool_calls") == original_message.get("tool_calls"):
+                return original_tool_calls
+            return self._annotated_tool_calls_to_provider(message.get("tool_calls"))
+
+        return self._annotated_tool_calls_to_provider(message.get("tool_calls"))
+
     def decode(self, request: LLMRequest) -> AnnotatedLLMRequest:
         """Decode a LangChain-shaped request payload into an annotated request."""
         payload = request.content
@@ -244,29 +268,9 @@ class LangChainCodec(LlmCodec):
         for message in annotated.messages:
             provider_tool_calls = None
             if message.get("role") == "assistant":
-                for index, (original_message, original_tool_calls) in enumerate(original_provider_tool_calls):
-                    if index in matched_original_messages or message != original_message:
-                        continue
-                    matched_original_messages.add(index)
-                    provider_tool_calls = original_tool_calls
-                    break
-
-            if message.get("role") == "assistant" and provider_tool_calls is None:
-                message_without_tool_calls = {key: value for key, value in message.items() if key != "tool_calls"}
-                for index, (original_message, original_tool_calls) in enumerate(original_provider_tool_calls):
-                    original_without_tool_calls = {
-                        key: value for key, value in original_message.items() if key != "tool_calls"
-                    }
-                    if index in matched_original_messages or message_without_tool_calls != original_without_tool_calls:
-                        continue
-                    matched_original_messages.add(index)
-                    if message.get("tool_calls") == original_message.get("tool_calls"):
-                        provider_tool_calls = original_tool_calls
-                    else:
-                        provider_tool_calls = self._annotated_tool_calls_to_provider(message.get("tool_calls"))
-                    break
-            if message.get("role") == "assistant" and provider_tool_calls is None:
-                provider_tool_calls = self._annotated_tool_calls_to_provider(message.get("tool_calls"))
+                provider_tool_calls = self._provider_tool_calls_for_message(
+                    message, original_provider_tool_calls, matched_original_messages
+                )
             encoded_messages.append(self._annotated_message_to_langchain(message, provider_tool_calls))
         payload["messages"] = messages_to_dict(encoded_messages)
         if annotated.model is not None:

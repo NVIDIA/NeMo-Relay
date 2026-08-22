@@ -1,0 +1,216 @@
+---
+title: "Rust Worker"
+description: "Build, digest, activate, verify, and stop the checked Rust grpc-v1 worker."
+position: 32
+---
+{/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0 */}
+
+The `examples/rust-grpc-worker-plugin` project is the compiled counterpart to the
+[Python worker](/build-plugins/workers/python). It depends on `nemo-relay-worker` 0.9.0,
+implements `WorkerPlugin`, registers all
+15 [surfaces](/build-plugins/workers/middleware-and-continuations), and lets the SDK
+create the authenticated `grpc-v1` server from the
+activation environment Relay provides.
+
+## Configure the Snapshot Location
+
+Relay copies the worker runtime closure into an isolated activation snapshot before
+starting the worker. Set `NEMO_RELAY_PLUGIN_SNAPSHOT_DIR` in the environment that starts
+Relay to use a directory of your choice; Relay creates it when it does not exist. Choose a
+location outside every directory copied into a snapshot, including active plugin packages and
+external library directories:
+
+```powershell
+$env:NEMO_RELAY_PLUGIN_SNAPSHOT_DIR = "C:\\nrs"
+```
+
+```bash
+export NEMO_RELAY_PLUGIN_SNAPSHOT_DIR=/var/tmp/nrs
+```
+
+## Build and Calculate Integrity
+
+Build the executable and materialize its platform-specific manifest as follows:
+
+1. Run the example from its own directory.
+
+   ```bash
+   cargo test
+   cargo build
+   ```
+
+2. Copy `relay-plugin.toml` to `relay-plugin.local.toml` and replace
+   `<platform-worker-file>` with `nemo-relay-rust-grpc-worker-plugin-example` on macOS or
+   Linux, or the same name with `.exe` on Windows.
+
+3. Calculate the promised digest before registration. On macOS run:
+
+   ```bash
+   shasum -a 256 target/debug/<platform-worker-file>
+   ```
+
+   On Linux run `sha256sum target/debug/<platform-worker-file>`. In PowerShell run
+   `Get-FileHash -Algorithm SHA256 target/debug/<platform-worker-file>`. Put the lowercase
+   hexadecimal value after `sha256:` in `[integrity].sha256`.
+
+Success at this stage means tests pass, the manifest entrypoint resolves to the built
+executable, and integrity describes the exact executable that starts.
+
+The local manifest retains the checked package identity and replaces only the executable
+name and digest placeholders:
+
+```toml
+manifest_version = 1
+
+[plugin]
+id = "examples.rust_grpc_worker"
+kind = "worker"
+
+[compat]
+relay = ">=0.8.0,<1.0"
+worker_protocol = "grpc-v1"
+
+[defaults]
+enabled = false
+
+[capabilities]
+items = ["plugin_worker", "config_schema"]
+
+[config_schema]
+path = "config.schema.json"
+
+[source]
+artifact = "target/debug/<platform-worker-file>"
+
+[integrity]
+sha256 = "sha256:<artifact-sha256>"
+
+[load]
+runtime = "rust"
+entrypoint = "target/debug/<platform-worker-file>"
+```
+
+The worker speaks `grpc-v1`, whose Relay 0.8 tool-result baseline requires
+`relay = ">=0.8.0,<1.0"`. `ToolNext::call` returns `ToolExecutionResult`, preserving an
+application payload and optional opaque annotation separately from Relay-owned pending
+marks. Rebuild the worker when adopting this SDK release; the protocol name remains
+`grpc-v1`, but an earlier generated binding cannot read the structural result messages.
+
+The artifact and entrypoint paths must identify the same executable. Relay verifies the
+artifact digest before it starts the command, and the worker
+[handshake](/build-plugins/workers/grpc-v1-protocol) must return the
+same plugin identity and `grpc-v1` protocol.
+
+## Register and Start the Worker
+
+Use the following procedure to register the manifest and inspect worker activation:
+
+1. From the repository root, validate, add, and enable the local manifest.
+
+   ```bash
+   nemo-relay plugins validate ./examples/rust-grpc-worker-plugin/relay-plugin.local.toml
+   nemo-relay plugins add --user ./examples/rust-grpc-worker-plugin/relay-plugin.local.toml
+   nemo-relay plugins enable examples.rust_grpc_worker
+   ```
+
+2. Start Relay from the repository root. Inspect the activation report
+   and confirm the handshake reports plugin identity, SDK and runtime metadata,
+   `grpc-v1`, multiple-component behavior, and all 16 surfaces.
+
+   ```bash
+   nemo-relay --bind 127.0.0.1:4040
+   ```
+
+## Build the Worker Implementation
+
+The example uses the current public worker crate and creates both a library for focused
+tests and the executable named in the manifest.
+
+```toml
+[package]
+name = "nemo-relay-rust-grpc-worker-plugin-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+futures-util = "0.3"
+nemo-relay-worker = { version = "0.9.0", path = "../../crates/worker" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lib]
+name = "nemo_relay_rust_grpc_worker_plugin_example"
+
+[[bin]]
+name = "nemo-relay-rust-grpc-worker-plugin-example"
+path = "src/main.rs"
+```
+
+`WorkerPlugin::register` is a synchronous description step. It parses the validated JSON
+and fills the `PluginContext` with callbacks; the callbacks themselves return futures.
+
+```rust
+pub struct DocumentationWorker;
+
+impl WorkerPlugin for DocumentationWorker {
+    fn plugin_id(&self) -> &str {
+        "examples.rust_grpc_worker"
+    }
+
+    fn allows_multiple_components(&self) -> bool {
+        false
+    }
+
+    fn validate(&self, config: &Json) -> Vec<ConfigDiagnostic> {
+        config::validate(config)
+    }
+
+    fn register(&self, context: &mut PluginContext, config: &Json) -> Result<()> {
+        let settings = ExampleConfig::parse(config)
+            .map_err(WorkerSdkError::InvalidInput)?;
+        if settings.observe.enabled {
+            register_observation(context, &settings);
+        }
+        if settings.requests.enabled {
+            register_requests(context, &settings);
+        }
+        register_execution(context, &settings);
+        Ok(())
+    }
+}
+```
+
+The binary contains no transport configuration. `serve_plugin` reads the activation
+environment, starts the authenticated SDK service, and stays alive until Relay sends the
+shutdown stage.
+
+```rust
+use nemo_relay_rust_grpc_worker_plugin_example::DocumentationWorker;
+use nemo_relay_worker::{Result, serve_plugin};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    serve_plugin(DocumentationWorker).await
+}
+```
+
+## Exercise and Remove the Worker
+
+Use the following procedure to verify the registered callbacks and stop the worker
+cleanly:
+
+1. Exercise allowed and blocked calls, unary and streaming continuations, codec decode and
+   encode proxies, pending marks, optimization contributions, nested and isolated scopes,
+   and cancellation.
+2. Disable and remove the component only after in-flight invocations have settled.
+
+   ```bash
+   nemo-relay plugins disable examples.rust_grpc_worker
+   nemo-relay plugins remove examples.rust_grpc_worker
+   ```
+
+Success means shutdown rejects new invocations, cancels or drains active work, closes the
+authenticated endpoint, stops the process, and leaves no owned runtime registrations.

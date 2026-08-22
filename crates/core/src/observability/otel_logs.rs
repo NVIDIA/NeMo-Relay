@@ -304,7 +304,7 @@ impl OpenTelemetryLogSubscriber {
         self.inner
             .provider
             .force_flush()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
     }
 
     /// Shut down the OTLP logger provider.
@@ -316,7 +316,7 @@ impl OpenTelemetryLogSubscriber {
             .inner
             .provider
             .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()));
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()));
         barrier.and(provider)
     }
 
@@ -324,7 +324,7 @@ impl OpenTelemetryLogSubscriber {
         self.inner
             .provider
             .shutdown()
-            .map_err(|error| OpenTelemetryError::Provider(error.to_string()))
+            .map_err(|error| OpenTelemetryError::LogProvider(error.to_string()))
     }
 
     pub(crate) fn delivery_failure_summary(&self) -> Option<String> {
@@ -502,10 +502,12 @@ impl LogProcessor for DiagnosticBatchLogProcessor {
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
         let result = self.inner.shutdown_with_timeout(timeout);
-        if result.is_ok() && self.diagnostics.runtime_diagnostics.has_plugin_mirror() {
+        if result.is_ok() {
             let dropped = self.diagnostics.record_queue_drops();
             let export_failures = self.diagnostics.export_failures.load(Ordering::Relaxed);
-            if dropped > 0 || export_failures > 0 {
+            if (dropped > 0 || export_failures > 0)
+                && self.diagnostics.runtime_diagnostics.has_plugin_mirror()
+            {
                 return Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
                     format!(
                         "{OTEL_RUNTIME_DELIVERY_FAILURE_MARKER}: otel.logs_dropped ({dropped}), otel.logs_export_failed ({export_failures})"

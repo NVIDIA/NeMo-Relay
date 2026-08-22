@@ -62,7 +62,7 @@ function normalizePackagePath(value) {
 /** Extract the OpenClaw release version from supported single-version specs. */
 function normalizeOpenClawVersion(value, fieldName) {
   assert(typeof value === 'string' && value.length > 0, `${fieldName} is required`);
-  const match = value.match(/^(?:\^|~|>=)?(\d+\.\d+\.\d+)$/);
+  const match = value.match(/^(?:\^|~|>=)?(\d+\.\d+\.\d+(?:-\d+)?)$/);
   assert(match, `${fieldName} must be a single OpenClaw release version`);
   return match[1];
 }

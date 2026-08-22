@@ -538,27 +538,48 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
 
     let logs = resolve_signal_endpoints("logs", None, std::slice::from_ref(&trace)).unwrap();
     assert_eq!(
-        logs[0].endpoint,
+        logs.endpoints[0].value.as_active().unwrap().endpoint,
         "https://collector.example/prefix/v1/logs?tenant=observability-dev"
     );
-    assert_eq!(logs[0].headers, trace.headers);
-    assert_eq!(logs[0].resource_attributes, trace.resource_attributes);
+    assert_eq!(
+        logs.endpoints[0].value.as_active().unwrap().headers,
+        trace.headers
+    );
+    assert_eq!(
+        logs.endpoints[0]
+            .value
+            .as_active()
+            .unwrap()
+            .resource_attributes,
+        trace.resource_attributes
+    );
 
     let metrics = resolve_signal_endpoints("metrics", None, &[trace]).unwrap();
     assert_eq!(
-        metrics[0].endpoint,
+        metrics.endpoints[0].value.as_active().unwrap().endpoint,
         "https://collector.example/prefix/v1/metrics?tenant=observability-dev"
     );
 
     let mut root_trace = test_opentelemetry_endpoint();
     root_trace.endpoint = "https://collector.example/".to_string();
     assert_eq!(
-        resolve_signal_endpoints("logs", None, std::slice::from_ref(&root_trace)).unwrap()[0]
+        resolve_signal_endpoints("logs", None, std::slice::from_ref(&root_trace))
+            .unwrap()
+            .endpoints[0]
+            .value
+            .as_active()
+            .unwrap()
             .endpoint,
         "https://collector.example/v1/logs"
     );
     assert_eq!(
-        resolve_signal_endpoints("metrics", None, &[root_trace]).unwrap()[0].endpoint,
+        resolve_signal_endpoints("metrics", None, &[root_trace])
+            .unwrap()
+            .endpoints[0]
+            .value
+            .as_active()
+            .unwrap()
+            .endpoint,
         "https://collector.example/v1/metrics"
     );
 
@@ -575,18 +596,48 @@ fn signal_endpoint_resolution_derives_or_preserves_the_expected_destination() {
         timeout_millis: default_timeout_millis(),
     }];
     assert_eq!(
-        resolve_signal_endpoints("metrics", Some(&custom), &[]).unwrap()[0].endpoint,
+        resolve_signal_endpoints("metrics", Some(&custom), &[])
+            .unwrap()
+            .endpoints[0]
+            .value
+            .as_active()
+            .unwrap()
+            .endpoint,
         custom[0].endpoint
     );
     assert!(resolve_signal_endpoints("metrics", Some(&Vec::new()), &[]).is_err());
 }
 
 #[test]
-fn signal_endpoint_resolution_rejects_ambiguous_trace_paths_and_wrong_signal_paths() {
-    let mut custom_trace = test_opentelemetry_endpoint();
-    custom_trace.endpoint = "https://collector.example/custom/traces".to_string();
-    assert!(resolve_signal_endpoints("logs", None, &[custom_trace]).is_err());
+fn signal_endpoint_resolution_skips_ambiguous_trace_paths_and_preserves_indexes() {
+    let mut first = test_opentelemetry_endpoint();
+    first.endpoint = "https://collector.example/first/v1/traces".to_string();
+    let mut ambiguous = test_opentelemetry_endpoint();
+    ambiguous.endpoint = "https://collector.example/custom/traces".to_string();
+    let mut third = test_opentelemetry_endpoint();
+    third.endpoint = "https://collector.example/third/v1/traces".to_string();
 
+    let resolution = resolve_signal_endpoints("logs", None, &[first, ambiguous, third]).unwrap();
+    assert_eq!(
+        resolution
+            .endpoints
+            .iter()
+            .map(|endpoint| endpoint.index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(
+        resolution
+            .endpoints
+            .iter()
+            .map(|endpoint| endpoint.value.as_active().is_some())
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+}
+
+#[test]
+fn signal_endpoint_resolution_rejects_explicit_wrong_signal_paths() {
     let mut explicit = OpenTelemetrySignalEndpointConfig {
         endpoint: "https://collector.example/v1/traces".to_string(),
         transport: default_otlp_transport(),
@@ -613,13 +664,24 @@ fn signal_endpoint_resolution_covers_missing_trace_grpc_and_invalid_transports()
     grpc_trace.transport = "grpc".to_string();
     grpc_trace.endpoint = "http://collector.example:4317".to_string();
     let derived = resolve_signal_endpoints("metrics", None, &[grpc_trace]).unwrap();
-    assert_eq!(derived[0].endpoint, "http://collector.example:4317");
-    assert_eq!(derived[0].transport, "grpc");
+    assert_eq!(
+        derived.endpoints[0].value.as_active().unwrap().endpoint,
+        "http://collector.example:4317"
+    );
+    assert_eq!(
+        derived.endpoints[0].value.as_active().unwrap().transport,
+        "grpc"
+    );
 
     for endpoint in ["ftp://collector.example", "not a url"] {
         let mut trace = test_opentelemetry_endpoint();
         trace.endpoint = endpoint.to_string();
-        assert!(resolve_signal_endpoints("logs", None, &[trace]).is_err());
+        let resolution = resolve_signal_endpoints("logs", None, &[trace]).unwrap();
+        assert_eq!(resolution.endpoints.len(), 1);
+        assert!(matches!(
+            resolution.endpoints[0].value,
+            OpenTelemetryResource::Skipped(_)
+        ));
     }
 
     let mut endpoint = test_signal_endpoint();
@@ -1174,12 +1236,96 @@ fn validate_opentelemetry_section_reports_empty_and_malformed_endpoints() {
         "endpoints[0].scheduled_delay_millis",
     ] {
         assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.field.as_deref() == Some(field)),
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.field.as_deref() == Some(field) && diagnostic.message.contains(field)
+            }),
             "missing diagnostic for {field}: {diagnostics:?}"
         );
     }
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("endpoints[0].max_export_batch_size")
+            && diagnostic
+                .message
+                .contains("endpoints[0].max_export_batch_size")
+            && diagnostic
+                .message
+                .contains("less than or equal to max_queue_size")
+    }));
+}
+
+#[test]
+fn invalid_batch_config_identifies_the_endpoint_during_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "full",
+                    "endpoint": "http://jaeger-local:4318/v1/traces",
+                    "max_queue_size": 256
+                },
+                {
+                    "type": "full",
+                    "endpoint": "http://tempo-prod:4319/v1/traces",
+                    "max_queue_size": 0
+                },
+                {
+                    "type": "full",
+                    "endpoint": "http://compliance:4320/v1/traces",
+                    "max_queue_size": 128
+                }
+            ]
+        }
+    }));
+
+    let report = validate_plugin_config(&config);
+    assert!(!report.has_errors());
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("endpoints[1].max_queue_size")
+            && diagnostic.level == DiagnosticLevel::Warning
+            && diagnostic.code == "observability.invalid_otel_endpoint"
+            && diagnostic
+                .message
+                .contains("OpenTelemetry endpoints[1].max_queue_size must be greater than 0")
+    }));
+
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    let report = crate::plugin::active_plugin_report().unwrap();
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.field.as_deref() == Some("endpoints[1].max_queue_size")
+            && diagnostic.level == DiagnosticLevel::Warning
+            && diagnostic.code == "observability.invalid_otel_endpoint"
+    }));
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn all_invalid_trace_batch_configs_still_block_activation() {
+    let _guard = crate::observability::test_mutex().lock().unwrap();
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 3,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [{
+                "type": "full",
+                "endpoint": "http://jaeger-local:4318/v1/traces",
+                "max_queue_size": 0
+            }]
+        }
+    }));
+
+    assert!(!validate_plugin_config(&config).has_errors());
+    let error = futures::executor::block_on(initialize_plugins_exact(config)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires at least one valid trace, log, or metric endpoint")
+    );
+    assert!(crate::plugin::active_plugin_report().is_none());
 }
 
 #[test]
@@ -1316,6 +1462,227 @@ fn opentelemetry_endpoint_header_env_rejects_missing_and_duplicate_headers() {
         }
     }))));
     assert!(activation.is_err());
+
+    futures::executor::block_on(initialize_plugins_exact(plugin_config(json!({
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "full",
+                    "endpoint": "http://localhost:4318/v1/traces",
+                    "header_env": {"x-api-key": variable}
+                },
+                {
+                    "type": "gen_ai",
+                    "endpoint": "http://localhost:4319/v1/traces"
+                }
+            ]
+        }
+    }))))
+    .unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn invalid_log_endpoint_keeps_valid_signal_subscriber() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let variable = "NEMO_RELAY_TEST_MISSING_OTEL_LOG_HEADER_ENV";
+    unsafe { std::env::remove_var(variable) };
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "logs": {
+                "enabled": true,
+                "endpoints": [
+                    {
+                        "endpoint": "http://localhost:4318/v1/logs",
+                        "header_env": {"authorization": variable}
+                    },
+                    {"endpoint": "http://localhost:4319/v1/logs"}
+                ]
+            }
+        }
+    }));
+
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn invalid_metric_endpoint_keeps_valid_signal_subscriber() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let variable = "NEMO_RELAY_TEST_MISSING_OTEL_METRIC_HEADER_ENV";
+    unsafe { std::env::remove_var(variable) };
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "metrics": {
+                "enabled": true,
+                "endpoints": [
+                    {
+                        "endpoint": "http://localhost:4318/v1/metrics",
+                        "header_env": {"authorization": variable}
+                    },
+                    {"endpoint": "http://localhost:4319/v1/metrics"}
+                ]
+            }
+        }
+    }));
+
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn malformed_derived_signal_endpoint_keeps_valid_peers() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "endpoints": [
+                {
+                    "type": "full",
+                    "endpoint": "http://127.0.0.1:4318/first/v1/traces"
+                },
+                {
+                    "type": "gen_ai",
+                    "endpoint": "http://127.0.0.1:4319/custom/traces"
+                },
+                {
+                    "type": "openinference",
+                    "endpoint": "http://127.0.0.1:4320/third/v1/traces"
+                }
+            ],
+            "logs": {"enabled": true},
+            "metrics": {"enabled": true}
+        }
+    }));
+
+    let report = validate_plugin_config(&config);
+    assert!(!report.has_errors());
+    for signal in ["logs", "metrics"] {
+        let component = format!("opentelemetry.{signal}");
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.component.as_deref() == Some(component.as_str())
+                && diagnostic.field.as_deref() == Some("endpoints[1]")
+                && diagnostic.level == DiagnosticLevel::Warning
+                && diagnostic.code == "observability.invalid_otel_endpoint"
+        }));
+    }
+
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
+    assert!(
+        global_context()
+            .read()
+            .unwrap()
+            .event_subscribers
+            .contains_key("__nemo_relay_plugin__observability__opentelemetry")
+    );
+    clear_plugin_configuration().unwrap();
+}
+
+#[test]
+fn skipped_trace_endpoint_preserves_configured_indexes() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let first = test_opentelemetry_endpoint();
+    let mut invalid = test_opentelemetry_endpoint();
+    invalid.max_queue_size = Some(0);
+    let third = test_opentelemetry_endpoint();
+
+    let subscribers = build_opentelemetry_subscribers(vec![first, invalid, third]).unwrap();
+    assert_eq!(
+        subscribers
+            .iter()
+            .map(|subscriber| subscriber.index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(
+        subscribers
+            .iter()
+            .map(|subscriber| subscriber.value.as_active().is_some())
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+    assert!(shutdown_indexed_opentelemetry_providers(&subscribers).is_empty());
+}
+
+#[test]
+fn all_invalid_log_and_metric_endpoints_still_block_activation() {
+    let _guard = crate::observability::test_mutex()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    reset_runtime();
+    let log_variable = "NEMO_RELAY_TEST_MISSING_OTEL_LOG_HEADER_ENV";
+    let metric_variable = "NEMO_RELAY_TEST_MISSING_OTEL_METRIC_HEADER_ENV";
+    unsafe {
+        std::env::remove_var(log_variable);
+        std::env::remove_var(metric_variable);
+    }
+    let config = plugin_config(json!({
+        "version": 4,
+        "opentelemetry": {
+            "enabled": true,
+            "logs": {
+                "enabled": true,
+                "endpoints": [{
+                    "endpoint": "http://localhost:4318/v1/logs",
+                    "header_env": {"authorization": log_variable}
+                }]
+            },
+            "metrics": {
+                "enabled": true,
+                "endpoints": [{
+                    "endpoint": "http://localhost:4318/v1/metrics",
+                    "header_env": {"authorization": metric_variable}
+                }]
+            }
+        }
+    }));
+
+    let error = futures::executor::block_on(initialize_plugins_exact(config)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires at least one valid trace, log, or metric endpoint")
+    );
+    assert!(crate::plugin::active_plugin_report().is_none());
 }
 
 #[test]
@@ -2146,7 +2513,11 @@ fn initialization_fails_for_invalid_enabled_file_exporters() {
     }));
     let error =
         futures::executor::block_on(initialize_plugins_exact(invalid_otel_transport)).unwrap_err();
-    assert!(error.to_string().contains("OpenTelemetry transport"));
+    assert!(
+        error
+            .to_string()
+            .contains("requires at least one valid trace, log, or metric endpoint")
+    );
 }
 
 #[test]
@@ -3567,7 +3938,7 @@ fn opentelemetry_endpoint_delivery_failure_does_not_block_other_endpoints() {
 }
 
 #[test]
-fn invalid_later_opentelemetry_endpoint_leaves_no_fanout_registration() {
+fn invalid_later_opentelemetry_endpoint_keeps_fanout_registration() {
     let _guard = crate::observability::test_mutex().lock().unwrap();
     reset_runtime();
     let config = plugin_config(json!({
@@ -3586,14 +3957,15 @@ fn invalid_later_opentelemetry_endpoint_leaves_no_fanout_registration() {
         }
     }));
 
-    assert!(futures::executor::block_on(initialize_plugins_exact(config)).is_err());
+    futures::executor::block_on(initialize_plugins_exact(config)).unwrap();
     assert!(
-        !global_context()
+        global_context()
             .read()
             .unwrap()
             .event_subscribers
             .contains_key("__nemo_relay_plugin__observability__opentelemetry")
     );
+    clear_plugin_configuration().unwrap();
 }
 
 #[test]
@@ -3684,9 +4056,11 @@ fn opentelemetry_shutdown_helper_retains_every_endpoint_failure() {
 #[test]
 fn signal_delivery_state_classifies_generic_sdk_shutdown_error_as_delivery() {
     let issue = signal_shutdown_issue(
-        Err(crate::observability::otel::OpenTelemetryError::Provider(
-            "generic SDK final-export failure".to_string(),
-        )),
+        Err(
+            crate::observability::otel::OpenTelemetryError::MetricProvider(
+                "generic SDK final-export failure".to_string(),
+            ),
+        ),
         Some("otel.metrics_export_failed (1)".to_string()),
     )
     .expect("delivery failure should produce a shutdown issue");
@@ -3795,18 +4169,28 @@ fn plugin_validation_reports_each_signal_specific_invalid_value() {
     }));
 }
 
-fn counting_callbacks(counter: &Arc<AtomicUsize>) -> Vec<crate::api::runtime::EventSubscriberFn> {
+fn counting_callbacks(
+    counter: &Arc<AtomicUsize>,
+) -> Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> {
     let counter = Arc::clone(counter);
-    vec![Arc::new(move |_| {
-        counter.fetch_add(1, Ordering::Relaxed);
-    })]
+    vec![IndexedOpenTelemetryResource {
+        index: 0,
+        value: OpenTelemetryResource::Active(Arc::new(move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        })),
+    }]
 }
 
-fn counting_metric_callbacks(counter: &Arc<AtomicUsize>) -> Vec<MetricEventCallback> {
+fn counting_metric_callbacks(
+    counter: &Arc<AtomicUsize>,
+) -> Vec<IndexedOpenTelemetryResource<MetricEventCallback>> {
     let counter = Arc::clone(counter);
-    vec![Arc::new(move |_, _| {
-        counter.fetch_add(1, Ordering::Relaxed);
-    })]
+    vec![IndexedOpenTelemetryResource {
+        index: 0,
+        value: OpenTelemetryResource::Active(Arc::new(move |_, _| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        })),
+    }]
 }
 
 fn reserved_metric_mark(version: &str, data: serde_json::Value) -> crate::api::event::Event {
@@ -3831,11 +4215,23 @@ fn reserved_metric_mark(version: &str, data: serde_json::Value) -> crate::api::e
 fn opentelemetry_delivery_continues_after_an_endpoint_panics() {
     let delivered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let delivered_after_panic = std::sync::Arc::clone(&delivered);
-    let callbacks: Vec<crate::api::runtime::EventSubscriberFn> = vec![
-        std::sync::Arc::new(|_| panic!("simulated endpoint failure")),
-        std::sync::Arc::new(move |_| {
-            delivered_after_panic.store(true, std::sync::atomic::Ordering::SeqCst);
-        }),
+    let callbacks: Vec<IndexedOpenTelemetryResource<EventSubscriberFn>> = vec![
+        IndexedOpenTelemetryResource {
+            index: 0,
+            value: OpenTelemetryResource::Active(std::sync::Arc::new(|_: &Event| -> () {
+                panic!("simulated endpoint failure")
+            })),
+        },
+        IndexedOpenTelemetryResource {
+            index: 1,
+            value: OpenTelemetryResource::Skipped("invalid endpoint".to_string()),
+        },
+        IndexedOpenTelemetryResource {
+            index: 2,
+            value: OpenTelemetryResource::Active(std::sync::Arc::new(move |_| {
+                delivered_after_panic.store(true, std::sync::atomic::Ordering::SeqCst);
+            })),
+        },
     ];
     let event = crate::api::event::Event::Mark(crate::api::event::MarkEvent::new(
         crate::api::event::BaseEvent::builder()
@@ -3859,14 +4255,20 @@ fn opentelemetry_routes_marks_by_metric_schema() {
     let trace_callbacks = counting_callbacks(&traced);
     let log_callbacks = counting_callbacks(&logged);
     let metered_for_callback = Arc::clone(&metered);
-    let metric_callbacks: Vec<MetricEventCallback> = vec![Arc::new(move |_, measurements| {
-        assert_eq!(measurements.len(), 1);
-        assert_eq!(
-            measurements[0].descriptor.name.as_str(),
-            "example.tokens.saved"
-        );
-        metered_for_callback.fetch_add(1, Ordering::Relaxed);
-    })];
+    let metric_callbacks: Vec<IndexedOpenTelemetryResource<MetricEventCallback>> =
+        vec![IndexedOpenTelemetryResource {
+            index: 0,
+            value: OpenTelemetryResource::Active(Arc::new(
+                move |_: &Event, measurements: &[ValidatedMetricMeasurement]| {
+                    assert_eq!(measurements.len(), 1);
+                    assert_eq!(
+                        measurements[0].descriptor.name.as_str(),
+                        "example.tokens.saved"
+                    );
+                    metered_for_callback.fetch_add(1, Ordering::Relaxed);
+                },
+            )),
+        }];
     let rejected_metric_marks = AtomicU64::new(0);
 
     let ordinary_mark = crate::api::event::Event::Mark(MarkEvent::new(

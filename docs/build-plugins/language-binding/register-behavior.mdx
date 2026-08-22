@@ -1,388 +1,355 @@
 ---
-title: "Register Plugin Behavior"
-description: "Register validated NeMo Relay plugin configuration through PluginContext and manage its lifecycle."
-position: 5
+title: "Register Behavior"
+description: "Install component-owned event, tool, LLM, and stream behavior in each binding."
+position: 7
 ---
 {/* SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0 */}
 
+Registration converts a valid component document into owned runtime behavior. The
+example installs only the feature groups whose `enabled` values are true and reads
+[priority and `break_chain`](/build-plugins/fundamentals/plugin-context) directly from
+configuration. It never calls a process-global middleware registrar from inside the
+plugin.
 
-Use this guide after you define plugin configuration validation and before the
-plugin installs NeMo Relay runtime behavior.
+An optional `registration_control` group in each complete example demonstrates an
+activation-owned conditional middleware guardrail. It is disabled by default. When
+enabled, the context qualifies the gate name and removes the gate automatically during
+rollback or teardown. Refer to
+[Conditional Middleware Guardrails](/about-nemo-relay/concepts/conditional-middleware-guardrails)
+before selecting and storing the target name.
 
-## What You Build
+## Register an Activation-Owned Gate
 
-Register a plugin kind, initialize validated configuration, install subscribers
-or middleware through `PluginContext`, and clear active plugin configuration
-during teardown.
-
-## Use PluginContext
-
-`PluginContext` is the component-scoped registration surface that Relay passes
-to the plugin during initialization. Register subscribers, guardrails, and
-intercepts through this context instead of through global registration calls in
-application startup.
-
-The context gives the plugin system three important guarantees:
-
-- The runtime qualifies names for the component instance.
-- Relay rolls back partial setup if one registration fails.
-- Plugin diagnostics can identify the affected configured component when the
-  plugin includes `component` in each diagnostic.
-
-Use the context only after validation succeeds. Keep validation deterministic and
-side-effect free. Inspect configuration and return diagnostics. Create runtime
-objects and attach them to the context during registration.
-
-The context includes mark, scope-start, and scope-end event sanitizer
-registrations in addition to the tool and LLM middleware surfaces. Event
-sanitizer callbacks receive the immutable event plus `data`,
-`category_profile`, and `metadata`, and return only those observability fields.
-Use the context methods so component name qualification and rollback also apply
-to these registries. Refer to [Event Sanitizers](/reference/event-sanitizers)
-for the binding-specific method names.
-
-## Header Plugin Example
-
-The same model applies in every binding: validate component-local config, then install middleware through the component-scoped registration context.
+The following examples register the same constant-result gate after configuration has
+supplied a discovered effective target name:
 
 <Tabs>
 <Tab title="Python" language="python">
 ```python
-from typing import Any
+from nemo_relay.runtime_registrations import RuntimeRegistrationKind
 
-import nemo_relay
-
-class HeaderPlugin:
-    def validate(self, plugin_config: dict[str, Any]) -> list[dict[str, str]]:
-        diagnostics = []
-        for field in ("header_name", "value"):
-            if not isinstance(plugin_config.get(field), str):
-                diagnostics.append({
-                    "level": "error",
-                    "code": "header-plugin.invalid_config",
-                    "component": "header-plugin",
-                    "field": field,
-                    "message": f"{field} must be a string",
-                })
-        return diagnostics
-
-    def register(self, plugin_config: dict[str, Any], context: nemo_relay.plugin.PluginContext):
-        def add_header(
-            name: str,
-            request: nemo_relay.LLMRequest,
-            annotated: nemo_relay.AnnotatedLLMRequest | None
-        ) -> nemo_relay.LLMRequestInterceptOutcome:
-            headers = request.headers.copy()
-            headers[plugin_config["header_name"]] = plugin_config["value"]
-            return nemo_relay.LLMRequestInterceptOutcome(
-                nemo_relay.LLMRequest(headers=headers, content=request.content),
-                annotated,
-            )
-
-        context.register_llm_request_intercept("inject-header", 100, False, add_header)
-
+control = settings["registration_control"]
+if control["enabled"]:
+    context.register_conditional_middleware_guardrail(
+        "documentation-registration-control",
+        {RuntimeRegistrationKind(kind) for kind in control["kinds"]},
+        control["registration_name"],
+        lambda _kinds, _name: control["reason"],
+    )
 ```
-
 </Tab>
 
 <Tab title="Node.js" language="node">
 ```js
-const plugin = require('nemo-relay-node/plugin');
-
-const headerPlugin = {
-  validate(pluginConfig) {
-    const diagnostics = [];
-    for (const field of ['header_name', 'value']) {
-      if (typeof pluginConfig[field] !== 'string') {
-        diagnostics.push({
-          level: 'error',
-          code: 'header-plugin.invalid_config',
-          component: 'header-plugin',
-          field,
-          message: `${field} must be a string`,
-        });
-      }
-    }
-    return diagnostics;
-  },
-  register(pluginConfig, context) {
-    context.registerLlmRequestIntercept('inject-header', 100, false, ({ request, annotated }) => {
-      if (
-        typeof request !== 'object' ||
-        request === null ||
-        Array.isArray(request) ||
-        typeof request.headers !== 'object' ||
-        request.headers === null ||
-        Array.isArray(request.headers)
-      ) {
-        throw new Error('Expected an LLM request object with headers.');
-      }
-      return {
-        request: {
-          ...request,
-          headers: {
-            ...request.headers,
-            [String(pluginConfig.header_name)]: String(pluginConfig.value),
-          },
-        },
-        annotated,
-      };
-    });
-  },
-};
-
+const control = settings.registration_control;
+if (control.enabled) {
+  context.registerConditionalMiddlewareGuardrail(
+    'documentation-registration-control',
+    control.kinds,
+    control.registration_name,
+    () => control.reason,
+  );
+}
 ```
-
 </Tab>
 
 <Tab title="Rust" language="rust">
 ```rust
-use nemo_relay::api::llm::LlmRequestInterceptOutcome;
-use nemo_relay::plugin::{
-    ConfigDiagnostic, DiagnosticLevel, Plugin, PluginRegistrationContext, Result as PluginResult,
-};
-use serde_json::{Map, Value as Json};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
+if config.registration_control.enabled {
+    let reason = config.registration_control.reason.clone();
+    ctx.register_conditional_middleware_guardrail(
+        "documentation-registration-control",
+        config.registration_control.kinds.iter().copied().collect(),
+        &config.registration_control.registration_name,
+        Arc::new(move |_kinds, _name| Some(reason.clone())),
+    )?;
+}
+```
+</Tab>
+</Tabs>
 
-struct HeaderPlugin;
+The component-local gate name does not need a plugin prefix. Relay qualifies the name
+and records its rollback operation. The target name is different: it must already be the
+effective name that discovery returned for the current runtime activation.
 
-impl Plugin for HeaderPlugin {
-    fn plugin_kind(&self) -> &str {
-        "header-plugin"
-    }
+## Register Event Metadata Injectors
 
-    fn validate(&self, plugin_config: &Map<String, Json>) -> Vec<ConfigDiagnostic> {
-        let mut diagnostics = Vec::new();
+An event metadata injector receives an event snapshot and returns flat metadata
+additions. Relay validates and inserts accepted additions before event sanitizers run.
+Existing metadata values are preserved.
 
-        for field in ["header_name", "value"] {
-            match plugin_config.get(field) {
-                Some(Json::String(_)) => {}
-                Some(_) => diagnostics.push(ConfigDiagnostic {
-                    level: DiagnosticLevel::Error,
-                    code: "header-plugin.invalid_config".into(),
-                    component: Some("header-plugin".into()),
-                    field: Some(field.into()),
-                    message: format!("{field} must be a string"),
-                }),
-                None => diagnostics.push(ConfigDiagnostic {
-                    level: DiagnosticLevel::Error,
-                    code: "header-plugin.invalid_config".into(),
-                    component: Some("header-plugin".into()),
-                    field: Some(field.into()),
-                    message: format!("{field} is required"),
-                }),
-            }
-        }
+The following examples register a component-owned callback through `PluginContext`:
 
-        diagnostics
-    }
+<Tabs>
+<Tab title="Python" language="python">
+```python
+def register(self, plugin_config, context):
+    tag = plugin_config["tag"]
+    context.register_event_metadata_injector(
+        "component-metadata",
+        10,
+        lambda event: {"example.plugin.tag": tag},
+    )
+```
 
-    fn register<'a>(
-        &'a self,
-        plugin_config: &Map<String, Json>,
-        ctx: &'a mut PluginRegistrationContext,
-    ) -> Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>> {
-        let header_name = plugin_config
-            .get("header_name")
-            .and_then(Json::as_str)
-            .unwrap_or("x-plugin")
-            .to_string();
-        let header_value = plugin_config
-            .get("value")
-            .and_then(Json::as_str)
-            .unwrap_or("enabled")
-            .to_string();
+Applications can instead use `nemo_relay.event_metadata.register_injector()` for a
+global callback or `nemo_relay.scope_local.register_event_metadata_injector()` for a
+callback owned by an active scope. The matching deregistration functions remove those
+registrations.
+</Tab>
+<Tab title="Node.js" language="node">
+```js
+register(pluginConfig, context) {
+  context.registerEventMetadataInjector('component-metadata', 10, () => ({
+    'example.plugin.tag': pluginConfig.tag,
+  }));
+}
+```
 
+Applications can instead use `registerEventMetadataInjector()` for a global callback
+or `scopeRegisterEventMetadataInjector()` for a callback owned by an active scope. The
+matching deregistration functions remove those registrations.
+</Tab>
+<Tab title="Rust" language="rust">
+```rust
+let tag = config.tag.clone();
+ctx.register_event_metadata_injector(
+    "component-metadata",
+    10,
+    Arc::new(move |_event| {
+        let tag = tag.clone();
         Box::pin(async move {
-            ctx.register_llm_request_intercept(
-                "inject-header",
-                100,
-                false,
-                Arc::new(move |_name, mut request, annotated| {
-                    request
-                        .headers
-                        .insert(header_name.clone(), header_value.clone().into());
-                    Ok(LlmRequestInterceptOutcome::new(request, annotated))
-                }),
-            )?;
-            Ok(())
+            Ok(BTreeMap::from([(
+                "example.plugin.tag".into(),
+                Json::String(tag),
+            )]))
         })
-    }
-}
-
+    }),
+)?;
 ```
 
+Applications can instead use `register_event_metadata_injector()` for a global
+callback or `scope_register_event_metadata_injector()` for a callback owned by
+an active scope. The matching deregistration functions remove those registrations.
 </Tab>
-
 </Tabs>
 
-## Activation APIs
+Python and Node.js callbacks can return additions directly or asynchronously. Rust
+callbacks return a future. In every binding, callback failures and invalid return values
+omit that callback's additions without dropping the event.
 
-After you register the plugin kind, use the plugin APIs in this order. Refer to
-the [Header Plugin Example](#header-plugin-example) for the registration pattern:
+## Register One Equivalent Request Intercept
 
-1. Build a `PluginConfig`.
-2. Validate the config.
-3. Initialize the config.
-4. Inspect the activation report.
-5. Clear active config during teardown when needed.
-
-Register the plugin kind before initialization. With the default
-`unknown_component="warn"` policy, `validate()` reports an enabled unregistered
-kind as a warning. An error-only check therefore passes, but `initialize()`
-raises for an enabled unregistered kind. Register every enabled kind before
-initialization, or set
-`unknown_component="error"` to make validation fail.
-
-`validate()` checks only the configuration you pass to it. `initialize()` also
-layers discovered `plugins.toml` configuration, so startup can activate or
-reject components that a preflight report did not include. Refer to [Plugin
-Configuration Files](/configure-plugins/plugin-configuration-files) when file
-discovery participates in deployment.
-
-Append the following entry point to the matching Header Plugin Example above.
-Each tab relies on that example's plugin definition and imports. Together, the
-two blocks register the custom plugin, validate configuration, initialize it,
-inspect the activation report and available kinds, and clear active
-configuration:
+The following excerpts show the same model-header rewrite. The full checked examples add
+event observation, tool policy, execution wrappers, and streaming verification around
+this common center.
 
 <Tabs>
 <Tab title="Python" language="python">
-Append this entry point to the Python Header Plugin Example above.
-
 ```python
-import asyncio
+settings = normalized_config(config)
+tag = settings["tag"]
+observe = settings["observe"]
+requests = settings["requests"]
+execution = settings["execution"]
 
-import nemo_relay
+if observe["enabled"]:
+    context.register_subscriber(
+        "events", lambda event: self.events.append(event.name)
+    )
 
-async def main() -> None:
-    nemo_relay.plugin.register("header-plugin", HeaderPlugin())
+def tool_policy(name, _args):
+    if requests["mode"] == "enforce" and name in requests["blocked_tools"]:
+        return f"tool '{name}' is blocked"
+    return None
 
-    config = nemo_relay.plugin.PluginConfig()
-    config.components = [
-        nemo_relay.plugin.ComponentSpec(
-            kind="header-plugin",
-            config={"header_name": "x-tenant", "value": "tenant-a"},
-        )
-    ]
+context.register_tool_conditional_execution_guardrail(
+    "tool-policy", 10, tool_policy
+)
+context.register_tool_request_intercept(
+    "tool-request",
+    requests["priority"],
+    requests["break_chain"],
+    lambda _name, args: {**args, "plugin_tag": tag},
+)
 
-    report = nemo_relay.plugin.validate(config)
-    if any(diagnostic["level"] == "error" for diagnostic in report["diagnostics"]):
-        raise RuntimeError(report["diagnostics"])
+def add_header(name, request, annotated):
+    headers = dict(request.headers)
+    headers[requests["header_name"]] = requests["header_value"]
+    return LLMRequestInterceptOutcome(
+        request=LLMRequest(headers=headers, content=request.content),
+        annotated_request=annotated,
+    )
 
-    try:
-        active_report = await nemo_relay.plugin.initialize(config)
-        print("Activation report:", active_report)
-        print("Available kinds:", nemo_relay.plugin.list_kinds())
-    finally:
-        await nemo_relay.plugin.clear_async()
+context.register_llm_request_intercept(
+    "documentation-header",
+    requests["priority"],
+    requests["break_chain"],
+    add_header,
+)
 
+async def stream_request(request, next_call):
+    async for chunk in await next_call(request):
+        yield {**chunk, "plugin_stream": True}
 
-if __name__ == "__main__":
-    asyncio.run(main())
+context.register_llm_stream_execution_intercept(
+    "documentation-stream", execution["priority"], stream_request
+)
 ```
-
 </Tab>
-
 <Tab title="Node.js" language="node">
-Append this entry point to the Node.js Header Plugin Example above.
-
 ```js
-void (async () => {
-  plugin.register('header-plugin', headerPlugin);
+const settings = normalizedConfig(config);
+const { observe, requests, execution } = settings;
 
-  const config = plugin.defaultConfig();
-  config.components = [
-    plugin.ComponentSpec(
-      'header-plugin',
-      { header_name: 'x-tenant', value: 'tenant-a' },
-      { enabled: true },
-    ),
-  ];
-
-  const report = plugin.validate(config);
-  if (report.diagnostics.some((diagnostic) => diagnostic.level === 'error')) {
-    throw new Error(JSON.stringify(report.diagnostics));
-  }
-
-  try {
-    const activeReport = await plugin.initialize(config);
-    console.log('Activation report:', activeReport);
-    console.log('Available kinds:', plugin.listKinds());
-  } finally {
-    plugin.clear();
-  }
-})().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
-```
-
-</Tab>
-
-<Tab title="Rust" language="rust">
-Append this entry point to the Rust Header Plugin Example above.
-
-```rust
-use nemo_relay::plugin::{
-    clear_plugin_configuration, initialize_plugins, list_plugin_kinds, register_plugin,
-    validate_plugin_config, PluginComponentSpec, PluginConfig,
-};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    register_plugin(Arc::new(HeaderPlugin))?;
-
-    let mut config = PluginConfig::default();
-    let mut component = PluginComponentSpec::new("header-plugin");
-    component.config.insert("header_name".into(), "x-tenant".into());
-    component.config.insert("value".into(), "tenant-a".into());
-    config.components.push(component);
-
-    let report = validate_plugin_config(&config);
-    if report.has_errors() {
-        return Err(format!("{:?}", report.diagnostics).into());
-    }
-
-    let active_report = initialize_plugins(config).await?;
-    println!("Activation report: {active_report:?}");
-    println!("Available kinds: {:?}", list_plugin_kinds());
-    clear_plugin_configuration()?;
-    Ok(())
+if (observe.enabled) {
+  context.registerSubscriber(
+    'events', (event) => documentationPlugin.events.push(event.name),
+  );
 }
+
+context.registerToolConditionalExecutionGuardrail('tool-policy', 10, (name) => (
+  requests.mode === 'enforce' && requests.blocked_tools.includes(name)
+    ? `tool '${name}' is blocked`
+    : null
+));
+context.registerToolRequestIntercept(
+  'tool-request', requests.priority, requests.break_chain, (_name, args) => ({
+    ...args,
+    plugin_tag: settings.tag,
+  }),
+);
+
+context.registerLlmRequestIntercept(
+  'documentation-header',
+  requests.priority,
+  requests.break_chain,
+  ({ request, annotated }) => ({
+    request: {
+      ...request,
+      headers: {
+        ...request.headers,
+        [requests.header_name]: requests.header_value,
+      },
+    },
+    annotated,
+  }),
+);
+
+context.registerLlmStreamExecutionIntercept(
+  'documentation-stream',
+  execution.priority,
+  async function* (request, next) {
+    for await (const chunk of await next(request)) {
+      yield { ...chunk, plugin_stream: true };
+    }
+  },
+);
 ```
-
 </Tab>
+<Tab title="Rust" language="rust">
+```rust
+let tag = config.tag.clone();
+let mode = config.requests.mode.clone();
+let blocked_tools = config.requests.blocked_tools.clone();
+let header_name = config.requests.header_name.clone();
+let header_value = config.requests.header_value.clone();
 
+if config.observe.enabled {
+    ctx.register_subscriber(
+        "events",
+        Arc::new(|event| println!("event: {}", event.name())),
+    )?;
+}
+
+ctx.register_tool_conditional_execution_guardrail(
+    "tool-policy",
+    10,
+    Arc::new(move |name, _args| {
+        let mode = mode.clone();
+        let blocked = blocked_tools.clone();
+        Box::pin(async move {
+            Ok((mode == "enforce" && blocked.contains(&name))
+                .then(|| format!("tool '{name}' is blocked")))
+        })
+    }),
+)?;
+
+ctx.register_tool_request_intercept(
+    "tool-request",
+    config.requests.priority,
+    config.requests.break_chain,
+    Arc::new(move |_name, mut args| {
+        let tag = tag.clone();
+        Box::pin(async move {
+            if let Some(object) = args.as_object_mut() {
+                object.insert("plugin_tag".into(), Json::String(tag));
+            }
+            Ok(args)
+        })
+    }),
+)?;
+
+ctx.register_llm_request_intercept(
+    "documentation-header",
+    config.requests.priority,
+    config.requests.break_chain,
+    Arc::new(move |_name, mut request, annotated| {
+        let header_name = header_name.clone();
+        let header_value = header_value.clone();
+        Box::pin(async move {
+            request.headers.insert(header_name, header_value.into());
+            Ok(LlmRequestInterceptOutcome::new(request, annotated))
+        })
+    }),
+)?;
+
+ctx.register_llm_stream_execution_intercept(
+    "documentation-stream",
+    config.execution.priority,
+    Arc::new(move |_name, request, next| {
+        Box::pin(async move {
+            let downstream = next(request).await?;
+            Ok(LlmJsonStream::new(downstream.map(|chunk| {
+                chunk.map(|mut value| {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("plugin_stream".into(), Json::Bool(true));
+                    }
+                    value
+                })
+            })))
+        })
+    }),
+)?;
+```
+</Tab>
 </Tabs>
 
-## Registration Checklist
+The LLM intercept returns the
+[complete outcome](/reference/llm-request-intercept-outcomes) rather than relying on
+mutation. In particular, it preserves `annotated`. The Rust request is mutable inside its
+owned callback value; Python creates a new typed request, and Node.js creates a new plain
+object. Those language differences do not change Relay semantics.
 
-Before publishing or sharing a plugin:
+## Initialize and Inspect
 
-1. Validate a correct config and confirm no errors are reported.
-2. Validate an intentionally invalid config and confirm diagnostics are actionable.
-3. Initialize the plugin and verify the expected subscribers or middleware run.
-4. Force one registration failure and confirm partial setup is rolled back.
-5. Call `clear()` to remove active component registrations during teardown.
-   Call `deregister()` too only when a test or embedded runtime must register
-   the same custom kind again.
+Use the following procedure to verify successful activation and transactional rollback:
 
-## Common Issues
+1. Register the kind, validate the shared component, and stop if the report contains an
+   error. Duplicate kind registration is itself an error and should fail the test.
+2. Initialize the valid document. Rust awaits `initialize_plugins`, Python awaits
+   `plugin.initialize`, and Node.js awaits `plugin.initialize`. Inspect the returned
+   report instead of treating a resolved call as the only signal.
+3. Call the report accessor. Rust uses `active_plugin_report`, Python uses `report`, and
+   Node.js uses `report`. It should describe the last successful activation without
+   rerunning validation.
+4. Execute an LLM request and inspect the real callback headers. Then emit an event and
+   execute the representative tool and stream paths from the checked example.
+5. Force a later registration in the same component to fail. Initialization should
+   reject, the new partial registrations should disappear, and Relay should restore the
+   previous configuration when it can prove cleanup succeeded.
 
-Check these symptoms first when the workflow does not behave as expected.
-
-- **Middleware names collide**: Use component-local names and let the plugin runtime qualify them.
-- **Partial registrations remain after failure**: Register through `PluginContext` so rollback can clean up.
-- **Registration does validation work**: Move deterministic checks into the validation hook.
-- **Global state leaks across component instances**: Create instance-local state during registration or key shared state by component identity.
-
-## Next Steps
-
-Use these links to continue from this workflow into the next related task.
-
-- Add advanced validation and rollout controls with [Design Plugin Configuration](/build-plugins/language-binding/advanced-configuration).
-- Review concrete authoring patterns in [Code Examples](/build-plugins/language-binding/code-examples).
+Success means configuration controls the installed surfaces, names are component-owned,
+the activation report matches the runtime effect, and failed registration leaves no
+half-active middleware.

@@ -441,97 +441,15 @@ pub unsafe extern "C" fn nemo_relay_metric(
     } else {
         unsafe { std::slice::from_raw_parts(measurements, measurements_len) }
     };
-    let mut typed_measurements = Vec::with_capacity(raw_measurements.len());
-    for (index, measurement) in raw_measurements.iter().enumerate() {
-        let measurement_name = match c_str_to_string(measurement.name) {
-            Ok(name) => name,
-            Err(status) => {
-                set_last_error(&format!("measurements[{index}].name is invalid"));
-                return status;
-            }
-        };
-        let Some(kind) = metric_kind_from_ffi(measurement.kind) else {
-            set_metric_discriminator_error(
-                index,
-                "kind",
-                measurement.kind,
-                NEMO_RELAY_METRIC_KIND_UNSPECIFIED,
-                "NEMO_RELAY_METRIC_KIND_COUNTER, NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER, NEMO_RELAY_METRIC_KIND_GAUGE, or NEMO_RELAY_METRIC_KIND_HISTOGRAM",
-            );
-            return NemoRelayStatus::InvalidArg;
-        };
-        let Some(value_type) = metric_value_type_from_ffi(measurement.value_type) else {
-            set_metric_discriminator_error(
-                index,
-                "value_type",
-                measurement.value_type,
-                NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED,
-                "NEMO_RELAY_METRIC_VALUE_TYPE_U64, NEMO_RELAY_METRIC_VALUE_TYPE_I64, or NEMO_RELAY_METRIC_VALUE_TYPE_F64",
-            );
-            return NemoRelayStatus::InvalidArg;
-        };
-        let value = match value_type {
-            nemo_relay::api::event::MetricValueType::U64 => {
-                serde_json::Value::from(measurement.u64_value)
-            }
-            nemo_relay::api::event::MetricValueType::I64 => {
-                serde_json::Value::from(measurement.i64_value)
-            }
-            nemo_relay::api::event::MetricValueType::F64 => {
-                let Some(number) = serde_json::Number::from_f64(measurement.f64_value) else {
-                    set_last_error(&format!("measurements[{index}].f64_value must be finite"));
-                    return NemoRelayStatus::InvalidArg;
-                };
-                serde_json::Value::Number(number)
-            }
-        };
-        let unit = if measurement.unit.is_null() {
-            None
-        } else {
-            match c_str_to_string(measurement.unit) {
-                Ok(value) => Some(value),
-                Err(status) => return status,
-            }
-        };
-        let description = if measurement.description.is_null() {
-            None
-        } else {
-            match c_str_to_string(measurement.description) {
-                Ok(value) => Some(value),
-                Err(status) => return status,
-            }
-        };
-        let attributes = match c_str_to_opt_json(measurement.attributes_json) {
-            Some(value) => value,
-            None => return NemoRelayStatus::InvalidJson,
-        };
-        if measurement.boundaries_len > 0 && measurement.boundaries.is_null() {
-            set_last_error(&format!("measurements[{index}].boundaries pointer is null"));
-            return NemoRelayStatus::NullPointer;
-        }
-        let boundaries = if measurement.boundaries.is_null() {
-            None
-        } else if measurement.boundaries_len == 0 {
-            Some(Vec::new())
-        } else {
-            Some(
-                unsafe {
-                    std::slice::from_raw_parts(measurement.boundaries, measurement.boundaries_len)
-                }
-                .to_vec(),
-            )
-        };
-        typed_measurements.push(nemo_relay::api::event::MetricMeasurement {
-            name: measurement_name,
-            kind,
-            value_type,
-            value,
-            unit,
-            description,
-            attributes,
-            boundaries,
-        });
-    }
+    let typed_measurements = raw_measurements
+        .iter()
+        .enumerate()
+        .map(|(index, measurement)| parse_metric_measurement(index, measurement))
+        .collect::<Result<Vec<_>, _>>();
+    let typed_measurements = match typed_measurements {
+        Ok(measurements) => measurements,
+        Err(status) => return status,
+    };
     let parent_ref = if parent.is_null() {
         None
     } else {
@@ -557,4 +475,98 @@ pub unsafe extern "C" fn nemo_relay_metric(
         Ok(()) => NemoRelayStatus::Ok,
         Err(error) => status_from_error(&error),
     }
+}
+
+fn parse_metric_measurement(
+    index: usize,
+    measurement: &NemoRelayMetricMeasurement,
+) -> Result<nemo_relay::api::event::MetricMeasurement, NemoRelayStatus> {
+    let measurement_name = match c_str_to_string(measurement.name) {
+        Ok(name) => name,
+        Err(status) => {
+            set_last_error(&format!("measurements[{index}].name is invalid"));
+            return Err(status);
+        }
+    };
+    let Some(kind) = metric_kind_from_ffi(measurement.kind) else {
+        set_metric_discriminator_error(
+            index,
+            "kind",
+            measurement.kind,
+            NEMO_RELAY_METRIC_KIND_UNSPECIFIED,
+            "NEMO_RELAY_METRIC_KIND_COUNTER, NEMO_RELAY_METRIC_KIND_UP_DOWN_COUNTER, NEMO_RELAY_METRIC_KIND_GAUGE, or NEMO_RELAY_METRIC_KIND_HISTOGRAM",
+        );
+        return Err(NemoRelayStatus::InvalidArg);
+    };
+    let Some(value_type) = metric_value_type_from_ffi(measurement.value_type) else {
+        set_metric_discriminator_error(
+            index,
+            "value_type",
+            measurement.value_type,
+            NEMO_RELAY_METRIC_VALUE_TYPE_UNSPECIFIED,
+            "NEMO_RELAY_METRIC_VALUE_TYPE_U64, NEMO_RELAY_METRIC_VALUE_TYPE_I64, or NEMO_RELAY_METRIC_VALUE_TYPE_F64",
+        );
+        return Err(NemoRelayStatus::InvalidArg);
+    };
+    let value = match value_type {
+        nemo_relay::api::event::MetricValueType::U64 => {
+            serde_json::Value::from(measurement.u64_value)
+        }
+        nemo_relay::api::event::MetricValueType::I64 => {
+            serde_json::Value::from(measurement.i64_value)
+        }
+        nemo_relay::api::event::MetricValueType::F64 => {
+            let Some(number) = serde_json::Number::from_f64(measurement.f64_value) else {
+                set_last_error(&format!("measurements[{index}].f64_value must be finite"));
+                return Err(NemoRelayStatus::InvalidArg);
+            };
+            serde_json::Value::Number(number)
+        }
+    };
+    let unit = if measurement.unit.is_null() {
+        None
+    } else {
+        match c_str_to_string(measurement.unit) {
+            Ok(value) => Some(value),
+            Err(status) => return Err(status),
+        }
+    };
+    let description = if measurement.description.is_null() {
+        None
+    } else {
+        match c_str_to_string(measurement.description) {
+            Ok(value) => Some(value),
+            Err(status) => return Err(status),
+        }
+    };
+    let attributes = match c_str_to_opt_json(measurement.attributes_json) {
+        Some(value) => value,
+        None => return Err(NemoRelayStatus::InvalidJson),
+    };
+    if measurement.boundaries_len > 0 && measurement.boundaries.is_null() {
+        set_last_error(&format!("measurements[{index}].boundaries pointer is null"));
+        return Err(NemoRelayStatus::NullPointer);
+    }
+    let boundaries = if measurement.boundaries.is_null() {
+        None
+    } else if measurement.boundaries_len == 0 {
+        Some(Vec::new())
+    } else {
+        Some(
+            unsafe {
+                std::slice::from_raw_parts(measurement.boundaries, measurement.boundaries_len)
+            }
+            .to_vec(),
+        )
+    };
+    Ok(nemo_relay::api::event::MetricMeasurement {
+        name: measurement_name,
+        kind,
+        value_type,
+        value,
+        unit,
+        description,
+        attributes,
+        boundaries,
+    })
 }

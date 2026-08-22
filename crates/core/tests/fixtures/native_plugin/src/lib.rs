@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,7 +17,8 @@ use nemo_relay_plugin::{
     NemoRelayNativeAsyncStream, NemoRelayNativeHostApiV1, NemoRelayNativeHostApiV3,
     NemoRelayNativeHostApiV4, NemoRelayNativePluginContext, NemoRelayNativePluginV1,
     NemoRelayNativeString, NemoRelayNativeToolNextFn, NemoRelayStatus, PendingMarkSpec,
-    PluginContext, PluginRuntime, ScopeCategory, ScopeType, ToolExecutionInterceptOutcome,
+    PluginContext, PluginRuntime, RuntimeRegistrationKind, ScopeCategory, ScopeType,
+    ToolExecutionInterceptOutcome,
 };
 use serde_json::{Map, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -66,26 +67,7 @@ impl NativePlugin for FixtureNativePlugin {
             .get("event_metadata_injector_error")
             .and_then(Json::as_bool)
             .unwrap_or(false);
-        ctx.register_event_metadata_injector(
-            "fixture_event_metadata_injector",
-            0,
-            move |event| async move {
-                if event_metadata_injector_error {
-                    return Err("fixture Event metadata injector error requested".into());
-                }
-                let mut additions = BTreeMap::new();
-                if event
-                    .name()
-                    .starts_with("external-plugin-event-metadata-injection")
-                {
-                    additions.insert(
-                        "external.injector.transport".into(),
-                        json!("native_dynamic_rust"),
-                    );
-                }
-                Ok(additions)
-            },
-        )?;
+        register_fixture_event_metadata_injector(ctx, event_metadata_injector_error)?;
         if plugin_config
             .get("event_metadata_injector_only")
             .and_then(Json::as_bool)
@@ -98,6 +80,29 @@ impl NativePlugin for FixtureNativePlugin {
             let runtime = runtime.clone();
             move |event| subscriber_mark(&runtime, event)
         })?;
+        let subscriber_kinds = BTreeSet::from([RuntimeRegistrationKind::Subscriber]);
+        if !runtime
+            .list_runtime_registrations(Some(&subscriber_kinds))?
+            .iter()
+            .any(|registration| registration.local_name == "fixture_subscriber")
+        {
+            return Err("native runtime did not discover its subscriber".into());
+        }
+        ctx.register_conditional_middleware_guardrail(
+            "fixture_initial_gate",
+            &subscriber_kinds,
+            "missing-initial-target",
+            "fixture initial gate",
+        )?;
+        let dynamic_gate = runtime.register_conditional_middleware_guardrail(
+            "fixture_dynamic_gate",
+            &subscriber_kinds,
+            "missing-dynamic-target",
+            "fixture dynamic gate",
+        )?;
+        if !runtime.deregister_conditional_middleware_guardrail(&dynamic_gate)? {
+            return Err("native runtime did not remove its dynamic gate".into());
+        }
         ctx.register_mark_sanitize_guardrail("fixture_mark_sanitize", 0, |_, fields| async move {
             Ok(mark_event_fields(fields, "native_plugin_mark"))
         })?;
@@ -307,6 +312,32 @@ impl NativePlugin for FixtureNativePlugin {
 
         Ok(())
     }
+}
+
+fn register_fixture_event_metadata_injector(
+    ctx: &mut PluginContext<'_>,
+    return_error: bool,
+) -> nemo_relay_plugin::Result<()> {
+    ctx.register_event_metadata_injector(
+        "fixture_event_metadata_injector",
+        0,
+        move |event| async move {
+            if return_error {
+                return Err("fixture Event metadata injector error requested".into());
+            }
+            let mut additions = BTreeMap::new();
+            if event
+                .name()
+                .starts_with("external-plugin-event-metadata-injection")
+            {
+                additions.insert(
+                    "external.injector.transport".into(),
+                    json!("native_dynamic_rust"),
+                );
+            }
+            Ok(additions)
+        },
+    )
 }
 
 fn mark_event_fields(mut fields: EventSanitizeFields, marker: &str) -> EventSanitizeFields {

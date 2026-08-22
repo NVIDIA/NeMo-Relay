@@ -2666,7 +2666,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.```
 
-## @openclaw/ai - 2026.7.1
+## @openclaw/ai - 2026.7.1-2
 **Repository URL**: https://github.com/openclaw/openclaw
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
@@ -11247,7 +11247,7 @@ Apache License
    See the License for the specific language governing permissions and
    limitations under the License.```
 
-## openclaw - 2026.7.1
+## openclaw - 2026.7.1-2
 **Repository URL**: https://github.com/openclaw/openclaw
 **License Type(s)**: MIT
 ### License: https://spdx.org/licenses/MIT.html
