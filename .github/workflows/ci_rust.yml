@@ -156,6 +156,29 @@ jobs:
           fi
           just "${args[@]}" test-rust
 
+      - name: Check Rampart source plugin
+        if: ${{ matrix.platform == 'linux-amd64' }}
+        working-directory: ${{ env.NEMO_RELAY_CI_WORKSPACE }}
+        run: |
+          set -euo pipefail
+          cargo clippy --locked \
+            -p nemo-relay-pii-redaction \
+            --features rampart \
+            --all-targets \
+            -- -D warnings
+          cargo test --locked \
+            -p nemo-relay-pii-redaction \
+            --features rampart \
+            --lib
+          cargo clippy --locked \
+            --manifest-path plugins/pii-rampart/Cargo.toml \
+            --target-dir target \
+            --all-targets \
+            -- -D warnings
+          cargo test --locked \
+            --manifest-path plugins/pii-rampart/Cargo.toml \
+            --target-dir target
+
       - name: Upload Rust coverage to Codecov
         if: ${{ matrix.platform != 'windows-arm64' }}
         uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6

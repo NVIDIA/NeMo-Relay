@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import textwrap
 import tomllib
 import urllib.request
 import zipfile
@@ -426,6 +427,20 @@ def _rust_missing_cargo_about_packages(rendered_keys: set[tuple[str, str]]) -> l
     return missing
 
 
+def _stable_rust_license_text(crate: dict[str, Any], detected_text: str) -> str:
+    """Prefer an equivalent bundled license file over cargo-about's platform-dependent match."""
+    normalized_detected = "\n".join(
+        " ".join(line.split()) for line in textwrap.dedent(detected_text).strip().splitlines()
+    )
+    for _, bundled_text in _rust_license_files(crate):
+        normalized_bundled = "\n".join(
+            " ".join(line.split()) for line in textwrap.dedent(bundled_text).strip().splitlines()
+        )
+        if normalized_bundled == normalized_detected:
+            return bundled_text
+    return detected_text
+
+
 def _render_rust_crate_attribution(
     crate: dict[str, Any], *, license_id: str, license_text: str, workspace_members: set[str]
 ) -> tuple[str, str, str] | None:
@@ -438,6 +453,7 @@ def _render_rust_crate_attribution(
     repo = str(crate.get("repository") or "").strip()
     if not repo:
         repo = f"https://crates.io/crates/{name}"
+    license_text = _stable_rust_license_text(crate, license_text)
     license_text = "\n".join(line.rstrip() for line in license_text.splitlines())
 
     rendered = "".join(

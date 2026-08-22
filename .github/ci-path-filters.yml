@@ -131,6 +131,8 @@ dependencies:
   - 'package-lock.json'
   - 'pyproject.toml'
   - 'python/cli-bin/**'
+  - 'plugins/pii-rampart/Cargo.toml'
+  - 'plugins/pii-rampart/Cargo.lock'
   - 'scripts/licensing/**'
   - 'uv.lock'
 
@@ -166,6 +168,7 @@ rust:
   - 'crates/worker-proto/proto/**'
   - 'crates/ffi/cbindgen.toml'
   - 'integrations/coding-agents/**'
+  - 'plugins/pii-rampart/**'
 
 go:
   - 'crates/ffi/Cargo.toml'
